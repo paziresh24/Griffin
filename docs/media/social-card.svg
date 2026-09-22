@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" fill="none">
+  <defs>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6ad63"/><stop offset="1" stop-color="#d9722a"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#191108"/><stop offset="1" stop-color="#120c07"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g transform="translate(108,168) scale(2.6)">
+    <circle cx="32" cy="32" r="21" stroke="#e8873a" stroke-width="1.5" opacity="0.18"/>
+    <g stroke="#e8873a" stroke-width="2.3" stroke-linecap="round" opacity="0.5">
+      <path d="M32 26 V16.6"/><path d="M36.9 35.1 L46 40.4"/><path d="M27.1 35.1 L18 40.4"/>
+    </g>
+    <circle cx="32" cy="32" r="8.6" fill="url(#hub)"/>
+    <circle cx="32" cy="13" r="5.1" fill="#34d399"/>
+    <circle cx="49" cy="43" r="5.1" fill="#2dd4bf"/>
+    <circle cx="15" cy="43" r="5.1" fill="#f0a35a"/>
+  </g>
+  <text x="380" y="272" font-family="DejaVu Sans, Verdana, sans-serif" font-size="92" font-weight="700" fill="#f4ece4">Griffin</text>
+  <text x="384" y="330" font-family="DejaVu Sans, Verdana, sans-serif" font-size="30" fill="#c9b8a8">A self-hosted shell for a small team of agents</text>
+  <text x="384" y="374" font-family="DejaVu Sans, Verdana, sans-serif" font-size="30" fill="#c9b8a8">that work for you.</text>
+  <text x="384" y="446" font-family="DejaVu Sans, Verdana, sans-serif" font-size="24" fill="#8c7a68">Your agents · your tools · your box · MIT</text>
+</svg>
