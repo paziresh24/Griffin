@@ -1,10 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="14" fill="#1a120c"/>
-  <circle cx="32" cy="32" r="21" stroke="#e8873a" stroke-width="2.25" opacity="0.3"/>
-  <path stroke="#e8873a" stroke-width="2.5" stroke-linecap="round"
-        d="M32 24.5 V18 M38.2 35.8 L44.5 39.6 M25.8 35.8 L19.5 39.6"/>
-  <circle cx="32" cy="32" r="8" fill="#e8873a"/>
-  <circle cx="32" cy="13.5" r="5" fill="#f0a35a"/>
-  <circle cx="48" cy="42" r="5" fill="#e8873a"/>
-  <circle cx="16" cy="42" r="5" fill="#c96a28"/>
+  <defs>
+    <linearGradient id="hub" x1="23" y1="23" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6ad63"/><stop offset="1" stop-color="#d9722a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="#17100b"/>
+  <circle cx="32" cy="32" r="21" stroke="#e8873a" stroke-width="1.5" opacity="0.18"/>
+  <g stroke="#e8873a" stroke-width="2.3" stroke-linecap="round" opacity="0.5">
+    <path d="M32 26 V16.6"/><path d="M36.9 35.1 L46 40.4"/><path d="M27.1 35.1 L18 40.4"/>
+  </g>
+  <circle cx="32" cy="32" r="8.6" fill="url(#hub)"/>
+  <circle cx="32" cy="13" r="5.1" fill="#34d399"/>
+  <circle cx="49" cy="43" r="5.1" fill="#2dd4bf"/>
+  <circle cx="15" cy="43" r="5.1" fill="#f0a35a"/>
 </svg>
