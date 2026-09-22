@@ -1,0 +1,118 @@
+# Griffin: two containers built from this tree.
+#   docker compose -f deploy/compose.yaml up -d --build
+#
+# The split is the point: `app` runs the model and the UI and holds no infrastructure
+# credentials; `broker` holds them and exposes typed tools over a unix socket. Both use the
+# host network because the proxy and the vault listen on the host loopback.
+#
+# Profile "infra" additionally runs Griffin's own egress proxy and OpenBao. Leave
+# COMPOSE_PROFILES empty on a host that already provides them.
+
+name: griffin
+
+x-build: &build
+  context: ..
+  network: host  # apt/apk steps use it; npm installs offline
+
+x-user: &user "${GRIFFIN_UID:-1000}:${GRIFFIN_GID:-1000}"
+
+services:
+  broker:
+    build: { <<: *build, target: broker }
+    image: griffin-broker:local
+    network_mode: host
+    restart: unless-stopped
+    user: *user
+    environment:
+      GRIFFIN_BAO_URL: http://127.0.0.1:18200
+      GRIFFIN_BAO_TOKEN_AGE: /vault/machine.token.age
+      GRIFFIN_AGE_IDENTITY: /keys/identity.age
+      GRIFFIN_SITE_CONFIG: /config/site.json
+      GRIFFIN_SSH_KNOWN_HOSTS: /config/ssh_known_hosts
+    volumes:
+      - sockets:/run/griffin
+      - ${GRIFFIN_CONFIG:?path to the config directory}:/config:ro
+      - ${GRIFFIN_VAULT_TOKEN_AGE:?path to machine.token.age}:/vault/machine.token.age:ro
+      - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
+
+  app:
+    build: { <<: *build, target: app }
+    image: griffin-app:local
+    network_mode: host
+    restart: unless-stopped
+    user: *user
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      PORT: ${GRIFFIN_PORT:-3100}
+      GRIFFIN_VERSION: ${GRIFFIN_VERSION:-local}
+      CURSOR_MODEL: ${CURSOR_MODEL:-auto}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      # Links in messenger replies (charts, files) point here.
+      GRIFFIN_PUBLIC_URL: ${GRIFFIN_PUBLIC_URL:-http://127.0.0.1:3100}
+      # Incident ops room: shadow (LLM triage) | record (group + show, no LLM) | off
+      GRIFFIN_OPS_MODE: ${OPS_MODE:-record}
+      # Telegram account (MTProto over TCP) needs SOCKS, not an HTTP proxy.
+      GRIFFIN_TELEGRAM_SOCKS: ${GRIFFIN_TELEGRAM_SOCKS:-}
+      # Node's built-in fetch honours these.
+      NODE_USE_ENV_PROXY: "1"
+      # The Cursor SDK agent stream ignores HTTPS_PROXY; apps/server/src/egress.mjs tunnels it here.
+      CURSOR_PROXY: ${GRIFFIN_PROXY:-}
+      HTTPS_PROXY: ${GRIFFIN_PROXY:-}
+      HTTP_PROXY: ${GRIFFIN_PROXY:-}
+      NO_PROXY: 127.0.0.1,localhost,::1,192.168.0.0/16,10.0.0.0/8
+    volumes:
+      - sockets:/run/griffin
+      - ${GRIFFIN_DATA:?path to the data directory}:/data
+      - ${GRIFFIN_WORKSPACE:?path to the agent workspace}:/workspace
+    # No vault token, no age identity, no SSH key in this container.
+
+  # --- profile "infra": Griffin's own egress proxy and secret store -----------------------
+
+  xray:
+    profiles: [infra]
+    image: node:24-alpine  # any small image; the static xray binary is mounted
+    network_mode: host
+    restart: unless-stopped
+    command: ["/xray/xray", "run", "-c", "/xray/config.json"]
+    volumes:
+      - ${GRIFFIN_XRAY_DIR:-/srv/griffin/xray}:/xray:ro
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "${GRIFFIN_PROXY_PORT:-18118}"]
+      interval: 30s
+      timeout: 5s
+
+  openbao:
+    profiles: [infra]
+    image: openbao/openbao@sha256:11fd73a2102cda9c55d5d881a8c3210303146a7ec1e8ac76f526e175c6d24641
+    network_mode: host
+    restart: unless-stopped
+    command: ["server", "-config=/openbao/config.hcl"]
+    environment:
+      BAO_ADDR: http://127.0.0.1:18200
+    volumes:
+      - ${GRIFFIN_VAULT_DIR:-/srv/griffin/vault}/state/config.hcl:/openbao/config.hcl:ro
+      - ${GRIFFIN_VAULT_DIR:-/srv/griffin/vault}/raft:/openbao/file
+      - ${GRIFFIN_VAULT_DIR:-/srv/griffin/vault}/audit:/openbao/audit
+
+  vault-unsealer:
+    profiles: [infra]
+    image: griffin-broker:local
+    network_mode: host
+    restart: unless-stopped
+    user: *user
+    command: ["node", "apps/broker/src/unseal.mjs"]
+    depends_on: [openbao]
+    environment:
+      GRIFFIN_BAO_URL: http://127.0.0.1:18200
+      GRIFFIN_UNSEAL_AGE: /vault/unseal.b64.age
+      GRIFFIN_AGE_IDENTITY: /keys/identity.age
+    volumes:
+      - ${GRIFFIN_VAULT_DIR:-/srv/griffin/vault}/state/unseal.b64.age:/vault/unseal.b64.age:ro
+      - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
+    healthcheck:
+      disable: true
+
+volumes:
+  sockets:

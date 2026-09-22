@@ -1,0 +1,21 @@
+# deps / build
+node_modules/
+__pycache__/
+*.pyc
+apps/web/dist/
+.build/
+
+# runtime state and secrets — never commit
+*.age
+*.token
+*.api-key
+.env
+.env.*
+deploy/.env
+
+# the real site inventory (config/site.example.json is the shape)
+config/site.json
+config/ssh_known_hosts
+
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

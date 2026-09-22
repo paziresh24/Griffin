@@ -1,0 +1,10 @@
+{
+  "name": "@griffin/timeline",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

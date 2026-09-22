@@ -1,0 +1,484 @@
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log"
+  },
+  "inbounds": [
+    {
+      "tag": "http-in",
+      "listen": "127.0.0.1",
+      "port": 8118,
+      "protocol": "http",
+      "settings": {}
+    },
+    {
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "port": 1080,
+      "protocol": "socks",
+      "settings": {
+        "udp": true
+      }
+    },
+    {
+      "tag": "cursor-door",
+      "listen": "127.0.0.1",
+      "port": 18743,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "<ADDRESS>",
+        "port": 443,
+        "network": "tcp"
+      }
+    },
+    {
+      "tag": "probe-proxy-cursor",
+      "listen": "127.0.0.1",
+      "port": 10811,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    },
+    {
+      "tag": "probe-proxy-cursor-fb1",
+      "listen": "127.0.0.1",
+      "port": 10812,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    },
+    {
+      "tag": "probe-proxy-cursor-fb2",
+      "listen": "127.0.0.1",
+      "port": 10813,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    },
+    {
+      "tag": "probe-proxy-cursor-fb3",
+      "listen": "127.0.0.1",
+      "port": 10814,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    },
+    {
+      "tag": "probe-proxy-cursor-fb4",
+      "listen": "127.0.0.1",
+      "port": 10815,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    },
+    {
+      "tag": "probe-proxy-legacy",
+      "listen": "127.0.0.1",
+      "port": 10816,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": false
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy-cursor",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<ADDRESS>",
+            "port": 2096,
+            "users": [
+              {
+                "id": "<ID>",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "<PATH>",
+          "host": "<HOST>",
+          "mode": "auto",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100,
+            "scMinPostsIntervalMs": 30,
+            "xPaddingBytes": "100-1000",
+            "noGRPCHeader": false
+          }
+        }
+      }
+    },
+    {
+      "tag": "proxy-cursor-fb1",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<ADDRESS>",
+            "port": 2096,
+            "users": [
+              {
+                "id": "<ID>",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "<PATH>",
+          "host": "<HOST>",
+          "mode": "auto",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100,
+            "scMinPostsIntervalMs": 30,
+            "xPaddingBytes": "100-1000",
+            "noGRPCHeader": false
+          }
+        }
+      }
+    },
+    {
+      "tag": "proxy-cursor-fb2",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<ADDRESS>",
+            "port": 2096,
+            "users": [
+              {
+                "id": "<ID>",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "<PATH>",
+          "host": "<HOST>",
+          "mode": "auto",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100,
+            "scMinPostsIntervalMs": 30,
+            "xPaddingBytes": "100-1000",
+            "noGRPCHeader": false
+          }
+        }
+      }
+    },
+    {
+      "tag": "proxy-cursor-fb3",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<ADDRESS>",
+            "port": 2053,
+            "users": [
+              {
+                "id": "<ID>",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "<PATH>",
+          "host": "<HOST>",
+          "mode": "auto",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100,
+            "scMinPostsIntervalMs": 30,
+            "xPaddingBytes": "100-1000",
+            "noGRPCHeader": false
+          }
+        }
+      }
+    },
+    {
+      "tag": "proxy-cursor-fb4",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<ADDRESS>",
+            "port": 2053,
+            "users": [
+              {
+                "id": "<ID>",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": [
+            "h2",
+            "http/1.1"
+          ]
+        },
+        "xhttpSettings": {
+          "path": "<PATH>",
+          "host": "<HOST>",
+          "mode": "auto",
+          "extra": {
+            "scMaxEachPostBytes": 1000000,
+            "scMaxConcurrentPosts": 100,
+            "scMinPostsIntervalMs": 30,
+            "xPaddingBytes": "100-1000",
+            "noGRPCHeader": false
+          }
+        }
+      }
+    },
+    {
+      "tag": "proxy-legacy",
+      "protocol": "trojan",
+      "settings": {
+        "servers": [
+          {
+            "address": "<ADDRESS>",
+            "port": 443,
+            "password": "<PASSWORD>"
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "<SERVERNAME>",
+          "allowInsecure": false,
+          "fingerprint": "random"
+        },
+        "wsSettings": {
+          "path": "<PATH>",
+          "headers": {}
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {}
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-legacy"
+        ],
+        "outboundTag": "proxy-legacy"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-cursor-fb4"
+        ],
+        "outboundTag": "proxy-cursor-fb4"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-cursor-fb3"
+        ],
+        "outboundTag": "proxy-cursor-fb3"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-cursor-fb2"
+        ],
+        "outboundTag": "proxy-cursor-fb2"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-cursor-fb1"
+        ],
+        "outboundTag": "proxy-cursor-fb1"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "probe-proxy-cursor"
+        ],
+        "outboundTag": "proxy-cursor"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "cursor-door"
+        ],
+        "balancerTag": "cursor-balancer"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "domain:cursor.com",
+          "domain:cursor.sh",
+          "domain:cursorapi.com",
+          "full:api.cursor.com"
+        ],
+        "balancerTag": "cursor-balancer"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "full:cloudcode-pa.googleapis.com",
+          "full:daily-cloudcode-pa.googleapis.com",
+          "full:oauth2.googleapis.com",
+          "domain:anthropic.com",
+          "domain:claude.ai",
+          "domain:claude.com",
+          "domain:github.com",
+          "domain:githubusercontent.com",
+          "domain:gitlab.com",
+          "domain:telegram.org",
+          "domain:t.me"
+        ],
+        "balancerTag": "cursor-balancer"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      }
+    ],
+    "balancers": [
+      {
+        "tag": "cursor-balancer",
+        "selector": [
+          "proxy-cursor"
+        ],
+        "fallbackTag": "proxy-cursor-fb3",
+        "strategy": {
+          "type": "leastLoad",
+          "settings": {
+            "expected": 2,
+            "maxRTT": "3s",
+            "tolerance": 0.34,
+            "baselines": [
+              "700ms",
+              "1500ms",
+              "3s"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "handshake": 8,
+        "connIdle": 3600,
+        "uplinkOnly": 10,
+        "downlinkOnly": 30,
+        "bufferSize": 512
+      }
+    },
+    "system": {
+      "statsInboundUplink": false,
+      "statsInboundDownlink": false
+    }
+  },
+  "burstObservatory": {
+    "subjectSelector": [
+      "proxy-cursor"
+    ],
+    "pingConfig": {
+      "destination": "https://api.cursor.com/",
+      "connectivity": "",
+      "interval": "30s",
+      "sampling": 6,
+      "timeout": "8s"
+    }
+  }
+}

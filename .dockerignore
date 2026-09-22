@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+.git
+.claude
+docs
+deploy
+config/site.json
+**/*.age
+**/*.token
+**/*.api-key
+**/.env*

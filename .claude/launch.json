@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "griffin-demo",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "mkdir -p /tmp/griffin-demo/data /tmp/griffin-demo/workspace && GRIFFIN_DEMO=1 GRIFFIN_DATA=/tmp/griffin-demo/data GRIFFIN_WORKSPACE=/tmp/griffin-demo/workspace GRIFFIN_BROKER_SOCKET=/tmp/griffin-demo/broker.sock GRIFFIN_AUTH=off PORT=3100 HOST=127.0.0.1 node apps/server/src/index.mjs"],
+      "port": 3100
+    }
+  ]
+}

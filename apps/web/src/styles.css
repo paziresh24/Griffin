@@ -1,0 +1,350 @@
+@import "tailwindcss";
+@import "@fontsource-variable/vazirmatn";
+@import "streamdown/styles.css";
+
+@source "../../../node_modules/streamdown/dist/*.js";
+@source "../../../node_modules/@streamdown/code/dist/*.js";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: oklch(0.985 0.002 250);
+  --foreground: oklch(0.2 0.02 255);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--foreground);
+  --muted: oklch(0.955 0.005 250);
+  --muted-foreground: oklch(0.52 0.02 255);
+  --border: oklch(0.9 0.008 250);
+  --input: var(--border);
+  /* Griffin stays orange; page primary follows data-agent (see below). */
+  --brand: #e8873a;
+  --primary: oklch(0.7 0.15 55);
+  --primary-foreground: oklch(0.98 0.01 70);
+  --accent: oklch(0.95 0.04 55);
+  --agent-platform: #1baf7a;
+  --agent-arvan: #039595;
+  --agent-nsin: #22b8c8;
+  --ok: oklch(0.62 0.14 155);
+  --warn: oklch(0.72 0.15 75);
+  --bad: oklch(0.6 0.2 25);
+  --emergency: oklch(0.68 0.16 55);
+  --radius: 0.75rem;
+  --scrollbar-size: 8px;
+  --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--muted-foreground) 62%, transparent);
+  --scrollbar-track: transparent;
+}
+
+.dark {
+  --background: oklch(0.16 0.012 255);
+  --foreground: oklch(0.93 0.008 250);
+  --card: oklch(0.2 0.014 255);
+  --card-foreground: var(--foreground);
+  --muted: oklch(0.24 0.014 255);
+  --muted-foreground: oklch(0.68 0.015 255);
+  --border: oklch(0.3 0.015 255);
+  --input: var(--border);
+  --brand: #e8873a;
+  --primary: oklch(0.78 0.14 55);
+  --primary-foreground: oklch(0.2 0.04 50);
+  --accent: oklch(0.28 0.05 50);
+  --agent-platform: #34d399;
+  --agent-arvan: #039595;
+  --agent-nsin: #5eead4;
+  --ok: oklch(0.76 0.14 155);
+  --warn: oklch(0.82 0.14 80);
+  --bad: oklch(0.7 0.18 25);
+  --emergency: oklch(0.78 0.15 60);
+  --scrollbar-thumb: color-mix(in oklch, var(--muted-foreground) 42%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+}
+
+/* Page chrome follows the active agent; Griffin logo uses --brand. */
+html[data-agent="platform"] {
+  --primary: #1baf7a;
+  --primary-foreground: #f4fffa;
+  --accent: color-mix(in srgb, #1baf7a 14%, white);
+}
+html.dark[data-agent="platform"] {
+  --primary: #34d399;
+  --primary-foreground: #052e1c;
+  --accent: color-mix(in srgb, #34d399 18%, #1a1f28);
+}
+html[data-agent="arvan-ban"] {
+  --primary: #039595;
+  --primary-foreground: #f2ffff;
+  --accent: color-mix(in srgb, #039595 14%, white);
+}
+html.dark[data-agent="arvan-ban"] {
+  --primary: #039595;
+  --primary-foreground: #041212;
+  --accent: color-mix(in srgb, #039595 22%, #1a1f28);
+}
+html[data-agent="nsin-ban"] {
+  --primary: #22b8c8;
+  --primary-foreground: #041218;
+  --accent: color-mix(in srgb, #22b8c8 14%, white);
+}
+html.dark[data-agent="nsin-ban"] {
+  --primary: #5eead4;
+  --primary-foreground: #042f2e;
+  --accent: color-mix(in srgb, #5eead4 18%, #1a1f28);
+}
+
+@theme inline {
+  --font-sans: "Vazirmatn Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-brand: var(--brand);
+  --color-agent-platform: var(--agent-platform);
+  --color-agent-arvan: var(--agent-arvan);
+  --color-agent-nsin: var(--agent-nsin);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-emergency: var(--emergency);
+  --radius-lg: var(--radius);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+* {
+  border-color: var(--border);
+}
+
+/* Numbers, IDs and paths read left-to-right even inside Persian text. */
+.ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* Markdown sheets: Persian blocks flush right, English flush left. Streamdown pins
+   table headers with `text-left`, which left the titles on the left while RTL body
+   cells went right — override that so title and content share one direction.
+   Never use unicode-bidi:plaintext here: it re-detects from the first strong char
+   and flips English-leading Persian paragraphs back to LTR. */
+.sd-block[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+.sd-block[dir="ltr"] {
+  direction: ltr;
+  text-align: left;
+}
+
+.sd-block[dir="rtl"] :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, th, td) {
+  direction: rtl;
+  text-align: right !important;
+  unicode-bidi: embed;
+}
+
+.sd-block[dir="rtl"] :is(pre, code, .ltr) {
+  direction: ltr;
+  text-align: left !important;
+  unicode-bidi: isolate;
+}
+
+.sd-block[dir="ltr"] :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, th, td) {
+  direction: ltr;
+  text-align: left !important;
+  unicode-bidi: embed;
+}
+
+/* Plain chat bubbles (user message) — same force as markdown sheets. */
+.chat-text[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: embed;
+}
+
+.chat-text[dir="ltr"] {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: embed;
+}
+
+.sd-block[dir="rtl"] blockquote {
+  border-left-width: 0;
+  border-right-width: 4px;
+  border-right-style: solid;
+  border-right-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  padding-left: 0;
+  padding-right: 1rem;
+}
+
+.sd-block[dir="rtl"] :is(ul, ol) {
+  padding-right: 1.25rem;
+  padding-left: 0;
+}
+
+.sd-block[dir="ltr"] :is(ul, ol) {
+  padding-left: 1.25rem;
+  padding-right: 0;
+}
+
+.sd-block :is(pre, code) {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left !important;
+}
+
+/* Thin, theme-colored scrollbars everywhere (Firefox + Chromium/WebKit). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, var(--muted-foreground) 25%, var(--foreground) 50%, var(--muted-foreground) 75%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+
+.agent-pulse {
+  color: var(--primary);
+  animation: agent-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+.agent-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.agent-dots i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: agent-dot 1.05s ease-in-out infinite;
+}
+.agent-dots i:nth-child(2) { animation-delay: 0.15s; }
+.agent-dots i:nth-child(3) { animation-delay: 0.3s; }
+.agent-dots-on-dark { color: var(--background); }
+
+@keyframes agent-dot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+  40% { transform: translateY(-2px); opacity: 1; }
+}
+
+.welcome-glow {
+  position: relative;
+}
+.welcome-glow::after {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  border-radius: 28%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--primary) 35%, transparent), transparent 70%);
+  z-index: -1;
+  animation: welcome-glow 2.8s ease-in-out infinite;
+}
+@keyframes welcome-glow {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 0.85; transform: scale(1.05); }
+}
+
+/* Motion: tactile buttons, popovers that grow from their trigger, calm theme transition. */
+@layer components {
+  .press {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-duration: 160ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+  .press:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+  .pop {
+    transform-origin: var(--radix-popover-content-transform-origin, var(--radix-tooltip-content-transform-origin, center));
+    animation: pop-in 160ms cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .press, .pop { animation: none; transition: none; }
+}
+
+/* Every composer/assistant-ui button gets the same feel without touching each one. */
+button:not(.press) {
+  transition: color 160ms, background-color 160ms, border-color 160ms, opacity 160ms, transform 120ms;
+}
+button:not(:disabled):active {
+  transform: scale(0.96);
+}

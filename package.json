@@ -1,0 +1,19 @@
+{
+  "name": "griffin",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "packages/timeline",
+    "apps/server",
+    "apps/broker",
+    "apps/web"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "build": "npm run build --workspace apps/web"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

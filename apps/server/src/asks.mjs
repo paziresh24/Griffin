@@ -1,0 +1,273 @@
+// ask_owner: lets the agent stop and ask the owner a question mid-run. The Cursor SDK has no
+// ask mode, so this is a custom tool whose execute() waits for the answer posted from the UI.
+// If the tool call is gone by the time the owner answers (run finished, cancelled, restart),
+// the caller sends the answer as a normal follow-up message instead.
+//
+// Peer children (ask_agent): the question is routed to the root chat so the owner sees and
+// answers it there. If the root is a scheduler/job chat, nobody is watching — auto-reject.
+//
+// Audience: who is allowed to answer. Anything that needs permission is for the owner — even in a
+// chain a peer agent started, because the peer must never approve its own request. Only a plain
+// clarification ("which cluster did you mean?") goes back to the requester, and only when the
+// agent says so with audience:"requester". The owner may answer either kind.
+//
+// onSettled(rootChatId) fires the moment a question stops being open — answered from any
+// surface (UI or Telegram), held early, or the run ended — so a caller (integrations manager)
+// can delete the mirrored Telegram question and keep only genuinely open ones visible there.
+
+export const ASK_TOOL = "ask_owner";
+
+export const ASK_REQUESTER_TOOL = "ask_requester";
+
+export const OWNER = "owner";
+export const REQUESTER = "requester";
+
+/** Who should answer this question. Used both here and by the Telegram bridge, which sees only
+ *  the tool.started event (the SDK calls execute() a while later). */
+export function audienceFor(chat, args = {}) {
+  if (args?.audience === REQUESTER && chat && chat.caller && chat.caller !== OWNER) return REQUESTER;
+  return OWNER;
+}
+
+const inputSchema = {
+  type: "object",
+  properties: {
+    question: { type: "string", description: "One clear question in Persian." },
+    options: {
+      type: "array",
+      maxItems: 6,
+      description: "2-6 concrete choices; put the recommended one first. Omit for a free-text answer.",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string", description: "short choice label" },
+          description: { type: "string", description: "what choosing it means" },
+        },
+        required: ["label"],
+        additionalProperties: false,
+      },
+    },
+    multiSelect: { type: "boolean", description: "owner may pick several options" },
+    audience: {
+      type: "string",
+      enum: [OWNER, REQUESTER],
+      description:
+        "Who answers. Default \"owner\": anything that needs permission, approval, or a decision about access — the requester may never approve their own request. Use \"requester\" only for a plain clarification about what they meant.",
+    },
+  },
+  required: ["question"],
+  additionalProperties: false,
+};
+
+const requesterSchema = {
+  ...inputSchema,
+  properties: Object.fromEntries(Object.entries(inputSchema.properties).filter(([key]) => key !== "audience")),
+};
+
+export function createAsks({ store = null, onSettled = () => {}, log = console } = {}) {
+  const pending = new Map(); // targetChatId -> [{ question, resolve, sourceChatId, mirrorIds }]
+  // Answers that arrived while the question card was visible but the SDK had not called execute() yet
+  // (seen up to 12 minutes on 2026-09-15). The next question of that run takes it immediately.
+  const early = new Map(); // targetChatId -> answer
+  const listeners = new Map(); // targetChatId -> Set<() => void>, woken when a question starts waiting
+
+  function targetOf(chatId) {
+    if (!store?.rootChatId) return chatId;
+    return store.rootChatId(chatId);
+  }
+
+  function rootIsUnwatched(rootId) {
+    const root = store?.getChat?.(rootId);
+    if (!root) return false;
+    return root.caller === "scheduler" || root.caller === "ops" || Boolean(root.job_id);
+  }
+
+  function enqueue(chatId, question, args = {}) {
+    const target = targetOf(chatId);
+    const audience = args.audience === REQUESTER ? REQUESTER : OWNER;
+    if (rootIsUnwatched(target)) {
+      return Promise.resolve({
+        answered: false,
+        reason: "nobody is watching this chain (scheduler/job/ops root) — decide yourself or refuse",
+      });
+    }
+    if (early.has(target)) {
+      const answer = early.get(target);
+      early.delete(target);
+      return Promise.resolve(answer);
+    }
+
+    // Mirror the question onto the root chat so AskCard appears where the owner is looking.
+    const mirrorIds = [];
+    if (store && target !== chatId) {
+      const started = store.appendEvent(target, null, "tool.started", {
+        callId: `peer-ask-${Date.now()}`,
+        name: ASK_TOOL,
+        args: { question, options: args.options, multiSelect: args.multiSelect, audience },
+        fromChatId: chatId,
+      });
+      mirrorIds.push(started.id);
+    }
+
+    const item = { question, audience, sourceChatId: chatId, mirrorIds, by: null };
+    return new Promise((resolve) => {
+      if (!pending.has(target)) pending.set(target, []);
+      Object.assign(item, {
+        resolve: (answer) => {
+          if (store && mirrorIds.length) {
+            store.appendEvent(target, null, "tool.done", {
+              callId: `peer-ask-done`,
+              name: ASK_TOOL,
+              args: { question, options: args.options, multiSelect: args.multiSelect },
+              result: answer,
+              answeredBy: item.by || null,
+              fromChatId: chatId,
+            });
+          }
+          resolve(answer);
+        },
+      });
+      pending.get(target).push(item);
+      for (const wake of listeners.get(target) || []) wake();
+    });
+  }
+
+  function settle(chatId, text, { by = OWNER } = {}) {
+    const target = targetOf(chatId);
+    const queue = pending.get(target);
+    const next = queue?.[0];
+    if (!next) return false;
+    // A question for the owner can only be settled by the owner: the peer agent that asked for
+    // the work must not be able to approve it by answering its own task's question.
+    if (next.audience === OWNER && by !== OWNER) return false;
+    queue.shift();
+    if (!queue.length) pending.delete(target);
+    next.by = by;
+    next.resolve(text);
+    if (text?.answered) {
+      // Who answered an approval matters after the fact; without this the log cannot say whether
+      // the owner tapped it or the requester replied.
+      log?.log?.(`[ask] ${target.slice(0, 8)} ${next.audience} question answered by ${by}: ${String(text.answer || "").slice(0, 80)}`);
+    }
+    onSettled(target); // the question is no longer open — e.g. delete the mirrored Telegram message
+    return true;
+  }
+
+  return {
+    tool(chatId) {
+      return {
+        description:
+          "Ask the owner a question and wait for the answer. Use it when the request is ambiguous, when several reasonable paths exist, or before a risky/irreversible action. Do not use it for things you can find out with other tools.",
+        inputSchema,
+        async execute(args) {
+          const question = String(args?.question || "").trim();
+          if (!question) return { isError: true, content: [{ type: "text", text: "question is required" }] };
+          const audience = audienceFor(store?.getChat?.(chatId), args || {});
+          const answer = await enqueue(chatId, question, { ...(args || {}), audience });
+          return { content: [{ type: "text", text: JSON.stringify(answer) }] };
+        },
+      };
+    },
+
+    // Talking to whoever asked (a colleague's agent over /mcp, a teammate in a coverage chat)
+    // instead of the owner. Real work often needs a word with them — which namespace, which
+    // repo, is this the app you meant — and that is not the owner's question. In the owner's own
+    // chats there is nobody else to ask, so it is the same as ask_owner.
+    requesterTool(chatId) {
+      return {
+        description:
+          "Ask the person or agent who sent this request a question and wait for their answer. Use it for anything only they can answer: what they meant, which system/app/branch, what they already tried. Never use it to get permission — approval and access decisions go to the owner with ask_owner.",
+        // Built without the audience key at all: the SDK serializes the schema through protobuf,
+        // where a present-but-undefined property is a decode error, not an omission.
+        inputSchema: requesterSchema,
+        async execute(args) {
+          const question = String(args?.question || "").trim();
+          if (!question) return { isError: true, content: [{ type: "text", text: "question is required" }] };
+          const audience = audienceFor(store?.getChat?.(chatId), { audience: REQUESTER });
+          const answer = await enqueue(chatId, question, { ...(args || {}), audience });
+          return { content: [{ type: "text", text: JSON.stringify(answer) }] };
+        },
+      };
+    },
+
+    // Same waiting mechanism for tools that need the owner's go-ahead (e.g. telegram_send); resolves with
+    // { answered, answer, selected } or { answered: false, reason }.
+    confirm(chatId, { question }) {
+      return enqueue(chatId, String(question || ""), { audience: OWNER });
+    },
+
+    // Returns true when a waiting tool call received the answer. `by` says who answered: the
+    // owner (UI or their Telegram) or the requester (a peer agent replying to its own task).
+    answer(chatId, { answer, selected = [], by = OWNER }) {
+      return settle(chatId, { answered: true, answer: String(answer || ""), selected }, { by });
+    },
+
+    // Who may answer the question currently open on this chain (null when none is open).
+    audienceOf(chatId) {
+      return pending.get(targetOf(chatId))?.[0]?.audience || null;
+    },
+
+    // Keep an answer for the question that is about to start waiting in this run.
+    holdEarly(chatId, { answer, selected = [] }) {
+      const target = targetOf(chatId);
+      early.set(target, { answered: true, answer: String(answer || ""), selected });
+      onSettled(target); // answered already, even though the tool hasn't picked it up yet
+    },
+
+    // Called when a run ends: releases waiting questions and returns an early answer nobody took.
+    cancel(chatId) {
+      const target = targetOf(chatId);
+      // Only questions this chat itself raised. A parent ending its turn (delegate hands the work
+      // to a child and returns) must not cancel the question its child is still waiting on —
+      // seen live 2026-09-21: an approval that had just reached the owner's Telegram was killed
+      // two minutes later because the parent finished its turn.
+      const queue = pending.get(target) || [];
+      const keep = [];
+      let cancelled = false;
+      for (const item of queue) {
+        if (item.sourceChatId === chatId) {
+          item.resolve({ answered: false, reason: "the owner stopped the run before answering" });
+          cancelled = true;
+        } else keep.push(item);
+      }
+      if (keep.length) pending.set(target, keep);
+      else pending.delete(target);
+      const leftover = early.get(target) || null;
+      if (chatId === target || cancelled) early.delete(target);
+      // Only tell the bridge the chain is quiet when nothing of it is open any more.
+      if (!keep.length) onSettled(target);
+      return leftover;
+    },
+
+    // The UI shows the question as soon as the model starts the tool call, but the SDK runs
+    // execute() only after its MCP round trip (about a minute on the capsule). An answer in that
+    // gap waits here for the question instead of becoming a duplicate follow-up run.
+    waitForQuestion(chatId, { timeoutMs = 120_000, stillActive = () => true, pollMs = 1_000 } = {}) {
+      const target = targetOf(chatId);
+      if (pending.get(target)?.length) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        const set = listeners.get(target) || new Set();
+        listeners.set(target, set);
+        let timer;
+        let poll;
+        const done = (value) => {
+          clearTimeout(timer);
+          clearInterval(poll);
+          set.delete(wake);
+          if (!set.size) listeners.delete(target);
+          resolve(value);
+        };
+        const wake = () => done(true);
+        set.add(wake);
+        timer = setTimeout(() => done(false), timeoutMs);
+        poll = setInterval(() => {
+          if (!stillActive()) done(false);
+        }, pollMs);
+      });
+    },
+
+    isWaiting(chatId) {
+      return Boolean(pending.get(targetOf(chatId))?.length);
+    },
+  };
+}

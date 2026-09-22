@@ -1,0 +1,25 @@
+{
+  "name": "@griffin/server",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.274",
+    "@anthropic-ai/sdk": "^0.93.0",
+    "@cursor/sdk": "1.0.31",
+    "@griffin/timeline": "*",
+    "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "hono": "^4.13.7",
+    "telegram": "^2.26.22",
+    "vega": "^6.4.0",
+    "vega-lite": "^6.4.3",
+    "zod": "^4.6.5"
+  }
+}
