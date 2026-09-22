@@ -134,6 +134,8 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
   label TEXT NOT NULL,
   domain TEXT NOT NULL DEFAULT '',
   blurb TEXT NOT NULL DEFAULT '',
+  -- what this agent is, in its own words: appended to the shared core rules on every run
+  instructions TEXT NOT NULL DEFAULT '',
   provider TEXT NOT NULL DEFAULT 'cursor',
   model TEXT,
   tools_json TEXT NOT NULL DEFAULT '[]',
@@ -890,7 +892,7 @@ export function openStore(file) {
       for (const row of seedProfilesFromRegistry()) {
         const existing = store.getAgentProfile(row.id);
         if (existing) {
-          // New caller rows from the registry (e.g. "ops") are added; rows the owner edited stay.
+          // New caller rows from the registry are added; anything the owner edited stays.
           const callers = { ...(existing.meta?.callers || {}) };
           const missing = Object.keys(row.meta.callers || {}).filter((id) => !callers[id]);
           if (missing.length) {
@@ -901,72 +903,6 @@ export function openStore(file) {
         }
         store.upsertAgentProfile(row);
         inserted += 1;
-      }
-      // One-time: griffin (and every caller that may ask_agent it) also gets delegate/subtasks.
-      if (!store.getKv("migr:delegate-tools")) {
-        const griffin = store.getAgentProfile("griffin");
-        if (griffin) {
-          const add = (list) => (list.includes("ask_agent") ? [...new Set([...list, "delegate", "subtasks"])] : list);
-          const callers = { ...(griffin.meta?.callers || {}) };
-          // Owner (profile tools) and external peers; not ops/scheduler/team, whose run budgets
-          // assume one run per trigger (a delegate wake would add runs outside those caps).
-          for (const [id, quota] of Object.entries(callers)) {
-            if (id.startsWith("peer:") && Array.isArray(quota?.tools)) callers[id] = { ...quota, tools: add(quota.tools) };
-          }
-          const tools = add(griffin.tools || []);
-          const patch = {};
-          if (tools.length !== (griffin.tools || []).length) {
-            patch.tools = tools;
-            if (griffin.meta?.allPlatform !== undefined) patch.allPlatform = griffin.meta.allPlatform;
-          }
-          if (JSON.stringify(callers) !== JSON.stringify(griffin.meta?.callers || {})) patch.meta = { callers };
-          if (Object.keys(patch).length) store.updateAgentProfile("griffin", patch);
-        }
-        store.setKv("migr:delegate-tools", "1");
-      }
-      // One-time: ask_requester goes wherever ask_owner already is. Talking to the colleague who
-      // asked ("which app did you mean?") is part of doing the work; only approval is the owner's.
-      if (!store.getKv("migr:ask-requester")) {
-        for (const profile of store.listAgentProfiles()) {
-          const add = (list) =>
-            Array.isArray(list) && list.includes("ask_owner") && !list.includes("ask_requester")
-              ? [...list, "ask_requester"]
-              : list;
-          const callers = { ...(profile.meta?.callers || {}) };
-          for (const [id, quota] of Object.entries(callers)) {
-            if (Array.isArray(quota?.tools)) callers[id] = { ...quota, tools: add(quota.tools) };
-          }
-          const tools = add(profile.tools || []);
-          const patch = {};
-          if (tools !== profile.tools) {
-            patch.tools = tools;
-            // Patching tools otherwise turns off allPlatform (platform's "everything" domain).
-            if (profile.meta?.allPlatform !== undefined) patch.allPlatform = profile.meta.allPlatform;
-          }
-          if (JSON.stringify(callers) !== JSON.stringify(profile.meta?.callers || {})) {
-            patch.meta = { ...(profile.meta || {}), callers };
-          }
-          if (Object.keys(patch).length) store.updateAgentProfile(profile.id, patch);
-        }
-        store.setKv("migr:ask-requester", "1");
-      }
-      // One-time: infisical_projects is the index for infisical_list/get (names and ids, no
-      // values). Leaving it out only made agents stop and ask the owner to unlock a listing.
-      if (!store.getKv("migr:infisical-projects")) {
-        for (const profile of store.listAgentProfiles()) {
-          const add = (list) =>
-            Array.isArray(list) && list.includes("infisical_list") && !list.includes("infisical_projects")
-              ? [...list, "infisical_projects"]
-              : list;
-          const callers = { ...(profile.meta?.callers || {}) };
-          for (const [id, quota] of Object.entries(callers)) {
-            if (Array.isArray(quota?.tools)) callers[id] = { ...quota, tools: add(quota.tools) };
-          }
-          if (JSON.stringify(callers) !== JSON.stringify(profile.meta?.callers || {})) {
-            store.updateAgentProfile(profile.id, { meta: { ...(profile.meta || {}), callers } });
-          }
-        }
-        store.setKv("migr:infisical-projects", "1");
       }
       return inserted;
     },
@@ -985,6 +921,7 @@ export function openStore(file) {
       label,
       domain = "",
       blurb = "",
+      instructions = "",
       provider = "cursor",
       model = null,
       tools = [],
@@ -999,13 +936,13 @@ export function openStore(file) {
       const prov = provider === "claude" ? "claude" : "cursor";
       if (existing) {
         db.prepare(
-          `UPDATE agent_profiles SET label = ?, domain = ?, blurb = ?, provider = ?, model = ?, tools_json = ?, meta_json = ?, built_in = ?, updated_at = ? WHERE id = ?`,
-        ).run(label, domain, blurb || "", prov, model || null, toolsJson, metaJson, Number(builtIn), at, id);
+          `UPDATE agent_profiles SET label = ?, domain = ?, blurb = ?, instructions = ?, provider = ?, model = ?, tools_json = ?, meta_json = ?, built_in = ?, updated_at = ? WHERE id = ?`,
+        ).run(label, domain, blurb || "", instructions || "", prov, model || null, toolsJson, metaJson, Number(builtIn), at, id);
       } else {
         db.prepare(
-          `INSERT INTO agent_profiles (id, label, domain, blurb, provider, model, tools_json, meta_json, built_in, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, label, domain, blurb || "", prov, model || null, toolsJson, metaJson, Number(builtIn), at, at);
+          `INSERT INTO agent_profiles (id, label, domain, blurb, instructions, provider, model, tools_json, meta_json, built_in, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, label, domain, blurb || "", instructions || "", prov, model || null, toolsJson, metaJson, Number(builtIn), at, at);
       }
       bus.emit("agents", { type: existing ? "updated" : "created", agentId: id });
       return store.getAgentProfile(id);
@@ -1018,13 +955,13 @@ export function openStore(file) {
       if (patch.meta !== undefined && patch.meta && typeof patch.meta === "object") {
         Object.assign(meta, patch.meta);
       }
-      if (patch.allPlatform !== undefined) meta.allPlatform = Boolean(patch.allPlatform);
+      if (patch.allTools !== undefined) meta.allTools = Boolean(patch.allTools);
       if (Array.isArray(patch.disabled)) meta.disabled = unique(patch.disabled);
 
       let tools = patch.tools !== undefined ? unique(patch.tools) : current.tools;
-      // Explicit tool list means leave allPlatform mode.
-      if (patch.tools !== undefined && patch.allPlatform === undefined) {
-        meta.allPlatform = false;
+      // An explicit tool list means leaving "every tool" mode.
+      if (patch.tools !== undefined && patch.allTools === undefined) {
+        meta.allTools = false;
         meta.disabled = [];
       }
 
@@ -1033,6 +970,7 @@ export function openStore(file) {
         label: patch.label !== undefined ? String(patch.label).slice(0, 120) : current.label,
         domain: patch.domain !== undefined ? String(patch.domain).slice(0, 500) : current.domain,
         blurb: patch.blurb !== undefined ? String(patch.blurb).slice(0, 500) : current.blurb,
+        instructions: patch.instructions !== undefined ? String(patch.instructions).slice(0, 20_000) : current.instructions,
         provider: patch.provider !== undefined ? patch.provider : current.provider,
         model: patch.model !== undefined ? (patch.model || null) : current.model,
         tools,
@@ -1041,11 +979,20 @@ export function openStore(file) {
       });
     },
 
+    /** Remove a custom agent. Chats that used it keep their history and fall back to the default. */
+    deleteAgentProfile(id) {
+      const profile = store.getAgentProfile(id);
+      if (!profile) return false;
+      db.prepare("DELETE FROM agent_profiles WHERE id = ?").run(String(id));
+      bus.emit("agents", { type: "deleted", agentId: String(id) });
+      return true;
+    },
+
     enableAgentTools(id, names) {
       const profile = store.getAgentProfile(id);
       if (!profile) return null;
       const add = unique((Array.isArray(names) ? names : [names]).map(String));
-      if (profile.meta?.allPlatform) {
+      if (profile.meta?.allTools) {
         const disabled = (profile.meta.disabled || []).filter((n) => !add.includes(n));
         return store.updateAgentProfile(id, { disabled, meta: { ...profile.meta, disabled } });
       }
@@ -1056,7 +1003,7 @@ export function openStore(file) {
       const profile = store.getAgentProfile(id);
       if (!profile) return null;
       const remove = unique((Array.isArray(names) ? names : [names]).map(String));
-      if (profile.meta?.allPlatform) {
+      if (profile.meta?.allTools) {
         const disabled = unique([...(profile.meta.disabled || []), ...remove]);
         return store.updateAgentProfile(id, { meta: { ...profile.meta, disabled } });
       }
@@ -1091,6 +1038,7 @@ function profileFromRow(row) {
     label: row.label,
     domain: row.domain || "",
     blurb: row.blurb || "",
+    instructions: row.instructions || "",
     provider: row.provider || "cursor",
     model: row.model || null,
     tools: Array.isArray(tools) ? tools : [],

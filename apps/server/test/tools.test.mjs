@@ -59,7 +59,7 @@ test("image results are stored as media; the model gets the picture, the event l
     ? { status: 200, body: [{ name: "s3_get", description: "x", inputSchema: {} }] }
     : { status: 200, body: { ok: true, result: { bucket: "b", key: "k.jpg", image: { mimeType: "image/jpeg", data: Buffer.from("jpg").toString("base64") } } } };
   const { createToolSource } = await import("../src/tools.mjs");
-  const tools = await createToolSource({ socketPath: "/x", request, store }).customTools("chat-1");
+  const tools = await createToolSource({ socketPath: "/x", exists: () => true, request, store }).customTools("chat-1");
   const result = await tools.s3_get.execute({});
   assert.equal(saved[0].chatId, "chat-1");
   assert.equal(saved[0].data.toString(), "jpg");

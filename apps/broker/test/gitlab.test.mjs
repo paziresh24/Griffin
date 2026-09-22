@@ -68,7 +68,7 @@ test("gitlab_propose: new griffin/ branch from the default branch, one commit, a
   const fetchImpl = async (url, init = {}) => {
     const u = new URL(url);
     calls.push({ method: init.method || "GET", path: decodeURIComponent(u.pathname), body: init.body ? JSON.parse(init.body) : null });
-    if (u.pathname === "/api/v4/projects/infrustructure%2Fplatform-gitops" && init.method === "GET") return Response.json({ default_branch: "main" });
+    if (u.pathname === "/api/v4/projects/acme%2Finfra" && init.method === "GET") return Response.json({ default_branch: "main" });
     if (u.pathname.includes("/repository/branches/")) return new Response("{}", { status: 404 });
     if (u.pathname.endsWith("/repository/commits")) return Response.json({ short_id: "abc123" });
     if (u.pathname.endsWith("/merge_requests")) return Response.json({ iid: 7, web_url: "https://g/mr/7", state: "opened" });
@@ -76,7 +76,7 @@ test("gitlab_propose: new griffin/ branch from the default branch, one commit, a
   };
   const tools = createGitlabTools({ vault: { item: async () => "tok" }, fetchImpl, host: "https://gitlab.example.com" });
   const out = await tools.gitlab_propose.execute({
-    project: "infrustructure/platform-gitops",
+    project: "acme/infra",
     branch: "alert-template-cap",
     title: "fix(alertmanager): cap telegram messages",
     actions: [{ action: "update", path: "platform/x.yaml", content: "a: 1\n" }],

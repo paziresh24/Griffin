@@ -2,7 +2,7 @@ import { foldEvents } from "@griffin/timeline";
 import crypto from "node:crypto";
 import { autoTitle } from "../titles.mjs";
 import { BOT_KINDS, createBotApi, createBotChannel, pairingCode } from "./bots.mjs";
-import { resolveAgentId } from "../agents/registry.mjs";
+import { DEFAULT_AGENT, resolveAgentId } from "../agents/registry.mjs";
 import { COVERAGE_CALLER } from "./coverage.mjs";
 import { isNoReply, peerAgentPrompt, takeRate } from "./peer-agent.mjs";
 import { deliverable, liveStatusLine } from "./format.mjs";
@@ -766,11 +766,11 @@ export function integrationRoutes(app, integrations) {
   app.delete("/api/integrations/:id", (c) => (integrations.remove(c.req.param("id")) ? c.json({ ok: true }) : c.json({ error: "not found" }, 404)));
 }
 
-/** Agent persona for /agent coverage: person's access.agent, else platform (platform default). */
+/** Agent persona for /agent coverage: the person's access.agent when it may serve a colleague. */
 function coverageAgent(profile, store) {
   const wanted = profile?.access?.agent;
-  if (!wanted) return "platform";
+  if (!wanted) return DEFAULT_AGENT;
   const id = resolveAgentId(wanted);
   const agentProfile = store?.getAgentProfile?.(id);
-  return agentProfile?.meta?.callers?.team ? id : "platform";
+  return agentProfile?.meta?.callers?.team ? id : DEFAULT_AGENT;
 }

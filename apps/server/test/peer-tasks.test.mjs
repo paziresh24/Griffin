@@ -9,11 +9,13 @@ import { createAsks } from "../src/asks.mjs";
 import { createPeerAuth } from "../src/peer-auth.mjs";
 import { createPeerTasks } from "../src/peer-tasks.mjs";
 import { createMcpHandler } from "../src/mcp.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 // Fake runner: each send runs `script(chatId, emit)`; emit appends chat events like the real one.
 function setup(script) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-tasks-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   const asks = createAsks({ store });
   const active = new Set();
   const runner = {

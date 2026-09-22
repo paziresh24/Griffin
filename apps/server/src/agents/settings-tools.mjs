@@ -45,7 +45,7 @@ export function createAgentSettingsTools({ store, catalogNames }) {
             type: "text",
             text: JSON.stringify({
               agent: profile.id,
-              allPlatform: Boolean(profile.meta?.allPlatform),
+              allTools: Boolean(profile.meta?.allTools),
               disabled: profile.meta?.disabled || [],
               tools,
             }),

@@ -1,12 +1,42 @@
 # Configuration
 
-Griffin ships with no environment of its own. Three things decide what a deployment can reach:
+Griffin ships with no environment of its own. A default install needs nothing but a model API key:
+chats, agents, jobs, charts, files and messengers all live in the app process. Infrastructure tools
+are what the optional broker adds, and they appear only once you describe that infrastructure.
 
 | What | Where | Read by |
 |---|---|---|
+| Runtime knobs — port, paths, proxy, public URL | `GRIFFIN_*` environment variables | app + broker |
 | Inventory — clusters, routers, GitLab, object storage, shell hosts | `config/site.json` (shape: `config/site.example.json`) | broker |
-| Credentials | OpenBao / Infisical, never files in this repo | broker only |
-| Runtime knobs — ports, paths, proxy, public URL | `GRIFFIN_*` environment variables | app + broker |
+| Credentials | OpenBao/Vault KV or a secret manager, never files in this repo | broker only |
+
+## Do I need the broker?
+
+No, unless you want the credential-holding tools. The app treats it as absent when its socket is
+not there — health says `broker: { configured: false }`, the incident intake stays off, and agents
+get the app tools only. Start it with the `tools` compose profile once `config/site.json` exists.
+
+## Tool packs
+
+The broker publishes a pack only when this site has what it needs, so an agent never sees a tool
+that cannot work:
+
+| Pack | Appears when | Tools |
+|---|---|---|
+| `kubernetes`, `alerts`, `postgres` | at least one cluster is configured | `kube_*`, `metrics_*`, `cnpg_*`, `alerts_*`, `pg_*` |
+| `grafana` | a cluster has a `grafana` url | `grafana_*` |
+| `s3` | `s3.endpoint` is set | `s3_list`, `s3_get` |
+| `gitlab` | `gitlab.url` is set | `gitlab_*` |
+| `mikrotik` | at least one router | `mikrotik_*` |
+| `shell` | at least one entry in `debugHosts` | `debug_exec` |
+| `infisical`, `arvan`, `nsin` | opt in explicitly (they need a vault item) | `infisical_*`, `arvan_*`, `nsin_*` |
+| `net` | always | `dns_lookup`, `http_check`, `tls_check` |
+
+Override any of them in the site config:
+
+```json
+{ "tools": { "arvan": true, "shell": false } }
+```
 
 ## Site config
 
@@ -44,6 +74,7 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | Variable | Meaning |
 |---|---|
 | `GRIFFIN_DATA` | data dir: SQLite, API keys, TLS, owner token |
+| `GRIFFIN_BROKER` | `off` to run without infrastructure tools even if a socket exists |
 | `GRIFFIN_WORKSPACE` | agent workspaces, rules and the knowledge git |
 | `GRIFFIN_SITE_CONFIG`, `GRIFFIN_SSH_KNOWN_HOSTS` | broker inventory paths |
 | `GRIFFIN_BROKER_SOCKET` | unix socket shared by app and broker |

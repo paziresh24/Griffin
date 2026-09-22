@@ -10,10 +10,12 @@ import {
   materializeTaskChat,
   taskSummary,
 } from "../src/tasks.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 function tempStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-task-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   return { store, dir };
 }
 

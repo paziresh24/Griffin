@@ -438,7 +438,53 @@ export function createTools({
       readSecret: async (args) => (await infisical.infisical_get.execute(args)).value,
     });
   Object.assign(tools, mikrotikTools, s3, pg, grafana, infisical, gitlab, arvan, net, nsin, alerts);
-  return tools;
+  return keepConfigured(tools, site);
+}
+
+// A tool nobody configured is worse than a missing one: the agent sees it, calls it, and gets an
+// error it cannot fix. So each pack is published only when this site has what it needs. Override
+// with "tools": { "<pack>": true|false } in the site config.
+export const TOOL_PACKS = {
+  kubernetes: { prefixes: ["kube_", "metrics_", "cnpg_"], needs: (site) => hasAny(site.clusters) },
+  alerts: { prefixes: ["alerts_"], needs: (site) => hasAny(site.clusters) },
+  grafana: { prefixes: ["grafana_"], needs: (site) => Object.values(site.clusters || {}).some((c) => c?.grafana) },
+  postgres: { prefixes: ["pg_"], needs: (site) => hasAny(site.clusters) },
+  s3: { prefixes: ["s3_"], needs: (site) => Boolean(site.s3?.endpoint) },
+  gitlab: { prefixes: ["gitlab_"], needs: (site) => Boolean(site.gitlab?.url) },
+  mikrotik: { prefixes: ["mikrotik_"], needs: (site) => hasAny(site.routers) },
+  shell: { prefixes: ["debug_exec"], needs: (site) => hasAny(site.debugHosts) },
+  // These only need a credential in the vault, which the broker cannot see from here: opt in.
+  infisical: { prefixes: ["infisical_"], needs: () => false },
+  arvan: { prefixes: ["arvan_"], needs: () => false },
+  nsin: { prefixes: ["nsin_"], needs: () => false },
+  // No credentials at all — always available.
+  net: { prefixes: ["dns_lookup", "http_check", "tls_check"], needs: () => true },
+};
+
+const hasAny = (obj) => Boolean(obj && Object.keys(obj).length);
+
+export function enabledPacks(site = {}) {
+  const wanted = site.tools && typeof site.tools === "object" ? site.tools : {};
+  const out = {};
+  for (const [name, pack] of Object.entries(TOOL_PACKS)) {
+    out[name] = wanted[name] === undefined ? pack.needs(site) : Boolean(wanted[name]);
+  }
+  return out;
+}
+
+function keepConfigured(tools, site) {
+  const packs = enabledPacks(site);
+  const off = Object.entries(packs)
+    .filter(([, on]) => !on)
+    .flatMap(([name]) => TOOL_PACKS[name].prefixes);
+  const kept = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    if (!off.some((prefix) => name.startsWith(prefix))) kept[name] = tool;
+  }
+  // metricsData is not an agent tool; carry it across the filter.
+  const raw = Object.getOwnPropertyDescriptor(tools, "metricsData");
+  if (raw) Object.defineProperty(kept, "metricsData", raw);
+  return kept;
 }
 
 // Grafana urls and alert-capable clusters are both derived from the cluster entries.

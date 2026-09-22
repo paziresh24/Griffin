@@ -1,13 +1,4 @@
-import {
-  AGENTS,
-  CALLER_LABELS,
-  DEFAULT_AGENT,
-  filterTools,
-  isSpecialistTool,
-} from "./registry.mjs";
-
-// Re-export for callers that need the specialist check without importing registry internals.
-export { isSpecialistTool } from "./registry.mjs";
+import { AGENTS, CALLER_LABELS, DEFAULT_AGENT, filterTools } from "./registry.mjs";
 
 export const SELF_MGMT_TOOLS = [
   "list_agents",
@@ -18,6 +9,7 @@ export const SELF_MGMT_TOOLS = [
   "agent_settings_set",
 ];
 
+/** Tools the app itself provides (no broker, no credentials beyond what the owner connected). */
 export const APP_TOOL_NAMES = [
   "ask_owner",
   "ask_requester",
@@ -53,23 +45,17 @@ export function seedProfilesFromRegistry() {
     for (const [callerId, quota] of Object.entries(agent.callers || {})) {
       callers[callerId] = { tools: quota.tools };
     }
-    let tools;
-    let allPlatform = false;
-    if (agent.tools == null) {
-      allPlatform = true;
-      tools = [...SELF_MGMT_TOOLS];
-    } else {
-      tools = unique([...(agent.tools || []), ...SELF_MGMT_TOOLS]);
-    }
+    const allTools = agent.tools == null;
     rows.push({
       id,
       label: agent.label,
       domain: agent.domain,
       blurb: "",
+      instructions: "",
       provider: "cursor",
       model: null,
-      tools,
-      meta: { callers, ...(allPlatform ? { allPlatform: true } : {}) },
+      tools: allTools ? [...SELF_MGMT_TOOLS] : unique([...(agent.tools || []), ...SELF_MGMT_TOOLS]),
+      meta: { callers, ...(allTools ? { allTools: true } : {}) },
       builtIn: true,
     });
   }
@@ -86,7 +72,7 @@ export function unique(list) {
 
 /**
  * Resolve which tool names this profile may use for a given caller.
- * owner / peer agents → profile.tools (+ allPlatform expansion against catalog).
+ * owner → profile.tools (or every catalog tool when the profile says allTools).
  * scheduler / team → meta.callers quota when present.
  */
 export function resolveEnabledTools(profile, { caller = "owner", catalogNames = [] } = {}) {
@@ -115,8 +101,9 @@ export function resolveEnabledTools(profile, { caller = "owner", catalogNames = 
 function expandProfileTools(profile, catalogNames) {
   const meta = profile.meta || {};
   const disabled = new Set(Array.isArray(meta.disabled) ? meta.disabled : []);
-  if (meta.allPlatform) {
-    const base = catalogNames.filter((n) => !isSpecialistTool(n) && !disabled.has(n));
+  // allTools: this agent gets whatever the install has, minus what the owner switched off.
+  if (meta.allTools) {
+    const base = catalogNames.filter((n) => !disabled.has(n));
     return unique([...base, ...(profile.tools || []), ...SELF_MGMT_TOOLS]).filter((n) => !disabled.has(n));
   }
   const enabled = new Set(profile.tools || []);
@@ -130,10 +117,11 @@ export function publicProfile(profile) {
     label: profile.label,
     domain: profile.domain,
     blurb: profile.blurb || "",
+    instructions: profile.instructions || "",
     provider: profile.provider || "cursor",
     model: profile.model || null,
     tools: profile.tools || [],
-    allPlatform: Boolean(profile.meta?.allPlatform),
+    allTools: Boolean(profile.meta?.allTools),
     disabled: profile.meta?.disabled || [],
     builtIn: Boolean(profile.built_in ?? profile.builtIn),
     callers: Object.entries(profile.meta?.callers || {}).map(([callerId, quota]) => ({

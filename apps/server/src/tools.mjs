@@ -1,4 +1,5 @@
 import { mediaContent, storeMedia } from "./media.mjs";
+import fs from "node:fs";
 import http from "node:http";
 
 // Exposes broker tools to the Cursor agent as SDK customTools. The broker owns the tool
@@ -26,17 +27,34 @@ export function brokerRequest(socketPath, method, urlPath, body, timeoutMs = 180
   });
 }
 
-export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request = brokerRequest, store = null }) {
+export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request = brokerRequest, store = null, exists = (p) => fs.existsSync(p) }) {
   let cache = { at: 0, defs: null };
+  let warned = false;
+
+  /** The broker is present when its socket is there. Absent is a valid, quiet state. */
+  function available() {
+    if (!socketPath) return false;
+    try {
+      return exists(socketPath);
+    } catch {
+      return false;
+    }
+  }
 
   async function definitions() {
+    // No broker: this install has no credential-holding tools, and that is a complete setup.
+    if (!available()) return null;
     if (cache.defs && Date.now() - cache.at < refreshMs) return cache.defs;
     try {
       const { status, body } = await request(socketPath, "GET", "/tools", undefined, 5_000);
       if (status !== 200 || !Array.isArray(body)) throw new Error(`http ${status}`);
       cache = { at: Date.now(), defs: body };
+      warned = false;
     } catch (error) {
-      console.error(`[tools] broker unavailable: ${error.message}`);
+      if (!warned) {
+        console.error(`[tools] broker unavailable (${error.message}); running with app tools only`);
+        warned = true;
+      }
     }
     return cache.defs;
   }
@@ -79,7 +97,7 @@ export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request =
     return tools;
   }
 
-  return { customTools, listNames, socketPath };
+  return { customTools, listNames, available, socketPath };
 }
 
 function errorResult(message, attempts) {

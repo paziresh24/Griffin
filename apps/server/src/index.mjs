@@ -31,6 +31,7 @@ import { createMcpHandler } from "./mcp.mjs";
 import { brokerRequest, createToolSource } from "./tools.mjs";
 import { createToolBudget } from "./budget.mjs";
 import { DEFAULT_AGENT } from "./agents/registry.mjs";
+import { agentPayload } from "./agents/import.mjs";
 import { filterToolsByProfile, publicProfile, rootCallerOf, APP_TOOL_NAMES, CALLER_LABELS, SELF_MGMT_TOOLS, unique as uniqueTools } from "./agents/profiles.mjs";
 import { createIncidentStore, createIntake, incidentView, isTeamReport } from "./incidents/index.mjs";
 import { createIncidentTools, createOpsRoom } from "./incidents/opsroom.mjs";
@@ -74,15 +75,24 @@ function anthropicApiKey() {
 }
 
 fs.mkdirSync(DATA, { recursive: true });
-prepareAgentWorkspaces(WORKSPACE);
 const store = openStore(resolveDbPath(DATA));
+const refreshWorkspaces = () => {
+  const profiles = store.listAgentProfiles();
+  prepareAgentWorkspaces(WORKSPACE, {
+    agents: profiles.map((p) => p.id),
+    profiles: Object.fromEntries(profiles.map((p) => [p.id, p])),
+  });
+};
+refreshWorkspaces();
 const compacted = store.compactLargeEvents((data) => clip(data));
 if (compacted) console.log(`[store] compacted ${compacted} oversized events`);
 
-const toolSource = createToolSource({
-  socketPath: genv("BROKER_SOCKET", "/run/griffin/broker.sock"),
-  store,
-});
+// The broker is optional. Without it Griffin still runs: chats, agents, jobs, charts, files and
+// messengers all live in this process; only the credential-holding infrastructure tools are absent.
+const BROKER_SOCKET = genv("BROKER_SOCKET", "/run/griffin/broker.sock");
+const brokerWanted = Boolean(BROKER_SOCKET) && genv("BROKER", "on") !== "off";
+const toolSource = createToolSource({ socketPath: brokerWanted ? BROKER_SOCKET : null, store });
+const brokerEnabled = () => brokerWanted && toolSource.available();
 
 // integrationsHolder breaks the cycle: asks needs to tell integrations a question closed, but
 // integrations itself is constructed later (it takes asks as an argument).
@@ -281,14 +291,16 @@ async function models(provider = null) {
 
 async function health() {
   const [probe, cursor, claude] = await Promise.all([
-    brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
-      .then((r) => ({ ok: r.status === 200, ...r.body }))
-      .catch((error) => ({ ok: false, error: error.message })),
+    !brokerEnabled()
+      ? Promise.resolve({ ok: true, configured: false })
+      : brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
+          .then((r) => ({ ok: r.status === 200, ...r.body }))
+          .catch((error) => ({ ok: false, error: error.message })),
     providers[PROVIDER_CURSOR].health(),
     providers[PROVIDER_CLAUDE].health(),
   ]);
   return {
-    broker: { ok: probe.ok, ...(probe.error ? { error: probe.error } : {}) },
+    broker: { ok: probe.ok, configured: brokerEnabled(), ...(probe.error ? { error: probe.error } : {}) },
     clusters: probe.clusters || null,
     cursor,
     claude,
@@ -312,7 +324,13 @@ jobs.start();
 
 // Incident intake: Alertmanager of every cluster → grouped incidents → Griffin's ops room (shadow).
 const incidents = createIncidentStore(store.db);
-const opsRoom = createOpsRoom({ store, runner, incidents, mode: genv("OPS_MODE", "shadow") });
+// Incident intake needs something to poll; with no broker there are no alert sources at all.
+const opsRoom = createOpsRoom({
+  store,
+  runner,
+  incidents,
+  mode: brokerEnabled() ? genv("OPS_MODE", "record") : "off",
+});
 // Optional: a SQL table where your own job records whether the business number dropped.
 const readBusiness = createBusinessSource({
   config: genv("BUSINESS_SIGNAL") ? JSON.parse(genv("BUSINESS_SIGNAL")) : null,
@@ -452,6 +470,32 @@ const app = createApp({
       if (!profile) return c.json({ error: "not found" }, 404);
       return c.json({ agent: publicProfile(profile) });
     });
+    api.post("/api/agents", async (c) => {
+      let body = {};
+      try {
+        body = await c.req.json();
+      } catch {
+        body = {};
+      }
+      let payload;
+      try {
+        payload = agentPayload(body);
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+      if (store.getAgentProfile(payload.id)) return c.json({ error: `agent "${payload.id}" already exists` }, 409);
+      const created = store.upsertAgentProfile(payload);
+      refreshWorkspaces();
+      return c.json({ agent: publicProfile(created) }, 201);
+    });
+    api.delete("/api/agents/:id", (c) => {
+      const id = c.req.param("id");
+      const profile = store.getAgentProfile(id);
+      if (!profile) return c.json({ error: "not found" }, 404);
+      if (id === DEFAULT_AGENT) return c.json({ error: "the default agent cannot be deleted" }, 400);
+      store.deleteAgentProfile(id);
+      return c.json({ ok: true });
+    });
     api.patch("/api/agents/:id", async (c) => {
       const id = c.req.param("id");
       if (!store.getAgentProfile(id)) return c.json({ error: "not found" }, 404);
@@ -465,6 +509,21 @@ const app = createApp({
       if (typeof body.label === "string" && body.label.trim()) patch.label = body.label.trim();
       if (typeof body.domain === "string") patch.domain = body.domain;
       if (typeof body.blurb === "string") patch.blurb = body.blurb;
+      if (typeof body.instructions === "string") patch.instructions = body.instructions;
+      if (typeof body.allTools === "boolean") patch.allTools = body.allTools;
+      // Who may call this agent, and with which tools. Callers named here are replaced; the rest stay.
+      if (body.callers && typeof body.callers === "object") {
+        const current = store.getAgentProfile(id)?.meta?.callers || {};
+        const next = { ...current };
+        for (const [caller, quota] of Object.entries(body.callers)) {
+          if (!/^[a-z0-9][a-z0-9:_-]{0,63}$/.test(caller)) continue;
+          if (quota === null) delete next[caller];
+          else if (quota?.tools === "*") next[caller] = { tools: "*" };
+          else if (Array.isArray(quota?.tools)) next[caller] = { tools: uniqueTools(quota.tools.map(String)) };
+        }
+        if (!next.owner) next.owner = { tools: "*" };
+        patch.meta = { ...(store.getAgentProfile(id)?.meta || {}), callers: next };
+      }
       if (typeof body.provider === "string") patch.provider = normalizeProvider(body.provider);
       if (typeof body.model === "string") patch.model = body.model.trim() || null;
       if (body.model === null) patch.model = null;
@@ -476,6 +535,7 @@ const app = createApp({
         store.disableAgentTools(id, body.disable);
       }
       const updated = Object.keys(patch).length ? store.updateAgentProfile(id, patch) : store.getAgentProfile(id);
+      refreshWorkspaces();
       return c.json({ agent: publicProfile(updated) });
     });
     api.get("/api/tool-catalog", async (c) => {

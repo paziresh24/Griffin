@@ -1,12 +1,12 @@
-# Griffin: two containers built from this tree.
-#   docker compose -f deploy/compose.yaml up -d --build
+# Griffin.
 #
-# The split is the point: `app` runs the model and the UI and holds no infrastructure
-# credentials; `broker` holds them and exposes typed tools over a unix socket. Both use the
-# host network because the proxy and the vault listen on the host loopback.
+#   docker compose -f deploy/compose.yaml up -d --build          # the app alone: chat + agents
+#   COMPOSE_PROFILES=tools docker compose … up -d --build        # + the broker (infrastructure tools)
+#   COMPOSE_PROFILES=tools,infra docker compose … up -d --build  # + its own vault and egress proxy
 #
-# Profile "infra" additionally runs Griffin's own egress proxy and OpenBao. Leave
-# COMPOSE_PROFILES empty on a host that already provides them.
+# The app alone is a complete install: chats, agents, jobs, charts, files, messengers. It holds the
+# model API key and nothing else. The broker is what holds infrastructure credentials and turns them
+# into typed tools, so it only makes sense once you have a config/site.json to point it at.
 
 name: griffin
 
@@ -18,6 +18,7 @@ x-user: &user "${GRIFFIN_UID:-1000}:${GRIFFIN_GID:-1000}"
 
 services:
   broker:
+    profiles: [tools]
     build: { <<: *build, target: broker }
     image: griffin-broker:local
     network_mode: host
@@ -31,7 +32,7 @@ services:
       GRIFFIN_SSH_KNOWN_HOSTS: /config/ssh_known_hosts
     volumes:
       - sockets:/run/griffin
-      - ${GRIFFIN_CONFIG:?path to the config directory}:/config:ro
+      - ${GRIFFIN_CONFIG:-./config}:/config:ro
       - ${GRIFFIN_VAULT_TOKEN_AGE:?path to machine.token.age}:/vault/machine.token.age:ro
       - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
 
@@ -41,11 +42,10 @@ services:
     network_mode: host
     restart: unless-stopped
     user: *user
-    depends_on:
-      broker:
-        condition: service_healthy
     environment:
       PORT: ${GRIFFIN_PORT:-3100}
+      # Unset it and the app runs without infrastructure tools (see the broker profile above).
+      GRIFFIN_BROKER: ${GRIFFIN_BROKER:-on}
       GRIFFIN_VERSION: ${GRIFFIN_VERSION:-local}
       CURSOR_MODEL: ${CURSOR_MODEL:-auto}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
@@ -64,8 +64,8 @@ services:
       NO_PROXY: 127.0.0.1,localhost,::1,192.168.0.0/16,10.0.0.0/8
     volumes:
       - sockets:/run/griffin
-      - ${GRIFFIN_DATA:?path to the data directory}:/data
-      - ${GRIFFIN_WORKSPACE:?path to the agent workspace}:/workspace
+      - ${GRIFFIN_DATA:-./data}:/data
+      - ${GRIFFIN_WORKSPACE:-./workspace}:/workspace
     # No vault token, no age identity, no SSH key in this container.
 
   # --- profile "infra": Griffin's own egress proxy and secret store -----------------------

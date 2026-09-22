@@ -8,12 +8,14 @@ import { nextCron, nextInterval, parseCron, parseDuration, tzOffsetMs } from "..
 import { createJobs, jobMessage } from "../src/jobs/index.mjs";
 import { createRunner } from "../src/runner.mjs";
 import { describeTrigger, nextTriggerAt, validateTrigger } from "../src/jobs/triggers.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 const TZ = "Asia/Tehran";
 
 function setup({ answer = "مصرف مموری گیت‌لب ۳٫۲ گیگ است.", hang = false, timeoutMs = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-jobs-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   const prompts = [];
   const sdk = {
     async create() {
@@ -105,7 +107,7 @@ test("a due job runs the agent in its own chat and delivers the answer", async (
   // The job's chat stays out of the sidebar but is reachable from the run.
   assert.equal(store.listChats({ archived: false }).length, 0);
   assert.equal(store.getChat(run.chatId).job_id, job.id);
-  assert.equal(store.getChat(run.chatId).agent, "platform");
+  assert.equal(store.getChat(run.chatId).agent, "griffin");
   assert.equal(store.getChat(run.chatId).caller, "scheduler");
   // …and the next run is scheduled again.
   assert.ok(new Date(store.getJob(job.id).nextAt) > new Date());

@@ -7,6 +7,7 @@ import { foldEvents, finalText } from "@griffin/timeline";
 import { createApp } from "../src/app.mjs";
 import { openStore } from "../src/db.mjs";
 import { createRunner } from "../src/runner.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 // Fake SDK agent: plays a scripted list of InteractionUpdates through onDelta.
 function fakeSdk(script, { holdUntilCancel = false } = {}) {
@@ -52,6 +53,7 @@ function fakeSdk(script, { holdUntilCancel = false } = {}) {
 function setup(script, options) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-test-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   const fake = fakeSdk(script, options);
   const runner = createRunner({ store, sdk: fake.sdk, agentOptions: () => ({}), log: {} });
   const app = createApp({ store, runner });
@@ -231,6 +233,7 @@ test("ask_owner waits for the owner's answer; late answers become a message", as
   const { createAsks, ASK_TOOL } = await import("../src/asks.mjs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-ask-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   const asks = createAsks();
   const toolResults = [];
   let sends = 0;
@@ -412,6 +415,7 @@ test("provider comes from agent profile; chat PATCH provider is ignored", async 
 test("agents list includes peer agents that ran via ask_agent children", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-agents-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   try {
     const parent = store.createChat({ title: "root", agent: "griffin" });
     const runId = store.startRun(parent.id);
@@ -435,6 +439,7 @@ test("agents list includes peer agents that ran via ask_agent children", () => {
 test("chats list and chat get include ask_agent children with live run status", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-children-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   try {
     const parent = store.createChat({ title: "root", agent: "griffin" });
     const child = store.createChat({

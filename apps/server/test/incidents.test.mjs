@@ -8,6 +8,7 @@ import { groupAlerts, incidentKey } from "../src/incidents/group.mjs";
 import { createIncidentStore, createIntake } from "../src/incidents/index.mjs";
 import { createIncidentTools, createOpsRoom, digestMessage, OPS_CHARTER } from "../src/incidents/opsroom.mjs";
 import { resolveEnabledTools, rootCallerOf } from "../src/agents/profiles.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 const alert = (over = {}) => ({
   fingerprint: Math.random().toString(16).slice(2),
@@ -26,6 +27,7 @@ const watchdog = (cluster) => alert({ cluster, seenFrom: cluster, alertname: "Wa
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-incidents-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   let clock = new Date("2026-09-18T10:00:00Z");
   const now = () => clock;
   const incidents = createIncidentStore(store.db, { now });

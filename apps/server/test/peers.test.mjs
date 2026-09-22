@@ -7,10 +7,12 @@ import { openStore } from "../src/db.mjs";
 import { createAsks } from "../src/asks.mjs";
 import { ASK_AGENT_TOOL, buildEnvelope, createPeers, peerMessage } from "../src/peers.mjs";
 import { allowedTools } from "../src/agents/registry.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 function tempStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-peers-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   return { store, dir };
 }
 
@@ -135,7 +137,8 @@ test("ask_agent creates child with peer quota caller and returns server envelope
 });
 
 test("peerMessage names the calling agent", () => {
-  assert.match(peerMessage("platform", "purge"), /پلتفرم‌بان/);
+  assert.match(peerMessage("griffin", "purge"), /گریفین/);
+  assert.match(peerMessage("platform", "purge"), /platform/, "an agent with no label is named by its id");
   assert.match(peerMessage("platform", "purge"), /purge/);
 });
 
@@ -176,17 +179,11 @@ test("ask_owner on scheduler root auto-rejects", async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("owner of griffin/platform/arvan/nsin may use ask_agent; peer quotas do not", () => {
-  const names = ["ask_agent", "ask_owner", "arvan_domains", "nsin_edge_ranges", "kube_get", "jobs_list"];
+test("the owner may delegate; a peer-invoked run may not chain further by default", () => {
+  const names = ["ask_agent", "ask_owner", "visualize", "jobs_list"];
   assert.ok(allowedTools("griffin", "owner", names).includes(ASK_AGENT_TOOL));
-  assert.ok(allowedTools("platform", "owner", names).includes(ASK_AGENT_TOOL));
-  assert.ok(allowedTools("arvan-ban", "owner", names).includes(ASK_AGENT_TOOL));
-  assert.ok(allowedTools("nsin-ban", "owner", names).includes(ASK_AGENT_TOOL));
-  assert.ok(!allowedTools("arvan-ban", "platform", names).includes(ASK_AGENT_TOOL));
-  assert.ok(!allowedTools("platform", "arvan-ban", names).includes(ASK_AGENT_TOOL));
-  assert.ok(!allowedTools("arvan-ban", "griffin", names).includes(ASK_AGENT_TOOL));
-  assert.ok(!allowedTools("nsin-ban", "griffin", names).includes(ASK_AGENT_TOOL));
-  assert.ok(!allowedTools("platform", "nsin-ban", names).includes(ASK_AGENT_TOOL));
+  assert.ok(allowedTools("griffin", "scheduler", names).includes(ASK_AGENT_TOOL), "a job may still delegate");
+  assert.ok(!allowedTools("griffin", "scheduler", names).includes("ask_owner"), "but never asks a human");
 });
 
 test("griffin ask_agent creates child with caller griffin", async () => {

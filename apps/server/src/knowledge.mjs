@@ -149,7 +149,7 @@ export function createKnowledge({ store, root, git = true } = {}) {
           async execute(args) {
             const chat = store.getChat(chatId);
             const agentId = String(args?.agent || chat?.agent || DEFAULT_AGENT);
-            if (!(agentId in AGENTS)) {
+            if (!resolveAgentMeta(agentId)) {
               return { isError: true, content: [{ type: "text", text: `unknown agent: ${agentId}` }] };
             }
             const dir = agentDir(agentId);

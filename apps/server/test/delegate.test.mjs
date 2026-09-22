@@ -7,11 +7,13 @@ import { openStore } from "../src/db.mjs";
 import { createAsks } from "../src/asks.mjs";
 import { createPeers } from "../src/peers.mjs";
 import { createPeerTasks } from "../src/peer-tasks.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 // Fake runner: per-chat scripts; a chat without a script finishes at once with "ok".
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-delegate-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   const active = new Map();
   const sent = [];
   const scripts = new Map(); // chatId -> async (emit) => status

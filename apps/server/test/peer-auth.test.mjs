@@ -8,10 +8,12 @@ import { openStore } from "../src/db.mjs";
 import { createPeerAuth, hashToken } from "../src/peer-auth.mjs";
 import { resolveEnabledTools } from "../src/agents/profiles.mjs";
 import { guardTools } from "../src/guard.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 function setup(clock = { t: Date.parse("2026-09-19T10:00:00Z") }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-peer-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   const auth = createPeerAuth({ store, now: () => clock.t });
   return { store, auth, clock };
 }

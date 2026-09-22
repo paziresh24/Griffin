@@ -297,3 +297,39 @@ test("cnpg_retry_bootstrap deletes only failed, inactive jobs of that cluster", 
   assert.deepEqual(deleted, ["baft-db-replica-1-pgbasebackup"]);
   assert.deepEqual(out.deletedJobs, deleted);
 });
+
+// A fresh install configures nothing: the tool list must then be honest about it, or agents spend
+// their turns calling endpoints that cannot exist.
+test("tool packs follow the site config: nothing configured, nothing but credential-free tools", async () => {
+  const { enabledPacks } = await import("../src/tools.mjs");
+  const bare = createTools({ site: { clusters: {}, routers: {}, debugHosts: {} }, kube: {}, vault: {}, sshRun: async () => ({}) });
+  const names = Object.keys(bare);
+  assert.deepEqual(names.sort(), ["dns_lookup", "http_check", "tls_check"]);
+
+  const packs = enabledPacks({ clusters: {}, routers: {}, debugHosts: {} });
+  assert.equal(packs.kubernetes, false);
+  assert.equal(packs.gitlab, false);
+  assert.equal(packs.net, true);
+
+  // Declaring a cluster and a GitLab publishes exactly those packs.
+  const some = createTools({
+    site: { clusters: { prod: { api: "https://k8s.example.com" } }, gitlab: { url: "https://gitlab.example.com" }, routers: {}, debugHosts: {} },
+    kube: {},
+    vault: {},
+    sshRun: async () => ({}),
+  });
+  assert.ok(Object.keys(some).includes("kube_status"));
+  assert.ok(Object.keys(some).includes("gitlab_version"));
+  assert.ok(!Object.keys(some).includes("mikrotik_print"));
+  assert.ok(!Object.keys(some).includes("debug_exec"), "no shell host, no shell tool");
+  assert.ok(!Object.keys(some).includes("arvan_domains"), "vendor packs are opt-in");
+
+  // An explicit switch wins over the inference.
+  const forced = createTools({
+    site: { clusters: {}, routers: {}, debugHosts: {}, tools: { arvan: true } },
+    kube: {},
+    vault: {},
+    sshRun: async () => ({}),
+  });
+  assert.ok(Object.keys(forced).includes("arvan_domains"));
+});

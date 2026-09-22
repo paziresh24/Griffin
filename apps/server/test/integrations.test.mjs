@@ -8,6 +8,7 @@ import { openStore } from "../src/db.mjs";
 import { createIntegrations } from "../src/integrations/manager.mjs";
 import { chunk, liveStatusLine, markdownToPlain, markdownToTelegramHtml, withAgentFooter } from "../src/integrations/format.mjs";
 import { createRunner } from "../src/runner.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 const until = async (check, ms = 3000) => {
   const end = Date.now() + ms;
@@ -44,6 +45,7 @@ function fakeBotApi() {
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-int-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   // Same cycle-breaking holder as production (index.mjs): asks needs to tell integrations a
   // question closed, but integrations itself is built later (it takes asks as an argument).
   const integrationsHolder = { current: null };
@@ -131,6 +133,7 @@ test("bot: wrong token rejected; strangers ignored; pairing; message → run →
 test("bot: getUpdates Conflict becomes unavailable with Persian userMessage", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-conflict-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   const asks = createAsks();
   const runner = createRunner({ store, sdk: { create: async () => ({ agentId: "a", send: async () => ({ id: "r", supports: () => true, cancel: async () => {}, wait: async () => ({ status: "finished" }) }) }) }, log: {}, agentOptions: () => ({}) });
   let polls = 0;
@@ -262,7 +265,7 @@ test("formatting", () => {
       type: "tool.started",
       data: { name: "ask_agent", args: { agent: "platform", request: "فضای آزاد دیسک ۱" } },
     }),
-    "پلتفرم‌بان در حال انجام فضای آزاد دیسک ۱…",
+    "platform در حال انجام فضای آزاد دیسک ۱…",
   );
   assert.equal(liveStatusLine({ type: "text.delta" }), null);
   assert.match(withAgentFooter("سلام"), /سلام\n\n— گریفین$/);

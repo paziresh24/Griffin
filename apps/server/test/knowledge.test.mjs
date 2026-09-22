@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
 import { createKnowledge, findSecrets, KNOWLEDGE_WRITE } from "../src/knowledge.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 test("findSecrets catches JWT and private key markers", () => {
   assert.equal(findSecrets("hello"), false);
@@ -18,6 +19,7 @@ test("findSecrets catches JWT and private key markers", () => {
 test("knowledge_write refuses secrets, writes markdown with provenance, lists notes", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-know-"));
   const store = openStore(path.join(dir, "db.sqlite"));
+  seedExampleAgents(store);
   const root = path.join(dir, "knowledge");
   const knowledge = createKnowledge({ store, root, git: false });
   const chat = store.createChat({ title: "t", agent: "arvan-ban" });

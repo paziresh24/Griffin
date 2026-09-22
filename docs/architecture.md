@@ -22,6 +22,10 @@ browser / Telegram / MCP client
 tool. Everything it can do to the outside world is a named tool with a schema, executed by the broker,
 which decides what the arguments are allowed to be. A prompt rule is a hint; the broker is the control.
 
+**The broker is optional.** Without it the app is still a complete install — chats, agents, jobs,
+charts, files, messengers, MCP — and `health` reports `broker: { configured: false }` rather than an
+error. Tools appear as you configure the things they need (see [configuration](configuration.md)).
+
 **Why the emergency path.** Every cluster tool tries the public API first and falls back to SSH on a
 node. The answer carries `source`, so you always know which path produced it. An agent that only works
 while the platform is healthy is useless exactly when it is needed.
@@ -32,7 +36,8 @@ while the platform is healthy is useless exactly when it is needed.
 |---|---|
 | `apps/server/src/runner.mjs` | one live run per chat, queue/steer/cancel, resume after restart |
 | `apps/server/src/providers/` | Cursor Agent SDK and Claude Agent SDK behind one interface |
-| `apps/server/src/agents/` | agent profiles: which tools an agent owns, and which of them each caller gets |
+| `apps/server/src/agents/` | agent profiles: identity, instructions, tools, and which of them each caller gets |
+| `apps/server/src/agents/import.mjs` | one shape for "here is an agent" — the UI form, the API and `examples/agents/*.json` |
 | `apps/server/src/guard.mjs` | irreversible-action classifier: ask the owner, or refuse in an unattended chain |
 | `apps/server/src/peers.mjs` | `delegate` / `ask_agent` / `subtasks` — agents handing work to agents |
 | `apps/server/src/peer-auth.mjs`, `mcp.mjs` | external agents connect over MCP with their own token and quota |
@@ -44,7 +49,8 @@ while the platform is healthy is useless exactly when it is needed.
 
 ## Authority model
 
-Authority is a property of **who is calling**, not of the agent.
+Authority is a property of **who is calling**, not of the agent. Agents themselves are data: one
+built-in agent ships, and the rest are rows you create (see [agents](agents.md)).
 
 - Each agent declares the tools it owns, and per caller (`owner`, another agent, `scheduler`, `ops`,
   a peer user) the subset that caller gets. A missing row fails closed.

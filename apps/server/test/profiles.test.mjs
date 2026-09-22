@@ -14,39 +14,78 @@ import {
 } from "../src/agents/profiles.mjs";
 import { createAgentSettingsTools, bindChatTools } from "../src/agents/settings-tools.mjs";
 import { ASK_AGENT_TOOL, createPeers } from "../src/peers.mjs";
-import { installRules, GRIFFIN_RULES } from "../src/prompt.mjs";
+import { CORE_RULES, installRules } from "../src/prompt.mjs";
+import { agentPayload, importAgent } from "../src/agents/import.mjs";
+import { rulesFor } from "../src/prompt.mjs";
+import { seedExampleAgents } from "./fixture-agents.mjs";
 
 function tempStore() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-profiles-"));
   const store = openStore(path.join(dir, "t.sqlite"));
+  seedExampleAgents(store);
   return { store, dir };
 }
 
-test("seed creates four built-in agent profiles from registry", () => {
-  const { store, dir } = tempStore();
-  const list = store.listAgentProfiles();
-  assert.equal(list.length, 4);
-  const ids = list.map((p) => p.id).sort();
-  assert.deepEqual(ids, ["arvan-ban", "griffin", "nsin-ban", "platform"]);
-  const griffin = store.getAgentProfile("griffin");
+test("a fresh install has exactly one agent; more are imported like any user would", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-seed-"));
+  const store = openStore(path.join(dir, "t.sqlite"));
+  const fresh = store.listAgentProfiles();
+  assert.deepEqual(fresh.map((p) => p.id), ["griffin"], "no environment-specific agents ship");
+  const griffin = fresh[0];
   assert.equal(griffin.provider, "cursor");
-  assert.equal(griffin.meta.allPlatform, undefined);
+  assert.ok(!griffin.meta.allTools, "the default agent gets a named tool list, not everything");
   assert.ok(griffin.tools.includes("ask_agent"));
-  assert.ok(griffin.tools.includes("telegram_dialogs"));
-  for (const name of SELF_MGMT_TOOLS) {
-    assert.ok(griffin.tools.includes(name), name);
-  }
-  assert.equal(store.getAgentProfile("platform").meta.allPlatform, true);
-  assert.ok(store.getAgentProfile("platform").meta.callers.scheduler);
+  for (const name of SELF_MGMT_TOOLS) assert.ok(griffin.tools.includes(name), name);
   assert.equal(store.seedAgentProfiles(), 0, "second seed is a no-op");
+
+  seedExampleAgents(store);
+  assert.deepEqual(store.listAgentProfiles().map((p) => p.id).sort(), ["arvan-ban", "griffin", "nsin-ban", "platform", "researcher"]);
+  assert.equal(store.getAgentProfile("platform").meta.allTools, true);
+  assert.ok(store.getAgentProfile("platform").meta.callers.scheduler);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("seedProfilesFromRegistry matches openStore seed shape", () => {
   const rows = seedProfilesFromRegistry();
-  assert.equal(rows.length, 4);
+  assert.equal(rows.length, 1);
   assert.ok(rows.every((r) => r.builtIn && r.provider === "cursor"));
+});
+
+test("an agent can be created, edited and deleted at runtime", () => {
+  const { store, dir } = tempStore();
+  const created = importAgent(store, {
+    id: "librarian",
+    label: "کتابدار",
+    domain: "reading and summarising",
+    instructions: "You read and summarise. You never change anything.",
+    tools: ["ask_owner", "show_media"],
+    callers: { owner: { tools: "*" }, griffin: { tools: ["show_media"] } },
+  });
+  assert.equal(created.id, "librarian");
+  assert.match(created.instructions, /never change anything/);
+  assert.ok(created.tools.includes("list_agents"), "self-management is always added");
+
+  const rules = rulesFor({ agent: "librarian", profile: store.getAgentProfile("librarian") });
+  assert.ok(rules.startsWith(CORE_RULES), "every agent gets the shared core");
+  assert.match(rules, /You read and summarise/);
+  assert.match(rules, /`librarian`/);
+
+  store.updateAgentProfile("librarian", { instructions: "New brief." });
+  assert.equal(store.getAgentProfile("librarian").instructions, "New brief.");
+
+  assert.equal(store.deleteAgentProfile("librarian"), true);
+  assert.equal(store.getAgentProfile("librarian"), null);
+  assert.equal(store.deleteAgentProfile("librarian"), false);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a bad agent id is refused before it reaches the store", () => {
+  assert.throws(() => agentPayload({ id: "Not Valid" }), /lowercase/);
+  assert.throws(() => agentPayload({ id: "" }), /lowercase/);
+  const payload = agentPayload({ id: "ok-1" });
+  assert.equal(payload.meta.callers.owner.tools, "*", "owner may always call");
 });
 
 test("filterToolsByProfile uses tools_json for owner", () => {
@@ -79,13 +118,17 @@ test("scheduler caller still uses meta.callers quota", () => {
 
 test("peer caller is bounded by its quota, never the full profile or self-mgmt", () => {
   const { store, dir } = tempStore();
-  const profile = store.getAgentProfile("platform"); // allPlatform, huge domain
+  const profile = store.getAgentProfile("platform"); // allTools, every catalog tool
   const catalog = [
     "kube_get", "kube_status", "kube_secret", "pg_query", "debug_exec", "s3_get",
     "telegram_send", "ask_owner", ...SELF_MGMT_TOOLS,
   ];
-  // arvan-ban calling platform gets exactly its quota (read-only), not the whole platform.
-  const asPeer = resolveEnabledTools(profile, { caller: "arvan-ban", catalogNames: catalog });
+  // A peer with a read-only quota gets exactly that, not the whole profile.
+  store.updateAgentProfile("platform", {
+    meta: { callers: { ...profile.meta.callers, "arvan-ban": { tools: ["kube_get", "kube_status"] } } },
+  });
+  const bounded = store.getAgentProfile("platform");
+  const asPeer = resolveEnabledTools(bounded, { caller: "arvan-ban", catalogNames: catalog });
   assert.deepEqual(asPeer.sort(), ["kube_get", "kube_status"]);
   for (const dangerous of ["kube_secret", "pg_query", "debug_exec", "s3_get", "telegram_send"]) {
     assert.ok(!asPeer.includes(dangerous), dangerous);
@@ -93,7 +136,7 @@ test("peer caller is bounded by its quota, never the full profile or self-mgmt",
   // The self-management tools (which mutate RBAC) never reach a peer-invoked run.
   for (const name of SELF_MGMT_TOOLS) assert.ok(!asPeer.includes(name), name);
   // A caller with no quota row on this profile fails closed.
-  assert.deepEqual(resolveEnabledTools(profile, { caller: "no-such-agent", catalogNames: catalog }), []);
+  assert.deepEqual(resolveEnabledTools(bounded, { caller: "no-such-agent", catalogNames: catalog }), []);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -135,7 +178,7 @@ test("enable/disable tools via store and settings tools", async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("platform allPlatform disable/enable via meta.disabled", () => {
+test("an allTools agent switches single tools off via meta.disabled", () => {
   const { store, dir } = tempStore();
   store.disableAgentTools("platform", ["visualize"]);
   let profile = store.getAgentProfile("platform");
@@ -145,7 +188,7 @@ test("platform allPlatform disable/enable via meta.disabled", () => {
   assert.ok(!enabled.includes("visualize"));
   assert.ok(enabled.includes("ask_owner"));
   assert.ok(enabled.includes("kube_get"));
-  assert.ok(!enabled.includes("arvan_domains"), "specialist CDN stays out of platform allPlatform");
+  assert.ok(enabled.includes("arvan_domains"), "allTools means every tool the install has");
 
   store.enableAgentTools("platform", ["visualize"]);
   profile = store.getAgentProfile("platform");
@@ -196,16 +239,15 @@ test("installRules lists live peers from profiles", () => {
   ];
   const file = installRules(dir, { agent: "griffin", caller: "owner", peers });
   const text = fs.readFileSync(file, "utf8");
-  assert.ok(text.startsWith(GRIFFIN_RULES));
+  assert.ok(text.startsWith(CORE_RULES));
   assert.match(text, /Live peers/);
   assert.match(text, /`arvan-ban`/);
   assert.match(text, /list_agents/);
-  assert.match(GRIFFIN_RULES, /list_agents/);
-  assert.doesNotMatch(GRIFFIN_RULES, /برو arvan-ban/);
+  assert.doesNotMatch(CORE_RULES, /kube|gitlab|cluster/i, "the core rules know no infrastructure");
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("seed owner tools include ask_agent for specialists and griffin", () => {
+test("owner tools include ask_agent for every agent", () => {
   const { store, dir } = tempStore();
   for (const id of ["platform", "arvan-ban", "nsin-ban", "griffin"]) {
     const profile = store.getAgentProfile(id);

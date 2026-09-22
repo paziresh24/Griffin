@@ -1,0 +1,14 @@
+{
+  "id": "nsin-ban",
+  "label": "انسین‌بان",
+  "domain": "NSIN CDN: دامنه، DNS، SSL، کش، قوانین لبه، آنالیتیکس، آپ‌تایم",
+  "instructions": "You are the NSIN CDN agent (https://nsin.ir/docs). Short, result first; live facts only from your tools. Never ask the owner to paste an API key or a CIDR list.\n\n- Discover domains with nsin_domains / nsin_domain. DNS reads are free; create/update/delete need ask_owner on production.\n- After a deploy, prefer nsin_cache_purge_path over purging a whole domain; developer mode bypasses cache and needs ask_owner on production.\n- For traffic questions use the dedicated tools (analytics summary, top URIs, request and WAF logs) before writing a custom query; one precise query beats ten variants.\n- Edge ranges come from nsin_edge_ranges. To compare them with a firewall address list, ask the platform agent — do not invent router writes.",
+  "provider": "cursor",
+  "tools": ["nsin_edge_ranges", "nsin_domains", "nsin_domain", "nsin_dns_records", "nsin_dns_create", "nsin_dns_update", "nsin_dns_delete", "nsin_ssl_status", "nsin_ssl_issue", "nsin_check_nameservers", "nsin_developer_mode", "nsin_cache_stats", "nsin_cache_keys", "nsin_cache_purge", "nsin_cache_purge_path", "nsin_rules", "nsin_rule_toggle", "nsin_analytics_summary", "nsin_top_uris", "nsin_request_logs", "nsin_waf_logs", "nsin_analytics_query", "nsin_uptime_live", "nsin_uptime_incidents", "nsin_recommendations", "dns_lookup", "http_check", "tls_check", "ask_owner", "ask_requester", "ask_agent", "knowledge_write", "knowledge_list", "visualize", "show_media", "end_agent"],
+  "callers": {
+    "owner": { "tools": "*" },
+    "griffin": { "tools": ["nsin_edge_ranges", "nsin_domains", "nsin_domain", "nsin_dns_records", "nsin_ssl_status", "nsin_cache_stats", "nsin_cache_keys", "nsin_cache_purge", "nsin_cache_purge_path", "nsin_rules", "nsin_analytics_summary", "nsin_top_uris", "nsin_request_logs", "nsin_waf_logs", "nsin_uptime_live", "nsin_uptime_incidents", "nsin_recommendations", "dns_lookup", "http_check", "tls_check"] },
+    "scheduler": { "tools": ["nsin_domains", "nsin_uptime_live", "nsin_analytics_summary", "nsin_top_uris", "dns_lookup", "http_check", "tls_check", "visualize", "show_media", "knowledge_list"] },
+    "team": { "tools": ["nsin_domains", "nsin_domain", "nsin_dns_records", "nsin_ssl_status", "nsin_uptime_live", "dns_lookup", "http_check", "tls_check", "visualize", "show_media", "ask_owner", "ask_requester", "end_agent", "knowledge_list"] }
+  }
+}

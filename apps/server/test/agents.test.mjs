@@ -3,157 +3,52 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AGENTS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents } from "../src/agents/registry.mjs";
-import { GRIFFIN_RULES, NEVER_DEAD_END, RULES, installRules } from "../src/prompt.mjs";
+import { AGENTS, CORE_TOOLS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents, resolveAgentId } from "../src/agents/registry.mjs";
+import { agentPayload } from "../src/agents/import.mjs";
+import { resolveEnabledTools } from "../src/agents/profiles.mjs";
+import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, installRules, rulesFor } from "../src/prompt.mjs";
+import { exampleAgent } from "./fixture-agents.mjs";
 
 const ALL = [
-  "kube_get",
-  "kube_status",
-  "kube_logs",
-  "kube_secret",
-  "debug_exec",
   "ask_owner",
+  "ask_agent",
+  "delegate",
   "visualize",
   "show_media",
-  "pg_query",
-  "arvan_cache_purge",
+  "jobs_list",
+  "telegram_send",
+  "kube_get",
+  "debug_exec",
 ];
 
-test("default agent is griffin", () => {
+test("one built-in agent, and it owns nobody's infrastructure", () => {
   assert.equal(DEFAULT_AGENT, "griffin");
+  assert.deepEqual(Object.keys(AGENTS), ["griffin"]);
   assert.equal(listAgents()[0].id, "griffin");
-  assert.ok(AGENTS.griffin);
-  assert.ok(AGENTS["platform"]);
-  assert.ok(AGENTS["arvan-ban"]);
-  assert.ok(AGENTS["nsin-ban"]);
-});
-
-test("griffin owner orchestrates via ask_agent; owns Telegram; no direct kube/arvan/nsin tools", () => {
-  const names = [
-    ...ALL,
-    "ask_agent",
-    "jobs_list",
-    "jobs_create",
-    "knowledge_list",
-    "telegram_dialogs",
-    "telegram_read",
-    "telegram_send",
-    "arvan_domains",
-    "nsin_edge_ranges",
-  ];
-  const allowed = allowedTools("griffin", "owner", names);
+  for (const name of CORE_TOOLS) {
+    assert.ok(!/^(kube|gitlab|grafana|mikrotik|arvan|nsin|infisical|s3|pg)_/.test(name), name);
+  }
+  const allowed = allowedTools("griffin", "owner", ALL);
   assert.ok(allowed.includes("ask_agent"));
   assert.ok(allowed.includes("ask_owner"));
-  assert.ok(allowed.includes("jobs_list"));
-  assert.ok(allowed.includes("telegram_dialogs"));
-  assert.ok(allowed.includes("telegram_read"));
-  assert.ok(allowed.includes("telegram_send"));
-  assert.ok(!allowed.includes("kube_get"));
-  assert.ok(!allowed.includes("arvan_domains"));
-  assert.ok(!allowed.includes("nsin_edge_ranges"));
+  assert.ok(!allowed.includes("kube_get"), "infrastructure tools are opt-in per install");
   assert.ok(!allowed.includes("debug_exec"));
 });
 
-test("griffin can call platform, arvan-ban and nsin-ban with peer quotas", () => {
-  assert.ok(callerQuota("platform", "griffin").tools.includes("kube_get"));
-  assert.ok(callerQuota("platform", "griffin").tools.includes("debug_exec"));
-  assert.ok(callerQuota("platform", "griffin").tools.includes("ask_owner"));
-  assert.ok(allowedTools("platform", "griffin", ALL).includes("ask_owner"));
-  assert.ok(callerQuota("arvan-ban", "griffin").tools.includes("arvan_cache_purge"));
-  assert.ok(callerQuota("nsin-ban", "griffin").tools.includes("nsin_edge_ranges"));
-  assert.ok(!callerQuota("arvan-ban", "griffin").tools.includes("nsin_edge_ranges"));
-});
-
-test("griffin→platform peer quota excludes telegram — Griffin owns the owner's account", () => {
-  const q = callerQuota("platform", "griffin").tools;
-  assert.ok(!q.includes("telegram_dialogs"));
-  assert.ok(!q.includes("telegram_read"));
-  assert.ok(!q.includes("telegram_send"));
-  const names = [...ALL, "telegram_dialogs", "telegram_read", "telegram_send", "kube_get"];
-  const allowed = allowedTools("platform", "griffin", names);
-  assert.ok(!allowed.includes("telegram_read"));
-  assert.ok(allowed.includes("kube_get"));
-});
-
-test("owner gets everything available except arvan_* and nsin_* specialist tools", () => {
-  const names = [...ALL, "nsin_edge_ranges"];
-  const allowed = allowedTools("platform", "owner", names);
-  assert.deepEqual(
-    allowed,
-    names.filter((n) => !n.startsWith("arvan_") && !n.startsWith("nsin_")),
-  );
-  assert.ok(!allowed.includes("arvan_cache_purge"));
-  assert.ok(!allowed.includes("nsin_edge_ranges"));
-});
-
-test("platform owner reaches CDN/NSIN only via ask_agent, not arvan_*/nsin_*", () => {
-  const names = [...ALL, "ask_agent", "arvan_domains", "http_check", "nsin_edge_ranges"];
-  const allowed = allowedTools("platform", "owner", names);
-  assert.ok(allowed.includes("ask_agent"));
-  assert.ok(allowed.includes("http_check"));
-  assert.ok(!allowed.includes("arvan_domains"));
-  assert.ok(!allowed.includes("arvan_cache_purge"));
-  assert.ok(!allowed.includes("nsin_edge_ranges"));
-});
-
-test("arvan-ban caller of platform gets get/status only — not kube_logs", () => {
-  assert.deepEqual(allowedTools("platform", "arvan-ban", ALL), ["kube_get", "kube_status"]);
-  assert.ok(!allowedTools("platform", "arvan-ban", ALL).includes("kube_logs"));
-});
-
-test("nsin-ban caller of platform gets mikrotik read only", () => {
-  const names = [...ALL, "mikrotik_print", "mikrotik_ping", "mikrotik_address_list_add"];
-  assert.deepEqual(allowedTools("platform", "nsin-ban", names), ["mikrotik_print", "mikrotik_ping"]);
-});
-
-test("scheduler does not get debug_exec, kube_secret or ask_owner", () => {
-  const allowed = allowedTools("platform", "scheduler", ALL);
-  assert.ok(!allowed.includes("debug_exec"));
-  assert.ok(!allowed.includes("kube_secret"));
-  assert.ok(!allowed.includes("ask_owner"));
-  assert.ok(allowed.includes("kube_status"));
-  assert.ok(allowed.includes("visualize"));
-});
-
-test("griffin and specialists have scheduler and team quotas for jobs / Telegram", () => {
-  const names = [...ALL, "ask_agent", "end_agent", "knowledge_list", "telegram_send", "arvan_domains", "nsin_domains"];
-  const gSched = allowedTools("griffin", "scheduler", names);
-  assert.ok(gSched.includes("ask_agent"));
-  assert.ok(!gSched.includes("ask_owner"));
-  assert.ok(allowedTools("griffin", "team", names).includes("end_agent"));
-  assert.ok(allowedTools("arvan-ban", "scheduler", names).includes("arvan_domains"));
-  assert.ok(allowedTools("nsin-ban", "team", names).includes("end_agent"));
-});
-
-test("team coverage keeps ask_owner and debug_exec; excludes secrets", () => {
-  const allowed = allowedTools("platform", "team", [
-    ...ALL,
-    "telegram_send",
-    "arvan_cache_purge",
-    "mikrotik_print",
-    "end_agent",
-    "gitlab_mr",
-    "infisical_list",
-    "infisical_get",
-    "infisical_upsert",
-    "kube_secret",
-  ]);
-  assert.ok(allowed.includes("ask_owner"));
-  assert.ok(allowed.includes("pg_query"));
-  assert.ok(allowed.includes("gitlab_mr"));
-  assert.ok(allowed.includes("telegram_send"));
-  assert.ok(allowed.includes("debug_exec"));
-  assert.ok(allowed.includes("end_agent"));
-  assert.ok(allowed.includes("infisical_list"));
-  assert.ok(allowed.includes("infisical_get"));
-  assert.ok(allowed.includes("infisical_upsert"));
-  assert.ok(!allowed.includes("kube_secret"));
-  assert.ok(!allowed.includes("arvan_cache_purge"));
-});
-
-test("unknown agent or caller throws — never falls open", () => {
+test("an unattended caller works but never asks; unknown caller fails closed", () => {
+  const scheduled = allowedTools("griffin", "scheduler", ALL);
+  assert.ok(scheduled.includes("delegate"));
+  assert.ok(scheduled.includes("visualize"));
+  assert.ok(!scheduled.includes("ask_owner"), "nobody is watching a scheduled run");
+  assert.ok(allowedTools("griffin", "team", ALL).includes("ask_owner"));
   assert.throws(() => callerQuota("nope", "owner"), /unknown agent/);
-  assert.throws(() => callerQuota("platform", "stranger"), /unknown caller/);
+  assert.throws(() => callerQuota("griffin", "stranger"), /unknown caller/);
+});
+
+test("agent ids are shapes, not a fixed list — custom agents are first class", () => {
+  assert.equal(resolveAgentId("my-agent"), "my-agent");
+  assert.equal(resolveAgentId("Not Valid"), DEFAULT_AGENT);
+  assert.equal(resolveAgentId(""), DEFAULT_AGENT);
 });
 
 test("filterTools returns a new object and does not mutate input", () => {
@@ -164,103 +59,78 @@ test("filterTools returns a new object and does not mutate input", () => {
   assert.notEqual(out, input);
 });
 
-test("installRules with no options is GRIFFIN_RULES plus the never-dead-end rule", () => {
+test("rules are the shared core plus this agent's own instructions", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-rules-"));
   const file = installRules(dir);
-  assert.equal(fs.readFileSync(file, "utf8"), GRIFFIN_RULES + NEVER_DEAD_END);
-  assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), GRIFFIN_RULES + NEVER_DEAD_END);
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test("installRules for platform owner is RULES plus the never-dead-end rule", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-rules-"));
-  const file = installRules(dir, { agent: "platform", caller: "owner" });
-  assert.equal(fs.readFileSync(file, "utf8"), RULES + NEVER_DEAD_END);
-  fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test("installRules for scheduler appends the quota note", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-rules-"));
-  const file = installRules(dir, { agent: "platform", caller: "scheduler" });
   const text = fs.readFileSync(file, "utf8");
-  assert.ok(text.startsWith(RULES));
-  assert.match(text, /Who is calling you now: زمان‌بند/);
-  assert.match(text, /kube_status/);
-  const quotaLine = text.slice(text.indexOf("Who is calling you now:")).split("\n")[0];
-  assert.doesNotMatch(quotaLine, /debug_exec/, "the scheduler quota itself has no terminal");
+  assert.ok(text.startsWith(CORE_RULES));
+  assert.ok(text.includes(DEFAULT_INSTRUCTIONS), "the default agent ships with instructions");
+  assert.ok(text.endsWith(NEVER_DEAD_END));
+  assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), text);
+
+  const own = rulesFor({
+    agent: "scribe",
+    profile: { label: "Scribe", domain: "writing", instructions: "Write minutes, never opinions." },
+  });
+  assert.ok(own.startsWith(CORE_RULES));
+  assert.match(own, /`scribe` \(Scribe\)/);
+  assert.match(own, /Your domain: writing/);
+  assert.match(own, /Write minutes, never opinions/);
+  assert.doesNotMatch(own, /kube|cluster|gitlab/i);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("prepareAgentWorkspaces creates per-agent cwd and symlinks shared clones", async () => {
+test("a non-owner caller is told who is calling and what it may use", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-rules-"));
+  const profile = {
+    label: "Scribe",
+    instructions: "Write minutes.",
+    meta: { callers: { scheduler: { tools: ["visualize", "knowledge_list"] } } },
+  };
+  const file = installRules(dir, { agent: "scribe", caller: "scheduler", profile });
+  const text = fs.readFileSync(file, "utf8");
+  assert.match(text, /Who is calling you now: زمان‌بند/);
+  assert.match(text, /visualize, knowledge_list/);
+  assert.match(text, /unattended/);
+  const quotaLine = text.slice(text.indexOf("Who is calling you now:")).split("\n")[0];
+  assert.doesNotMatch(quotaLine, /ask_owner/, "an unattended run is not told to ask");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("every agent gets its own cwd, rules and the shared directories", async () => {
   const { prepareAgentWorkspaces, agentCwd } = await import("../src/agents/workspaces.mjs");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-ws-"));
   fs.mkdirSync(path.join(root, "handbook"));
   fs.writeFileSync(path.join(root, "handbook", "AGENTS.md"), "hi");
-  const prepared = prepareAgentWorkspaces(root, { linkShared: ["handbook"] });
+  const prepared = prepareAgentWorkspaces(root, { agents: ["griffin", "scribe"], linkShared: ["handbook"] });
   assert.ok(prepared.includes(agentCwd(root, "griffin")));
-  assert.ok(prepared.includes(agentCwd(root, "platform")));
-  assert.ok(prepared.includes(agentCwd(root, "arvan-ban")));
-  assert.ok(prepared.includes(agentCwd(root, "nsin-ban")));
+  assert.ok(prepared.includes(agentCwd(root, "scribe")));
   assert.ok(fs.existsSync(path.join(agentCwd(root, "griffin"), ".cursor", "rules", "griffin.mdc")));
-  assert.ok(fs.existsSync(path.join(agentCwd(root, "platform"), ".cursor", "rules", "platform.mdc")));
-  assert.ok(fs.existsSync(path.join(agentCwd(root, "arvan-ban"), ".cursor", "rules", "arvan-ban.mdc")));
-  assert.ok(fs.existsSync(path.join(agentCwd(root, "nsin-ban"), ".cursor", "rules", "nsin-ban.mdc")));
-  assert.equal(fs.realpathSync(path.join(agentCwd(root, "platform"), "handbook")), path.join(root, "handbook"));
-  assert.ok(!fs.existsSync(path.join(agentCwd(root, "arvan-ban"), "handbook")));
-  assert.ok(!fs.existsSync(path.join(agentCwd(root, "nsin-ban"), "handbook")));
-  assert.ok(!fs.existsSync(path.join(agentCwd(root, "griffin"), "handbook")));
+  assert.ok(fs.existsSync(path.join(agentCwd(root, "scribe"), ".cursor", "rules", "scribe.mdc")));
+  assert.equal(fs.realpathSync(path.join(agentCwd(root, "scribe"), "handbook")), path.join(root, "handbook"));
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test("arvan-ban owner only gets CDN tools, not kube_secret, debug_exec or nsin_*", () => {
-  const available = [...ALL, "arvan_domains", "http_check", "dns_lookup", "nsin_edge_ranges", "arvan_cache_purge"];
-  const allowed = allowedTools("arvan-ban", "owner", available);
-  assert.ok(allowed.includes("arvan_domains"));
-  assert.ok(allowed.includes("http_check"));
-  assert.ok(allowed.includes("ask_owner"));
-  assert.ok(!allowed.includes("nsin_edge_ranges"));
-  assert.ok(!allowed.includes("kube_secret"));
-  assert.ok(!allowed.includes("debug_exec"));
-  assert.ok(!allowed.includes("kube_get"));
-});
-
-test("nsin-ban owner gets NSIN tools, not arvan_* or kube", () => {
-  const available = [
-    ...ALL,
-    "arvan_domains",
-    "http_check",
-    "dns_lookup",
-    "nsin_edge_ranges",
-    "nsin_domains",
-    "nsin_cache_purge",
-    "arvan_cache_purge",
+test("the shipped example agents are valid and keep their callers bounded", () => {
+  const catalog = [
+    "kube_get", "kube_status", "kube_secret", "debug_exec", "pg_query", "s3_get",
+    "arvan_domains", "arvan_cache_purge", "nsin_domains", "nsin_dns_create",
+    "telegram_send", "ask_owner", "visualize", "show_media", "list_agents",
   ];
-  const allowed = allowedTools("nsin-ban", "owner", available);
-  assert.ok(allowed.includes("nsin_edge_ranges"));
-  assert.ok(allowed.includes("nsin_domains"));
-  assert.ok(allowed.includes("nsin_cache_purge"));
-  assert.ok(allowed.includes("http_check"));
-  assert.ok(allowed.includes("ask_owner"));
-  assert.ok(!allowed.includes("arvan_domains"));
-  assert.ok(!allowed.includes("arvan_cache_purge"));
-  assert.ok(!allowed.includes("kube_secret"));
-  assert.ok(!allowed.includes("debug_exec"));
-});
+  const platform = agentPayload(exampleAgent("platform.json"));
+  assert.equal(platform.meta.allTools, true, "an infrastructure agent may hold every tool");
+  const forGriffin = resolveEnabledTools({ ...platform, meta: platform.meta }, { caller: "griffin", catalogNames: catalog });
+  assert.ok(forGriffin.includes("kube_get"));
+  assert.ok(!forGriffin.includes("telegram_send"), "the messenger account stays with the orchestrator");
+  assert.ok(!forGriffin.includes("list_agents"), "self-management never reaches a peer");
 
-test("arvan-ban registry exposes CDN tools to platform caller", () => {
-  const quota = callerQuota("arvan-ban", "platform");
-  assert.ok(quota.tools.includes("arvan_cache_purge"));
-  assert.ok(quota.tools.includes("http_check"));
-  assert.ok(!quota.tools.includes("nsin_edge_ranges"));
-  assert.equal(AGENTS["arvan-ban"].label, "آروان‌بان");
-});
+  const arvan = agentPayload(exampleAgent("cdn-arvan.json"));
+  const arvanOwner = resolveEnabledTools(arvan, { caller: "owner", catalogNames: catalog });
+  assert.ok(arvanOwner.includes("arvan_domains"));
+  assert.ok(!arvanOwner.includes("kube_secret"), "a CDN agent has no business in the cluster");
+  assert.ok(!arvanOwner.includes("nsin_domains"));
 
-test("nsin-ban registry exposes NSIN tools to griffin and platform callers", () => {
-  assert.ok(callerQuota("nsin-ban", "griffin").tools.includes("nsin_edge_ranges"));
-  assert.ok(callerQuota("nsin-ban", "griffin").tools.includes("nsin_domains"));
-  assert.ok(callerQuota("nsin-ban", "griffin").tools.includes("nsin_cache_purge"));
-  assert.ok(callerQuota("nsin-ban", "platform").tools.includes("nsin_analytics_summary"));
-  assert.ok(!callerQuota("nsin-ban", "griffin").tools.includes("nsin_dns_create"));
-  assert.ok(callerQuota("nsin-ban", "arvan-ban").tools.includes("nsin_edge_ranges"));
-  assert.equal(AGENTS["nsin-ban"].label, "انسین‌بان");
+  const researcher = agentPayload(exampleAgent("researcher.json"));
+  const researcherOwner = resolveEnabledTools(researcher, { caller: "owner", catalogNames: catalog });
+  assert.deepEqual(researcherOwner.sort(), ["ask_owner", "list_agents", "show_media", "visualize"]);
 });

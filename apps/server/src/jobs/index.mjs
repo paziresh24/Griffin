@@ -1,4 +1,4 @@
-import { resolveAgentId } from "../agents/registry.mjs";
+import { DEFAULT_AGENT, resolveAgentId } from "../agents/registry.mjs";
 import { formatLocal } from "./cron.mjs";
 import { describeTrigger, nextTriggerAt, TRIGGERS, TriggerError, triggerKinds, validateTrigger } from "./triggers.mjs";
 
@@ -191,7 +191,7 @@ function prepare(input, current = null, store = null) {
   if (input.agent !== undefined && input.agent !== null && String(input.agent).trim()) {
     agent = String(input.agent).trim();
   } else {
-    agent = resolveAgentId(current?.agent ?? "platform");
+    agent = resolveAgentId(current?.agent ?? DEFAULT_AGENT);
   }
   const profile = store?.getAgentProfile?.(agent);
   if (!profile) throw new TriggerError(`ایجنت «${agent}» را نمی‌شناسم`);
