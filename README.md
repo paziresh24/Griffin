@@ -1,22 +1,14 @@
-<p align="center">
-  <img src="docs/media/griffin-mark.svg" width="88" alt="Griffin">
-</p>
+<img src="docs/media/griffin-mark.svg" width="76" alt="">
 
-<h1 align="center">Griffin</h1>
+# Griffin
 
-<p align="center">
-  A self-hosted multi-agent shell for running your own infrastructure.<br>
-  You ask in plain language; an orchestrator plans, hands the pieces to specialist agents,<br>
-  and answers from typed tools — never from the model's memory.
-</p>
+**A self-hosted multi-agent shell for running your own infrastructure.** You ask in plain language;
+an orchestrator plans, hands the pieces to specialist agents, and answers from typed tools — never
+from the model's memory.
 
-<p align="center">
-  <sub>Node 24 · Cursor or Claude Agent SDK · SQLite · no SaaS control plane · MIT</sub>
-</p>
+`Node 24` · `Cursor or Claude Agent SDK` · `SQLite` · no SaaS control plane · MIT
 
-<p align="center">
-  <img src="docs/media/chat.png" width="880" alt="Griffin answering a cluster question: a plan, a cluster-status tool card marked as coming from the emergency path, and a disk-usage card">
-</p>
+<img src="docs/media/chat.png" width="900" alt="Griffin answering a cluster question: a plan, a cluster-status tool card marked as coming from the emergency path, and a disk-usage card">
 
 ## Why this exists
 
@@ -49,9 +41,7 @@ DNS/HTTP/TLS probes.
 **Charts and files in the conversation** — the agent draws Vega-Lite from real series and the same
 chart is delivered to a messenger as an image; images, video, PDF, Markdown and CSV render inline.
 
-<p align="center">
-  <img src="docs/media/chart.png" width="880" alt="A memory usage chart drawn by the agent inside the chat, labelled as demo data">
-</p>
+<img src="docs/media/chart.png" width="900" alt="A memory usage chart drawn by the agent inside the chat, labelled as demo data">
 
 **Scheduled jobs** — a prompt plus a trigger plus a delivery target; each run gets its own hidden
 chat, so a job that misbehaves leaves the same trace a person's chat would.
