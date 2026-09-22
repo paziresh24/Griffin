@@ -75,6 +75,8 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 |---|---|
 | `GRIFFIN_DATA` | data dir: SQLite, API keys, TLS, owner token |
 | `GRIFFIN_BROKER` | `off` to run without infrastructure tools even if a socket exists |
+| `GRIFFIN_WEB` | `off` to run headless: API, MCP, messengers and jobs, no web UI |
+| `GRIFFIN_TOKEN`, `GRIFFIN_URL` | used by the terminal client (`bin/griffin.mjs`) |
 | `GRIFFIN_WORKSPACE` | agent workspaces, rules and the knowledge git |
 | `GRIFFIN_SITE_CONFIG`, `GRIFFIN_SSH_KNOWN_HOSTS` | broker inventory paths |
 | `GRIFFIN_BROKER_SOCKET` | unix socket shared by app and broker |

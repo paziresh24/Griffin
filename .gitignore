@@ -1,5 +1,5 @@
 # deps / build
-node_modules/
+node_modules
 __pycache__/
 *.pyc
 apps/web/dist/

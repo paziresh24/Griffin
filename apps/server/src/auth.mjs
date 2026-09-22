@@ -7,8 +7,11 @@ import { clientAddress } from "./listen.mjs";
 const COOKIE = "griffin_session";
 const SESSION_DAYS = 30;
 
-// Local owner auth with no external identity provider, so it keeps working when the shared
-// (and Authentik) is down. The owner token lives in the data volume (0600).
+// Local owner auth with no external identity provider, so it keeps working when the shared SSO is
+// down. The owner token lives in the data volume (0600) and opens two doors:
+//   - the browser: POST /api/auth/login exchanges it for a signed, HttpOnly session cookie;
+//   - everything else: `Authorization: Bearer <owner token>` on /api/*, so the terminal client,
+//     a script or a cron job is as first-class as the web UI.
 export function createAuth({ dataDir, store, secureCookie = false }) {
   const tokenFile = path.join(dataDir, "owner.token");
   if (!fs.existsSync(tokenFile)) {
@@ -34,6 +37,16 @@ export function createAuth({ dataDir, store, secureCookie = false }) {
     const entry = failures.get(ip);
     const count = entry && Date.now() < entry.until ? entry.count + 1 : 1;
     failures.set(ip, { count, until: Date.now() + 15 * 60_000 });
+  }
+
+  /** The owner token presented directly — how the CLI and scripts authenticate. */
+  function bearerValid(c) {
+    const header = c.req.header("authorization") || "";
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+    if (!match) return false;
+    const given = Buffer.from(match[1].trim());
+    const expected = Buffer.from(ownerToken());
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
   }
 
   async function sessionValid(c) {
@@ -93,11 +106,12 @@ export function createAuth({ dataDir, store, secureCookie = false }) {
         return c.json({ ok: true });
       });
 
-      app.get("/api/auth/me", async (c) => c.json({ authenticated: await sessionValid(c) }));
+      app.get("/api/auth/me", async (c) => c.json({ authenticated: bearerValid(c) || (await sessionValid(c)) }));
     },
 
     async middleware(c, next) {
       if (c.req.path.startsWith("/api/auth/") || c.req.path.startsWith("/api/public/")) return next();
+      if (bearerValid(c)) return next();
       if (!(await sessionValid(c))) return c.json({ error: "unauthorized" }, 401);
       return next();
     },

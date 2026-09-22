@@ -21,10 +21,17 @@ echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key  
 GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs
 ```
 
-Open `http://127.0.0.1:3100`, log in with the token printed at `data/owner.token` (or start with
-`GRIFFIN_AUTH=off` while you are on localhost), and start talking to the agent that is already
-there. No cluster, no vault, no YAML: a fresh install is a chat with one agent, and everything else
-is something you add when you want it.
+Open `http://127.0.0.1:3100`, log in with the token at `data/owner.token`, and start talking to the
+agent that is already there. No cluster, no vault, no YAML: a fresh install is a chat with one
+agent, and everything else is something you add when you want it.
+
+Or stay in the terminal:
+
+```bash
+node bin/griffin.mjs "what changed in the last deploy?"   # streams the answer
+node bin/griffin.mjs -i                                   # keep the chat open
+node bin/griffin.mjs agents                               # who exists, what they may use
+```
 
 Prefer Docker? `docker compose -f deploy/compose.yaml up -d --build` runs the same thing.
 
@@ -59,6 +66,11 @@ so a job that misbehaves leaves the same trace a person's chat would.
 **Messengers and other agents** — Telegram/Bale bots and a Telegram account bridge; an MCP endpoint
 where another agent (Claude Code, for instance) connects with its own scoped token and gets
 task-shaped tools: send, wait, reply, cancel.
+
+**No interface, when that is better.** The core is the product; the UI is one client of it. There is
+a terminal client, a Bearer-authenticated HTTP API, MCP for other agents, messengers, and scheduled
+jobs that deliver where you already are — and `GRIFFIN_WEB=off` runs the whole thing headless. See
+[docs/interfaces.md](docs/interfaces.md).
 
 **Infrastructure tools, if you want them.** A separate broker process holds credentials and exposes
 typed tools: Kubernetes (status, get, logs, in-pod `df`, secrets, CNPG), Prometheus and Grafana
@@ -117,7 +129,8 @@ tests declare their own fixture site.
 | `config/` | the site inventory shape |
 | `examples/agents/` | importable agent profiles |
 | `deploy/` | compose, environment example, egress proxy notes, backup script |
-| `docs/` | [agents](docs/agents.md) · [architecture](docs/architecture.md) · [configuration](docs/configuration.md) |
+| `bin/griffin.mjs` | the terminal client |
+| `docs/` | [agents](docs/agents.md) · [interfaces](docs/interfaces.md) · [architecture](docs/architecture.md) · [configuration](docs/configuration.md) |
 
 ## Security posture
 
@@ -130,7 +143,8 @@ tests declare their own fixture site.
   return key names only.
 - Irreversible actions ask the owner and wait; in an unattended chain (a job, the ops room) they are
   refused rather than guessed. Every approval is recorded.
-- Owner auth is local (token → signed cookie) so it keeps working when your SSO is down. Put it
+- Owner auth is local: the token in `data/owner.token` becomes a signed cookie in the browser, or a
+  `Bearer` credential for the terminal and scripts. It keeps working when your SSO is down. Put it
   behind TLS you control; it is not built to face the open internet unauthenticated.
 
 Read the code before you point this at production: it is opinionated, and the guards assume one

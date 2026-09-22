@@ -593,9 +593,16 @@ const app = createApp({
     jobRoutes(api, jobs, { targets: () => integrations.targets() });
   },
 });
-app.use("/assets/*", serveStatic({ root: WEB_DIST }));
-app.use("/*", serveStatic({ root: WEB_DIST }));
-app.get("*", serveStatic({ path: path.join(WEB_DIST, "index.html") }));
+// The web UI is one surface among several (terminal, messengers, MCP, jobs). GRIFFIN_WEB=off runs
+// the core headless: the API, the MCP endpoint and every integration stay exactly as they are.
+const serveWeb = genv("WEB", "on") !== "off" && fs.existsSync(WEB_DIST);
+if (serveWeb) {
+  app.use("/assets/*", serveStatic({ root: WEB_DIST }));
+  app.use("/*", serveStatic({ root: WEB_DIST }));
+  app.get("*", serveStatic({ path: path.join(WEB_DIST, "index.html") }));
+} else {
+  app.get("/", (c) => c.json({ griffin: "headless", ui: false, api: "/api", mcp: "/mcp" }));
+}
 
 const tls = loadTls(genv("TLS_DIR", path.join(DATA, "tls")));
 const server = createDualServer(getRequestListener(app.fetch), { tls });

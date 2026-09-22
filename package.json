@@ -1,6 +1,6 @@
 {
   "name": "griffin",
-  "description": "Self-hosted multi-agent shell for running your own infrastructure: an orchestrator that plans, delegates to specialist agents, and answers from typed tools.",
+  "description": "Self-hosted shell for a small team of agents that work for you: your agents, your tools, your box.",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -10,9 +10,13 @@
     "apps/broker",
     "apps/web"
   ],
+  "bin": {
+    "griffin": "bin/griffin.mjs"
+  },
   "scripts": {
     "test": "npm test --workspaces --if-present",
-    "build": "npm run build --workspace apps/web"
+    "build": "npm run build --workspace apps/web",
+    "griffin": "node bin/griffin.mjs"
   },
   "engines": {
     "node": ">=24"
