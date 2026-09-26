@@ -489,7 +489,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           // can be switched off with settings.threads = false (then the older paths below apply).
           const threadDm = Boolean(
             key && person && !message.isGroup && !message.isChannel && !entity?.bot &&
-            person.category === "team" &&
+            person.category === "team" && person.access?.enabled !== false &&
             bridge.integration?.(integration.id)?.settings?.threads !== false,
           );
 
