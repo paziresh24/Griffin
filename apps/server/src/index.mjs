@@ -14,11 +14,13 @@ import { createShowMedia, SHOW_MEDIA_TOOL } from "./media.mjs";
 import { createAuth } from "./auth.mjs";
 import { openStore } from "./db.mjs";
 import { genv, resolveDbPath } from "./env.mjs";
-import { installRules } from "./prompt.mjs";
+import { buildRules, installRules } from "./prompt.mjs";
+import { simulateTools } from "./sim.mjs";
 import { createRunner } from "./runner.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler } from "./titles.mjs";
 import { createIntegrations, integrationRoutes } from "./integrations/manager.mjs";
+import { classifyThread } from "./integrations/threads.mjs";
 import { createJobs } from "./jobs/index.mjs";
 import { jobRoutes } from "./jobs/routes.mjs";
 import { createJobTools } from "./jobs/tools.mjs";
@@ -29,7 +31,6 @@ import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL } from "./peer-auth.mjs"
 import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
 import { brokerRequest, createToolSource } from "./tools.mjs";
-import { createToolBudget } from "./budget.mjs";
 import { DEFAULT_AGENT } from "./agents/registry.mjs";
 import { agentPayload } from "./agents/import.mjs";
 import { filterToolsByProfile, publicProfile, rootCallerOf, APP_TOOL_NAMES, CALLER_LABELS, SELF_MGMT_TOOLS, unique as uniqueTools } from "./agents/profiles.mjs";
@@ -44,6 +45,7 @@ import {
   normalizeProvider,
   PROVIDER_CLAUDE,
   PROVIDER_CURSOR,
+  PROVIDER_OPENAI,
 } from "./providers/index.mjs";
 
 const env = process.env;
@@ -74,6 +76,10 @@ function anthropicApiKey() {
   return readSecret("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE", "anthropic.api-key");
 }
 
+function openaiApiKey() {
+  return readSecret("OPENAI_API_KEY", "OPENAI_API_KEY_FILE", "openai.api-key");
+}
+
 fs.mkdirSync(DATA, { recursive: true });
 const store = openStore(resolveDbPath(DATA));
 const refreshWorkspaces = () => {
@@ -97,7 +103,7 @@ const brokerEnabled = () => brokerWanted && toolSource.available();
 // integrationsHolder breaks the cycle: asks needs to tell integrations a question closed, but
 // integrations itself is constructed later (it takes asks as an argument).
 const integrationsHolder = { current: null };
-const asks = createAsks({ store, onSettled: (chatId) => integrationsHolder.current?.clearQuestion(chatId) });
+const asks = createAsks({ store, onSettled: (chatId, info) => integrationsHolder.current?.clearQuestion(chatId, info) });
 const peersHolder = { current: null };
 const knowledge = createKnowledge({
   store,
@@ -155,14 +161,34 @@ const demo = genv("DEMO") === "1";
 const providers = createProviders({
   cursorApiKey: cursorApiKey(),
   anthropicApiKey: anthropicApiKey(),
+  openaiApiKey: openaiApiKey(),
+  openaiBaseUrl: genv("OPENAI_BASE_URL", ""),
+  openaiModel: genv("OPENAI_MODEL", ""),
+  openaiReasoningEffort: genv("OPENAI_REASONING_EFFORT", ""),
   cursorModel: env.CURSOR_MODEL || "auto",
   claudeModel: env.CLAUDE_MODEL || "sonnet",
   builtinTools: TOOLS,
   demoSdk: demo ? (await import("./demo-sdk.mjs")).demoSdk : null,
 });
 
+// The provider and model a chat's next run actually uses: the agent profile decides, the chat's own
+// model overrides, the env default fills in. The same answer labels run.started, so the UI shows the
+// real model instead of "auto".
+function runModel(chat) {
+  const profile = store.getAgentProfile(chat?.agent || DEFAULT_AGENT);
+  const provider = normalizeProvider(profile?.provider || chat?.provider);
+  const fallback =
+    provider === PROVIDER_CLAUDE
+      ? env.CLAUDE_MODEL || "sonnet"
+      : provider === PROVIDER_OPENAI
+        ? genv("OPENAI_MODEL", "gpt-4o-mini")
+        : env.CURSOR_MODEL || "auto";
+  return { provider, model: chat?.model || profile?.model || fallback };
+}
+
 const runner = createRunner({
   store,
+  runLabel: runModel,
   onFinished: (chatId) => maybeTitle(chatId),
   onCancel: (chatId) => {
     const leftover = asks.cancel(chatId);
@@ -218,8 +244,6 @@ const runner = createRunner({
 
     const cwd = agentCwd(WORKSPACE, agent);
     const peers = store.listAgentProfiles().filter((p) => p.id !== agent);
-    installRules(cwd, { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT });
-
     let filtered = filterToolsByProfile(customTools, profile, { caller });
     const rootCaller = chat.parent_chat_id ? rootCallerOf(store, chat) : caller;
     const rootChatId = store.rootChatId(chat.id);
@@ -248,16 +272,19 @@ const runner = createRunner({
       filtered = guardTeamTools(filtered, { chatId: chat.id, asks, store, peerChat });
     }
 
-    // Loop wall in code: per-run budget over the custom tools, reset on every run.started.
-    filtered = budgetFor(chat.id).wrap(filtered);
 
-    const provider = normalizeProvider(profile.provider);
-    const defaultModel =
-      profile.model ||
-      (provider === PROVIDER_CLAUDE ? env.CLAUDE_MODEL || "sonnet" : env.CURSOR_MODEL || "auto");
+    // Outermost: a simulation tree records side effects instead of running them (no approval
+    // question reaches the owner either — sim wraps the guard).
+    if (store.getChat(rootChatId)?.sim) filtered = simulateTools(filtered);
+
+    // Rules are built from the tools this run really has (after caller filtering and guards).
+    const ruleOptions = { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered) };
+    installRules(cwd, ruleOptions);
+
     return {
       cwd,
-      model: { id: chat.model || defaultModel },
+      rules: buildRules(ruleOptions),
+      model: { id: runModel(chat).model },
       customTools: filtered,
       settingSources: ["project"],
     };
@@ -275,7 +302,7 @@ async function models(provider = null) {
   }
   const byProvider = {};
   await Promise.all(
-    [PROVIDER_CURSOR, PROVIDER_CLAUDE].map(async (id) => {
+    [PROVIDER_CURSOR, PROVIDER_CLAUDE, PROVIDER_OPENAI].map(async (id) => {
       try {
         byProvider[id] = await providers[id].listModels();
       } catch (error) {
@@ -290,7 +317,7 @@ async function models(provider = null) {
 }
 
 async function health() {
-  const [probe, cursor, claude] = await Promise.all([
+  const [probe, cursor, claude, openai] = await Promise.all([
     !brokerEnabled()
       ? Promise.resolve({ ok: true, configured: false })
       : brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
@@ -298,19 +325,29 @@ async function health() {
           .catch((error) => ({ ok: false, error: error.message })),
     providers[PROVIDER_CURSOR].health(),
     providers[PROVIDER_CLAUDE].health(),
+    providers[PROVIDER_OPENAI].health(),
   ]);
   return {
     broker: { ok: probe.ok, configured: brokerEnabled(), ...(probe.error ? { error: probe.error } : {}) },
     clusters: probe.clusters || null,
     cursor,
     claude,
+    openai,
     ops: { mode: opsRoom.mode, room: opsRoom.roomId(), pending: opsRoom.pendingCount(), ...intake.status() },
     activeRuns: runner.activeCount(),
   };
 }
 
 // Messenger integrations run inside the app (they need the runner and the chat store).
-const integrations = createIntegrations({ store, runner, asks, publicUrl: genv("PUBLIC_URL", ""), telegramProxy: parseProxy(genv("TELEGRAM_SOCKS")) });
+// peerAuth comes first: the integrations bridge auto-registers peer users for assistant-signed
+// messages (bindPeerAgentPerson) and needs createUser's default-quota grant.
+const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", "") });
+const integrations = createIntegrations({
+  store, runner, asks, peerAuth, publicUrl: genv("PUBLIC_URL", ""), telegramProxy: parseProxy(genv("TELEGRAM_SOCKS")),
+  pendingWork: (chatId) => peersHolder.current?.pendingDelegates(chatId) || 0,
+  // Jev decides whether a teammate DM opens a Griffin thread (threads.mjs).
+  classifyThread: (args) => classifyThread(args, { apiKey: readSecret("TYPESAFE_API_KEY", "TYPESAFE_API_KEY_FILE", "typesafe.api-key") }),
+});
 integrationsHolder.current = integrations;
 if (genv("DEMO") !== "1") integrations.startAll();
 
@@ -369,7 +406,6 @@ store.bus.on("person.message", ({ personId, direction, text }) => {
 });
 
 
-const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", "") });
 // Server→broker tool call (socket, no model in the loop) — used by peer_invite to move the minted
 // token straight into the peer's Infisical project.
 const callBrokerTool = async (name, args) => {
@@ -378,17 +414,6 @@ const callBrokerTool = async (name, args) => {
   return body.result;
 };
 
-// Per-chat tool budget (loop wall). Counters reset on each run.started of that chat.
-const toolBudgets = new Map();
-function budgetFor(chatId) {
-  let budget = toolBudgets.get(chatId);
-  if (!budget) {
-    budget = createToolBudget();
-    store.bus.on(`chat:${chatId}`, (event) => budget.noteEvent(event));
-    toolBudgets.set(chatId, budget);
-  }
-  return budget;
-}
 const peerTasks = createPeerTasks({
   store,
   runner,

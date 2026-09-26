@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import {
-  AlarmClock, Radar, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronUp,
+  AlarmClock, Radar, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
   Filter, FolderTree, LogOut, MessageCircle, MoreHorizontal, Pencil, Pin, PinOff, Search,
   Settings2, Users, X,
 } from "lucide-react";
 import { api, navigate } from "../api.js";
-import { BRAND, agentMeta } from "../brand.js";
+import { BRAND, agentMeta, readSetting, writeSetting } from "../brand.js";
 import { textDir } from "../dir.js";
 import { AgentGlyph, AgentPicker } from "./Controls.jsx";
 
@@ -18,6 +18,7 @@ const SORTS = [
 
 const GROUPS = [
   { id: "none", label: "بدون گروه‌بندی" },
+  { id: "owner", label: "بر اساس صاحب" },
   { id: "agent", label: "بر اساس ایجنت" },
   { id: "status", label: "بر اساس وضعیت" },
 ];
@@ -29,16 +30,45 @@ const FILTERS = [
   { id: "pinned", label: "سنجاق‌شده" },
 ];
 
-export function Sidebar({ chats, archived, activeId, page = null, agent, onAgentChange, agentLocked = false, onClose }) {
+// Each tab lists only its own threads: «گفتگو» is what the owner started by hand; Telegram-born,
+// peer, ops-room and job threads live under their tabs. Sub-agent chats never appear here — the
+// parent chat shows them above the composer.
+const SECTIONS = {
+  manual: { page: null, label: "گفتگوهای اخیر" },
+  telegram: { page: "telegram", label: "رشته‌های تلگرام" },
+  peer: { page: "peers", label: "کارهای همتاها" },
+  ops: { page: "incidents", label: "اتاق‌های عملیات" },
+  job: { page: "jobs", label: "اجراهای جاب" },
+};
+const sectionOfPage = (page) => Object.keys(SECTIONS).find((k) => SECTIONS[k].page === page && page) || null;
+
+export function Sidebar({ chats, archived, activeId, activeSource = null, page = null, agent, onAgentChange, agentLocked = false, onClose }) {
+  const section = sectionOfPage(page) || (!page && activeSource && SECTIONS[activeSource] ? activeSource : "manual");
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [sort, setSort] = useState("updated");
-  const [groupBy, setGroupBy] = useState("none");
+  // Telegram and peer threads group by whose they are by default, so one person's threads can be
+  // folded away while another's stay open.
+  const [groupChoice, setGroupChoice] = useState({});
+  const groupBy = groupChoice[section] || (section === "telegram" || section === "peer" ? "owner" : "none");
+  const setGroupBy = (value) => setGroupChoice((g) => ({ ...g, [section]: value }));
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return JSON.parse(readSetting("griffin.sidebar.collapsed", "{}")) || {}; } catch { return {}; }
+  });
+  const toggleGroup = (key) => setCollapsed((c) => {
+    const next = { ...c, [key]: !c[key] };
+    writeSetting("griffin.sidebar.collapsed", JSON.stringify(next));
+    return next;
+  });
   const [filter, setFilter] = useState("all");
   const [showArchived, setShowArchived] = useState(false);
   const searchRef = useRef(null);
 
-  const list = showArchived ? archived : chats;
+  const list = useMemo(
+    () => (showArchived ? archived : chats).filter((c) => (c.source || "manual") === section),
+    [showArchived, archived, chats, section],
+  );
+  const archivedHere = useMemo(() => archived.filter((c) => (c.source || "manual") === section), [archived, section]);
 
   const prepared = useMemo(() => {
     let items = [...list];
@@ -62,6 +92,15 @@ export function Sidebar({ chats, archived, activeId, page = null, agent, onAgent
   }, [list, query, sort, filter]);
 
   const sections = useMemo(() => {
+    if (groupBy === "owner") {
+      const map = new Map();
+      for (const chat of prepared) {
+        const key = chat.ownerKey || "none";
+        if (!map.has(key)) map.set(key, { key: `${section}:${key}`, title: chat.ownerLabel || "بدون صاحب", chats: [], collapsible: true });
+        map.get(key).chats.push(chat);
+      }
+      return [...map.values()];
+    }
     if (groupBy === "agent") {
       const map = new Map();
       for (const chat of prepared) {
@@ -90,7 +129,7 @@ export function Sidebar({ chats, archived, activeId, page = null, agent, onAgent
       pinned.length ? { title: "سنجاق‌شده", chats: pinned } : null,
       { title: null, chats: rest },
     ].filter((s) => s && s.chats.length);
-  }, [prepared, groupBy, showArchived]);
+  }, [prepared, groupBy, showArchived, section]);
 
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus();
@@ -114,11 +153,11 @@ export function Sidebar({ chats, archived, activeId, page = null, agent, onAgent
       </div>
 
       <div className="mt-1 space-y-0.5 px-2">
-        <NavButton active={!page} icon={Bot} label="گفتگو" onClick={() => open(null)} />
-        <NavButton active={page === "telegram"} icon={MessageCircle} label="تلگرام" onClick={() => { window.location.hash = "/telegram"; onClose?.(); }} />
-        <NavButton active={page === "jobs"} icon={AlarmClock} label="جاب" onClick={() => { window.location.hash = "/jobs"; onClose?.(); }} />
-        <NavButton active={page === "incidents"} icon={Radar} label="حادثه‌ها" onClick={() => { window.location.hash = "/incidents"; onClose?.(); }} />
-        <NavButton active={page === "peers"} icon={Users} label="همتاها" onClick={() => { window.location.hash = "/peers"; onClose?.(); }} />
+        <NavButton active={section === "manual" && !page} icon={Bot} label="گفتگو" onClick={() => open(null)} />
+        <NavButton active={section === "telegram"} icon={MessageCircle} label="تلگرام" onClick={() => { window.location.hash = "/telegram"; onClose?.(); }} />
+        <NavButton active={section === "job"} icon={AlarmClock} label="جاب" onClick={() => { window.location.hash = "/jobs"; onClose?.(); }} />
+        <NavButton active={section === "ops"} icon={Radar} label="حادثه‌ها" onClick={() => { window.location.hash = "/incidents"; onClose?.(); }} />
+        <NavButton active={section === "peer"} icon={Users} label="همتاها" onClick={() => { window.location.hash = "/peers"; onClose?.(); }} />
       </div>
 
       <div className="my-4 flex items-center justify-center" aria-hidden>
@@ -128,7 +167,7 @@ export function Sidebar({ chats, archived, activeId, page = null, agent, onAgent
       <div className="px-2">
         <div className="flex items-center gap-1 px-1">
           <h2 className="min-w-0 flex-1 truncate text-start text-xs font-medium text-muted-foreground">
-            {showArchived ? "بایگانی" : "گفتگوهای اخیر"}
+            {showArchived ? "بایگانی" : SECTIONS[section].label}
           </h2>
           <div className="flex shrink-0 items-center gap-0.5">
             <IconToggle
@@ -173,17 +212,26 @@ export function Sidebar({ chats, archived, activeId, page = null, agent, onAgent
 
       <nav className="scrollbar-thin mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {sections.map((section) => (
-          <Section key={section.title || "recent"} title={section.title} chats={section.chats} activeId={activeId} onOpen={open} />
+          <Section
+            key={section.key || section.title || "recent"}
+            title={section.title}
+            chats={section.chats}
+            activeId={activeId}
+            onOpen={open}
+            collapsible={section.collapsible}
+            collapsed={section.collapsible && collapsed[section.key] && !section.chats.some((c) => c.id === activeId)}
+            onToggle={() => toggleGroup(section.key)}
+          />
         ))}
         {!prepared.length ? <p className="px-3 py-6 text-center text-sm text-muted-foreground">گفتگویی نیست.</p> : null}
-        {archived.length > 0 || showArchived ? (
+        {archivedHere.length > 0 || showArchived ? (
           <button
             type="button"
             onClick={() => setShowArchived(!showArchived)}
             className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
           >
             <Archive className="size-3.5" />
-            {showArchived ? "بازگشت به گفتگوها" : `بایگانی (${archived.length})`}
+            {showArchived ? "بازگشت" : `بایگانی (${archivedHere.length})`}
           </button>
         ) : null}
       </nav>
@@ -358,24 +406,34 @@ function NavButton({ active, icon: Icon, label, onClick }) {
   );
 }
 
-function Section({ title, chats, activeId, onOpen }) {
+function Section({ title, chats, activeId, onOpen, collapsible = false, collapsed = false, onToggle }) {
   if (!chats.length) return null;
   return (
     <div className="mb-2">
-      {title ? <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">{title}</p> : <div className="pt-1" />}
-      <ul>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronDown className={`size-3 shrink-0 transition-transform ${collapsed ? "-rotate-90 rtl:rotate-90" : ""}`} />
+          <span className="min-w-0 flex-1 truncate text-start" dir="auto">{title}</span>
+          <span className="shrink-0 tabular-nums">{chats.length}</span>
+        </button>
+      ) : title ? <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">{title}</p> : <div className="pt-1" />}
+      {collapsed ? null : <ul>
         {chats.map((chat) => (
-          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeId} onOpen={onOpen} />
+          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} onOpen={onOpen} />
         ))}
-      </ul>
+      </ul>}
     </div>
   );
 }
 
-function ChatItem({ chat, active, activeId, onOpen }) {
+function ChatItem({ chat, active, onOpen }) {
   const [menu, setMenu] = useState(false);
   const agents = chatAgents(chat);
-  const children = Array.isArray(chat.children) ? chat.children : [];
   const patch = (body) => api(`/api/chats/${chat.id}`, { method: "PATCH", body }).catch(() => {});
   const rename = () => {
     setMenu(false);
@@ -405,29 +463,6 @@ function ChatItem({ chat, active, activeId, onOpen }) {
           <MoreHorizontal className="size-4" />
         </button>
       </div>
-      {children.length ? (
-        <ul className="mb-1 ms-6 border-s ps-2">
-          {children.map((child) => (
-            <li key={child.id}>
-              <button
-                type="button"
-                onClick={() => onOpen(child.id)}
-                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-xs ${
-                  child.id === activeId ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                }`}
-              >
-                <AgentGlyph id={child.agent} className="size-3.5 shrink-0 opacity-80" />
-                <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
-                {child.runStatus === "running" ? (
-                  <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
-                ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-bad" title="خطا" />
-                ) : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
       {menu ? (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />

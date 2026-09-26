@@ -142,7 +142,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
           type: "object",
           properties: {
             id: { type: "string", description: "identity slug (a-z, 0-9, -) — usually their secret-manager project name, e.g. sara-karimi" },
-            label: { type: "string", description: "Persian display name, e.g. آقای ساجدی" },
+            label: { type: "string", description: "Persian display name, e.g. آقای رضایی" },
             projectId: { type: "string", description: "Infisical project id; omit to resolve by project name = id" },
           },
           required: ["id", "label"],

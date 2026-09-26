@@ -1,5 +1,9 @@
 // Maps @cursor/sdk InteractionUpdate (the single onDelta source) to stored events.
 // Text is passed through untouched: SDK deltas already carry their own whitespace.
+// Tool args/results pass through redactArgs/redactResult: the event log is a chat timeline,
+// and secrets must not persist in it (the agent still gets the real result).
+
+import { redactArgs, redactResult } from "./redact.mjs";
 
 const MAX_STRING = 32_000;
 
@@ -16,7 +20,7 @@ export function eventsFromUpdate(update) {
     case "partial-tool-call":
       return [{ type: "tool.updated", data: toolData(update) }];
     case "tool-call-completed":
-      return [{ type: "tool.done", data: { ...toolData(update), result: clip(update.toolCall?.result ?? null) } }];
+      return [{ type: "tool.done", data: { ...toolData(update), result: redactResult(nameOf(update), clip(update.toolCall?.result ?? null)) } }];
     case "turn-ended":
       return update.usage ? [{ type: "usage", data: clip(update.usage) }] : [];
     case "summary-started":
@@ -28,6 +32,13 @@ export function eventsFromUpdate(update) {
   }
 }
 
+export function nameOf(update) {
+  const call = update?.toolCall || {};
+  if (call.type !== "mcp") return call.type || "tool";
+  const args = call.args ?? {};
+  return args.providerIdentifier === "custom-user-tools" ? args.toolName : `mcp:${args.toolName}`;
+}
+
 function toolData(update) {
   const call = update.toolCall || {};
   let name = call.type || "tool";
@@ -37,7 +48,7 @@ function toolData(update) {
     name = args.providerIdentifier === "custom-user-tools" ? args.toolName : `mcp:${args.toolName}`;
     args = args.args ?? null;
   }
-  return { callId: update.callId, name, args: clip(args) };
+  return { callId: update.callId, name, args: redactArgs(name, clip(args)) };
 }
 
 export function clip(value, depth = 0) {

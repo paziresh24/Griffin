@@ -7,7 +7,8 @@ import {
   coverageIntroPrompt,
   coverageReplyPrompt,
 } from "./coverage.mjs";
-import { isAgentSigned, peerAgentConfig } from "./peer-agent.mjs";
+import { isAgentSigned, looksAssistantSigned, peerAgentConfig } from "./peer-agent.mjs";
+import { threadInboundPrompt, threadOwnerPrompt, threadStartPrompt, wantsGriffin } from "./threads.mjs";
 
 // The owner's own Telegram account (MTProto, gramjs). Uses:
 //   1. chat with Platform-Ban in Saved Messages (call word),
@@ -269,7 +270,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           const msgs = await client.getMessages(dest, { limit: 30 });
           // getMessages returns newest first
           return [...msgs].reverse().map((m) => {
-            const who = m.out ? "Owner" : "همکار";
+            // Griffin's own replies go out from the owner's account too; they carry its footer.
+            const who = !m.out ? "همکار" : /—\s*(ایجنت\s*)?(سکان[‌\s]*بان|گریفین)\s*$/u.test(String(m.message || "")) ? "گریفین (ایجنت)" : "Owner";
             const body = String(m.message || "").replace(/\s+/g, " ").trim().slice(0, 240);
             if (!body || body.startsWith(MARK.trim())) return null;
             if (coverageCommand(body)) return `${who}: ${body}`;
@@ -299,8 +301,9 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         if (focus?.text) {
           if (focus.id) pendingReplyTo.set(String(key), Number(focus.id));
           log.info?.(`[telegram-account] /agent reply-focus peer=${key} msg=${focus.id} via=${reason}`);
+          const history = await recentHistory(key);
           await bridge.receive(integration.id, key, {
-            text: coverageReplyPrompt(name, focus.text),
+            text: coverageReplyPrompt(name, focus.text, history),
             caller: COVERAGE_CALLER,
             title: `/agent · ${name}`,
             person: { name, username, data: { platform: "telegram", source: "account" } },
@@ -325,6 +328,77 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         const ended = await bridge.endCoverage(integration.id, key);
         if (ended) await sendPlain("me", `${MARK}/agent برای «${ended.name || key}» خاموش شد.`);
         return ended;
+      };
+
+      // ——— Threads in teammate DMs (threads.mjs) ———
+      const threadBusy = new Set(); // peer keys with a classification in flight
+      const threadQueued = new Map(); // peer key -> latest message that arrived during that classification
+      const threadRuns = new Map(); // peer key -> run timestamps (ping-pong brake between two agents)
+      const THREAD_RUNS_PER_HOUR = 20;
+      const threadBrake = (key) => {
+        const now = Date.now();
+        const recent = (threadRuns.get(key) || []).filter((t) => now - t < 3_600_000);
+        if (recent.length >= THREAD_RUNS_PER_HOUR) return false;
+        recent.push(now);
+        threadRuns.set(key, recent);
+        return true;
+      };
+      const handleThreadMessage = async (key, person, text, message, from) => {
+        const name = person?.display_name || (await peerLabel(client, key));
+        if (bridge.isCovered(integration.id, key)) {
+          // Locked: every message in the chat, either side, feeds the open thread.
+          if (!threadBrake(key)) {
+            log.info?.(`[telegram-account] thread brake peer=${key}`);
+            return;
+          }
+          if (from === "teammate" && message.id) pendingReplyTo.set(String(key), Number(message.id));
+          await bridge.receive(integration.id, key, {
+            text: from === "owner" ? threadOwnerPrompt({ name, text }) : threadInboundPrompt({ name, text }),
+            caller: COVERAGE_CALLER,
+          });
+          return;
+        }
+        // A second message while the first is being classified («سلام» then the real request) used
+        // to be dropped; keep the latest and look at it once the first is done.
+        if (threadBusy.has(key)) {
+          threadQueued.set(key, { person, text, message, from });
+          return;
+        }
+        threadBusy.add(key);
+        try {
+          const history = await recentHistory(key);
+          const reopen = from === "teammate" && wantsGriffin(text);
+          const decision = reopen
+            ? { start: true, topic: "", reason: "reopened with «گریفین»" }
+            : await bridge.classifyThread({ history: history.slice(0, -1), message: text, from, name });
+          log.info?.(`[telegram-account] thread ${decision.start ? "OPEN" : "skip"} peer=${key} from=${from} — ${decision.reason || ""}`);
+          // The classifier fails closed; a colleague's request must not vanish with it.
+          if (!decision.start && /^jev (error|http)/.test(decision.reason || "") && from === "teammate") {
+            await sendPlain("me", `${MARK}پیام «${name}» را نتوانستم بسنجم (${decision.reason}). اگر کار است، روی همان پیام ریپلای کن و /agent بزن.\n«${String(text).slice(0, 200)}»`);
+          }
+          if (!decision.start) return;
+          await bridge.startCoverage(integration.id, key, {
+            name,
+            username: person?.username || null,
+            personId: person?.id || null,
+            fresh: !reopen,
+            title: `🧵 ${name}: ${decision.topic || String(text).replace(/\s+/g, " ").slice(0, 40)}`,
+          });
+          threadRuns.set(key, [Date.now()]);
+          if (message.id && from === "teammate") pendingReplyTo.set(String(key), Number(message.id));
+          await sendPlain("me", `${MARK}رشته با «${name}» باز شد${decision.topic ? `: ${decision.topic}` : ""} — ${decision.reason || ""}\nبستن: در همان چت /agent off`);
+          await bridge.receive(integration.id, key, {
+            text: threadStartPrompt({ name, history, message: text, from, topic: decision.topic }),
+            caller: COVERAGE_CALLER,
+          });
+        } finally {
+          threadBusy.delete(key);
+          const queued = threadQueued.get(key);
+          if (queued) {
+            threadQueued.delete(key);
+            await handleThreadMessage(key, queued.person, queued.text, queued.message, queued.from);
+          }
+        }
       };
 
       // If updates were missed (session blip / competing client), pick up recent /agent.
@@ -361,8 +435,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         }
       };
 
-      client.addEventHandler(async (event) => {
-        const message = event.message;
+      const onMessage = async (message) => {
         if (!message || sentByUs.has(message.id)) return;
         const text = String(message.message || "").trim();
         if (!text || text.startsWith(MARK.trim())) return;
@@ -373,8 +446,9 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         try {
           // Persist every incoming Telegram message under its stable person profile before routing/filtering.
           let person = null;
+          let entity = null;
           if (!inSaved && key) {
-            const entity = await client.getEntity(/^-?\d+$/.test(key) ? BigInt(key) : key).catch(() => null);
+            entity = await client.getEntity(/^-?\d+$/.test(key) ? BigInt(key) : key).catch(() => null);
             person = await bridge.upsertPerson?.(integration.id, key, {
               name: entity?.title || [entity?.firstName, entity?.lastName].filter(Boolean).join(" ") || entity?.username || key,
               username: entity?.username || null,
@@ -398,6 +472,14 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             return;
           }
 
+          // Threads run only in 1:1 chats with people marked «team», never groups/channels/bots, and
+          // can be switched off with settings.threads = false (then the older paths below apply).
+          const threadDm = Boolean(
+            key && person && !message.isGroup && !message.isChannel && !entity?.bot &&
+            person.category === "team" &&
+            bridge.integration?.(integration.id)?.settings?.threads !== false,
+          );
+
           // ——— Owner outgoing in a teammate chat: /agent start (agent greets); /agent off kill-switch ———
           if (message.out && key) {
             const cmd = coverageCommand(text);
@@ -410,11 +492,24 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
               await endAgent(key);
               return;
             }
-            return; // other outgoing messages in that chat are the owner's own words
+            // The owner writing by hand to a teammate: may open a thread, or feeds the open one.
+            if (threadDm) await handleThreadMessage(key, person, text, message, "owner");
+            return;
+          }
+
+          // A teammate (or their assistant) in a 1:1 chat: threads decide, signature or not.
+          if (threadDm) {
+            await handleThreadMessage(key, person, text, message, "teammate");
+            return;
           }
 
           // ——— A colleague's signed automated assistant: Griffin answers it agent-to-agent ———
-          const agentCfg = !message.out && key && !message.isGroup && !message.isChannel ? peerAgentConfig(person) : null;
+          // Off unless the owner turns it on (settings.autoReplyAgents): replies go out from the
+          // owner's own account, and the owner switched them off 2026-09-23 («پیام خودکار رو
+          // خاموش کن»). The message stays in the chat for the owner, like any other DM.
+          const autoReply = bridge.integration?.(integration.id)?.settings?.autoReplyAgents === true;
+          const dm = autoReply && !message.out && key && !message.isGroup && !message.isChannel;
+          const agentCfg = dm ? peerAgentConfig(person) : null;
           if (agentCfg && isAgentSigned(text, agentCfg.signature)) {
             if (message.id) pendingReplyTo.set(String(key), Number(message.id));
             await bridge.receivePeerAgent?.(integration.id, key, {
@@ -423,6 +518,27 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
               label: person?.display_name || key,
               personId: person?.id || null,
             });
+            return;
+          }
+          // Any other assistant-signed DM: bind the sender to a peer identity (default read-only
+          // quota) and answer it too — no assistant should wait for the owner to forward it.
+          if (dm && person && looksAssistantSigned(text)) {
+            const bound = await bridge.bindPeerAgentPerson?.(person, key);
+            if (bound) {
+              if (bound.created) {
+                await client
+                  .sendMessage("me", { message: `${MARK}همتای خودکار: «${person.display_name || bound.user}» از روی امضای دستیارش متصل شد (سهمیهٔ فقط-خواندن پیش‌فرض).`, linkPreview: false })
+                  .then((s) => sentByUs.add(s.id))
+                  .catch(() => {});
+              }
+              if (message.id) pendingReplyTo.set(String(key), Number(message.id));
+              await bridge.receivePeerAgent?.(integration.id, key, {
+                text,
+                userId: bound.user,
+                label: person.display_name || key,
+                personId: person.id || null,
+              });
+            }
             return;
           }
 
@@ -434,10 +550,34 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         } catch (error) {
           log.error?.(`[telegram-account] ${error.message}`);
         }
-      }, new NewMessage({}));
+      };
+      client.addEventHandler((event) => onMessage(event.message), new NewMessage({}));
+
+      // A teammate's DM that arrived while the account was down (dead session, restart, network)
+      // never produced an update. After reconnecting, pass the unrecorded ones from the last day
+      // through the same handler — oldest first, incoming only (Griffin's own replies carry no
+      // record id here and must not be replayed as the owner typing).
+      const catchUpTeam = async () => {
+        const since = Math.floor(Date.now() / 1000) - 24 * 3600;
+        const team = (bridge.listPersons?.({ source: "telegram" }) || []).filter((p) => p.category === "team" && /^\d+$/.test(String(p.external_id || "")));
+        for (const person of team) {
+          try {
+            const known = new Set((person.history || []).map((h) => String(h.id)));
+            const msgs = await client.getMessages(await resolveTarget(String(person.external_id)), { limit: 15 });
+            const missed = [...msgs].reverse().filter((m) => !m.out && (m.date || 0) >= since && m.message && !known.has(String(m.id)));
+            for (const m of missed) {
+              log.info?.(`[telegram-account] catch-up ${person.display_name || person.external_id} #${m.id}`);
+              await onMessage(m);
+            }
+          } catch (error) {
+            log.error?.(`[telegram-account] catch-up ${person.external_id}: ${error.message}`);
+          }
+        }
+      };
 
       // Catch up after the handler is armed (missed /agent while session was contested).
       catchUpAgents().catch((error) => log.error?.(`[telegram-account] catchup: ${error.message}`));
+      catchUpTeam().catch((error) => log.error?.(`[telegram-account] catch-up: ${error.message}`));
     },
 
     async deliver(externalChat, message) {
@@ -459,7 +599,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       if (message.question) {
         await clearStatus(target);
         const options = message.question.options || [];
-        const messageId = await send(`❓ ${message.question.question}${options.length ? `\n\n${options.map((o, i) => `${i + 1}. ${o.label}`).join("\n")}\n\nعدد گزینه را بفرست.` : ""}`);
+        const messageId = await send(`❓ ${message.question.question}${options.length ? `\n\n${options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n")}\n\nعدد گزینه را بفرست.` : ""}`);
         if (messageId != null) questionByChat.set(String(target), messageId);
         return;
       }

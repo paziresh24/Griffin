@@ -4,17 +4,18 @@ import { autoTitle } from "../titles.mjs";
 import { BOT_KINDS, createBotApi, createBotChannel, pairingCode } from "./bots.mjs";
 import { DEFAULT_AGENT, resolveAgentId } from "../agents/registry.mjs";
 import { COVERAGE_CALLER } from "./coverage.mjs";
-import { isNoReply, peerAgentPrompt, takeRate } from "./peer-agent.mjs";
-import { deliverable, liveStatusLine } from "./format.mjs";
-import { audienceFor, OWNER } from "../asks.mjs";
+import { isNoReply, peerAgentPrompt, takeRate, derivePeerUserId } from "./peer-agent.mjs";
+import { answerStamp, deliverable, liveStatusLine } from "./format.mjs";
+import { OWNER, REQUESTER } from "../asks.mjs";
 import { createAccountChannel, createAccountLogin } from "./telegram-account.mjs";
 import { chartMedia } from "../chart-image.mjs";
+import { normalizeProvider } from "../providers/ids.mjs";
 
 // Bridges messenger channels (Telegram/Bale bots; Telegram account) to Griffin chats: incoming
 // messages become runs, finished runs and ask_owner questions go back to the linked messenger chat.
 // Team coverage (caller=team): answers go to the teammate; ask_owner confirmations go to the Owner's
 // Telegram bot so they are unmistakable — not buried in the owner's own Saved Messages.
-export function createIntegrations({ store, runner, asks, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, log = console }) {
+export function createIntegrations({ store, runner, asks, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, classifyThread = null, pendingWork = () => 0, log = console }) {
   const channels = new Map(); // integrationId -> channel
   const questions = new Map(); // chatId -> last ask_owner args (for button index → label)
   // Each ask_owner gets a short id embedded in Telegram callback_data so buttons cannot
@@ -47,22 +48,79 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
     }
   }
 
-  function recordAskDelivery(chatId, integrationId, externalChat) {
+  // Where each delivered question is sitting, in the database as well as in memory. In memory
+  // alone it did not survive a restart: every question already sent to Telegram became an
+  // untappable leftover, and after a few deploys the owner's bot chat was a wall of dead
+  // questions with no way to tell which one was still live.
+  const OPEN_ASKS_KEY = "ask:open";
+  const MAX_OPEN_ASKS = 200;
+
+  const openAsks = () => {
+    const rows = store.getKv?.(OPEN_ASKS_KEY);
+    return Array.isArray(rows) ? rows : [];
+  };
+  const saveOpenAsks = (rows) => store.setKv?.(OPEN_ASKS_KEY, rows.slice(-MAX_OPEN_ASKS));
+
+  function recordAskDelivery(chatId, integrationId, externalChat, { messageId = null, askId = null } = {}) {
     const list = askTargets.get(chatId) || [];
     list.push({ integrationId, externalChat: String(externalChat) });
     askTargets.set(chatId, list);
+    if (messageId == null) return;
+    // The question text is kept so closing the message can leave it readable (with the answer
+    // under it) instead of replacing it with a bare "answered".
+    const text = String(questions.get(chatId)?.question || "").slice(0, 3000);
+    saveOpenAsks([
+      ...openAsks().filter((row) => row.messageId !== messageId || row.externalChat !== String(externalChat)),
+      { chatId, integrationId, externalChat: String(externalChat), messageId, askId, text, at: Date.now() },
+    ]);
+  }
+
+  function closedText(row, note) {
+    return row.text ? `❓ ${row.text}\n\n${note}` : note;
+  }
+
+  // Strip a delivered question of its buttons and say what became of it.
+  async function closeDelivered(row, note) {
+    const channel = channels.get(row.integrationId);
+    if (!channel) return;
+    await channel.deliver(row.externalChat, { closeQuestion: { messageId: row.messageId, note: closedText(row, note) } }).catch(() => {});
   }
 
   // A question stopped being open (answered from the UI, from Telegram, or the run ended):
   // delete the Telegram message so only genuinely open questions stay visible there.
-  function clearQuestion(chatId) {
+  function clearQuestion(chatId, { answer = null, cancelled = false } = {}) {
+    const note = answer
+      ? `✅ پاسخ: ${String(answer).slice(0, 200)}`
+      : cancelled
+        ? "⏹ کار متوقف شد؛ این سؤال دیگر باز نیست."
+        : "✅ پاسخ ثبت شد.";
     clearAsksForChat(chatId);
     const targets = askTargets.get(chatId);
     askTargets.delete(chatId);
-    if (!targets) return;
-    for (const t of targets) {
+    const rows = openAsks();
+    const mine = rows.filter((row) => row.chatId === chatId);
+    if (mine.length) {
+      saveOpenAsks(rows.filter((row) => row.chatId !== chatId));
+      for (const row of mine) closeDelivered(row, note);
+      return;
+    }
+    // No recorded message id (older delivery): fall back to deleting the last one we remember.
+    for (const t of targets || []) {
       channels.get(t.integrationId)?.deliver(t.externalChat, { clearQuestion: true }).catch(() => {});
     }
+  }
+
+  // On startup nothing is waiting any more: every question still sitting in Telegram belongs to a
+  // run that is gone, so close them all instead of leaving tappable ghosts behind.
+  async function sweepStaleAsks() {
+    const rows = openAsks();
+    if (!rows.length) return 0;
+    saveOpenAsks([]);
+    for (const row of rows) {
+      await closeDelivered(row, "⏹ این سؤال دیگر باز نیست (سرور از آن زمان ری‌استارت شده). اگر هنوز لازم است، در خود گریفین دوباره بپرس.");
+    }
+    log.log?.(`[integrations] closed ${rows.length} stale question(s) left in Telegram`);
+    return rows.length;
   }
 
   function openOwnerAsks() {
@@ -186,7 +244,19 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
 
   const bridge = {
     integration: (id) => store.getIntegration(id),
-    upsertPerson: (id, externalId, person = {}) => store.upsertPerson({ integrationId: id, externalId, ...person }),
+    // settings.teamRoster: display names of colleagues who have not written 1:1 yet (from the
+    // platform-gitops owners/ and the team group). Their first DM marks them «team», so threads
+    // work from the first message instead of waiting for someone to classify them by hand.
+    upsertPerson: (id, externalId, person = {}) => {
+      const saved = store.upsertPerson({ integrationId: id, externalId, ...person });
+      const roster = store.getIntegration(id)?.settings?.teamRoster || [];
+      // Entries are display names or @usernames.
+      const keys = [saved?.display_name, saved?.username && `@${saved.username}`].filter(Boolean).map((k) => String(k).trim().toLowerCase());
+      if (saved && saved.category === "unclassified" && roster.some((n) => keys.includes(String(n).trim().toLowerCase()))) {
+        return store.updatePerson(saved.id, { category: "team" });
+      }
+      return saved;
+    },
     listPersons: (options) => store.listPersons(options),
     getPerson: (id) => store.getPerson(id),
     listPersonMessages: (id, limit) => store.listPersonMessages(id, limit),
@@ -221,7 +291,15 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
       return coverageMap(id)[String(peer)]?.name || null;
     },
 
-    async startCoverage(id, peer, { name, username = null, personId = null } = {}) {
+    // Does the newest message in a teammate DM open a thread? (see threads.mjs). No classifier
+    // configured means no automatic threads.
+    async classifyThread(args) {
+      if (!classifyThread) return { start: false, reason: "no classifier" };
+      return classifyThread(args);
+    },
+
+    // fresh: a new thread gets its own chat (reopening with «گریفین» continues the last one).
+    async startCoverage(id, peer, { name, username = null, personId = null, fresh = false, title = null } = {}) {
       const key = String(peer);
       const coverage = coverageMap(id);
       const integration = store.getIntegration(id);
@@ -231,9 +309,9 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
       const agent = coverageAgent(profile, store);
       let chatId = store.linkedChat(id, key);
       const existing = chatId ? store.getChat(chatId) : null;
-      if (!existing || existing.caller !== COVERAGE_CALLER || existing.agent !== agent) {
+      if (fresh || !existing || existing.caller !== COVERAGE_CALLER || existing.agent !== agent) {
         const chat = store.createChat({
-          title: `/agent · ${name || key}`,
+          title: title || `/agent · ${name || key}`,
           mode: "agent",
           model: integration.settings.model || null,
           caller: COVERAGE_CALLER,
@@ -290,6 +368,30 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
       }
     },
 
+    // Auto-bind a Telegram person to a peer identity so their signed assistant messages get
+    // answered (owner 2026-09-22: every assistant-signed message is answered automatically).
+    // Derives the id from their Telegram identity, registers the peer user with the default
+    // read-only quota when new, and persists the binding on the person profile. Idempotent.
+    async bindPeerAgentPerson(person, externalChat) {
+      if (!person?.id) return null;
+      const userId = derivePeerUserId(person, externalChat);
+      if (!userId) return null;
+      let created = false;
+      if (!store.getPeerUser(userId)) {
+        try {
+          peerAuth?.createUser?.({ id: userId, label: person.display_name || person.username || userId });
+          created = true;
+        } catch {
+          /* lost a race or invalid id — fall through to the existence check */
+        }
+      }
+      if (!store.getPeerUser(userId)) return null;
+      if (person.access?.peerAgent?.user !== userId) {
+        store.updatePerson(person.id, { access: { ...(person.access || {}), peerAgent: { user: userId } } });
+      }
+      return { user: userId, created };
+    },
+
     // A colleague's signed automated assistant: answered by Griffin under that colleague's peer
     // quota, in a chat of its own (a coverage chat on the same Telegram peer is relinked).
     async receivePeerAgent(id, externalChat, { text, userId, label, personId = null } = {}) {
@@ -314,7 +416,7 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
           caller,
           agent: "griffin",
           personId,
-          provider: profile.provider === "claude" ? "claude" : "cursor",
+          provider: normalizeProvider(profile.provider),
         });
         chatId = chat.id;
         store.linkChat(id, externalChat, chatId);
@@ -368,13 +470,36 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
       for (const link of links) channels.get(link.integration_id)?.deliver(link.external_chat, { clearStatus: true }).catch(() => {});
       return [];
     }
+    const chat = store.getChat(chatId);
+    const toOwner = chat?.caller === OWNER;
+    // A run woken by a subtask report that ends with subtasks still running has only "still working"
+    // to say — the colleague already heard that once (one colleague got four such lines).
+    const trigger = messages.findLast((m) => m.role === "user")?.text || "";
+    if (chat?.caller === COVERAGE_CALLER && trigger.startsWith("[گزارش خودکار زیرکارها") && pendingWork(chatId) > 0 && !out.files.length && !out.charts.length) {
+      for (const link of links) channels.get(link.integration_id)?.deliver(link.external_chat, { clearStatus: true }).catch(() => {});
+      return [];
+    }
+    // A colleague must never receive an engine error in the owner's name (2026-09-23: a raw Cursor
+    // "usage limit" reached a colleague). The owner sees it in the chat; the colleague gets nothing.
+    if (out.status === "error" && !toOwner && !out.text && !out.files.length && !out.charts.length) {
+      for (const link of links) channels.get(link.integration_id)?.deliver(link.external_chat, { clearStatus: true }).catch(() => {});
+      return [];
+    }
     let text = out.text;
-    if (out.status === "error") text = `${text ? `${text}\n\n` : ""}⚠️ خطا: ${out.error || "کار ناتمام ماند"}`;
+    // Sent as the owner to a colleague: no emoji (the owner's voice), enforced here, not asked for.
+    if (chat?.caller === COVERAGE_CALLER) text = text.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "").replace(/[ \t]+\n/g, "\n").trim();
+    if (out.status === "error" && toOwner) text = `${text ? `${text}\n\n` : ""}⚠️ خطا: ${out.error || "کار ناتمام ماند"}`;
     if (out.status === "cancelled") {
       const note = out.error || "متوقف شد";
       text = text ? `${text}\n\n⏹ ${note}` : `⏹ ${note}`;
     }
     if (heading) text = `${heading}\n\n${text}`;
+    // Only on the owner's own answers: a stamp under a message sent to a colleague in the owner's
+    // name would read as a bot (and Telegram shows the time there anyway).
+    if (toOwner) {
+      const stamp = answerStamp(run);
+      if (stamp) text = text ? `${text}\n\n${stamp}` : stamp;
+    }
     const files = out.files
       .map((f) => ({ ...f, media: store.getMedia(f.mediaId) }))
       .filter((f) => f.media)
@@ -412,10 +537,14 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
   // Owner-rooted ask_owner in a chat with no messenger link (i.e. the web UI): mirror the question
   // to the Owner's Telegram so approval reaches them even when no browser tab is open. Answering in
   // either place settles the one run (asks settles once by chatId).
-  function deliverOwnerAsk(chatId, question, { from = "" } = {}) {
+  function deliverOwnerAsk(chatId, question, { from = "", sourceChatId = chatId } = {}) {
+    // A link to the chat that asked: the owner decides with the whole context one tap away,
+    // not from a two-line summary.
+    const base = String(publicUrl || "").replace(/\/$/, "");
+    const link = base ? `🔗 ${base}/#/c/${sourceChatId}` : "";
     const tagged = registerAsk(
       chatId,
-      from ? { ...question, question: `${from}\n\n${question.question}` } : question,
+      { ...question, question: [from, question.question, link].filter(Boolean).join("\n\n") },
       { owner: true },
     );
     const ownerId = ownerTelegramId();
@@ -424,11 +553,15 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
     const fail = (where) => (error) => log.error?.(`[integrations] owner-ask ${where}: ${error.message}`);
     if (bot && ownerId) {
       ensureBotPaired(bot.id, ownerId);
-      recordAskDelivery(chatId, bot.id, ownerId);
-      bot.channel.deliver(ownerId, { question: tagged }).catch(fail("bot"));
+      bot.channel
+        .deliver(ownerId, { question: tagged })
+        .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+        .catch(fail("bot"));
     } else if (account) {
-      recordAskDelivery(chatId, account[0], "me");
-      account[1].deliver("me", { question: tagged }).catch(fail("account"));
+      account[1]
+        .deliver("me", { question: tagged })
+        .then((sent) => recordAskDelivery(chatId, account[0], "me", { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+        .catch(fail("account"));
     } else {
       log.error?.("[integrations] owner-ask: no telegram channel to reach Owner");
     }
@@ -437,76 +570,85 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
   const onEvent = (chatId, event) => {
     if (!channels.size) return;
     const chat = store.getChat(chatId);
-    const question = questionFromTool(event);
+    const question = questionFromEvent(event);
     const links = store.linksForChat(chatId).filter((l) => channels.has(l.integration_id));
-    if (!links.length) {
-      // No messenger link (the web UI, or a chat an external agent opened over /mcp). Every
-      // question for the owner goes to their Telegram — a peer's request must not sit waiting on
-      // a browser tab nobody has open, and the peer cannot answer it for them. Unattended chains
-      // (scheduler / ops / jobs) have no owner in the loop by design; asks auto-rejects those.
-      if (question && !unattendedChat(chat) && audienceFor(chat, question) === OWNER) {
-        deliverOwnerAsk(chatId, question, { from: requesterLine(chat) });
-      }
-      return;
-    }
     if (question) {
-      // Team coverage: ask_owner → Owner's Telegram bot (clear), never to the teammate.
-      if (chat?.caller === COVERAGE_CALLER) {
-        const peerName = (() => {
-          for (const link of links) {
-            const n = bridge.coverageName(link.integration_id, link.external_chat);
-            if (n) return n;
-          }
-          return "همکار";
-        })();
-        const tagged = registerAsk(chatId, {
-          ...question,
-          question: `از گفتگو با «${peerName}»:\n\n${question.question}`,
-        }, { owner: true });
-        const fail = (where) => (error) => log.error?.(`[integrations] ask_owner ${where}: ${error.message}`);
-
-        // Peer sees a short wait note so the chat doesn't look stuck.
-        for (const link of links) {
-          const channel = channels.get(link.integration_id);
-          if (!channel) continue;
-          channel.deliver(link.external_chat, {
-            text: "برای ادامه تأیید Owner لازم است؛ الان ازش می‌پرسم و برمی‌گردم.",
-          }).catch(fail("peer-notice"));
-          channel.deliver(link.external_chat, { status: "منتظر تأیید Owner…" }).catch(fail("peer-status"));
-        }
-
-        const ownerId = ownerTelegramId();
-        const bot = preferOwnerBot();
-        const account = [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account");
-
-        if (bot && ownerId) {
-          ensureBotPaired(bot.id, ownerId);
-          recordAskDelivery(chatId, bot.id, ownerId);
-          bot.channel.deliver(ownerId, { question: tagged }).catch(fail("bot-question"));
-        } else if (account) {
-          // Fallback only if no bot: Saved Messages (legacy).
-          account[1].deliver("me", {
-            text: `سؤال از /agent با «${peerName}» — گزینه‌ها در پیام بعد؛ عدد بفرست.`,
-          }).catch(fail("me-alert"));
-          recordAskDelivery(chatId, account[0], "me");
-          account[1].deliver("me", { question: tagged }).catch(fail("me-question"));
-        } else {
-          log.error?.("[integrations] ask_owner: no bot or telegram account to reach Owner");
-        }
-      } else {
+      if (unattendedChat(chat)) return;
+      const toLinks = () => {
         const tagged = registerAsk(chatId, question, { owner: false });
         for (const link of links) {
           const channel = channels.get(link.integration_id);
-          const fail = (error) => log.error?.(`[integrations] ask_owner deliver: ${error.message}`);
+          const fail = (error) => log.error?.(`[integrations] ask deliver: ${error.message}`);
           channel.deliver(link.external_chat, { clearStatus: true }).catch(fail);
-          recordAskDelivery(chatId, link.integration_id, link.external_chat);
-          channel.deliver(link.external_chat, { question: tagged }).catch(fail);
+          channel
+            .deliver(link.external_chat, { question: tagged })
+            .then((sent) => recordAskDelivery(chatId, link.integration_id, link.external_chat, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+            .catch(fail);
         }
+      };
+      // A question for whoever asked goes back where they asked (a colleague's Telegram chat);
+      // over /mcp there is no link and peer-tasks surfaces it as input-required.
+      if (question.audience === REQUESTER) {
+        if (links.length) toLinks();
+        return;
       }
+      // The owner's own messenger chat: the question belongs right there.
+      if (chat?.caller === OWNER && links.length) {
+        toLinks();
+        return;
+      }
+      // Team coverage: ask_owner → Owner's Telegram bot (clear), never to the teammate.
+      if (chat?.caller === COVERAGE_CALLER && links.length) {
+          const peerName = (() => {
+            for (const link of links) {
+              const n = bridge.coverageName(link.integration_id, link.external_chat);
+              if (n) return n;
+            }
+            return "همکار";
+          })();
+          const tagged = registerAsk(chatId, {
+            ...question,
+            question: `از گفتگو با «${peerName}»:\n\n${question.question}`,
+          }, { owner: true });
+          const fail = (where) => (error) => log.error?.(`[integrations] ask_owner ${where}: ${error.message}`);
+  
+          // Nothing to the colleague: every ask used to post "یه لحظه، چک می‌کنم…" + an Owner-approval
+          // status line into their PV, from Owner's own account (2026-09-24: 3 asks → 6 messages).
+  
+          const ownerId = ownerTelegramId();
+          const bot = preferOwnerBot();
+          const account = [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account");
+  
+          if (bot && ownerId) {
+            ensureBotPaired(bot.id, ownerId);
+            bot.channel
+              .deliver(ownerId, { question: tagged })
+              .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+              .catch(fail("bot-question"));
+          } else if (account) {
+            // Fallback only if no bot: Saved Messages (legacy).
+            account[1].deliver("me", {
+              text: `سؤال از /agent با «${peerName}» — گزینه‌ها در پیام بعد؛ عدد بفرست.`,
+            }).catch(fail("me-alert"));
+            account[1]
+              .deliver("me", { question: tagged })
+              .then((sent) => recordAskDelivery(chatId, account[0], "me", { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+              .catch(fail("me-question"));
+          } else {
+            log.error?.("[integrations] ask_owner: no bot or telegram account to reach Owner");
+          }
+        return;
+      }
+      // Everything else for the owner — a colleague's agent, a peer over /mcp, the web UI — goes to
+      // the owner's Telegram, never into the colleague's chat.
+      deliverOwnerAsk(chatId, question, { from: requesterLine(chat), sourceChatId: event.data?.fromChatId || chatId });
       return;
     }
+    if (!links.length) return;
 
-    const line = liveStatusLine(event);
+    // A colleague's chat gets only the answers — internal progress lines sent from Owner's account
+    // read as spam there.
+    const line = chat?.caller === COVERAGE_CALLER ? null : liveStatusLine(event);
     if (line && event.type !== "run.finished") {
       const now = Date.now();
       const prev = lastStatusAt.get(chatId) || 0;
@@ -537,6 +679,30 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
     }
   };
   store.bus.on("event", onEvent);
+
+  const accountAlerted = new Map(); // integration id -> lastError already reported
+  async function watchAccounts() {
+    for (const [id, channel] of channels) {
+      if (channel.kind !== "telegram_account") continue;
+      const { state, lastError } = channel.status || {};
+      if (state !== "error") {
+        accountAlerted.delete(id);
+        continue;
+      }
+      if (accountAlerted.get(id) === lastError) continue;
+      const bot = preferOwnerBot();
+      const ownerId = ownerTelegramId();
+      if (!bot || !ownerId) continue;
+      ensureBotPaired(bot.id, ownerId);
+      await bot.channel.deliver(ownerId, {
+        text: `⚠️ اکانت تلگرامِ گریفین قطع است و هیچ پیامی از همکارها به گریفین نمی‌رسد.\nخطا: ${String(lastError || "نامعلوم").slice(0, 200)}\n` +
+          (/AUTH_KEY_DUPLICATED|AUTH_KEY_UNREGISTERED|SESSION_REVOKED/.test(String(lastError))
+            ? "سشن باطل شده؛ باید دوباره وارد شوی: تنظیمات → اتصال‌ها."
+            : "تنظیمات → اتصال‌ها را ببین."),
+      });
+      accountAlerted.set(id, lastError);
+    }
+  }
 
   function startChannel(integration) {
     stopChannel(integration.id);
@@ -586,7 +752,15 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
 
     startAll() {
       for (const integration of store.listIntegrations()) startChannel(integration);
+      // A dead account is silent by nature: every colleague goes unanswered and nothing says so
+      // (a session killed with AUTH_KEY_DUPLICATED went unnoticed for hours while colleagues got
+      // no reply). The bot is a separate path, so it tells the owner.
+      setInterval(() => watchAccounts().catch((error) => log.error?.(`[integrations] account watch: ${error.message}`)), 60_000).unref?.();
+      // Questions delivered before this restart have no run behind them any more.
+      setTimeout(() => sweepStaleAsks().catch(() => {}), 5_000).unref?.();
     },
+
+    sweepStaleAsks,
 
     list: () => store.listIntegrations().map(view),
 
@@ -671,11 +845,10 @@ export function createIntegrations({ store, runner, asks, publicUrl = "", fetchI
 }
 
 // Tools that stop and wait for the owner, as a question a messenger can show.
-export function questionFromTool(event) {
-  if (event.type !== "tool.started") return null;
-  const { name, args } = event.data || {};
-  if (name === "ask_owner" && args?.question) return args;
-  return null;
+export function questionFromEvent(event) {
+  if (event.type !== "ask.pending") return null;
+  const { question, options, multiSelect, audience } = event.data || {};
+  return question ? { question, options, multiSelect, audience: audience === REQUESTER ? REQUESTER : OWNER } : null;
 }
 
 export function integrationRoutes(app, integrations) {
@@ -687,7 +860,12 @@ export function integrationRoutes(app, integrations) {
     return c.json({ ok: result.ok }, result.status);
   });
   app.get("/api/integrations", (c) => c.json({ integrations: integrations.list(), kinds: integrations.kinds }));
-  app.get("/api/telegram/persons", (c) => c.json({ persons: integrations.bridge.listPersons({ query: c.req.query("q") || "", category: c.req.query("category") || null }) }));
+  // The list carries no message history: with it the response was ~8MB for 70 people and the
+  // Telegram page came up empty behind the CDN (2026-09-24). History has its own endpoint.
+  app.get("/api/telegram/persons", (c) => c.json({
+    persons: integrations.bridge.listPersons({ query: c.req.query("q") || "", category: c.req.query("category") || null })
+      .map(({ history, history_json, access_json, meta_json, ...person }) => person),
+  }));
   app.get("/api/telegram/persons/:id/messages", (c) => c.json({ messages: integrations.bridge.listPersonMessages(c.req.param("id"), Math.min(Number(c.req.query("limit") || 200), 500)) }));
   app.get("/api/telegram/persons/:id/chats", (c) => {
     const chats = integrations.bridge.listPersonChats(c.req.param("id"), c.req.query("archived") === "1").map((chat) => ({

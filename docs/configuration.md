@@ -29,6 +29,7 @@ that cannot work:
 | `gitlab` | `gitlab.url` is set | `gitlab_*` |
 | `mikrotik` | at least one router | `mikrotik_*` |
 | `shell` | at least one entry in `debugHosts` | `debug_exec` |
+| `vcenter` | `vcenter.infisical` names where the url/user/password live | `vcenter_*` |
 | `infisical`, `arvan`, `nsin` | opt in explicitly (they need a vault item) | `infisical_*`, `arvan_*`, `nsin_*` |
 | `net` | always | `dns_lookup`, `http_check`, `tls_check` |
 
@@ -85,7 +86,9 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | `GRIFFIN_PROXY`, `CURSOR_PROXY`, `GRIFFIN_TELEGRAM_SOCKS` | egress (see `deploy/xray/`) |
 | `GRIFFIN_OPS_MODE` | incident ops room: `shadow` (LLM triage), `record` (group and show only), `off` |
 | `GRIFFIN_BUSINESS_SIGNAL` | optional JSON: the SQL table where your own job records business drops |
+| `GRIFFIN_OWNER_NAME` | how agents refer to you in prompts and framed messages (default `Owner`) |
+| `GRIFFIN_OPENAI_BASE_URL`, `GRIFFIN_OPENAI_MODEL`, `GRIFFIN_OPENAI_REASONING_EFFORT` | any OpenAI-compatible chat/completions endpoint as a third engine |
 | `GRIFFIN_AUTH=off`, `GRIFFIN_DEMO=1` | local development only — never in production |
 
-Model provider keys are files on the data volume (`cursor.api-key`, `anthropic.api-key`, mode 0600) or
-`ANTHROPIC_API_KEY` in the app's environment.
+Model provider keys are files on the data volume (`cursor.api-key`, `anthropic.api-key`,
+`openai.api-key`, mode 0600) or `ANTHROPIC_API_KEY` in the app's environment.

@@ -348,3 +348,7 @@ button:not(.press) {
 button:not(:disabled):active {
   transform: scale(0.96);
 }
+
+.scrollbar-none {
+  scrollbar-width: none;
+}

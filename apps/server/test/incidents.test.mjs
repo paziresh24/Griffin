@@ -203,8 +203,8 @@ test("team DMs become one TeamReport per person per day; chit-chat and groups ar
   assert.match(redact("key: bwUEpjkqdqnPCMCqhhbbz6GXBvYocLWjzuug05akLBDsf7F ok"), /key: \[redacted\] ok/);
 
   const t = setup();
-  const first = t.incidents.recordHuman({ personId: "p1", name: "انتظاری", text: "دیپلوی روی دی‌آر گیر کرده" });
-  const again = t.incidents.recordHuman({ personId: "p1", name: "انتظاری", text: "لاگ ImagePullBackOff هم می‌دهد" });
+  const first = t.incidents.recordHuman({ personId: "p1", name: "احمدی", text: "دیپلوی روی دی‌آر گیر کرده" });
+  const again = t.incidents.recordHuman({ personId: "p1", name: "احمدی", text: "لاگ ImagePullBackOff هم می‌دهد" });
   assert.equal(first.kind, "opened");
   assert.equal(again.incident.id, first.incident.id);
   assert.equal(JSON.parse(again.incident.members_json).length, 2);
@@ -301,4 +301,23 @@ test("owner acks: a whole key or one member goes quiet; a new member does not", 
   assert.equal(hist.log[0].kind, "ack");
   await tools.incident_ack.execute({ id: row.id, reason: "x", member: "https://registry.edge.example.com", remove: true });
   assert.equal(t.incidents.acksFor(row.key).length, 0);
+});
+
+test("the list puts critical first and says how much it left out", async () => {
+  const t = setup();
+  t.set({
+    clusters: ok("prod-b", "prod-a"),
+    alerts: [
+      alert({ cluster: "prod-b", seenFrom: "prod-b", labels: { namespace: "a" } }),
+      alert({ cluster: "prod-b", seenFrom: "prod-b", labels: { namespace: "b" } }),
+      alert({ cluster: "prod-a", seenFrom: "prod-a", alertname: "CNPGPrimaryPostgresDown", severity: "critical", labels: { namespace: "c" } }),
+      watchdog("prod-b"),
+      watchdog("prod-a"),
+    ],
+  });
+  await t.intake.poll();
+  assert.equal(t.incidents.list({ status: "open", limit: 1 })[0].severity, "critical");
+  const s = t.incidents.summary({ status: "open" });
+  assert.equal(s.total, 3);
+  assert.deepEqual(s.byCluster, { "prod-b": { warning: 2 }, "prod-a": { critical: 1 } });
 });

@@ -129,7 +129,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
 
   const projectArg = { type: "string", description: "Infisical project id (workspace); omit to use the configured default" };
   const envArg = { type: "string", description: "environment slug (default prod)" };
-  const pathArg = { type: "string", description: "folder path, e.g. /hami (default /)" };
+  const pathArg = { type: "string", description: "folder path, e.g. /billing (default /)" };
 
   return {
     infisical_projects: {
@@ -196,12 +196,24 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
         const seen = new Set([secretPath]);
         const matches = [];
         const folders = [];
+        const unreadable = [];
         let visited = 0;
         let truncated = false;
         while (queue.length && visited < MAX_FOLDERS && matches.length < limit) {
           const batch = queue.splice(0, 8);
+          // One unreadable folder (404/403 on its secrets) must not sink the whole search — seen
+          // 2026-09-23: every recursive search of the owner's project failed with http_404.
           const results = await Promise.all(
-            batch.map(async ({ path, depth }) => ({ path, depth, keys: await names(path), children: depth < MAX_DEPTH ? await sub(path) : [] })),
+            batch.map(async ({ path, depth }) => ({
+              path,
+              depth,
+              keys: await names(path).catch((error) => {
+                if (path === secretPath) throw error;
+                unreadable.push(path);
+                return [];
+              }),
+              children: depth < MAX_DEPTH ? await sub(path) : [],
+            })),
           );
           for (const { path, depth, keys, children } of results) {
             visited += 1;
@@ -231,6 +243,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
           ...(needle ? { search: needle } : {}),
           folders: folders.filter((f) => !needle || f.toLowerCase().includes(needle)).slice(0, limit),
           foldersScanned: visited,
+          ...(unreadable.length ? { unreadableFolders: unreadable.slice(0, 20) } : {}),
           total: matches.length,
           truncated,
           matches,
@@ -423,7 +436,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
 
     infisical_upsert: {
       description:
-        "Create or update a secret in Infisical (create if new, update if it exists). Use this to store a credential where a teammate can access it, instead of sending it in chat. Tell the owner the project/path so they can grant access. Returns the console link, never the value.",
+        "Create or update a secret in Infisical (create if new, update if it exists). A path that does not exist yet is created as folders automatically — write to the path you want (e.g. /otp-debug) and do not ask anyone to make the folder first. Use this to store a credential where a teammate can access it, instead of sending it in chat. Tell the owner the project/path so they can grant access. Returns the console link, never the value.",
       inputSchema: {
         type: "object",
         properties: {
@@ -445,12 +458,58 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
         const name = String(args.name || "");
         if (!NAME.test(name)) throw new ToolInputError("invalid secret name");
         const payload = { workspaceId, environment, secretPath, secretValue: String(args.value), ...(args.comment ? { secretComment: String(args.comment) } : {}) };
+        // A path that does not exist yet is a folder, not an error: create it and carry on. Without
+        // this, writing a credential to a fresh path like /vpn failed and the secret ended up at the
+        // project root instead (seen live while issuing a VPN account). Failures are returned, not
+        // swallowed: a silent folder-create failure turned into "Folder not found" dead ends
+        // (ticket 802798) that nobody could diagnose from the agent side.
+        async function ensureFolder() {
+          if (secretPath === "/") return null;
+          const parts = secretPath.split("/").filter(Boolean);
+          let parent = "/";
+          let failure = null;
+          for (const part of parts) {
+            const here = parent === "/" ? `/${part}` : `${parent}/${part}`;
+            try {
+              const list = await call(cfg, "GET", "/api/v1/folders", { query: { workspaceId, environment, path: parent } });
+              if (!(list.folders || []).some((f) => f.name === part)) {
+                try {
+                  await call(cfg, "POST", "/api/v1/folders", { body: { workspaceId, environment, path: parent, name: part } });
+                } catch (createError) {
+                  // Lost a race or a version quirk: acceptable only if the folder is now visible.
+                  const recheck = await call(cfg, "GET", "/api/v1/folders", { query: { workspaceId, environment, path: parent } }).catch(() => null);
+                  if (!recheck?.folders?.some((f) => f.name === part)) throw createError;
+                }
+              }
+            } catch (error) {
+              failure ??= error;
+            }
+            parent = here;
+          }
+          return failure;
+        }
+
         let action = "updated";
         try {
           await call(cfg, "PATCH", `/api/v3/secrets/raw/${encodeURIComponent(name)}`, { body: payload });
         } catch (error) {
           if (error.status !== 404 && error.status !== 400) throw error;
-          await call(cfg, "POST", `/api/v3/secrets/raw/${encodeURIComponent(name)}`, { body: payload });
+          try {
+            await call(cfg, "POST", `/api/v3/secrets/raw/${encodeURIComponent(name)}`, { body: payload });
+          } catch (createError) {
+            if (createError.status !== 404 && createError.status !== 400) throw createError;
+            const folderFailure = await ensureFolder();
+            try {
+              await call(cfg, "POST", `/api/v3/secrets/raw/${encodeURIComponent(name)}`, { body: payload });
+            } catch (retryError) {
+              if (folderFailure) {
+                throw new Error(
+                  `secret write to ${secretPath} failed (${retryError.message}); creating the folder failed too: ${folderFailure.message}`,
+                );
+              }
+              throw retryError;
+            }
+          }
           action = "created";
         }
         return {

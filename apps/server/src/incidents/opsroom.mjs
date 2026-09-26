@@ -16,16 +16,16 @@ const tehranTime = (iso) =>
   iso ? new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(iso)) : "—";
 
 export const OPS_CHARTER = `[اتاق عملیات گریفین — حالت سایه]
-این چت را لایهٔ حادثهٔ گریفین خودکار می‌سازد، نه عرفان. کسی پشت چت نیست.
+این چت را لایهٔ حادثهٔ گریفین خودکار می‌سازد، نه Owner. کسی پشت چت نیست.
 نقش تو: مدیر. آلارم‌ها را لایهٔ بدون‌LLM به «حادثه» تجمیع کرده؛ فقط تغییر وضعیت‌ها به تو می‌رسد.
 
 برای هر حادثهٔ تازه/بازگشته/شدیدشده:
 0. اول سابقه را ببین: incident_history همان حادثه (triageهای قبلی و ackهای Owner) و knowledge_list. اگر وضعیت می‌تواند عمدی باشد (سرویس خاموش، replicas=0، اپ غیرفعال)، از platform بخواه commitهای اخیر مسیر GitOps همان اپ را با gitlab_commits ببیند. «قطع عمدی» را خرابی حساب نکن؛ اگر شواهد عمدی بودن داری ولی ack نیست، در action بنویس «احتمالاً عمدی — Owner ack کند».
 1. اگر از خود اطلاعات حادثه (نام آلارم، کلاستر، scope، اعضا، summary) و دانش knowledge معلوم است، مستقیم نتیجه بگیر.
 2. وگرنه با ask_agent به platform یک درخواست **خواندنی و مشخص** بده (مثلاً «پادهای ns X در asia چرا NotReady اند؟ events و لاگ آخر»). حادثه‌های هم‌ریشه را با هم بپرس، نه یکی‌یکی.
-3. نتیجه را با incident_update ثبت کن: cause (علت محتمل)، impact (چه سرویس/کاربری آسیب می‌بیند)، owner (مالک اپ از label یا knowledge)، whoWouldAsk (چه کسی احتمالاً به عرفان پیام می‌دهد)، action (اقدام پیشنهادی)، reversible (true/false)، confidence (low/medium/high)، noise (true اگر آلارم نویز/بی‌اقدام است و باید rule اصلاح شود).
+3. نتیجه را با incident_update ثبت کن: cause (علت محتمل)، impact (چه سرویس/کاربری آسیب می‌بیند)، owner (مالک اپ از label یا knowledge)، whoWouldAsk (چه کسی احتمالاً به Owner پیام می‌دهد)، action (اقدام پیشنهادی)، reversible (true/false)، confidence (low/medium/high)، noise (true اگر آلارم نویز/بی‌اقدام است و باید rule اصلاح شود).
 
-برای حادثه‌های TeamReport (یک همکار برای کمک به عرفان پیام داده؛ متن خلاصه در summary/اعضا):
+برای حادثه‌های TeamReport (یک همکار برای کمک به Owner پیام داده؛ متن خلاصه در summary/اعضا):
 - اگر درخواست فنی/عملیاتی نیست (احوال‌پرسی، شخصی، تشکر) فقط noise=true ثبت کن.
 - اگر هست: ببین کدام حادثهٔ باز همین را پوشش می‌داد (incidents_list) → coveredBy=<id> و missed=false؛ اگر هیچ سیگنالی نبود → missed=true و در action بنویس چه سیگنال/آلارمی باید آن را زودتر نشان می‌داد (منبع و تأخیرش).
 - whoWouldAsk همان فرستنده است. به او جواب نده.
@@ -208,7 +208,7 @@ export function createIncidentTools({ incidents }) {
       },
     },
     [INCIDENTS_LIST]: {
-      description: "List Griffin incidents (grouped alerts): open by default, or all/resolved. Each has id, cluster, alertname, scope, severity, owner, members, times, flaps and any recorded triage.",
+      description: "List Griffin incidents (grouped alerts): open by default, or all/resolved; critical first, with total/shown and a per-cluster count so you know if the list is partial. An incident is an alert, not proof of user impact. Each has id, cluster, alertname, scope, severity, owner, members, times, flaps and any recorded triage.",
       inputSchema: {
         type: "object",
         properties: {
@@ -218,8 +218,11 @@ export function createIncidentTools({ incidents }) {
         additionalProperties: false,
       },
       async execute(args = {}) {
-        const rows = incidents.list({ status: args.status || "open", limit: args.limit || 50 }).map(incidentView);
-        return { content: [{ type: "text", text: JSON.stringify({ incidents: rows }) }] };
+        const status = args.status || "open";
+        const rows = incidents.list({ status, limit: args.limit || 50 }).map(incidentView);
+        const { total, byCluster } = incidents.summary?.({ status }) || { total: rows.length, byCluster: {} };
+        // Critical first; `shown` vs `total` says whether this is the whole picture.
+        return { content: [{ type: "text", text: JSON.stringify({ total, shown: rows.length, byCluster, incidents: rows }) }] };
       },
     },
     [INCIDENT_UPDATE]: {

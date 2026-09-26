@@ -49,6 +49,13 @@ services:
       GRIFFIN_VERSION: ${GRIFFIN_VERSION:-local}
       CURSOR_MODEL: ${CURSOR_MODEL:-auto}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      # Any OpenAI-compatible chat/completions endpoint (OpenAI, Z.ai, OpenRouter, a local server);
+      # the key lives in <data>/openai.api-key.
+      GRIFFIN_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      GRIFFIN_OPENAI_MODEL: ${OPENAI_MODEL:-}
+      GRIFFIN_OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
+      # How agents refer to you in prompts and framed messages (a first name reads best).
+      GRIFFIN_OWNER_NAME: ${OWNER_NAME:-}
       # Links in messenger replies (charts, files) point here.
       GRIFFIN_PUBLIC_URL: ${GRIFFIN_PUBLIC_URL:-http://127.0.0.1:3100}
       # Incident ops room: shadow (LLM triage) | record (group + show, no LLM) | off

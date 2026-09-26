@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { randomBytes, randomUUID } from "node:crypto";
 import { DEFAULT_AGENT } from "./agents/registry.mjs";
 import { seedProfilesFromRegistry, unique } from "./agents/profiles.mjs";
+import { normalizeProvider } from "./providers/ids.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS chats (
@@ -235,6 +236,10 @@ export function openStore(file) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "agent")) {
     db.exec("ALTER TABLE chats ADD COLUMN agent TEXT NOT NULL DEFAULT 'platform'");
   }
+  // Simulation chats (sim.mjs): real runs, side effects recorded instead of executed; not listed.
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "sim")) {
+    db.exec("ALTER TABLE chats ADD COLUMN sim INTEGER NOT NULL DEFAULT 0");
+  }
   // Peer-call child chats (ask_agent): hidden from the sidebar; ask_owner routes to the root.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "parent_chat_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN parent_chat_id TEXT");
@@ -262,16 +267,39 @@ export function openStore(file) {
 
   const q = {
     insertChat: db.prepare(
-      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @at, @at)",
+      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @at, @at)",
     ),
     getChat: db.prepare("SELECT * FROM chats WHERE id = ?"),
     listChats: db.prepare(`
       SELECT c.*, r.status AS run_status, r.started_at AS run_started_at
       FROM chats c
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND (c.caller IS NULL OR c.caller <> 'team')
+      WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
       ORDER BY c.pinned DESC, c.updated_at DESC
       LIMIT 500`),
+    // Every top-level chat for the sidebar, tagged with where it came from so each tab lists its
+    // own threads (manual chats under «گفتگو», Telegram-born ones under the Telegram tab, …).
+    listChatsBySource: db.prepare(`
+      SELECT c.*, r.status AS run_status, r.started_at AS run_started_at,
+        CASE
+          WHEN c.job_id IS NOT NULL OR c.caller = 'scheduler' THEN 'job'
+          WHEN c.caller = 'ops' THEN 'ops'
+          -- Born in Telegram wins over "peer": a colleague's agent writing in Telegram is a Telegram
+          -- thread; only /mcp peers (no person, no link) belong to the peers tab.
+          WHEN c.caller = 'team' OR c.person_id IS NOT NULL
+            OR EXISTS (SELECT 1 FROM integration_links l WHERE l.chat_id = c.id) THEN 'telegram'
+          WHEN c.caller LIKE 'peer:%' THEN 'peer'
+          ELSE 'manual'
+        END AS source,
+        COALESCE(c.person_id, CASE WHEN c.caller LIKE 'peer:%' THEN c.caller END) AS owner_key,
+        COALESCE(p.display_name, pu.label, CASE WHEN c.caller LIKE 'peer:%' THEN substr(c.caller, 6) END) AS owner_label
+      FROM chats c
+      LEFT JOIN persons p ON p.id = c.person_id
+      LEFT JOIN peer_users pu ON c.caller = 'peer:' || pu.id
+      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
+      WHERE c.archived = @archived AND c.parent_chat_id IS NULL AND c.sim = 0
+      ORDER BY c.pinned DESC, c.updated_at DESC
+      LIMIT 800`),
     listChildChats: db.prepare("SELECT id FROM chats WHERE parent_chat_id = ?"),
     // Peer-call child chats (ask_agent/delegate) with their latest run status, for the sidebar nest.
     childChatsWithStatus: db.prepare(`
@@ -326,6 +354,7 @@ export function openStore(file) {
       callChain = null,
       personId = null,
       provider = "cursor",
+      sim = false,
     }) {
       const chat = {
         id: randomUUID(),
@@ -338,12 +367,13 @@ export function openStore(file) {
         parentChatId: parentChatId || null,
         callChain: callChain == null ? null : (typeof callChain === "string" ? callChain : JSON.stringify(callChain)),
         personId: personId || null,
-        provider: provider === "claude" ? "claude" : "cursor",
+        provider: normalizeProvider(provider),
+        sim: sim ? 1 : 0,
         at: now(),
       };
       q.insertChat.run(chat);
       // Peer children stay out of the sidebar (same idea as job chats).
-      if (!chat.parentChatId) bus.emit("chats", { type: "created", chatId: chat.id });
+      if (!chat.parentChatId && !chat.sim) bus.emit("chats", { type: "created", chatId: chat.id });
       return store.getChat(chat.id);
     },
 
@@ -391,6 +421,10 @@ export function openStore(file) {
 
     listChats({ archived = false } = {}) {
       return q.listChats.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
+    },
+
+    listChatsBySource({ archived = false } = {}) {
+      return q.listChatsBySource.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
     },
 
     // All peer-call child chats (ask_agent/delegate), newest first, with latest run status.
@@ -933,7 +967,7 @@ export function openStore(file) {
       const existing = store.getAgentProfile(id);
       const toolsJson = JSON.stringify(unique(Array.isArray(tools) ? tools : []));
       const metaJson = JSON.stringify(meta && typeof meta === "object" ? meta : {});
-      const prov = provider === "claude" ? "claude" : "cursor";
+      const prov = normalizeProvider(provider);
       if (existing) {
         db.prepare(
           `UPDATE agent_profiles SET label = ?, domain = ?, blurb = ?, instructions = ?, provider = ?, model = ?, tools_json = ?, meta_json = ?, built_in = ?, updated_at = ? WHERE id = ?`,

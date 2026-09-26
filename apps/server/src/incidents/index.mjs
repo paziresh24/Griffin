@@ -111,7 +111,10 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
     resolve: db.prepare("UPDATE incidents SET status = 'resolved', resolved_at = @at, updated_at = @at WHERE id = @id"),
     triage: db.prepare("UPDATE incidents SET triage_json = @triage, triaged_at = @at, updated_at = @at WHERE id = @id"),
     log: db.prepare("INSERT INTO incident_log (incident_id, kind, data, at) VALUES (?, ?, ?, ?)"),
-    list: db.prepare("SELECT * FROM incidents WHERE (@status = 'all' OR status = @status) ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, last_seen DESC LIMIT @limit"),
+    list: db.prepare("SELECT * FROM incidents WHERE (@status = 'all' OR status = @status) ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, CASE severity WHEN 'critical' THEN 0 ELSE 1 END, last_seen DESC LIMIT @limit"),
+    // What a truncated list leaves out: an agent shown 30 of 133 (all Yazd warnings, newest first)
+    // reported a login outage that was a standby cluster's scaled-down Authentik (2026-09-25).
+    summary: db.prepare("SELECT cluster, severity, COUNT(*) AS n FROM incidents WHERE (@status = 'all' OR status = @status) GROUP BY cluster, severity"),
     logs: db.prepare("SELECT kind, data, at FROM incident_log WHERE incident_id = ? ORDER BY id DESC LIMIT ?"),
     prune: db.prepare("DELETE FROM incident_log WHERE incident_id IN (SELECT id FROM incidents WHERE status = 'resolved' AND resolved_at < ?)"),
     pruneIncidents: db.prepare("DELETE FROM incidents WHERE status = 'resolved' AND resolved_at < ?"),
@@ -209,6 +212,15 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
       }
     },
     list: ({ status = "open", limit = 50 } = {}) => q.list.all({ status, limit: Math.min(Math.max(Number(limit) || 50, 1), 500) }),
+    summary: ({ status = "open" } = {}) => {
+      const byCluster = {};
+      let total = 0;
+      for (const row of q.summary.all({ status })) {
+        byCluster[row.cluster] = { ...(byCluster[row.cluster] || {}), [row.severity]: row.n };
+        total += row.n;
+      }
+      return { total, byCluster };
+    },
     logs: (id, limit = 50) => q.logs.all(String(id), limit).map((r) => ({ ...r, data: parse(r.data, {}) })),
     prune(olderThanDays = 30) {
       const cutoff = new Date(now().getTime() - olderThanDays * 86_400_000).toISOString();

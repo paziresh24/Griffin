@@ -1,3 +1,4 @@
+import { COVERAGE_CALLER, coverageOwnerNote } from "./integrations/coverage.mjs";
 import { foldEvents } from "@griffin/timeline";
 import { autoTitle } from "./titles.mjs";
 import { servingHeaders } from "./media.mjs";
@@ -61,7 +62,7 @@ export function createApp({ store, runner, asks, models = async () => [], extraR
     const childrenByParent = childChatsByParent(store);
     const withChildren = (chat) => publicChat(store, chat, childrenByParent.get(chat.id));
     if (personId) return c.json({ chats: store.listChatsForPerson(personId, { archived }).map(withChildren) });
-    return c.json({ chats: store.listChats({ archived }).map(withChildren) });
+    return c.json({ chats: store.listChatsBySource({ archived }).map(withChildren) });
   });
 
   app.post("/api/chats", async (c) => {
@@ -70,12 +71,16 @@ export function createApp({ store, runner, asks, models = async () => [], extraR
     if (input.error) return c.json({ error: input.error }, 400);
     const agent = typeof body.agent === "string" && knownAgent(body.agent) ? body.agent : DEFAULT_AGENT;
     const profile = store.getAgentProfile?.(agent);
+    // sim: a dry-run chat (sim.mjs) — optionally as a colleague's thread (caller team, unlinked).
+    const sim = body.sim === true;
     const chat = store.createChat({
-      title: titleFrom(input.text),
+      title: typeof body.title === "string" && body.title ? body.title : titleFrom(input.text),
       model: typeof body.model === "string" && body.model ? body.model : profile?.model || null,
       mode: body.mode === "plan" ? "plan" : "agent",
       agent,
-      provider: profile?.provider === "claude" ? "claude" : "cursor",
+      provider: normalizeProvider(profile?.provider),
+      sim,
+      caller: sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
     });
     const sent = await runner.send(chat.id, input);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
@@ -103,7 +108,7 @@ export function createApp({ store, runner, asks, models = async () => [], extraR
       patch.agent = body.agent;
       const profile = store.getAgentProfile?.(body.agent);
       if (profile) {
-        patch.provider = profile.provider === "claude" ? "claude" : "cursor";
+        patch.provider = normalizeProvider(profile.provider);
         if (!("model" in patch)) patch.model = profile.model || null;
       }
     }
@@ -122,7 +127,12 @@ export function createApp({ store, runner, asks, models = async () => [], extraR
     if (input.error) return c.json({ error: input.error }, 400);
     const intent = ["send", "queue", "steer"].includes(body.intent) ? body.intent : "send";
     try {
-      return c.json(await runner.send(chat.id, { ...input, intent }), 202);
+      // The note says "this goes to the colleague on Telegram" — only true when the chat is linked.
+      // An unlinked team chat (a simulation) takes the text as-is.
+      const framed = chat.caller === COVERAGE_CALLER && input.text && store.linksForChat(chat.id).length
+        ? { ...input, text: coverageOwnerNote(store.getPerson?.(chat.person_id)?.display_name, input.text) }
+        : input;
+      return c.json(await runner.send(chat.id, { ...framed, intent }), 202);
     } catch (error) {
       if (error instanceof BusyError) return c.json({ error: "busy" }, 409);
       throw error;
@@ -358,10 +368,11 @@ const titleFrom = autoTitle;
 
 // Peer-call child chats (ask_agent/delegate) grouped by parent, newest first, capped per parent so
 // long-lived chats do not flood the sidebar nest.
-function childChatsByParent(store, { perParent = 12 } = {}) {
+function childChatsByParent(store, { perParent = 30 } = {}) {
   const map = new Map();
   for (const child of store.listChildChatsAll?.() || []) {
-    const list = map.get(child.parent_chat_id) || [];
+    const list = map.get(child.parent_chat_id) || Object.assign([], { total: 0 });
+    list.total += 1;
     if (list.length < perParent) list.push(child);
     map.set(child.parent_chat_id, list);
   }
@@ -381,6 +392,9 @@ function publicChat(store, chat, children = null) {
     provider: profile?.provider || chat.provider || DEFAULT_PROVIDER,
     agents: store.agentsWorked(chat),
     caller: chat.caller || "owner",
+    source: chat.source || null,
+    ownerKey: chat.owner_key || null,
+    ownerLabel: chat.owner_label || null,
     parentChatId: chat.parent_chat_id || null,
     pinned: Boolean(chat.pinned),
     archived: Boolean(chat.archived),
@@ -389,6 +403,7 @@ function publicChat(store, chat, children = null) {
     updatedAt: chat.updated_at,
     ...(children?.length
       ? {
+          childCount: children.total || children.length,
           children: children.map((child) => ({
             id: child.id,
             title: child.title,

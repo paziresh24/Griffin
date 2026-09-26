@@ -234,7 +234,7 @@ test("winbox routers: reads go through the console, writes carry the credential,
   assert.ok(!out.output.includes("Sup3rSecret"), "console output is masked");
   assert.match(out.output, /password: \*\*\*/);
 
-  for (const bad of ["/system reset-configuration", "/system/reboot", "/user remove smhossein"]) {
+  for (const bad of ["/system reset-configuration", "/system/reboot", "/user remove smhossein", "/export show-sensitive file=x"]) {
     await assert.rejects(tools.mikrotik_exec.execute({ router: "office", command: bad }), /مجاز نیست/);
   }
   assert.equal(ran.length, 2, "nothing catastrophic ever reached the router");
@@ -242,4 +242,25 @@ test("winbox routers: reads go through the console, writes carry the credential,
   // A router on the API transport must not accept console lines.
   const api = createMikrotikTools({ vault: { item: async () => "{}" }, routers: { edge: { vaultSlug: "y", writableLists: [] } } });
   await assert.rejects(api.mikrotik_exec.execute({ router: "edge", command: "/system/identity/print" }), /RouterOS API/);
+});
+
+test("winbox: credential read once for parallel calls, one retry after a login failure", async () => {
+  let reads = 0;
+  let calls = 0;
+  const tools = createMikrotikTools({
+    vault: { item: async () => { reads += 1; return JSON.stringify({ host: "10.0.0.1", user: "u", password: "p" }); } },
+    routers: { office: { vaultSlug: "x", transport: "winbox", port: 8291, lan: null, writableLists: [] } },
+    connect: async () => { throw new Error("no api"); },
+    exec: async () => {
+      calls += 1;
+      if (calls === 3) throw new Error("winbox login failed: Wrong username or password.");
+      return "ok";
+    },
+  });
+  await Promise.all([1, 2].map(() => tools.mikrotik_exec.execute({ router: "office", command: "/ppp/active/print" })));
+  assert.equal(reads, 1, "parallel calls share one credential read");
+  const out = await tools.mikrotik_exec.execute({ router: "office", command: "/ppp/active/print" });
+  assert.equal(out.output, "ok");
+  assert.equal(calls, 4, "a login failure is retried once");
+  assert.equal(reads, 2, "and the retry re-reads the credential");
 });

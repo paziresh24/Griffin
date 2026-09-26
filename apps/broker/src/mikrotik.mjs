@@ -129,6 +129,18 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
     }
   }
 
+  // Parallel tool calls each read three Infisical keys; on a cold token they raced and one came back
+  // 404 (2026-09-24, mid-diagnosis). One shared read per router, reused for a few minutes.
+  const credentials = new Map(); // name -> { at, promise }
+  function cachedCredential(config, name) {
+    const hit = credentials.get(name);
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.promise;
+    const promise = credentialFor(config, name);
+    credentials.set(name, { at: Date.now(), promise });
+    promise.catch(() => credentials.delete(name));
+    return promise;
+  }
+
   // Both "the API is shut" and "this user cannot log in here" mean the same thing to the reader:
   // access to that router has not been granted yet, and the hint says how to grant it.
   const notReachable = (message) =>
@@ -137,7 +149,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
   async function session(name, fn) {
     const config = routers[name || firstRouter()];
     if (!config) throw new ToolInputError(`unknown router (known: ${Object.keys(routers).join(", ")})`);
-    const credential = await credentialFor(config, name || firstRouter());
+    const credential = await cachedCredential(config, name || firstRouter());
     const started = Date.now();
     const api = await connect({ host: credential.host, port: credential.port || 8728, user: credential.user, password: credential.password }).catch(
       (error) => {
@@ -163,7 +175,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
   }
 
   // Catastrophic console commands: not "needs approval", simply never from here.
-  const FORBIDDEN_CONSOLE = /(reset-configuration|\/system\s+reset|system\/reset|shutdown|reboot|routerboard\s+upgrade|package\s+downgrade|\/file\s+remove|file\/remove|user\s+remove|\/user\s+set\s+.*password)/i;
+  const FORBIDDEN_CONSOLE = /(reset-configuration|\/system\s+reset|system\/reset|shutdown|reboot|routerboard\s+upgrade|package\s+downgrade|\/file\s+remove|file\/remove|user\s+remove|\/user\s+set\s+.*password|show-sensitive)/i; // show-sensitive: every secret in clear text (2026-09-24, asked for mid-diagnosis)
 
   async function console_(name, command, { timeoutMs = 30_000 } = {}) {
     const config = routers[name || firstRouter()];
@@ -173,15 +185,18 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
     }
     const line = text(command, "command", { max: 900 });
     if (FORBIDDEN_CONSOLE.test(line)) throw new ToolInputError("این دستور (ریست/ریبوت/حذف کاربر یا فایل) از این مسیر مجاز نیست");
-    const credential = await credentialFor(config, name || "office");
+    const key = name || firstRouter();
     const started = Date.now();
-    const output = await exec({
-      host: credential.host,
-      port: credential.port || config.port || 8291,
-      user: credential.user,
-      password: credential.password,
-      command: line,
-      timeoutMs,
+    const run = async () => {
+      const c = await cachedCredential(config, key);
+      return { c, out: await exec({ host: c.host, port: c.port || config.port || 8291, user: c.user, password: c.password, command: line, timeoutMs }) };
+    };
+    // A one-off "Wrong username or password" hit a live diagnosis between two good calls: drop the
+    // cached credential and try once more before calling it a failure.
+    const { c: credential, out: output } = await run().catch((error) => {
+      if (!/login failed/i.test(String(error?.message))) throw error;
+      credentials.delete(key);
+      return run();
     });
     // A console read can print credentials (/ppp/secret detail shows every VPN password). The
     // agent never needs those, and the result becomes a chat event — so they are masked here.

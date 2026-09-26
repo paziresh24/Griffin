@@ -138,3 +138,59 @@ test("list can search the whole project recursively, and still never returns a v
   assert.deepEqual(flat.secrets, ["MT_HOST", "MT_USER", "MT_PASS"]);
   assert.equal(flat.matches, undefined);
 });
+
+// Writing a credential to a path that does not exist yet used to fail and leave the secret at the
+// project root — exactly what happened while issuing a VPN account into /vpn.
+test("upsert creates the folder when the path does not exist yet", async () => {
+  const folders = { "/": [] };
+  const stored = [];
+  const vault = { item: async () => cfg };
+  const fetchImpl = async (url, init) => {
+    const u = new URL(url);
+    const path = u.searchParams.get("secretPath") || u.searchParams.get("path") || (init.body ? JSON.parse(init.body).secretPath || JSON.parse(init.body).path : "/") || "/";
+    if (u.pathname === "/api/v1/auth/universal-auth/login") return Response.json({ accessToken: "AT", expiresIn: 3600 });
+    if (u.pathname === "/api/v1/workspace") return Response.json({ workspaces: [{ id: "P1", name: "ops-team", environments: [{ slug: "prod" }] }] });
+    if (u.pathname === "/api/v1/folders" && init.method === "POST") {
+      const body = JSON.parse(init.body);
+      folders[body.path] = [...(folders[body.path] || []), body.name];
+      folders[body.path === "/" ? `/${body.name}` : `${body.path}/${body.name}`] = [];
+      return Response.json({ folder: { name: body.name } });
+    }
+    if (u.pathname === "/api/v1/folders") return Response.json({ folders: (folders[path] || []).map((name) => ({ name })) });
+    if (u.pathname.startsWith("/api/v3/secrets/raw/")) {
+      const body = JSON.parse(init.body);
+      if (folders[body.secretPath] === undefined) return Response.json({ message: "folder not found" }, { status: 404 });
+      if (init.method === "POST") {
+        stored.push(body.secretPath);
+        return Response.json({ secret: { secretKey: "X" } });
+      }
+      return Response.json({ message: "not found" }, { status: 404 });
+    }
+    return Response.json({ message: "nope" }, { status: 404 });
+  };
+  const tools = createInfisicalTools({ vault, fetchImpl });
+  const out = await tools.infisical_upsert.execute({ name: "VPN_PASSWORD", value: "x", path: "/vpn", projectId: "ops-team" });
+  assert.equal(out.action, "created");
+  assert.equal(out.path, "/vpn");
+  assert.deepEqual(stored, ["/vpn"], "it landed in the folder, not at the root");
+  assert.deepEqual(folders["/"], ["vpn"], "the folder was created on the way");
+});
+
+// A folder-create failure must surface, not vanish: swallowed errors turned into un-actionable
+// "Folder not found" dead ends (ticket 802798) with no hint of the real cause.
+test("upsert reports the folder failure when the write still fails", async () => {
+  const vault = { item: async () => cfg };
+  const fetchImpl = async (url, init) => {
+    const u = new URL(url);
+    if (u.pathname === "/api/v1/auth/universal-auth/login") return Response.json({ accessToken: "AT", expiresIn: 3600 });
+    if (u.pathname === "/api/v1/workspace") return Response.json({ workspaces: [{ id: "P1", name: "ops-team", environments: [{ slug: "prod" }] }] });
+    if (u.pathname === "/api/v1/folders") return Response.json({ message: "not allowed by role" }, { status: 403 });
+    if (u.pathname.startsWith("/api/v3/secrets/raw/")) return Response.json({ message: "Folder with path '/x' not found" }, { status: 404 });
+    return Response.json({ message: "nope" }, { status: 404 });
+  };
+  const tools = createInfisicalTools({ vault, fetchImpl });
+  await assert.rejects(
+    tools.infisical_upsert.execute({ name: "VPN_PASSWORD", value: "x", path: "/x", projectId: "ops-team" }),
+    /creating the folder failed too/,
+  );
+});

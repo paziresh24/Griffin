@@ -33,6 +33,8 @@ COPY apps/server/package.json apps/server/
 COPY packages/timeline/src packages/timeline/src
 COPY apps/server/src apps/server/src
 COPY apps/server/assets apps/server/assets
+# Scenario evals: docker exec griffin-app-1 node apps/server/scripts/eval.mjs
+COPY apps/server/scripts apps/server/scripts
 COPY --from=web /src/apps/web/dist apps/web/dist
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

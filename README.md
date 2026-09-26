@@ -6,7 +6,7 @@
 each one is, what it may touch, who may ask it — and they answer from typed tools instead of from
 the model's memory.
 
-`Node 24` · `Cursor or Claude Agent SDK` · `SQLite` · no SaaS control plane · MIT
+`Node 24` · `Cursor, Claude Agent SDK or any OpenAI-compatible API` · `SQLite` · no SaaS control plane · MIT
 
 <img src="docs/media/chat.png" width="900" alt="Griffin answering a question: a plan, a tool card marked with the path its answer came from, and a disk-usage card">
 
@@ -53,7 +53,7 @@ the model; [`examples/agents/`](examples/agents) has profiles you can import as 
 
 **Agents that delegate.** `delegate` returns immediately and reports back when the subtask lands, so
 the agent you are talking to stays free; `ask_agent` is the short blocking variant. Each agent picks
-its own engine (Cursor or Claude) and model.
+its own engine (Cursor, Claude, or any OpenAI-compatible endpoint) and model.
 
 **Charts and files in the conversation** — the agent draws Vega-Lite from real rows, and images,
 video, PDF, Markdown and CSV render inline. The same chart goes to a messenger as an image.
@@ -66,6 +66,14 @@ so a job that misbehaves leaves the same trace a person's chat would.
 **Messengers and other agents** — Telegram/Bale bots and a Telegram account bridge; an MCP endpoint
 where another agent (Claude Code, for instance) connects with its own scoped token and gets
 task-shaped tools: send, wait, reply, cancel.
+
+**Threads with colleagues.** On a Telegram account bridge, a colleague's DM opens a Griffin thread
+only when a small classifier says it is real work (thanks and small talk stay yours); the thread
+closes with the result, and messages that arrive while it works are answered together, once.
+
+**Rehearse before it talks to anyone.** A simulation chat runs the whole delegation tree for real
+but records side effects instead of executing them; `apps/server/scripts/eval.mjs` replays
+scenarios against it and checks the answers.
 
 **No interface, when that is better.** The core is the product; the UI is one client of it. There is
 a terminal client, a Bearer-authenticated HTTP API, MCP for other agents, messengers, and scheduled

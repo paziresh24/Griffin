@@ -20,7 +20,7 @@ function setup(clock = { t: Date.parse("2026-09-19T10:00:00Z") }) {
 
 test("user + client: token works once issued, only its hash is stored", () => {
   const { store, auth } = setup();
-  auth.createUser({ id: "ali-ahmadi", label: "آقای قانع" });
+  auth.createUser({ id: "ali-ahmadi", label: "آقای احمدی" });
   const { token, id } = auth.issueClient("ali-ahmadi", { label: "laptop" });
   assert.match(token, /^grf_/);
   const row = store.peerClientByHash(hashToken(token));
@@ -132,7 +132,7 @@ test("self-management tools never reach a non-owner even if a quota row lists th
 
 test("invite pickup: GET shows a button only, POST mints a token once, then it is gone", async () => {
   const { auth, store } = setup();
-  auth.createUser({ id: "sara-karimi", label: "آقای بیگی" });
+  auth.createUser({ id: "sara-karimi", label: "خانم کریمی" });
   const app = new Hono();
   auth.routes(app);
   const created = await (await app.request("/api/peers/sara-karimi/pickups", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();

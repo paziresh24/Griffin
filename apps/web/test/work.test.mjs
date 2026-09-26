@@ -28,3 +28,11 @@ test("no tools: only thinking goes to the log", () => {
   assert.equal(work.length, 1);
   assert.deepEqual(answer.map((p) => p.text), ["سلام"]);
 });
+
+test("an answered ask_owner stays in place in the work log; a pending one is pulled out", () => {
+  const tool = (name, status = "complete") => ({ type: "tool", name, status });
+  const answered = splitRun([tool("mikrotik_exec"), tool("ask_owner"), tool("mikrotik_exec"), { type: "text", text: "done" }]);
+  assert.deepEqual(answered.work.map((p) => p.name), ["mikrotik_exec", "ask_owner", "mikrotik_exec"]);
+  const pending = splitRun([tool("mikrotik_exec"), tool("ask_owner", "running")]);
+  assert.deepEqual(pending.answer.map((p) => p.name), ["ask_owner"]);
+});

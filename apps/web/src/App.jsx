@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ListChecks, Menu, WifiOff } from "lucide-react";
+import { ChevronDown, ListChecks, Menu, Network, WifiOff } from "lucide-react";
+import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTimeline } from "./api.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
@@ -11,7 +12,7 @@ import { TelegramPage } from "./components/Telegram.jsx";
 import { SettingsPage } from "./components/Settings.jsx";
 import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
-import { ThemeToggle } from "./components/Controls.jsx";
+import { AgentGlyph, ThemeToggle } from "./components/Controls.jsx";
 import { ShareButton } from "./components/Share.jsx";
 import { Toaster, toast } from "sonner";
 import { Thread } from "./components/Thread.jsx";
@@ -43,6 +44,13 @@ export default function App() {
       alive = false;
     };
   }, [chatId, listed]);
+  // The tab a chat belongs to; a sub-agent chat belongs to its parent's tab.
+  const activeSource = useMemo(() => {
+    if (!chat) return null;
+    if (chat.source) return chat.source;
+    const parent = chat.parentChatId ? [...chats, ...archived].find((c) => c.id === chat.parentChatId) : null;
+    return parent?.source || null;
+  }, [chat, chats, archived]);
   const [drawer, setDrawer] = useState(false);
   const [error, setError] = useState(null);
   const [theme, setTheme] = useState(() => readSetting(STORAGE.theme, "dark"));
@@ -149,7 +157,7 @@ export default function App() {
     }
   };
 
-  const recentTitles = useMemo(() => chats.slice(0, 8).map((c) => c.title).filter(Boolean), [chats]);
+  const recentTitles = useMemo(() => chats.filter((c) => (c.source || "manual") === "manual").slice(0, 8).map((c) => c.title).filter(Boolean), [chats]);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -162,6 +170,7 @@ export default function App() {
               chats={chats}
               archived={archived}
               activeId={chatId}
+              activeSource={activeSource}
               page={page}
               agent={settings.agent}
               onAgentChange={selectAgent}
@@ -176,6 +185,7 @@ export default function App() {
                   chats={chats}
                   archived={archived}
                   activeId={chatId}
+                  activeSource={activeSource}
                   page={page}
                   agent={settings.agent}
                   onAgentChange={selectAgent}
@@ -219,7 +229,7 @@ export default function App() {
                     <ThemeToggle theme={theme} onChange={setTheme} />
                   </header>
                 }
-                runInfo={<TodoProgress timeline={timeline} />}
+                runInfo={<><SubagentsBar chat={chat} /><TodoProgress timeline={timeline} /></>}
                 readOnly={chat?.caller === "task" || Boolean(chat?.parentChatId)}
                 agentLabel={agentMeta(settings.agent).label}
                 agent={settings.agent}
@@ -279,5 +289,47 @@ function TodoProgress({ timeline }) {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+// Sub-agents this chat started, as a count above the composer; the list opens on demand.
+function SubagentsBar({ chat }) {
+  const [open, setOpen] = useState(false);
+  const children = chat?.children || [];
+  if (!children.length) return null;
+  const running = children.filter((c) => c.runStatus === "running").length;
+  const count = chat.childCount || children.length;
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button type="button" className="press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
+          <Network className="size-3.5 text-primary" />
+          <span>{count} زیرایجنت</span>
+          {running ? <span className="flex items-center gap-1 text-primary"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{running} در حال کار</span> : null}
+          <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content side="top" align="start" sideOffset={6} className="pop z-50 max-h-80 w-80 overflow-y-auto rounded-xl border bg-card p-1 text-sm shadow-xl">
+          {children.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              onClick={() => { setOpen(false); navigate(child.id); }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted"
+            >
+              <AgentGlyph id={child.agent} className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
+              {child.runStatus === "running" ? (
+                <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
+              ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
+                <span className="size-1.5 shrink-0 rounded-full bg-bad" title="خطا" />
+              ) : null}
+            </button>
+          ))}
+          {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">و {count - children.length} مورد قدیمی‌تر</p> : null}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
