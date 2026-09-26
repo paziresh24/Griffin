@@ -505,13 +505,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
               await endAgent(key);
               return;
             }
-            // The owner writing by hand to a teammate: the owner has the conversation. Never open a
-            // thread on it, and hand back an open one.
+            // The owner writing by hand to a teammate never opens a thread. Inside an open one it is
+            // context, not a takeover: «بله، بهتون کمک میکنه» hands the work *to* Griffin, and
+            // closing on it cancelled the colleague's pending request (2026-09-26). The rules tell
+            // Griffin to answer only what is its own while the owner is talking.
             if (threadDm) {
               ownerSeen.set(String(key), Date.now());
               if (bridge.isCovered(integration.id, key)) {
-                log.info?.(`[telegram-account] thread closed peer=${key} — owner took over`);
-                await endAgent(key);
+                const name = person?.display_name || (await peerLabel(client, key));
+                await bridge.receive(integration.id, key, { text: threadOwnerPrompt({ name, text }), caller: COVERAGE_CALLER });
               }
             }
             return;
