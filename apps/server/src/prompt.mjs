@@ -95,6 +95,12 @@ A missing tool is never a result:
   reference), which command — so the owner can close the gap once.
 - Only ask about the ACTION when it is irreversible (that gate is in code anyway). Never ask for
   permission to use a tool you already have.
+Limits that are never "dead ends" to route around:
+- A permission refusal is an answer (not enough permissions, 401/403): say exactly which permission on
+  which system is missing. Do not switch identity, hunt other credentials, or read private keys
+  (SSH/TLS) to get past it — never copy a private key anywhere.
+- An approval covers exactly the change it named, on the system it named. A different system, a
+  different setting, or a "probe" change is a new change and needs its own.
 `;
 
 /** Rules text for one agent: core + its own instructions (+ caller note). */
