@@ -310,3 +310,51 @@ test("ask_agent timeout keeps the child alive as a subtask and delivers the resu
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("buildEnvelope keeps the final answer after more than FACT_CAP tools, latest run only", () => {
+  const { store, dir } = tempStore();
+  const chat = store.createChat({ title: "c" });
+  const old = store.startRun(chat.id);
+  store.appendEvent(chat.id, old, "run.started", {});
+  store.appendEvent(chat.id, old, "text", { text: "جواب قدیمی" });
+  const runId = store.startRun(chat.id);
+  store.appendEvent(chat.id, runId, "run.started", {});
+  store.appendEvent(chat.id, runId, "text", { text: "چک می‌کنم. " });
+  for (let i = 0; i < 45; i += 1) store.appendEvent(chat.id, runId, "tool.done", { name: "mikrotik_print", args: { i }, result: "ok" });
+  store.appendEvent(chat.id, runId, "text", { text: "نتیجه: هر سه رنج مسیر دارند." });
+  const env = buildEnvelope(store, chat.id, { status: "finished" });
+  assert.match(env.summary, /هر سه رنج/);
+  assert.doesNotMatch(env.summary, /جواب قدیمی/);
+  assert.equal(env.facts.length, 40);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a follow-up ask_agent to the same peer continues the idle child chat", async () => {
+  const { store, dir } = tempStore();
+  const parent = store.createChat({ title: "root", agent: "griffin", caller: "owner" });
+  const sent = [];
+  const runner = {
+    isActive: () => false,
+    async send(chatId, { text }) {
+      sent.push({ chatId, text });
+      const runId = store.startRun(chatId);
+      store.appendEvent(chatId, runId, "run.started", {});
+      store.appendEvent(chatId, runId, "text", { text: `run ${sent.length}` });
+      store.appendEvent(chatId, runId, "run.finished", { status: "finished" });
+      store.finishRun(chatId, runId, "finished", null);
+      return { runId };
+    },
+    cancel: async () => ({}),
+  };
+  const peers = createPeers({ store, runner, timeoutMs: 5000 });
+  const first = JSON.parse((await peers.tool(parent.id).execute({ agent: "platform", request: "رنج‌ها را ببین" })).content[0].text);
+  const second = JSON.parse((await peers.tool(parent.id).execute({ agent: "platform", request: "حالا اضافه کن" })).content[0].text);
+  assert.equal(second.chatRef, first.chatRef);
+  assert.match(sent[1].text, /^\[ادامه/);
+  assert.equal(second.summary, "run 2");
+  const other = JSON.parse((await peers.tool(parent.id).execute({ agent: "arvan-ban", request: "دامنه‌ها" })).content[0].text);
+  assert.notEqual(other.chatRef, first.chatRef);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

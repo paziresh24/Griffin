@@ -4,8 +4,8 @@ import {
   coverageCommand,
   coverageContextPrompt,
   coverageIntroPrompt,
-  coveragePrompt,
   coverageReplyPrompt,
+  coverageOwnerNote,
   createEndAgentTool,
   guardTeamTools,
   isDestructiveShell,
@@ -32,17 +32,16 @@ test("intro and coverage prompts tell the agent to speak for itself", () => {
   assert.match(intro, /معرفی/);
   assert.match(intro, /ابزار صدا نزن/);
   assert.match(intro, /Owner/);
-  const p = coveragePrompt("علی", "دیسک پر است");
-  assert.match(p, /دیسک پر است/);
-  assert.match(p, /end_agent/);
-  assert.match(p, /infisical_get/);
-  assert.match(p, /ask_owner را تنها/);
-  const focus = coverageReplyPrompt("قانع", "ماچ به لپت");
-  assert.match(focus, /ماچ به لپت/);
-  assert.match(focus, /فقط به همان پیام/);
-  assert.match(focus, /ایجنتیک/);
+  const focus = coverageReplyPrompt("کریمی", "اشتباه نمیکنه؟", ["Owner: پوش با نام نویسندهٔ اشتباه — توکن @skarimi", "همکار: اشتباه نمیکنه؟"]);
+  assert.match(focus, /اشتباه نمیکنه؟/);
+  assert.match(focus, /توکن @skarimi/, "the conversation around the replied message is included");
+  assert.match(focus, /نپرس «کدوم پیام؟»/);
+  assert.doesNotMatch(focus, /قربونت/);
+  assert.match(focus, /پیدا نکردم/);
+  const note = coverageOwnerNote("سارا کریمی", "پاسخ داد سارا");
+  assert.match(note, /^«Owner از داخل گریفین — برای تو، نه برای سارا کریمی»: پاسخ داد سارا$/);
   assert.doesNotMatch(focus, /معرفی کن/);
-  const ctx = coverageContextPrompt("انتظاری", ["همکار: لاگ hook0 را چک کن", "Owner: /agent"]);
+  const ctx = coverageContextPrompt("احمدی", ["همکار: لاگ hook0 را چک کن", "Owner: /agent"]);
   assert.match(ctx, /تاریخچه/);
   assert.match(ctx, /hook0/);
   assert.match(ctx, /نمی‌تواند مستقیم/);

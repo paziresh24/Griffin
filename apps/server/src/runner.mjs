@@ -28,6 +28,8 @@ export function createRunner({
   providerFor = null,
   sdk = null,
   agentOptions,
+  // runLabel(chat) -> { provider, model } actually used, for the run.started event.
+  runLabel = (chat) => ({ provider: chat.provider || "cursor", model: chat.model || "auto" }),
   onCancel = () => {},
   // Only for an explicit cancel (user / API), not for every run end.
   onUserCancel = () => {},
@@ -183,8 +185,17 @@ export function createRunner({
     }
     if (entry.forcedDone) return;
     if (status === "finished") Promise.resolve().then(() => onFinished(chatId)).catch(() => {});
-    const queued = entry.queue.shift();
-    if (queued) startRun(chatId, queued, entry.queue);
+    // Everything that queued up during the run goes in as ONE turn: separate turns answered each
+    // stale message on its own (a colleague got three replies in a minute, 2026-09-25).
+    const queued = entry.queue.splice(0);
+    if (queued.length) startRun(chatId, mergeQueued(queued), []);
+  }
+
+  function mergeQueued(messages) {
+    if (messages.length === 1) return messages[0];
+    const text = messages.map((m) => (typeof m === "string" ? m : m.text)).join("\n\n");
+    const images = messages.flatMap((m) => (typeof m === "string" ? [] : m.images || []));
+    return images.length ? { text, images } : text;
   }
 
   function startRun(chatId, message, queue = []) {
@@ -192,11 +203,8 @@ export function createRunner({
     const chat = store.getChat(chatId);
     const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now() };
     active.set(chatId, entry);
-    store.appendEvent(chatId, runId, "run.started", {
-      model: chat.model || "auto",
-      mode: chat.mode,
-      provider: chat.provider || "cursor",
-    });
+    const label = runLabel(chat);
+    store.appendEvent(chatId, runId, "run.started", { model: label.model, mode: chat.mode, provider: label.provider });
     execute(chatId, entry, message);
     return runId;
   }

@@ -1,18 +1,20 @@
 import { createClaudeProvider, PROVIDER_CLAUDE, CLAUDE_MODELS } from "./claude.mjs";
 import { createCursorProvider, PROVIDER_CURSOR } from "./cursor.mjs";
+import { createOpenAIProvider, PROVIDER_OPENAI } from "./openai.mjs";
+import { PROVIDER_IDS, normalizeProvider } from "./ids.mjs";
 
-export { PROVIDER_CLAUDE, PROVIDER_CURSOR, CLAUDE_MODELS };
+export { PROVIDER_CLAUDE, PROVIDER_CURSOR, PROVIDER_OPENAI, CLAUDE_MODELS, normalizeProvider, PROVIDER_IDS };
 
-export const PROVIDERS = [PROVIDER_CURSOR, PROVIDER_CLAUDE];
+export const PROVIDERS = [PROVIDER_CURSOR, PROVIDER_CLAUDE, PROVIDER_OPENAI];
 export const DEFAULT_PROVIDER = PROVIDER_CURSOR;
-
-export function normalizeProvider(value) {
-  return value === PROVIDER_CLAUDE ? PROVIDER_CLAUDE : PROVIDER_CURSOR;
-}
 
 export function createProviders({
   cursorApiKey,
   anthropicApiKey,
+  openaiApiKey,
+  openaiBaseUrl,
+  openaiModel,
+  openaiReasoningEffort,
   cursorModel,
   claudeModel,
   builtinTools,
@@ -33,6 +35,7 @@ export function createProviders({
     return {
       [PROVIDER_CURSOR]: wrap(PROVIDER_CURSOR),
       [PROVIDER_CLAUDE]: wrap(PROVIDER_CLAUDE),
+      [PROVIDER_OPENAI]: wrap(PROVIDER_OPENAI),
     };
   }
 
@@ -45,6 +48,12 @@ export function createProviders({
     [PROVIDER_CLAUDE]: createClaudeProvider({
       apiKey: anthropicApiKey,
       defaultModel: claudeModel || "sonnet",
+    }),
+    [PROVIDER_OPENAI]: createOpenAIProvider({
+      apiKey: openaiApiKey,
+      baseUrl: openaiBaseUrl,
+      defaultModel: openaiModel || "gpt-4o-mini",
+      reasoningEffort: openaiReasoningEffort || "",
     }),
   };
 }

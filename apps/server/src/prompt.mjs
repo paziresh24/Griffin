@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CALLER_LABELS, DEFAULT_AGENT } from "./agents/registry.mjs";
+import { AGENTS, CALLER_LABELS, DEFAULT_AGENT } from "./agents/registry.mjs";
+import { OWNER_NAME } from "./owner.mjs";
 import { reviewedRunbooks } from "./knowledge.mjs";
 
 // What an agent is told, assembled per run and written as an always-applied project rule (and as
@@ -126,13 +127,65 @@ report exactly what you could not do.\n`;
   return text;
 }
 
-export function installRules(workspace, { agent = DEFAULT_AGENT, caller = "owner", peers = [], profile = null, knowledgeRoot = null } = {}) {
-  const dir = path.join(workspace, ".cursor", "rules");
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${agent}.mdc`);
+// Decisions inside the delegation are the agent's; the owner reads them afterwards.
+export const DECIDE_AND_REPORT = `
+Decide, then report — asking is the exception:
+- A decision that is reversible and inside the delegation you were given is yours: pick the better
+  option, do it, keep going. Delivery details (naming, ordering, which of two safe paths) are yours.
+- Ask only for an irreversible action outside your delegation, or a fact no tool of yours can find.
+- Your final report in the owner's chat ends with the non-obvious decisions you took, one short line
+  each (what, and why). Never in a message to another person.
+`;
 
+// Messages to people go out under the Griffin signature (integrations/format.mjs), often from the
+// owner's own messenger account. Speaking as the owner under that signature read as a split
+// personality to the colleague on the other end — so the identity is fixed here.
+export const VOICE = `
+Your voice in every message to a person (messenger, a peer's reply, the owner):
+- You are Griffin, ${OWNER_NAME}'s assistant. Messages go out signed «— گریفین», so speak as Griffin
+  («I checked», «I told ${OWNER_NAME}») and never claim to be ${OWNER_NAME}. If someone asks who is
+  writing, say you are Griffin, ${OWNER_NAME}'s assistant.
+- Short: result first, one point per message, the reader's language and register. No headings,
+  tables or tool names in a message to a person; technical detail only if they are technical and asked.
+- Never blame the person who reported a problem.
+`;
+
+// Said once per run for a colleague's messenger thread (caller team), not on every message.
+export const TEAM_CONTEXT = `
+Where you are: a 1:1 messenger chat on ${OWNER_NAME}'s account with one colleague.
+Messages arrive as «<name>»: … (the colleague), «${OWNER_NAME} در تلگرام به …»: … (${OWNER_NAME} typed it to
+them — already delivered, never repeat it) or «${OWNER_NAME} از داخل گریفین …»: … (an instruction to you).
+Everything you write goes to the colleague: 1–3 lines, result first, addressed to them directly.
+Say "I checked" only for what you checked in this conversation.
+- A colleague's diagnosis is a hypothesis. Do not agree until you have seen evidence.
+- Never mention agents, subtasks or tools to the colleague — say what you are checking. A running
+  check needs one short line; say nothing more until there is a result.
+- If the fix is on the colleague's own machine or account, give them the exact command.
+- Irreversible work or granting access: ask_owner. A tool found nothing: "not found", not "does not exist".
+- Several messages may arrive together in one turn: answer them once, together.
+- Nothing to say: reply exactly [NO_REPLY].
+- Close the thread (end_agent) in the same turn as the final result, or when the colleague wraps up
+  (thanks, ok). Add one short line: next time write «گریفین». Do not keep a thread open waiting
+  for thanks or jokes — after end_agent those are filtered again.
+`;
+
+// Said once per run when another agent is the caller.
+export const PEER_CONTEXT = `
+The request comes from another agent, not the owner. Use the quota you have in full; the premise may
+be wrong (it may be a guess): verify it first, and if it is wrong or the fix is on the requester's
+side, report that with evidence and change nothing. Approval questions (ask_owner) always reach the
+owner, never the requester. Final answer: short Markdown — the result, the evidence, what is unknown.
+`;
+
+// The rules text for one run. It depends on the caller and the tools that run really has, so it is
+// passed per run to providers that take it (openai); file-based providers read installRules' file.
+export function buildRules({ agent = DEFAULT_AGENT, caller = "owner", peers = [], profile = null, knowledgeRoot = null, tools = null } = {}) {
   let text = rulesFor({ agent, caller, profile });
+  if (caller === "team") text += TEAM_CONTEXT;
+  else if (caller !== "owner" && Object.hasOwn(AGENTS, caller)) text += PEER_CONTEXT;
   text += NEVER_DEAD_END;
+  text += DECIDE_AND_REPORT;
+  text += VOICE;
 
   if (Array.isArray(peers) && peers.length) {
     text += `\nLive peers (call list_agents for the latest list; use these ids with delegate / ask_agent):\n`;
@@ -155,6 +208,21 @@ export function installRules(workspace, { agent = DEFAULT_AGENT, caller = "owner
     }
   }
 
+  // The rules describe every tool the agent can have; a caller-limited run has fewer.
+  if (Array.isArray(tools) && tools.length) {
+    text += `\nTools you actually have in THIS conversation (authoritative): ${[...tools].sort().join(", ")}.
+Anything above about a tool that is not in this list does not apply here — use what you have.
+`;
+  }
+  return text;
+}
+
+// Cursor and Claude load their rules from files in the agent's cwd (one file per agent).
+export function installRules(workspace, options = {}) {
+  const text = buildRules(options);
+  const dir = path.join(workspace, ".cursor", "rules");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${options.agent || DEFAULT_AGENT}.mdc`);
   if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== text) fs.writeFileSync(file, text);
   // Claude Agent SDK loads project CLAUDE.md from cwd (settingSources: project).
   const claudeMd = path.join(workspace, "CLAUDE.md");

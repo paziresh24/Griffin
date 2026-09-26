@@ -9,7 +9,7 @@ import {
   ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, ImagePlus, ListTodo, Square, X,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
-import { formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
+import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
 import { textDir } from "../dir.js";
 import { AgentGlyph, ModeToggle, ModelPicker } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
@@ -239,6 +239,7 @@ function RunFooter({ run }) {
   const seconds = run.endedAt && run.startedAt ? Math.max(1, Math.round((new Date(run.endedAt) - new Date(run.startedAt)) / 1000)) : null;
   const model = run.model && run.status !== "running" ? run.model : null;
   const done = run.status !== "running";
+  const answeredAt = done && run.endedAt ? formatAnsweredAt(run.endedAt) : null;
 
   return (
     <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
@@ -252,15 +253,20 @@ function RunFooter({ run }) {
         </span>
       ) : null}
 
-      {done && (seconds || model) ? (
+      {done && (answeredAt || seconds || model) ? (
         <div className="flex items-center gap-1.5 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] text-muted-foreground">
-          {seconds ? (
-            <span className="inline-flex items-center gap-1" title={formatDuration(seconds)}>
+          {answeredAt || seconds ? (
+            <span
+              className="inline-flex items-center gap-1"
+              title={[answeredAt && `جواب: ${answeredAt}`, seconds && `طول کشید: ${formatDuration(seconds)}`].filter(Boolean).join(" · ")}
+            >
               <Clock className="size-3 opacity-70" />
-              <span>{formatDuration(seconds, { compact: true })}</span>
+              {answeredAt ? <span>{answeredAt}</span> : null}
+              {answeredAt && seconds ? <span className="opacity-60">({formatDuration(seconds, { compact: true })})</span> : null}
+              {!answeredAt && seconds ? <span>{formatDuration(seconds, { compact: true })}</span> : null}
             </span>
           ) : null}
-          {seconds && model ? <span className="text-border">·</span> : null}
+          {(answeredAt || seconds) && model ? <span className="text-border">·</span> : null}
           {model ? (
             <span className="max-w-40 truncate font-medium text-foreground/70" title={model} dir="ltr">
               {model}

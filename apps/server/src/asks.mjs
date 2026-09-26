@@ -128,6 +128,12 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
         },
       });
       pending.get(target).push(item);
+      // The messenger bridge delivers from this, not from tool.started: providers that stream
+      // tool arguments (openai-compatible) log tool.started with empty args, so no question ever reached
+      // Telegram after 2026-09-24's engine switch. This carries the real text and audience.
+      store?.appendEvent?.(target, null, "ask.pending", {
+        question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId,
+      });
       for (const wake of listeners.get(target) || []) wake();
     });
   }
@@ -149,7 +155,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       // the owner tapped it or the requester replied.
       log?.log?.(`[ask] ${target.slice(0, 8)} ${next.audience} question answered by ${by}: ${String(text.answer || "").slice(0, 80)}`);
     }
-    onSettled(target); // the question is no longer open — e.g. delete the mirrored Telegram message
+    onSettled(target, { answer: text?.answered ? text.answer : null, cancelled: !text?.answered }); // no longer open — e.g. close the mirrored Telegram message
     return true;
   }
 
@@ -192,8 +198,10 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
 
     // Same waiting mechanism for tools that need the owner's go-ahead (e.g. telegram_send); resolves with
     // { answered, answer, selected } or { answered: false, reason }.
-    confirm(chatId, { question }) {
-      return enqueue(chatId, String(question || ""), { audience: OWNER });
+    // The options travel with the question: a delegated child's confirm is delivered from its
+    // mirror on the root chat, and without them it reached Telegram with no buttons.
+    confirm(chatId, { question, options = [{ label: "بله" }, { label: "نه" }] }) {
+      return enqueue(chatId, String(question || ""), { audience: OWNER, options });
     },
 
     // Returns true when a waiting tool call received the answer. `by` says who answered: the
@@ -211,7 +219,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     holdEarly(chatId, { answer, selected = [] }) {
       const target = targetOf(chatId);
       early.set(target, { answered: true, answer: String(answer || ""), selected });
-      onSettled(target); // answered already, even though the tool hasn't picked it up yet
+      onSettled(target, { answer: String(answer || "") }); // answered already, even though the tool hasn't picked it up yet
     },
 
     // Called when a run ends: releases waiting questions and returns an early answer nobody took.
@@ -235,7 +243,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       const leftover = early.get(target) || null;
       if (chatId === target || cancelled) early.delete(target);
       // Only tell the bridge the chain is quiet when nothing of it is open any more.
-      if (!keep.length) onSettled(target);
+      if (!keep.length) onSettled(target, { cancelled });
       return leftover;
     },
 

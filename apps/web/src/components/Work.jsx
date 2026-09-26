@@ -9,15 +9,20 @@ const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", 
 
 // Splits an assistant run into the work log (thinking, tool calls, narration between them) and the
 // answer (text after the last working tool, plus charts/files/questions wherever they appeared).
+// An answered question is history: it stays where it happened in the work log. Only a question
+// still waiting for the owner is pulled out — otherwise it sat under all later work (2026-09-24).
+const isResult = (part) =>
+  part.type === "tool" && RESULT_TOOLS.has(part.name) && !(part.name === "ask_owner" && part.status !== "running");
+
 export function splitRun(parts) {
   let lastWork = -1;
   parts.forEach((part, i) => {
-    if (part.type === "tool" && !RESULT_TOOLS.has(part.name)) lastWork = i;
+    if (part.type === "tool" && !isResult(part)) lastWork = i;
   });
   const work = [];
   const answer = [];
   parts.forEach((part, i) => {
-    if (part.type === "tool" && RESULT_TOOLS.has(part.name)) answer.push(part);
+    if (isResult(part)) answer.push(part);
     else if (part.type === "reasoning" || i <= lastWork) work.push(part);
     else answer.push(part);
   });
@@ -97,6 +102,19 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
       </AnimatePresence>
     </div>
   );
+}
+
+// When an answer arrived, on the Tehran clock: "۰۹:۳۴" today, with the date on any other day.
+const TEHRAN = "Asia/Tehran";
+const clock = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hour12: false });
+const day = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, day: "numeric", month: "long" });
+const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
+
+export function formatAnsweredAt(iso, now = new Date()) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const time = clock.format(at);
+  return dayKey.format(at) === dayKey.format(now) ? time : `${day.format(at)}، ${time}`;
 }
 
 export function formatDuration(seconds, { compact = false } = {}) {

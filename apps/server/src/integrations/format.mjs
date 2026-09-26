@@ -39,6 +39,11 @@ const TOOL_STATUS = {
   http_check: "چک HTTP",
   tls_check: "چک TLS",
   arvan_cache_purge: "پاکسازی کش آروان",
+  vcenter_vms: "فهرست VMهای vCenter",
+  vcenter_vm_get: "وضعیت VM در vCenter",
+  vcenter_inventory: "منابع vCenter",
+  vcenter_customization_specs: "specهای vCenter",
+  vcenter_vm_create: "ساخت VM در vCenter",
   read: "خواندن فایل",
   grep: "جستجو در کد",
   glob: "یافتن فایل",
@@ -136,6 +141,20 @@ export function withAgentFooter(text) {
   if (/—\s*(ایجنت\s*)?گریفین\s*$/u.test(body)) return body || AGENT_FOOTER;
   if (!body) return AGENT_FOOTER;
   return `${body}\n\n${AGENT_FOOTER}`;
+}
+
+// "⏱ ۰۹:۳۴ · ۲۳ث": when the answer arrived (Tehran clock) and how long the run took. The owner
+// wanted to see both under every answer (2026-09-24).
+const STAMP_CLOCK = new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", hour12: false });
+
+export function answerStamp(run) {
+  const end = new Date(run?.endedAt || NaN);
+  if (Number.isNaN(end.getTime())) return "";
+  const start = new Date(run?.startedAt || NaN);
+  const seconds = Number.isNaN(start.getTime()) ? null : Math.max(1, Math.round((end - start) / 1000));
+  const fa = (n) => n.toLocaleString("fa-IR");
+  const took = seconds == null ? "" : seconds < 60 ? `${fa(seconds)}ث` : `${fa(Math.floor(seconds / 60))}د${seconds % 60 ? ` ${fa(seconds % 60)}ث` : ""}`;
+  return `⏱ ${STAMP_CLOCK.format(end)}${took ? ` · ${took}` : ""}`;
 }
 
 // The parts of a run worth delivering: final answer text plus files and charts produced by tools.

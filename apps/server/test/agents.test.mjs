@@ -65,7 +65,8 @@ test("rules are the shared core plus this agent's own instructions", () => {
   const text = fs.readFileSync(file, "utf8");
   assert.ok(text.startsWith(CORE_RULES));
   assert.ok(text.includes(DEFAULT_INSTRUCTIONS), "the default agent ships with instructions");
-  assert.ok(text.endsWith(NEVER_DEAD_END));
+  assert.ok(text.includes(NEVER_DEAD_END));
+  assert.match(text, /never claim to be/, "the voice section fixes the identity");
   assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), text);
 
   const own = rulesFor({
@@ -133,4 +134,13 @@ test("the shipped example agents are valid and keep their callers bounded", () =
   const researcher = agentPayload(exampleAgent("researcher.json"));
   const researcherOwner = resolveEnabledTools(researcher, { caller: "owner", catalogNames: catalog });
   assert.deepEqual(researcherOwner.sort(), ["ask_owner", "list_agents", "show_media", "visualize"]);
+});
+
+test("buildRules: griffin in a colleague thread is not sent to itself and sees only its real tools", async () => {
+  const { buildRules } = await import("../src/prompt.mjs");
+  const text = buildRules({ agent: "griffin", caller: "team", tools: ["ask_agent", "delegate", "end_agent"] });
+  assert.doesNotMatch(text, /ask_agent \{agent:"griffin"\}/);
+  assert.match(text, /THIS conversation \(authoritative\): ask_agent, delegate, end_agent\./);
+  assert.match(text, /Close the thread \(end_agent\)/, "a colleague thread gets the thread rules");
+  assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner" }), /authoritative\): /);
 });

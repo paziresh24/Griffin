@@ -1,6 +1,8 @@
 // Cursor SDK `task` (زیرایجنت) returns a nested transcript in result.conversationSteps.
 // We materialize that into a hidden child chat so the owner can open it like a subchat.
 
+import { redactArgs, redactResult } from "./redact.mjs";
+
 const TASK_MARKER = "__task__";
 
 export function findTaskChild(store, parentId, callId) {
@@ -95,15 +97,16 @@ export function eventsFromStep(step) {
   if (step.toolCall) {
     const mapped = mapToolCall(step.toolCall);
     if (!mapped) return [];
+    const args = redactArgs(mapped.name, mapped.args);
     return [
-      { type: "tool.started", data: { callId: mapped.callId, name: mapped.name, args: mapped.args } },
+      { type: "tool.started", data: { callId: mapped.callId, name: mapped.name, args } },
       {
         type: "tool.done",
         data: {
           callId: mapped.callId,
           name: mapped.name,
-          args: mapped.args,
-          result: mapped.result,
+          args,
+          result: redactResult(mapped.name, mapped.result),
         },
       },
     ];

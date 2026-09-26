@@ -41,9 +41,9 @@ function setup(script) {
     },
   };
   const auth = createPeerAuth({ store });
-  auth.createUser({ id: "ali-ahmadi", label: "آقای قانع" });
+  auth.createUser({ id: "ali-ahmadi", label: "آقای احمدی" });
   auth.createUser({ id: "someone-else" });
-  const peer = { userId: "ali-ahmadi", clientId: "c1", caller: "peer:ali-ahmadi", label: "آقای قانع" };
+  const peer = { userId: "ali-ahmadi", clientId: "c1", caller: "peer:ali-ahmadi", label: "آقای احمدی" };
   const tasks = createPeerTasks({ store, runner, asks });
   return { store, tasks, peer, auth, runner, asks };
 }
@@ -95,7 +95,7 @@ test("ask_requester -> input-required -> reply -> completed", async () => {
     const answer = JSON.parse(res.content[0].text).answer;
     emit("text", { text: `باشه، ${answer}` });
   });
-  const r = await tasks.send(peer, { message: "لاگ گذرگاه", waitSec: 2 });
+  const r = await tasks.send(peer, { message: "لاگ درگاه", waitSec: 2 });
   assert.equal(r.state, "input-required");
   assert.equal(r.question.text, "کدام کلاستر؟");
   assert.deepEqual(r.question.options, ["prod", "dr"]);

@@ -315,3 +315,53 @@ test("sweepStale leaves a run that is waiting for an answer alone", async () => 
   // The wedged cancel keeps writing after this point; leave the store open and just drop the dir.
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// run.started carries the model and provider the run really uses (the UI badge showed "auto").
+test("run.started is labelled with the resolved provider and model", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-label-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sdk = {
+    async create() {
+      return { agentId: "a", async send() { return { id: "r", supports: () => false, async cancel() {}, wait: async () => ({ status: "finished" }) }; } };
+    },
+  };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), runLabel: () => ({ provider: "openai", model: "glm-5.3-flash" }), log: {} });
+  const chat = store.createChat({ title: "t", agent: "griffin" });
+  await runner.send(chat.id, { text: "hi", images: [] });
+  const started = store.allEvents(chat.id).find((e) => e.type === "run.started");
+  assert.equal(started.data.model, "glm-5.3-flash");
+  assert.equal(started.data.provider, "openai");
+});
+
+test("messages queued during a run go in as one merged turn", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-queue-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const agent = {
+    agentId: "a1",
+    async send(message) {
+      sends.push(message);
+      const first = sends.length === 1;
+      return { id: `r${sends.length}`, supports: () => true, async cancel() {}, async wait() { if (first) await gate; return { status: "finished" }; } };
+    },
+    close() {},
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {} } });
+  const chat = store.createChat({ title: "t" });
+
+  await runner.send(chat.id, { text: "اول" });
+  await until(() => sends.length === 1);
+  await runner.send(chat.id, { text: "دوم", intent: "queue" });
+  await runner.send(chat.id, { text: "سوم", intent: "queue" });
+  release();
+  await until(() => sends.length === 2);
+  await until(() => !runner.isActive(chat.id));
+  assert.equal(sends.length, 2, "one turn for both queued messages");
+  assert.equal(sends[1], "دوم\n\nسوم");
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

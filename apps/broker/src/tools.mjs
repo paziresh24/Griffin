@@ -7,6 +7,7 @@ import { createInfisicalTools } from "./infisical.mjs";
 import { createGitlabTools } from "./gitlab.mjs";
 import { createPgTools } from "./pg.mjs";
 import { createArvanTools } from "./arvan.mjs";
+import { createVcenterTools } from "./vcenter.mjs";
 import { createNetTools } from "./netcheck.mjs";
 import { createNsinTools } from "./nsin.mjs";
 import { createAlertTools } from "./alerts.mjs";
@@ -53,6 +54,7 @@ export function createTools({
   net = createNetTools({}),
   nsin = createNsinTools({ vault, fetchImpl }),
   alerts = createAlertTools({ kube, clusters: alertClustersOf(site) }),
+  vcenter = null,
 }) {
   // Cluster names are whatever the site config declares; nothing is baked into the code.
   const clusterNames = Object.keys(site.clusters || {});
@@ -437,7 +439,14 @@ export function createTools({
       routers: site.routers || {},
       readSecret: async (args) => (await infisical.infisical_get.execute(args)).value,
     });
-  Object.assign(tools, mikrotikTools, s3, pg, grafana, infisical, gitlab, arvan, net, nsin, alerts);
+  // vCenter: the credential (url/user/password) is read from Infisical at site.vcenter.infisical.
+  const vcenterTools =
+    vcenter ||
+    createVcenterTools({
+      secretRef: site.vcenter?.infisical || null,
+      readSecret: async (args) => (await infisical.infisical_get.execute(args)).value,
+    });
+  Object.assign(tools, mikrotikTools, s3, pg, grafana, infisical, gitlab, arvan, vcenterTools, net, nsin, alerts);
   return keepConfigured(tools, site);
 }
 
@@ -453,6 +462,7 @@ export const TOOL_PACKS = {
   gitlab: { prefixes: ["gitlab_"], needs: (site) => Boolean(site.gitlab?.url) },
   mikrotik: { prefixes: ["mikrotik_"], needs: (site) => hasAny(site.routers) },
   shell: { prefixes: ["debug_exec"], needs: (site) => hasAny(site.debugHosts) },
+  vcenter: { prefixes: ["vcenter_"], needs: (site) => Boolean(site.vcenter?.infisical) },
   // These only need a credential in the vault, which the broker cannot see from here: opt in.
   infisical: { prefixes: ["infisical_"], needs: () => false },
   arvan: { prefixes: ["arvan_"], needs: () => false },

@@ -93,7 +93,7 @@ async function askScenario(options, localTools, cancelledRef) {
     question: "مصرف مموری api را برای کدام کلاستر نشان بدهم؟",
     options: [
       { label: "پروداکشن", description: "۱۶ پاد در team-b (پیشنهادی)" },
-      { label: "آسیا", description: "در آسیا پادی از api پیدا نشد" },
+      { label: "staging", description: "در staging پادی از api پیدا نشد" },
     ],
   };
   const call = { type: "mcp", args: { providerIdentifier: "custom-user-tools", toolName: "ask_owner", args } };

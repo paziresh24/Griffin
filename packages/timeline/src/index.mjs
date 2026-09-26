@@ -170,12 +170,16 @@ function closePart(part, status) {
 
 export function finalText(message) {
   if (!message || message.role !== "assistant") return "";
-  // The answer is the text written after the last tool call.
+  // The answer is the text written after the last tool call. end_agent closes the conversation:
+  // the goodbye is written before it, and anything after it is chatter nobody should receive
+  // (2026-09-25 eval: only «مخلصم 🙌» went out; the «write گریفین next time» line was lost).
+  const end = message.parts.findIndex((part) => part.type === "tool" && part.name === "end_agent");
+  const parts = end >= 0 ? message.parts.slice(0, end) : message.parts;
   let lastTool = -1;
-  message.parts.forEach((part, i) => {
+  parts.forEach((part, i) => {
     if (part.type === "tool") lastTool = i;
   });
-  return message.parts
+  return parts
     .slice(lastTool + 1)
     .filter((part) => part.type === "text")
     .map((part) => part.text)

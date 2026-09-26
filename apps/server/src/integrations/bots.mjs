@@ -155,7 +155,12 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
         await clearStatus(externalChat);
         const options = (message.question.options || []).slice(0, 6);
         const askId = message.question.askId ? String(message.question.askId) : null;
-        const hint = options.length ? "\n\nدکمه را بزن یا عدد گزینه را بفرست." : "";
+        // Buttons hold 60 characters and no description: when that loses meaning, spell the
+        // options out in the message so the owner sees what each choice actually does.
+        const spelled = options.some((o) => o.description || String(o.label).length > 30)
+          ? `\n\n${options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n")}`
+          : "";
+        const hint = options.length ? `${spelled}\n\nدکمه را بزن یا عدد گزینه را بفرست.` : "";
         const sent = await sendText(externalChat, `❓ ${message.question.question}${hint}`, options.length
           ? {
             reply_markup: {
@@ -170,6 +175,25 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
         const messageId = sent?.message_id ?? sent?.id;
         if (messageId != null) questionByChat.set(String(externalChat), messageId);
         return sent;
+      }
+      // A question that is no longer open: leave the message in place but strip its buttons and
+      // say what happened. Deleting it (the old behaviour) left the owner with no sign that their
+      // tap landed, and any question delivered before a restart stayed tappable forever.
+      if (message.closeQuestion) {
+        const { messageId, note } = message.closeQuestion;
+        if (messageId == null) return null;
+        try {
+          await api.call("editMessageText", {
+            chat_id: externalChat,
+            message_id: messageId,
+            text: String(note || "این سؤال دیگر باز نیست.").slice(0, 3500),
+            reply_markup: { inline_keyboard: [] },
+          });
+        } catch {
+          /* message too old to edit, or already changed — nothing to do */
+        }
+        if (questionByChat.get(String(externalChat)) === messageId) questionByChat.delete(String(externalChat));
+        return null;
       }
       // The question was answered elsewhere (UI or Telegram) or the run ended: remove it so only
       // open questions stay visible here.
@@ -198,13 +222,32 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
       if (update.callback_query) {
         const query = update.callback_query;
         const from = String(query.message?.chat?.id ?? query.from?.id);
-        await api.call("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
+        const ack = (text) => api.call("answerCallbackQuery", { callback_query_id: query.id, ...(text ? { text, show_alert: false } : {}) }).catch(() => {});
         const parsed = parseAskCallback(query.data);
-        if (!parsed) return;
+        if (!parsed) {
+          await ack();
+          return;
+        }
         // Coverage ask_owner may target this bot even if the Owner chat isn't the linked team chat.
-        if (await bridge.answerOwnerAsk?.(id, parsed.index, parsed.askId)) return;
-        if (!paired().has(from)) return;
-        await bridge.answer(id, from, parsed.index, parsed.askId);
+        const delivered =
+          (await bridge.answerOwnerAsk?.(id, parsed.index, parsed.askId)) ||
+          (paired().has(from) ? await bridge.answer(id, from, parsed.index, parsed.askId) : false);
+        if (delivered) {
+          await ack("✅ ثبت شد");
+          return;
+        }
+        // A tap on a question whose run is long gone (most often: the server restarted after it
+        // was sent). Say so and take the buttons away instead of silently doing nothing.
+        await ack("این سؤال دیگر باز نیست");
+        const messageId = query.message?.message_id;
+        if (messageId != null) {
+          await api.call("editMessageText", {
+            chat_id: from,
+            message_id: messageId,
+            text: `${String(query.message.text || "").slice(0, 3000)}\n\n⏹ این سؤال دیگر باز نیست.`,
+            reply_markup: { inline_keyboard: [] },
+          }).catch(() => {});
+        }
         return;
       }
       const message = update.message || update.edited_message;

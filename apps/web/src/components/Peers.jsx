@@ -127,7 +127,7 @@ function NewPeer({ onDone }) {
   return (
     <form onSubmit={submit} className="mb-4 grid gap-2 rounded-xl border bg-card p-3 sm:grid-cols-[1fr_1fr_auto]">
       <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} required placeholder="شناسه (مثل ali-ahmadi)" className={`ltr ${input}`} />
-      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="نام (مثل آقای قانع)" className={input} />
+      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="نام (مثل آقای رضایی)" className={input} />
       <button type="submit" disabled={busy} className="press rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">ساخت</button>
     </form>
   );

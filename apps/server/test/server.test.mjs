@@ -443,7 +443,7 @@ test("chats list and chat get include ask_agent children with live run status", 
   try {
     const parent = store.createChat({ title: "root", agent: "griffin" });
     const child = store.createChat({
-      title: "← گریفین: کار سپیدار",
+      title: "← گریفین: کار حسابداری",
       agent: "platform",
       caller: "griffin",
       parentChatId: parent.id,

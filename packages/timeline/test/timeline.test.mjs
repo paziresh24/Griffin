@@ -60,3 +60,18 @@ test("replayed events are ignored by id", () => {
   assert.equal(t.messages[0].parts[0].text, "سلام");
   assert.equal(emptyTimeline().lastEventId, 0);
 });
+
+test("finalText: the goodbye before end_agent is the answer; chatter after it is not sent", async () => {
+  const { finalText } = await import("../src/index.mjs");
+  const message = {
+    role: "assistant",
+    parts: [
+      { type: "text", text: "دارم چک می‌کنم" },
+      { type: "tool", name: "kube_get" },
+      { type: "text", text: "خواهش، هر وقت کاری بود بنویس «گریفین»" },
+      { type: "tool", name: "end_agent" },
+      { type: "text", text: "مخلصم" },
+    ],
+  };
+  assert.equal(finalText(message), "خواهش، هر وقت کاری بود بنویس «گریفین»");
+});

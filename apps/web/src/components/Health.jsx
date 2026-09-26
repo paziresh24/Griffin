@@ -1,153 +1,136 @@
-import { useState } from "react";
+import { Bot, Cable, Radar, Server, Sparkles } from "lucide-react";
 import { usePolling } from "../api.js";
-import { Activity, Cable, Server } from "lucide-react";
+import { Group, Item } from "./SettingsParts.jsx";
 
-const CLUSTER_NAMES = {};  // optional display names per cluster id
+const CLUSTER_NAMES = {}; // optional display names per cluster id
+const OPS_MODES = { record: "فقط ثبت", shadow: "سایه (بدون ارسال)", live: "فعال", off: "خاموش" };
 
-export function HealthPanel({ variant = "card" }) {
-  const health = usePolling("/api/health", 30_000);
-  const clusters = Object.entries(health?.clusters || {});
-  const problems = [
-    health && !health.cursor?.ok,
-    health && health.claude && !health.claude.ok,
-    health && !health.broker?.ok,
-    ...clusters.map(([, c]) => !c.api?.ok),
-  ].filter(Boolean).length;
+// A provider with no key/URL is a choice, not an outage: shown muted and not counted as a problem.
+const notConfigured = (check) => /^no .*(api key|base url)/i.test(String(check?.error || ""));
+
+function stateOf(check) {
+  if (!check) return "none";
+  if (check.ok) return "ok";
+  return notConfigured(check) ? "none" : "bad";
+}
+
+export function StatusSection() {
+  const health = usePolling("/api/health", 15_000);
 
   if (!health) {
     return (
-      <div className="flex items-center gap-2 rounded-2xl border bg-card p-6 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2 rounded-2xl border bg-card p-5 text-sm text-muted-foreground">
         <span className="agent-dots text-primary" aria-hidden><i /><i /><i /></span>
-        در حال بررسی مسیرها…
+        در حال بررسی…
       </div>
     );
   }
 
-  if (variant === "page") {
-    return (
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <Dot state={problems ? "warn" : "ok"} large />
-          <div>
-            <h2 className="text-lg font-semibold">سلامت مسیرها</h2>
-            <p className="text-sm text-muted-foreground">
-              {problems ? `${problems} مسیر مشکل دارد` : "همهٔ مسیرها سالم‌اند"}
-              {health.stale ? " · اتصال به سرور قطع است" : ""}
-            </p>
-          </div>
-        </div>
+  const providers = [
+    ["Cursor", health.cursor],
+    ["Claude", health.claude],
+    ["OpenAI", health.openai],
+  ].filter(([, check]) => check);
+  const clusters = Object.entries(health.clusters || {});
+  const ops = health.ops;
+  const opsBad = Boolean(ops && ops.mode !== "off" && (ops.error || (ops.lastPollAt && !ops.lastOkAt)));
+  const problems = [
+    ...providers.map(([, c]) => stateOf(c) === "bad"),
+    !health.broker?.ok,
+    ...clusters.map(([, c]) => !c.api?.ok),
+    opsBad,
+  ].filter(Boolean).length;
+  const warn = problems || health.stale;
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <StatusCard
-            icon={Activity}
-            title="Cursor"
-            check={health.cursor}
-          />
-          <StatusCard
-            icon={Activity}
-            title="Claude"
-            check={health.claude || { ok: false, error: "نامشخص" }}
-          />
-          <StatusCard
-            icon={Cable}
-            title="کارگزار ابزارها"
-            check={health.broker}
-          />
-        </div>
-
-        <section className="overflow-hidden rounded-2xl border bg-card shadow-sm">
-          <div className="flex items-center gap-2 border-b px-4 py-3">
-            <Server className="size-4 text-muted-foreground" />
-            <h3 className="font-medium">کلاسترها</h3>
-          </div>
-          <div className="grid grid-cols-[1.2fr_1fr_1fr] gap-2 border-b bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
-            <span>کلاستر</span>
-            <span className="text-center">API</span>
-            <span className="text-center">اضطراری</span>
-          </div>
-          <ul>
-            {clusters.map(([name, c]) => (
-              <li key={name} className="grid grid-cols-[1.2fr_1fr_1fr] items-center gap-2 border-b px-4 py-3 last:border-b-0">
-                <span className="font-medium">{CLUSTER_NAMES[name] || name}</span>
-                <CheckCell check={c.api} />
-                <CheckCell check={c.emergency} emptyLabel="تعریف نشده" />
-              </li>
-            ))}
-          </ul>
-        </section>
-        {health.stale ? <p className="text-sm text-warn">اتصال به سرور گریفین قطع است.</p> : null}
-      </div>
-    );
-  }
-
-  // Compact card (legacy)
   return (
-    <section className="rounded-2xl border bg-card p-4 text-sm shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <Dot state={problems ? "warn" : "ok"} />
-        <h2 className="font-medium">سلامت مسیرها</h2>
-        <span className="ms-auto text-xs text-muted-foreground">
-          {problems ? `${problems} مسیر مشکل دارد` : "همه سالم"}
-        </span>
-      </div>
-      <div className="space-y-1.5">
-        <Row label="Cursor" check={health.cursor} />
-        <Row label="Claude" check={health.claude || { ok: false, error: "نامشخص" }} />
-        <Row label="کارگزار ابزارها" check={health.broker} />
-      </div>
-    </section>
-  );
-}
-
-function StatusCard({ icon: Icon, title, check }) {
-  const ok = !!check?.ok;
-  return (
-    <div className={`rounded-2xl border p-4 shadow-sm ${ok ? "bg-card" : "border-bad/40 bg-bad/5"}`}>
-      <div className="flex items-start gap-3">
-        <span className={`flex size-10 items-center justify-center rounded-xl ${ok ? "bg-ok/15 text-ok" : "bg-bad/15 text-bad"}`}>
-          <Icon className="size-5" />
-        </span>
+    <div className="space-y-6">
+      <div className={`flex items-center gap-3 rounded-2xl border px-4 py-3.5 ${warn ? "border-warn/40 bg-warn/8" : "border-ok/30 bg-ok/8"}`}>
+        <Dot state={warn ? "warn" : "ok"} large />
         <div className="min-w-0 flex-1">
-          <p className="font-medium">{title}</p>
-          <p className={`mt-0.5 text-sm ${ok ? "text-ok" : "text-bad"}`}>
-            {ok ? "سالم" : check?.error || "قطع"}
+          <p className="font-medium">{health.stale ? "اتصال به سرور قطع است" : problems ? `${problems.toLocaleString("fa")} مورد نیاز به توجه دارد` : "همه‌چیز سالم است"}</p>
+          <p className="text-xs text-muted-foreground">
+            {health.activeRuns ? `${health.activeRuns.toLocaleString("fa")} کار در حال اجرا` : "کاری در حال اجرا نیست"} · هر ۱۵ ثانیه به‌روز می‌شود
           </p>
         </div>
-        {check?.ms != null ? <span className="ltr text-xs text-muted-foreground">{check.ms}ms</span> : null}
       </div>
+
+      <Group title="مدل‌ها">
+        {providers.map(([name, check]) => (
+          <Item key={name} icon={name === "Cursor" ? Sparkles : Bot} title={name} trailing={<Check check={check} />} />
+        ))}
+      </Group>
+
+      <Group title="زیرساخت">
+        <Item icon={Cable} title="کارگزار ابزارها" trailing={<Check check={health.broker} />} />
+        {ops ? (
+          <Item
+            icon={Radar}
+            title="دریافت هشدارها"
+            subtitle={[
+              OPS_MODES[ops.mode] || ops.mode,
+              ops.openIncidents ? `${ops.openIncidents} حادثهٔ باز` : null,
+              ops.lastOkAt ? `آخرین خواندن ${ago(ops.lastOkAt)}` : "هنوز خوانده نشده",
+            ].filter(Boolean).join(" · ")}
+            trailing={<Pill state={ops.mode === "off" ? "none" : opsBad ? "bad" : "ok"} title={ops.error || ""}>{ops.mode === "off" ? "خاموش" : opsBad ? "خطا" : "فعال"}</Pill>}
+          />
+        ) : null}
+      </Group>
+
+      {clusters.length ? (
+        <Group title="کلاسترها">
+          {clusters.map(([name, c]) => (
+            <Item
+              key={name}
+              icon={Server}
+              title={CLUSTER_NAMES[name] || name}
+              trailing={
+                <>
+                  <Pill state={stateOf(c.api)} title={tip(c.api)}>API</Pill>
+                  <Pill state={c.emergency ? stateOf(c.emergency) : "none"} title={c.emergency ? tip(c.emergency) : "تعریف نشده"}>اضطراری</Pill>
+                </>
+              }
+            />
+          ))}
+        </Group>
+      ) : null}
     </div>
   );
 }
 
-function CheckCell({ check, emptyLabel }) {
-  if (!check) {
-    return <span className="text-center text-xs text-muted-foreground">{emptyLabel || "—"}</span>;
-  }
+function Check({ check }) {
+  const state = stateOf(check);
+  const label = state === "ok" ? "سالم" : state === "none" ? "پیکربندی نشده" : "قطع";
   return (
-    <span title={title(check)} className="flex items-center justify-center gap-1.5 text-sm">
-      <Dot state={check.ok ? "ok" : "bad"} />
-      <span className={check.ok ? "text-ok" : "text-bad"}>{check.ok ? "سالم" : "قطع"}</span>
-      {check.ms != null ? <span className="ltr text-[11px] text-muted-foreground">{check.ms}ms</span> : null}
+    <>
+      {state === "ok" && check?.ms != null ? <span className="ltr text-[11px] text-muted-foreground">{check.ms}ms</span> : null}
+      <Pill state={state} title={tip(check)}>{label}</Pill>
+    </>
+  );
+}
+
+export function Pill({ state, title, children }) {
+  const tone = state === "ok" ? "bg-ok/12 text-ok" : state === "bad" ? "bg-bad/12 text-bad" : state === "warn" ? "bg-warn/15 text-warn" : "bg-muted text-muted-foreground";
+  return (
+    <span title={title} className={`inline-flex max-w-48 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${tone}`}>
+      <Dot state={state} />
+      <span className="truncate">{children}</span>
     </span>
   );
 }
 
-function Row({ label, check }) {
-  return (
-    <div className="flex items-center gap-2" title={title(check)}>
-      <Dot state={check?.ok ? "ok" : "bad"} />
-      <span>{label}</span>
-      {check?.ms ? <span className="ltr ms-auto text-muted-foreground">{check.ms}ms</span> : null}
-    </div>
-  );
-}
-
-function Dot({ state, large = false }) {
+export function Dot({ state, large = false }) {
   const color = state === "ok" ? "bg-ok" : state === "warn" ? "bg-warn" : state === "bad" ? "bg-bad" : "bg-muted-foreground/40";
-  return <span className={`inline-block rounded-full ${color} ${large ? "size-3" : "size-2"}`} />;
+  return <span className={`inline-block shrink-0 rounded-full ${color} ${large ? "size-2.5" : "size-1.5"}`} />;
 }
 
-function title(check) {
+function tip(check) {
   if (!check) return "";
-  return check.ok ? `OK ${check.status ?? ""} ${check.ms ?? ""}ms` : `${check.error || "down"}`;
+  return check.ok ? `OK ${check.status ?? ""} ${check.ms ?? ""}ms` : String(check.error || "down");
+}
+
+function ago(at) {
+  const s = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 1000));
+  if (s < 60) return "همین حالا";
+  if (s < 3600) return `${Math.round(s / 60)} دقیقه پیش`;
+  return `${Math.round(s / 3600)} ساعت پیش`;
 }

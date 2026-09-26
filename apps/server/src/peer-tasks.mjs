@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
+import { normalizeProvider } from "./providers/ids.mjs";
 
 // Tasks for external agents (A2A lifecycle over Griffin chats). A context is a chat owned by one
 // peer user; a task is one request in it. Nothing here blocks until the work is done: send
@@ -206,7 +207,7 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
           model: profile.model || null,
           agent,
           caller: peer.caller,
-          provider: profile.provider === "claude" ? "claude" : "cursor",
+          provider: normalizeProvider(profile.provider),
         });
       }
       const task = store.createTask({

@@ -40,8 +40,16 @@ def clean(text, command):
     import re
 
     text = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", text).replace("\r", "")
+    # A command longer than the terminal line is echoed wrapped, then redrawn whole after the
+    # prompt ("…Identity] > <command>"). Cut at that redraw; the old first-line check left the
+    # wrapped echo in the output (2026-09-24).
+    cmd = command.strip()
+    # The redraw is not always preceded by the prompt (seen: "<wrapped echo><command>\n<output>").
+    at = text.rfind(cmd) if cmd else -1
+    if at >= 0:
+        text = text[at + len(cmd):]
     lines = [ln for ln in text.split("\n")]
-    if lines and command.strip() and command.strip() in lines[0]:
+    if at < 0 and lines and cmd and cmd in lines[0]:
         lines = lines[1:]
     while lines and PROMPT_TAIL.strip() in lines[-1]:
         lines.pop()
@@ -76,7 +84,9 @@ def main():
         client.send_ready_signal()
         drain(client, min(deadline, time.time() + 3))  # banner + first prompt
         client.send_terminal_input((command + "\r").encode())
-        raw = drain(client, deadline)
+        # Wait for the prompt, not for silence: printing a 241-route table takes longer than
+        # 0.6 s to start, and the old quiet cut returned only the echo — i.e. "" (2026-09-24).
+        raw = drain(client, deadline, quiet_for=15)
         print(json.dumps({"ok": True, "output": clean(raw, command)}))
         return 0
     except Exception as error:  # noqa: BLE001

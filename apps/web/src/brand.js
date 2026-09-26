@@ -18,6 +18,7 @@ export const STORAGE = {
 export const PROVIDER_META = {
   cursor: { id: "cursor", label: "Cursor", short: "Cursor" },
   claude: { id: "claude", label: "Claude", short: "Claude" },
+  openai: { id: "openai", label: "OpenAI", short: "OpenAI" },
 };
 
 export function readSetting(key, fallback = "") {
@@ -44,7 +45,7 @@ export const AGENT_META = {
     color: "#e8873a",
     colorDark: "#f0a35a",
     icon: "/agents/griffin.svg",
-    blurb: "یک عرفان مختص شما !",
+    blurb: "دستیار عملیاتی شما",
   },
   platform: {
     label: "پلتفرم‌بان",

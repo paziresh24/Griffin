@@ -1,4 +1,5 @@
 import { guardTools } from "../guard.mjs";
+import { OWNER_NAME } from "../owner.mjs";
 
 // Telegram stand-in: owner types /agent in a teammate's chat; the agent (not canned text)
 // greets them, works, then closes with end_agent after saying goodbye.
@@ -43,33 +44,34 @@ export function coverageContextPrompt(peerName, historyLines) {
 }
 
 /**
- * Owner replied to a specific peer message with /agent — answer THAT message only.
- * Keep it short; match tone (including playful); no long intro.
+ * Owner replied to a specific peer message with /agent — answer THAT message, in the light of the
+ * conversation around it. With only the quoted line («اشتباه نمیکنه؟»), no tools
+ * and a "be playful, say قربونت" nudge, the agent answered a serious question with «قربونت 😄 …
+ * بگو کدوم پیام رو میگی» — twice. The history was right there; now it is passed in.
  */
-export function coverageReplyPrompt(peerName, replyText) {
+export function coverageReplyPrompt(peerName, replyText, historyLines = []) {
   const who = peerName || "همکار";
   const quoted = String(replyText || "").trim().slice(0, 2000);
+  const history = (historyLines || []).filter(Boolean).slice(-20).join("\n");
   return (
-    `[Owner روی یک پیام خاص در چت با «${who}» ریپلای زد و /agent فرستاد. ` +
-    `فقط به همان پیام جواب بده — کوتاه، فارسی، هم‌تون. اگر شوخی/محبت بود، خودت هم ایجنتیک و شوخ باش ` +
-    `(مثلاً قربونت ولی ایجنتیک). معرفی بلند نکن؛ حداکثر نیم‌خط که ایجنت پلتفرم‌بانی. ` +
-    `ابزار صدا نزن مگر همان پیام صریحاً کار فنی بخواهد. با Owner حرف نزن.]\n\n` +
-    `پیام موردنظر:\n«${quoted}»`
+    `[Owner روی یک پیام خاص در چت با «${who}» ریپلای زد و /agent فرستاد. به همان پیام جواب بده، ` +
+    `ولی معنی‌اش را از تاریخچهٔ گفتگوی زیر بفهم — «این»، «اون»، «اشتباه نمیکنه؟» تقریباً همیشه به پیام‌های قبلی اشاره دارد؛ ` +
+    `نپرس «کدوم پیام؟» وقتی تاریخچه جوابش را دارد. اگر جواب درست به چک کردن نیاز دارد، با ابزارهای خواندنی چک کن و بعد جواب بده. ` +
+    `کوتاه (۱ تا ۳ خط)، فارسی محاوره، نتیجه اول، بدون Markdown و بدون ایموجی. خودت را معرفی نکن (امضای پیام این کار را می‌کند). ` +
+    `فقط اگر خودِ پیام شوخی یا تشکر بود، سبک جواب بده؛ سؤال جدی جواب جدی می‌خواهد. ` +
+    `اگر ابزار چیزی پیدا نکرد، بگو «پیدا نکردم»، نه «وجود ندارد»؛ چیزی را که چک نکرده‌ای ادعا نکن. ` +
+    `خطِ «گریفین (ایجنت)» در تاریخچه جوابِ قبلیِ خودت است، نه حرفِ ${OWNER_NAME}. با Owner حرف نزن.]\n\n` +
+    (history ? `تاریخچهٔ اخیر (قدیمی→جدید):\n${history}\n\n` : "") +
+    `پیامی که باید جوابش را بدهی:\n«${quoted}»`
   );
 }
 
-export function coveragePrompt(peerName, text) {
-  const who = peerName || "همکار";
-  return (
-    `[ایجنت پلتفرم‌بان — گفتگو با «${who}». تو از طرف Owner هستی و مسئله را خودت حل کن؛ ` +
-    `پیام‌هایت مستقیم به همین نفر می‌رود. هرگز نگو «از عرفان/Owner بپرس» — خودت انجام بده یا با ask_owner تأیید بگیر و بعد خودت اعمال کن. ` +
-    `یوزر SSO/GitLab را خودت پیدا کن؛ از همکار نپرس. ` +
-    `رمز/توکن: از infisical_list و infisical_get استفاده کن؛ روی هاست debug دنبال توکن/glab/.git-credentials نگرد و ادعا نکن «به Infisical دسترسی ندارم» بدون اینکه این ابزارها را زده باشی. ` +
-    `برای بررسی MR از gitlab_mr و برای فایل‌ها از gitlab_file استفاده کن؛ ادغام MR / push جهش است و ابزار ادغام فقط با تأیید Owner مجاز است؛ از debug برای GitLab استفاده نکن. ` +
-    `ask_owner را تنها صدا بزن (هم‌زمان با ابزار دیگر نه) و تا جواب Owner هیچ کار دیگری نکن و به همکار نگوی «نمی‌توانم». ` +
-    `برای کار برگشت‌ناپذیر ask_owner بزن (تأیید از ربات گریفین به Owner می‌رسد). وقتی کار تمام شد، جمع‌بندی بگو و end_agent را صدا بزن.]\n\n` +
-    String(text || "").trim()
-  );
+/**
+ * The owner typing in a coverage chat from the web UI. Without a frame the agent took it for the
+ * colleague and its answer went to them: «چه جوابی داده؟ متنش رو بفرست» reached the colleague.
+ */
+export function coverageOwnerNote(peerName, text) {
+  return `«${OWNER_NAME} از داخل گریفین — برای تو، نه برای ${peerName || "همکار"}»: ${String(text || "").trim()}`;
 }
 
 export function createEndAgentTool({ onEnd }) {

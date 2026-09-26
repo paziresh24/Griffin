@@ -1,5 +1,6 @@
 import { CALLER_LABELS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { clip } from "./updates.mjs";
+import { normalizeProvider } from "./providers/ids.mjs";
 
 // ask_agent: free-text request to a peer agent. Runs in a child chat whose tools come from
 // the peer's profile (tools_json). Discovery is via list_agents / agent profiles in the DB.
@@ -14,6 +15,9 @@ const DELEGATE_KV = "delegate:"; // delegate:<childChatId> -> { parent, agent, s
 const DEFAULT_TIMEOUT_MS = 3 * 60_000;
 const MAX_REQUEST = 8_000;
 const FACT_CAP = 40;
+// A follow-up to the same peer within this window continues the previous child chat (the peer
+// keeps its session and everything it already read) instead of starting cold in a new one.
+const REUSE_WINDOW_MS = 2 * 60 * 60_000;
 
 const inputSchema = {
   type: "object",
@@ -164,6 +168,12 @@ export function createPeers({
   function childDone(childId, status, error) {
     const entry = readDelegate(childId);
     if (!entry || entry.state !== "running") return;
+    // An explicit cancel means "stop", not "report back": waking the parent made Griffin re-delegate
+    // the very work that was just cancelled (2026-09-24).
+    if (status === "cancelled") {
+      writeDelegate(childId, { ...entry, state: "reported", status, error, doneAt: now().toISOString() });
+      return;
+    }
     writeDelegate(childId, { ...entry, state: "done", status, error, doneAt: now().toISOString() });
     scheduleWake(entry.parent);
   }
@@ -191,7 +201,7 @@ export function createPeers({
       const label = CALLER_LABELS[d.agent] || d.agent;
       return (
         `### ${label} — ${env.status} (subtask ${d.childId})\n` +
-        `${(env.summary || env.brief || "(بدون متن)").slice(0, 3_000)}\n` +
+        `${(env.summary || env.brief || "(بدون متن)").slice(-3_000)}\n` +
         (env.unknowns.length ? `نامعلوم/خطا: ${env.unknowns.join(" · ").slice(0, 500)}\n` : "") +
         (env.facts.length ? `ابزارهای اجراشده: ${[...new Set(env.facts.map((f) => f.tool))].join(", ")}\n` : "")
       );
@@ -199,7 +209,7 @@ export function createPeers({
     const text =
       `[گزارش خودکار زیرکارها — این پیام را سیستم فرستاده، نه Owner]\n\n${parts.join("\n")}\n` +
       (still.length ? `هنوز در کار: ${still.map((d) => `${CALLER_LABELS[d.agent] || d.agent} (${d.childId})`).join("، ")} — نتیجه‌شان خودکار می‌رسد؛ منتظر نمان.\n` : "") +
-      `این نتیجه‌ها را برای کسی که کار را خواسته جمع‌بندی کن (نتیجه اول). اگر کار دیگری لازم است دوباره delegate کن.`;
+      `این نتیجه‌ها را برای کسی که کار را خواسته جمع‌بندی کن (نتیجه اول). اگر زیرکار ناقص مانده، از همان ایجنت ادامه‌اش را بخواه (همان جلسه با همهٔ خوانده‌هایش ادامه پیدا می‌کند)؛ کار را از صفر تعریف نکن.`;
     for (const d of done) writeDelegate(d.childId, { ...readDelegate(d.childId), state: "reported", reportedAt: now().toISOString() });
     try {
       await runner.send(parentChatId, { text, images: [], intent: runner.isActive(parentChatId) ? "queue" : "send" });
@@ -250,11 +260,11 @@ export function createPeers({
         }
         const spawned = spawnChild(parentChatId, args);
         if (spawned.error) return { isError: true, content: [{ type: "text", text: spawned.error }] };
-        const { child, callerAgent, target } = spawned;
+        const { child, callerAgent, target, continued } = spawned;
         writeDelegate(child.id, { parent: parentChatId, agent: target, request, state: "running", at: now().toISOString() });
         watchChild(child.id);
         try {
-          await runner.send(child.id, { text: peerMessage(callerAgent, request), images: [] });
+          await runner.send(child.id, { text: peerMessage(callerAgent, request, { continued }), images: [] });
         } catch (error) {
           childDone(child.id, "error", String(error?.message || error));
         }
@@ -341,6 +351,15 @@ export function createPeers({
     if (target === callerAgent) return { error: `cannot ${ASK_AGENT_TOOL} yourself` };
     const chain = parseChain(parent.call_chain).concat(callerAgent);
     if (chain.includes(target)) return { error: `call loop refused: ${[...chain, target].join(" → ")}` };
+    // Seen 2026-09-24: a peer's report was cut, Griffin re-asked "ادامهٔ کار قبلی" and the new
+    // child started from zero — every router read done again. Continue the idle one instead.
+    const since = new Date(now().getTime() - REUSE_WINDOW_MS).toISOString();
+    const previous = store.db
+      .prepare("SELECT id FROM chats WHERE parent_chat_id = ? AND agent = ? AND updated_at > ? ORDER BY updated_at DESC LIMIT 1")
+      .get(parentChatId, target, since);
+    if (previous && !runner.isActive?.(previous.id) && readDelegate(previous.id)?.state !== "running") {
+      return { child: store.getChat(previous.id), callerAgent, target, request, continued: true };
+    }
     const child = store.createChat({
       title: `← ${CALLER_LABELS[callerAgent] || callerAgent}: ${request.slice(0, 60)}`,
       model: targetProfile.model || parent.model,
@@ -349,7 +368,7 @@ export function createPeers({
       agent: target,
       parentChatId: parentChatId,
       callChain: chain,
-      provider: targetProfile.provider === "claude" ? "claude" : "cursor",
+      provider: normalizeProvider(targetProfile.provider),
     });
     return { child, callerAgent, target, request };
   }
@@ -357,11 +376,11 @@ export function createPeers({
   async function runAsk(parentChatId, args) {
     const spawned = spawnChild(parentChatId, args);
     if (spawned.error) return { isError: true, content: [{ type: "text", text: spawned.error }] };
-    const { child, callerAgent, target, request } = spawned;
+    const { child, callerAgent, target, request, continued } = spawned;
     track(parentChatId, child.id);
 
     try {
-      await runner.send(child.id, { text: peerMessage(callerAgent, request), images: [] });
+      await runner.send(child.id, { text: peerMessage(callerAgent, request, { continued }), images: [] });
       const outcome = await waitForRun(child.id, timeoutMs);
       if (outcome.timedOut) {
         // Keep the work alive as a delegate-style subtask: the result is delivered to this chat
@@ -417,33 +436,45 @@ export function createPeers({
     cancelChildren, hasChildren: (parentChatId) => (childrenOf.get(parentChatId)?.size || 0) > 0, buildEnvelope: (chatId, meta) => buildEnvelope(store, chatId, meta) };
 }
 
-export function peerMessage(callerAgent, request) {
+// The request and who sent it; how to handle a peer's request is in the callee's rules
+// (prompt.mjs PEER_CONTEXT), said once per run instead of in front of every request.
+export function peerMessage(callerAgent, request, { continued = false } = {}) {
   const who = CALLER_LABELS[callerAgent] || callerAgent;
-  return (
-    `[درخواست از «${who}»] این پیام را ایجنت همتا فرستاده، نه Owner. سهمیهٔ ابزارت همان سهمیهٔ همین صداکننده روی توست — کامل از آن استفاده کن. ` +
-    `اگر هیچ ابزاری آن سیستم را پوشش نمی‌دهد، با ابزارهای عمومی‌ای که داری (ترمینال یا HTTP، اگر در سهمیه‌ات هست) کار را جلو ببر؛ ` +
-    `«ابزارش را ندارم» نتیجه نیست — دقیق بگو چه چیزی کم است (کدام سیستم، کدام کریدنشیال، کدام دستور). ` +
-    `اگر سؤال از Owner لازم است ask_owner بزن (سؤالِ اجازه همیشه به خود Owner می‌رسد، نه به درخواست‌کننده؛ اگر ریشه زمان‌بند باشد کسی نیست و خودت تصمیم بگیر). ` +
-    `جواب نهایی: Markdown کوتاه فارسی (حداکثر یک عنوان کوتاه + چند بولت یا یک جدول کوچک). فقط عدد و واقعیت ابزار. مسیر API/SSH را ننویس مگر Owner بپرسد یا همهٔ مسیرها شکست خورده باشند. وضعیت ساختگی برای ابزارها نساز.\n\n${request}`
-  );
+  return continued
+    ? `[ادامه — درخواست تازه از «${who}» در همین گفتگو؛ هرچه قبلاً خواندی معتبر است، دوباره نخوان]\n\n${request}`
+    : `[درخواست از «${who}»]\n\n${request}`;
 }
 
 export function buildEnvelope(store, chatId, { status, error = null, at = null } = {}) {
   const facts = [];
   const texts = [];
-  for (const event of store.allEvents(chatId)) {
-    if (event.type === "text" && event.data?.text) texts.push(String(event.data.text));
-    if (event.type === "tool.done" && event.data?.name) {
+  let finalText = ""; // text after the last tool call = the peer's actual answer
+  const events = [...store.allEvents(chatId)];
+  // A continued child chat holds earlier runs too — report only the latest one.
+  let start = 0;
+  events.forEach((event, i) => { if (event.type === "run.started") start = i; });
+  for (const event of events.slice(start)) {
+    if (event.type === "text" && event.data?.text) {
+      texts.push(String(event.data.text));
+      finalText += String(event.data.text);
+    }
+    if (event.type === "tool.done") finalText = "";
+    // No break at the cap: the final answer comes after the tools, and stopping here dropped it
+    // (2026-09-24: a 41-tool run reported only its first narration line).
+    if (event.type === "tool.done" && event.data?.name && facts.length < FACT_CAP) {
       facts.push(clip({
         tool: event.data.name,
         args: event.data.args || null,
         result: event.data.result ?? null,
         at: event.at,
       }));
-      if (facts.length >= FACT_CAP) break;
     }
   }
-  const summary = texts.join("").trim().slice(0, 4000) || null;
+  // The narration between tools ("now I check …") drowned the answer (2026-09-24: the report began
+  // mid-sentence). Report the final answer; fall back to the tail of everything said.
+  const all = texts.join("").trim();
+  const answer = finalText.trim();
+  const summary = (answer.length >= 40 ? answer.slice(0, 4000) : all.length > 4000 ? `…${all.slice(-4000)}` : all) || null;
   const brief = briefFromFacts(facts) || (summary ? summary.split(/\n+/).map((l) => l.trim()).filter(Boolean).slice(0, 3).join("\n").slice(0, 500) : null);
   const unknowns = [];
   if (error) unknowns.push(String(error));
