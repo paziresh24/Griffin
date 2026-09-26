@@ -747,10 +747,10 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
   assert.match(received.at(-1)[2].text, /^«سارا کریمی»: /);
   assert.match(received.at(-1)[2].text, /اشتباه نمیکنه؟$/);
 
-  const fed = received.length;
   await dm(4, "من خودم چکش کردم، توکنش مال کریمیه", true);
-  assert.equal(covered.has("272188041"), false, "the owner typing by hand takes the conversation back");
-  assert.equal(received.length, fed, "and Griffin says nothing about it");
+  assert.equal(covered.has("272188041"), true, "the owner typing does not close the thread or cancel its work");
+  assert.match(received.at(-1)[2].text, /در تلگرام به سارا کریمی»: /, "the owner's message reaches the thread as context");
+  covered.delete("272188041");
 
   const asked = classified.length;
   await dm(41, "سرور خرابه درست کن");
