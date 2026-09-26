@@ -472,3 +472,29 @@ describe("openai provider: rate limit", () => {
     }
   });
 });
+
+describe("openai provider: dropped connection", () => {
+  it("retries a round whose connection was cut before any answer text", async () => {
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests += 1;
+      if (requests === 1) {
+        req.socket.destroy(); // «fetch failed» on the client
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "ok" } }] })}\n\n`);
+      res.end("data: [DONE]\n\n");
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const provider = createOpenAIProvider({ apiKey: "k", baseUrl: `http://127.0.0.1:${server.address().port}`, log: { error() {} } });
+      const { result } = await runSend(provider.create({ cwd: tempWorkspace(), rules: "R" }), "سلام");
+      assert.equal(result.status, "finished");
+      assert.equal(requests, 2);
+    } finally {
+      server.closeAllConnections?.();
+      server.close();
+    }
+  });
+});

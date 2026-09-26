@@ -94,9 +94,16 @@ export function createOpenAIProvider({
         // 429: the endpoint asked us to slow down — wait and send the same round again. Failing the
         // run dropped a colleague's answer when several chats ran at once (2026-09-25 eval: 2 of 10).
         const limited = error?.status === 429 || /rate limit|too many requests/i.test(String(error?.message));
-        if (limited && !error?.partialText && attempt < 6) {
+        // A dropped connection or a gateway 5xx is the network, not the model: retry the same round.
+        // «fetch failed» ended a 12-minute run and threw its work away (2026-09-26).
+        const transient =
+          [500, 502, 503, 504].includes(error?.status) ||
+          /fetch failed|terminated|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|other side closed|UND_ERR/i.test(
+            `${error?.message} ${error?.cause?.code || ""} ${error?.cause?.message || ""}`,
+          );
+        if ((limited || transient) && !error?.partialText && attempt < 6) {
           const wait = Math.min(error.retryAfterMs || 2_000 * 2 ** attempt, 60_000);
-          log.error?.(`[openai] rate limited — retry in ${Math.round(wait / 1000)}s`);
+          log.error?.(`[openai] ${limited ? "rate limited" : `transient error (${error?.message})`} — retry in ${Math.round(wait / 1000)}s`);
           await new Promise((resolve) => setTimeout(resolve, wait));
           continue;
         }
@@ -123,6 +130,8 @@ export function createOpenAIProvider({
       if (idle.signal.aborted && !signal?.aborted) {
         throw Object.assign(new Error(`openai stream stalled (${Math.round(idleMs / 1000)}s without data)`), { stalled: true, partialText: state.text });
       }
+      // Whatever broke, remember whether answer text already went out: a retry must not repeat it.
+      if (error && typeof error === "object" && error.partialText === undefined) error.partialText = state.text;
       throw error;
     } finally {
       clearTimeout(timer);
