@@ -19,7 +19,7 @@ export function createApp({ store, runner, asks, models = async () => [], extraR
   const knownAgent = (id) => Boolean(id && (store.getAgentProfile?.(id) || AGENTS[id]));
 
   app.get("/healthz", (c) =>
-    c.json({ ok: true, version, activeRuns: runner.activeCount() }),
+    c.json({ ok: true, version, activeRuns: runner.activeCount(), workingRuns: runner.workingCount?.() ?? runner.activeCount() }),
   );
 
   // Public read-only view of a shared chat. Registered before auth; everything is scoped to the

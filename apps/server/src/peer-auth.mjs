@@ -10,6 +10,8 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 120;
 
 export const PEER_INVITE_TOOL = "peer_invite";
+export const PEER_CONNECTION_TOOL = "peer_connection";
+const STARTED_AT = new Date().toISOString();
 
 export const peerCaller = (userId) => `peer:${userId}`;
 export const isPeerCaller = (caller) => typeof caller === "string" && caller.startsWith("peer:");
@@ -327,4 +329,32 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
     },
   };
   return api;
+}
+
+/**
+ * A colleague's agent connection to Griffin over MCP, from Griffin's own log: when it last called,
+ * what failed, and when this server last restarted (a restart drops open sessions). Read-only; no
+ * message text is kept. 2026-09-26: asked «Griffin dropped mid-work — server or my session?», the
+ * agent could only ask back, though the answer was in its own log.
+ */
+export function peerConnectionTool({ store, defaultUser = null }) {
+  return {
+    description:
+      "How a colleague's agent (Claude Code/Cursor over MCP) is connected to Griffin: recent MCP calls with outcome, recent tasks with state, and when this Griffin server last started (a restart drops open sessions; the client must reconnect). Use it first when someone says their connection to Griffin dropped or its tools disappeared.",
+    inputSchema: {
+      type: "object",
+      properties: { user: { type: "string", description: "peer user id (e.g. the colleague's id); defaults to the colleague of this thread" }, limit: { type: "number" } },
+      additionalProperties: false,
+    },
+    async execute(args) {
+      const user = String(args?.user || defaultUser || "").trim();
+      if (!user) throw new Error("user is required (peer user id)");
+      if (!store.getPeerUser?.(user)) throw new Error(`no peer user ${user}`);
+      const limit = Math.min(Number(args?.limit) || 25, 100);
+      const calls = store.listPeerCalls(user, { limit }).map((c) => ({ at: c.at, method: c.method, tool: c.tool, outcome: c.outcome, detail: c.detail, ms: c.ms }));
+      const tasks = store.listTasks(user, { limit: 8 }).map((t) => ({ id: t.id, state: t.state, reason: t.state_reason, created: t.created_at, updated: t.updated_at }));
+      const result = { user, serverStartedAt: STARTED_AT, now: new Date().toISOString(), calls, tasks };
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    },
+  };
 }

@@ -27,7 +27,7 @@ import { createJobTools } from "./jobs/tools.mjs";
 import { createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
 import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
 import { guardTools } from "./guard.mjs";
-import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL } from "./peer-auth.mjs";
+import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL, PEER_CONNECTION_TOOL, peerConnectionTool } from "./peer-auth.mjs";
 import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
 import { brokerRequest, createToolSource } from "./tools.mjs";
@@ -233,6 +233,7 @@ const runner = createRunner({
       [DELEGATE_TOOL]: peersHolder.current.delegateTool(chat.id),
       [SUBTASKS_TOOL]: peersHolder.current.subtasksTool(chat.id),
       [PEER_INVITE_TOOL]: peerAuth.inviteTool({ callBroker: callBrokerTool }),
+      [PEER_CONNECTION_TOOL]: peerConnectionTool({ store, defaultUser: chat.person_id ? store.getPerson?.(chat.person_id)?.access?.peerAgent?.user || null : null }),
       ...knowledge.tool(chat.id),
       [VISUALIZE_TOOL]: visualizer.tool(chat.id),
       [SHOW_MEDIA_TOOL]: showMedia.tool(chat.id),
