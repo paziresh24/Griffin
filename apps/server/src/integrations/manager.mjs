@@ -343,8 +343,14 @@ export function createIntegrations({ store, runner, asks, peerAuth = null, publi
       const existing = chatId ? store.getChat(chatId) : null;
       const profile = person ? store.upsertPerson({ externalId: externalChat, ...person, data: { platform: "telegram", source: "account" } }) : store.listPersons({ source: "telegram" }).find((p) => p.external_id === String(externalChat)) || (person ? store.upsertPerson({ externalId: externalChat, ...person }) : null);
       if (profile && text) store.addPersonMessage({ personId: profile.id, direction: "in", text, data: { chatId, caller: caller || "owner" } });
+      // A disabled profile is the owner's choice about this person; the person is never told so
+      // (it used to reach the colleague as «این پروفایل فعلاً دسترسی فعال ندارد.»). Only the owner hears it.
       if (profile?.access?.enabled === false) {
-        await channels.get(id)?.deliver(externalChat, { text: "این پروفایل فعلاً دسترسی فعال ندارد." });
+        log.info?.(`[integrations] person ${profile.id} is disabled — not answering`);
+        const channel = channels.get(id);
+        if (channel?.kind === "telegram_account") {
+          await channel.deliver("me", { text: `«${profile.display_name || externalChat}» غیرفعال است؛ گریفین جوابش را نداد. برای فعال کردن: صفحهٔ تلگرام → پروفایل او.` }).catch(() => {});
+        }
         return null;
       }
       if (!existing) {
