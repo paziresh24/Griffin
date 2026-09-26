@@ -17,6 +17,7 @@ export const APP_TOOL_NAMES = [
   "delegate",
   "subtasks",
   "peer_invite",
+  "peer_connection",
   "visualize",
   "show_media",
   "knowledge_write",

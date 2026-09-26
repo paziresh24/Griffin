@@ -309,6 +309,13 @@ export function createRunner({
       return active.has(chatId);
     },
 
+    // Runs doing work right now — not the ones parked on a question to a person. A deploy may
+    // restart over parked runs (they resume and ask again); waiting hours for an answer blocked
+    // every deploy (2026-09-26).
+    workingCount() {
+      return [...active.keys()].filter((chatId) => !isBlocked(chatId)).length;
+    },
+
     activeCount() {
       return active.size;
     },

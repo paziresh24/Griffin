@@ -198,3 +198,19 @@ test("peer_invite: registers, stores token in the peer's own Infisical project, 
   assert.match(missing.content[0].text, /no Infisical project named "nobody-here"/);
   assert.ok(!store.getPeerUser("nobody-here"));
 });
+
+test("peer_connection shows a colleague's MCP calls and when the server started", async () => {
+  const { peerConnectionTool } = await import("../src/peer-auth.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-pc-"));
+  const store = openStore(path.join(dir, "t.sqlite"));
+  store.createPeerUser({ id: "ali-ahmadi", label: "آقای احمدی" });
+  store.recordPeerCall({ userId: "ali-ahmadi", clientId: "c1", method: "tools/call", tool: "griffin_send", argKeys: "message", outcome: "ok", detail: "completed t1", ms: 10 });
+  const tool = peerConnectionTool({ store, defaultUser: "ali-ahmadi" });
+  const out = JSON.parse((await tool.execute({})).content[0].text);
+  assert.equal(out.user, "ali-ahmadi");
+  assert.equal(out.calls[0].tool, "griffin_send");
+  assert.ok(out.serverStartedAt);
+  await assert.rejects(peerConnectionTool({ store }).execute({}), /user is required/);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

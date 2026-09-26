@@ -35,7 +35,7 @@ export const CORE_TOOLS = [
 const SCHEDULER_TOOLS = ["ask_agent", "delegate", "subtasks", "visualize", "show_media", "knowledge_list", "knowledge_write"];
 
 /** What a person talking through a messenger bridge may use. */
-const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "knowledge_list", "end_agent"];
+const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "knowledge_list", "end_agent", "peer_connection"];
 
 export const AGENTS = {
   griffin: {
