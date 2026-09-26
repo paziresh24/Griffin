@@ -335,6 +335,14 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       const threadQueued = new Map(); // peer key -> latest message that arrived during that classification
       const threadRuns = new Map(); // peer key -> run timestamps (ping-pong brake between two agents)
       const THREAD_RUNS_PER_HOUR = 20;
+      // The owner typing by hand in a teammate chat means the owner is in that conversation. Griffin
+      // steps back: an open thread closes, and the teammate's messages do not open a new one while
+      // the owner was there recently (2026-09-26: Griffin kept answering a colleague who was talking
+      // to the owner live — a thread had opened on the owner's own «بزنم؟»).
+      // ponytail: in-memory, a restart forgets presence for up to OWNER_PRESENT_MS.
+      const OWNER_PRESENT_MS = 30 * 60_000;
+      const ownerSeen = new Map(); // peer key -> last hand-typed owner message (ms)
+      const ownerPresent = (key) => Date.now() - (ownerSeen.get(String(key)) || 0) < OWNER_PRESENT_MS;
       const threadBrake = (key) => {
         const now = Date.now();
         const recent = (threadRuns.get(key) || []).filter((t) => now - t < 3_600_000);
@@ -356,6 +364,11 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             text: from === "owner" ? threadOwnerPrompt({ name, text }) : threadInboundPrompt({ name, text }),
             caller: COVERAGE_CALLER,
           });
+          return;
+        }
+        // The owner is in this conversation: leave it to them unless the teammate calls Griffin.
+        if (from === "teammate" && ownerPresent(key) && !wantsGriffin(text)) {
+          log.info?.(`[telegram-account] thread skip peer=${key} — owner is in the conversation`);
           return;
         }
         // A second message while the first is being classified («سلام» then the real request) used
@@ -492,8 +505,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
               await endAgent(key);
               return;
             }
-            // The owner writing by hand to a teammate: may open a thread, or feeds the open one.
-            if (threadDm) await handleThreadMessage(key, person, text, message, "owner");
+            // The owner writing by hand to a teammate: the owner has the conversation. Never open a
+            // thread on it, and hand back an open one.
+            if (threadDm) {
+              ownerSeen.set(String(key), Date.now());
+              if (bridge.isCovered(integration.id, key)) {
+                log.info?.(`[telegram-account] thread closed peer=${key} — owner took over`);
+                await endAgent(key);
+              }
+            }
             return;
           }
 

@@ -747,10 +747,19 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
   assert.match(received.at(-1)[2].text, /^«سارا کریمی»: /);
   assert.match(received.at(-1)[2].text, /اشتباه نمیکنه؟$/);
 
+  const fed = received.length;
   await dm(4, "من خودم چکش کردم، توکنش مال کریمیه", true);
-  assert.match(received.at(-1)[2].text, /^«Owner در تلگرام به سارا کریمی»: /, "the owner's own Telegram message feeds the thread");
+  assert.equal(covered.has("272188041"), false, "the owner typing by hand takes the conversation back");
+  assert.equal(received.length, fed, "and Griffin says nothing about it");
 
-  covered.delete("272188041"); // Griffin closed it with end_agent
+  const asked = classified.length;
+  await dm(41, "سرور خرابه درست کن");
+  assert.equal(covered.has("272188041"), false, "while the owner is in the conversation, nothing opens");
+  assert.equal(classified.length, asked, "not even a classification");
+
+  await dm(42, "باشه، بزنم؟", true);
+  assert.equal(classified.length, asked, "the owner's own message never opens a thread");
+
   await dm(5, "گریفین یه چیز دیگه هم هست");
   assert.equal(covered.get("272188041").fresh, false, "«گریفین» reopens the last thread chat");
 
