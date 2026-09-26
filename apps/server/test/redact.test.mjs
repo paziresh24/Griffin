@@ -60,3 +60,15 @@ test("args of unrelated tools keep non-secret content untouched", () => {
   const out = redactArgs("kube_get", { cluster: "prod-a", kind: "pods", namespace: "team-a" });
   assert.deepEqual(out, { cluster: "prod-a", kind: "pods", namespace: "team-a" });
 });
+
+test("secret-shaped results are masked: private keys, JWTs, infisical values, kube secret data", () => {
+  const key = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmU\n-----END OPENSSH PRIVATE KEY-----";
+  const inf = redactResult("infisical_get", { status: "success", value: JSON.stringify({ name: "PRIVATE_KEY", value: key }) });
+  assert.doesNotMatch(JSON.stringify(inf), /b3BlbnNzaC1rZXkt/);
+  assert.match(JSON.stringify(inf), /PRIVATE_KEY/, "the name stays readable");
+  const ks = redactResult("kube_secret", { value: JSON.stringify({ name: "app", data: { JWT_SECRET: "1RIPnNNWVHdO1sA", DB_URL: "postgres://u:p@h/db" } }) });
+  assert.doesNotMatch(JSON.stringify(ks), /1RIPnNNW|postgres:\/\//);
+  assert.match(JSON.stringify(ks), /JWT_SECRET/);
+  const out = redactResult("debug_exec", { stdout: `cat id\n${key}\ntoken eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3OCJ9.abcdefghijkl` });
+  assert.doesNotMatch(JSON.stringify(out), /b3BlbnNzaC1rZXkt|eyJhbGci/);
+});
