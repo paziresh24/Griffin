@@ -16,27 +16,40 @@ const SQL_PASSWORD = /(\b(?:password|identified\s+by)\s+)('(?:[^']|'')*'|"(?:[^"
 // JSON) for the tools whose strings routinely carry credentials.
 const LITERAL_SECRET = /(\b(?:pass(word|wd)?|passwd|pw|secret|token|api[_-]?key|apikey|credential|psk)\b["']?\s*[:=]\s*["']?)([^"'\s,;}&]{3,})/gi;
 
+// Secret-shaped text, masked in every string whatever the tool: a PEM private key block and a JWT.
+// 2026-09-26: an owner SSH private key read with infisical_get and 108 kube_secret results sat in
+// the event log in clear, because neither matched a secret-looking key name.
+const PEM_PRIVATE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g;
+const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+
+// Tools whose result *is* the secret: which fields hold it.
+const SECRET_FIELDS = {
+  infisical_get: { keys: new Set(["value"]) },
+  kube_secret: { under: new Set(["data", "stringData"]) },
+};
+
 const MAX_DEPTH = 8;
 
 // Free-text masking only for tools whose args/results are known to embed credentials verbatim.
 const LITERAL_TOOLS = new Set(["debug_exec", "pg_query", "infisical_get", "infisical_upsert"]);
 
 function maskString(value, { literals = false } = {}) {
-  let out = value;
+  let out = value.replace(PEM_PRIVATE, MASK).replace(JWT, MASK);
   if (literals) out = out.replace(LITERAL_SECRET, `$1${MASK}`);
   return out.replace(SQL_PASSWORD, (_m, prefix) => `${prefix}'${MASK}'`);
 }
 
 // Strings that are themselves JSON objects (broker results embed JSON in text) are masked from
 // the inside so key-based masking still catches them.
-function walk(value, { literals = false } = {}, depth = 0) {
+function walk(value, { literals = false, fields = null, under = false } = {}, depth = 0) {
+  if (under && (typeof value === "string" || typeof value === "number")) return MASK;
   if (depth > MAX_DEPTH) return value;
   if (typeof value === "string") {
     const trimmed = value.trimStart();
     if ((trimmed.startsWith("{") || trimmed.startsWith("[")) && trimmed.length <= 200_000) {
       try {
         const parsed = JSON.parse(value);
-        const masked = walk(parsed, { literals }, depth + 1);
+        const masked = walk(parsed, { literals, fields, under }, depth + 1);
         return JSON.stringify(masked);
       } catch {
         /* not JSON — fall through to plain string masking */
@@ -45,12 +58,15 @@ function walk(value, { literals = false } = {}, depth = 0) {
     return maskString(value, { literals });
   }
   if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((item) => walk(item, { literals }, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => walk(item, { literals, fields, under }, depth + 1));
   const out = {};
   for (const [key, item] of Object.entries(value)) {
-    out[key] = SECRET_KEY.test(key) && (typeof item === "string" || typeof item === "number")
+    const scalar = typeof item === "string" || typeof item === "number";
+    // The result wrapper carries its payload as JSON text under "value" too: open it, don't mask it.
+    const embedded = typeof item === "string" && /^\s*[[{]/.test(item);
+    out[key] = scalar && (SECRET_KEY.test(key) || (fields?.keys?.has(key) && !embedded))
       ? MASK
-      : walk(item, { literals }, depth + 1);
+      : walk(item, { literals, fields, under: under || Boolean(fields?.under?.has(key)) }, depth + 1);
   }
   return out;
 }
@@ -64,7 +80,7 @@ export function redactArgs(name, args) {
 }
 
 export function redactResult(name, result) {
-  return walk(result, { literals: LITERAL_TOOLS.has(String(name)) });
+  return walk(result, { literals: LITERAL_TOOLS.has(String(name)), fields: SECRET_FIELDS[String(name)] || null });
 }
 
 // Free-text masking for places that embed tool args into a string (the guard's approval question).
