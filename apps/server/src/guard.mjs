@@ -98,7 +98,9 @@ export function routerReadOnly(command) {
 const YES_RE = /^(بله|آره|باشه|برو|بزن|انجام|تأیید|تایید|yes|y|ok|۱|1)(?![\p{L}\p{N}])/iu;
 const NO_RE = /^(نه|خیر|نرو|نکن|انصراف|cancel|no|n)(?![\p{L}\p{N}])/iu;
 // Negations the owner slips mid-sentence («مرج نکن», «فعلاً لازم نیست») — an anchored ^ can't see these.
-const NEG_ANYWHERE = /نکن|نزن|نشه|نمی ?خوام|نمی ?خواهم|بی ?خیال|لازم نیست|رد شود|نخواستم/i;
+// توقف also matches متوقف (substring); متوفقف is the owner's live typo of متوقف (2026-09-29: the answer
+// «متوفقف شو» to an approval card meant STOP, and anything-not-a-no would have counted it as consent).
+const NEG_ANYWHERE = /نکن|نزن|نشه|نمی ?خوام|نمی ?خواهم|بی ?خیال|لازم نیست|رد شود|نخواستم|توقف|متوفقف|بس کن|ولش کن|کافیه/i;
 
 // Consent on a yes/no card in the owner's own words: anything that is not a no counts — owners
 // answer «مرج کن», «تأیید — مرج شود», «دوباره تأیید می‌کنم» and none of those matched the literal
