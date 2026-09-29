@@ -83,6 +83,11 @@ const TOOLS = {
     inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
     execute: async (args) => ({ ok: true, text: args.text }),
   },
+  debug_exec: {
+    description: "terminal",
+    inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+    execute: async () => ({ ok: true, stdout: "" }),
+  },
   boom: {
     description: "always fails",
     inputSchema: { type: "object", properties: {} },
@@ -242,7 +247,8 @@ describe("openai-compatible provider", () => {
     const completed = updates.find((u) => u.type === "tool-call-completed");
     assert.equal(completed.callId, "call-1");
     assert.equal(completed.toolCall.result.status, "success");
-    assert.ok(String(completed.toolCall.result.value).includes("hey"));
+    assert.equal(completed.toolCall.result.value.content[0].text.includes("hey"), true);
+    assert.ok(Array.isArray(completed.toolCall.result.value.content), "cursor-SDK MCP shape for the UI/delivery stack");
 
     const second = mock.requests.at(-1);
     const roles = second.body.messages.map((m) => m.role);
@@ -271,7 +277,7 @@ describe("openai-compatible provider", () => {
     assert.equal(result.status, "finished");
     const completed = updates.find((u) => u.type === "tool-call-completed");
     assert.equal(completed.toolCall.result.status, "error");
-    assert.match(String(completed.toolCall.result.value), /kaboom/);
+    assert.match(completed.toolCall.result.value.content[0].text, /kaboom/);
   });
 
   it("answers unknown tools with an error result", async () => {
@@ -288,7 +294,7 @@ describe("openai-compatible provider", () => {
     assert.equal(result.status, "finished");
     const completed = updates.find((u) => u.type === "tool-call-completed");
     assert.equal(completed.toolCall.result.status, "error");
-    assert.match(String(completed.toolCall.result.value), /unknown tool: nope/);
+    assert.match(completed.toolCall.result.value.content[0].text, /unknown tool: nope/);
   });
 
   it("surfaces endpoint errors with status, message and hint", async () => {
@@ -400,7 +406,91 @@ describe("openai-compatible provider", () => {
     assert.match(result.error.message, /api key missing/i);
   });
 
-  it("no round ration: tools stay available; only a runaway loop fails, loudly", async () => {
+  it("a streak of one-command terminal rounds gets one batching nudge, not a lecture", async () => {
+    const cwd = tempWorkspace();
+    let n = 0;
+    mock.on((req, res) => {
+      if (req.url !== "/v1/chat/completions") return { status: 404 };
+      const nudged = req.body.messages.some((m) => m.role === "user" && String(m.content).includes("تذکر سیستمی"));
+      if (nudged) {
+        sse(res, textChunks("done"));
+        return { raw: true };
+      }
+      n += 1;
+      sse(res, toolCallChunks(`c${n}`, "debug_exec", JSON.stringify({ command: `check ${n}` })), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = createOpenAIProvider({
+      apiKey: "test-key",
+      baseUrl,
+      runawayRounds: 50,
+      smallCmdAfter: 3,
+      silentAfter: 50,
+      log: { error() {}, warn() {} },
+    });
+    const { result } = await runSend(provider.create({ cwd, customTools: TOOLS }), "investigate");
+    assert.equal(result.status, "finished");
+    const nudges = mock.requests.at(-1).body.messages.filter((m) => String(m.content).includes("تذکر سیستمی"));
+    assert.equal(nudges.length, 1, "exactly one nudge");
+    assert.match(nudges[0].content, /اسکریپت/);
+    assert.ok(n >= 3, `nudge fired after the streak (${n} rounds)`);
+  });
+
+  it("a batched script round does not trip the terminal nudge", async () => {
+    const cwd = tempWorkspace();
+    let n = 0;
+    mock.on((req, res) => {
+      if (req.url !== "/v1/chat/completions") return { status: 404 };
+      n += 1;
+      const script = `echo "== section ${n}"\nkubectl get pods\nkubectl get svc`;
+      sse(res, toolCallChunks(`c${n}`, "debug_exec", JSON.stringify({ command: script })), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = createOpenAIProvider({
+      apiKey: "test-key",
+      baseUrl,
+      runawayRounds: 4,
+      smallCmdAfter: 2,
+      silentAfter: 50,
+      log: { error() {}, warn() {} },
+    });
+    const { result } = await runSend(provider.create({ cwd, customTools: TOOLS }), "investigate");
+    assert.match(result.error.message, /runaway/); // ran to the cap with no batching nudge
+    const since = mock.requests.slice(mock.requests.length - n);
+    assert.ok(!since.some((r) => r.body?.messages?.some((m) => String(m.content).includes("تذکر سیستمی"))));
+  });
+
+  it("many tool rounds with no text for the owner get one progress nudge", async () => {
+    const cwd = tempWorkspace();
+    let n = 0;
+    mock.on((req, res) => {
+      if (req.url !== "/v1/chat/completions") return { status: 404 };
+      const nudged = req.body.messages.some((m) => m.role === "user" && String(m.content).includes("تذکر سیستمی"));
+      if (nudged) {
+        sse(res, textChunks("پیشرفت: همچنان در حال بررسی‌ام"));
+        return { raw: true };
+      }
+      n += 1;
+      sse(res, toolCallChunks(`c${n}`, "echo", JSON.stringify({ text: `step-${n}` })), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = createOpenAIProvider({
+      apiKey: "test-key",
+      baseUrl,
+      runawayRounds: 50,
+      smallCmdAfter: 50,
+      silentAfter: 3,
+      log: { error() {}, warn() {} },
+    });
+    const { result } = await runSend(provider.create({ cwd, customTools: TOOLS }), "investigate");
+    assert.equal(result.status, "finished");
+    const nudges = mock.requests.at(-1).body.messages.filter((m) => String(m.content).includes("تذکر سیستمی"));
+    assert.equal(nudges.length, 1, "exactly one nudge");
+    assert.match(nudges[0].content, /پیشرفت/);
+    assert.ok(n >= 4, `nudge fired after the silent streak (${n} rounds)`);
+  });
+
+  it("no round ration: tools stay available; an identical loop is nudged once, then fails as stuck", async () => {
     const cwd = tempWorkspace();
     let n = 0;
     mock.on((req, res) => {
@@ -408,6 +498,23 @@ describe("openai-compatible provider", () => {
       n += 1;
       assert.ok(req.body.tools, "every round keeps its tools");
       sse(res, toolCallChunks(`c${n}`, "echo", '{"text":"x"}'), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = createOpenAIProvider({ apiKey: "test-key", baseUrl, runawayRounds: 50, log: { error() {}, warn() {} } });
+    const { result } = await runSend(provider.create({ cwd, customTools: TOOLS }), "loop forever");
+    assert.equal(result.status, "error");
+    assert.match(result.error.message, /stuck/);
+    // nudge at round 3 (default stuckAfter), one more identical round, then stop — long before the cap.
+    assert.ok(n >= 3 && n < 10, `expected an early stop, got ${n} rounds`);
+  });
+
+  it("a changing loop still runs until the runaway cap, loudly", async () => {
+    const cwd = tempWorkspace();
+    let n = 0;
+    mock.on((req, res) => {
+      if (req.url !== "/v1/chat/completions") return { status: 404 };
+      n += 1;
+      sse(res, toolCallChunks(`c${n}`, "echo", JSON.stringify({ text: `call-${n}` })), { delayMs: 0 });
       return { raw: true };
     });
     const provider = createOpenAIProvider({ apiKey: "test-key", baseUrl, runawayRounds: 5, log: { error() {}, warn() {} } });

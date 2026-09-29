@@ -261,9 +261,49 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
       },
     },
 
+    arvan_dns_delete: {
+      description:
+        "Delete ONE DNS record on an ArvanCloud domain, selected by exact name (and type/value when several share the name). Destructive: ask_owner with the exact record first; refuses NS records and ambiguous matches.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string", pattern: DOMAIN.source },
+          name: { type: "string", pattern: "^(@|\\*|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$", description: "exact record name: label(s), @, or *" },
+          type: { type: "string", enum: ["A", "CNAME", "TXT", "MX", "SRV", "CAA"], description: "required when the name has more than one record" },
+          value: { type: "string", maxLength: 253, description: "further filter when several of the same name+type exist" },
+        },
+        required: ["domain", "name"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const domain = requireDomain(args.domain);
+        const name = String(args.name).toLowerCase();
+        const { body } = await request(`/domains/${encodeURIComponent(domain)}/dns-records`);
+        const all = Array.isArray(dataOf(body)) ? dataOf(body) : [];
+        let matches = all.filter((r) => String(r.name || "").toLowerCase() === name);
+        const type = args.type ? String(args.type).toUpperCase() : "";
+        if (type) matches = matches.filter((r) => String(r.type).toUpperCase() === type);
+        if (args.value) matches = matches.filter((r) => String(recordValue(r) || "").includes(String(args.value)));
+        if (!matches.length) {
+          throw new ToolInputError(`no record named ${name === "@" ? "@" : name}.${domain}${type ? ` of type ${type}` : ""} — nothing deleted`);
+        }
+        if (matches.length > 1) {
+          throw new ToolInputError(
+            `${matches.length} records named ${name} (${matches.map((r) => r.type).join("/")}) — pass type (and value) to pick exactly one`,
+          );
+        }
+        const target = matches[0];
+        if (String(target.type || "").toUpperCase() === "NS") throw new ToolInputError("refusing: NS records are zone infrastructure");
+        const id = target.id || target.uuid;
+        if (!id) throw new ToolInputError("record has no id in the API response — refusing to guess");
+        await request(`/domains/${encodeURIComponent(domain)}/dns-records/${encodeURIComponent(id)}`, { method: "DELETE" });
+        return { domain, deleted: { id, type: target.type, name: target.name, value: recordValue(target) }, source: "arvan-api" };
+      },
+    },
+
     arvan_cache_purge: {
       description:
-        "Purge ArvanCloud CDN cache for a domain that exists in this Arvan account (discovered live via GET /domains — no static allowlist). Mutating: call ask_owner with the exact domain and scope first.",
+        "Purge ArvanCloud CDN cache for a domain that exists in this Arvan account (discovered live via GET /domains — no static allowlist). Prefer scope 'urls' with the exact changed paths; a full purge (scope 'all') empties the domain's whole cache and the origin takes everything cold — it is owner-approved by the built-in guard question and must never be routed around.",
       inputSchema: {
         type: "object",
         properties: {

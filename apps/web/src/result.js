@@ -8,6 +8,17 @@ export function unwrapResult(part) {
   if (!raw) return { result: null, isError: part.status !== "success" };
   if (raw.status === "error") return { result: { error: raw.error?.message || "error" }, isError: true };
   const value = raw.value ?? raw;
+  // The openai provider stored plain-string values before 2026-09-28; parse them so old chats
+  // still render (a stringified {"chartId"} left every chart card an empty box).
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object") return { result: parsed, isError: false };
+    } catch {
+      /* not JSON */
+    }
+    return { result: { text: value }, isError: false };
+  }
   if (Array.isArray(value?.content)) {
     const isError = Boolean(value.isError);
     // SDK delivers MCP text content as { text: { text } } (no "type"); tests/demo use { type, text }.

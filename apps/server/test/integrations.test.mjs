@@ -770,6 +770,53 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
   assert.equal(received.length, n, "people not marked team never get automatic threads");
 });
 
+// settings.autoThreads === false stops the automatic opening entirely (owner switch): no
+// classification, no new thread, even on an explicit «گریفین» call; a thread the owner opens by
+// hand (/agent) still feeds, and still closes with /agent off.
+test("telegram account: autoThreads=false keeps teammate DMs from opening threads", async () => {
+  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
+  let handler;
+  const fakeClient = {
+    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
+    addEventHandler: (fn) => { handler = fn; },
+    sendMessage: async () => ({ id: 900 }), editMessage: async () => {}, deleteMessages: async () => {},
+    getEntity: async () => ({ firstName: "Karimi", username: "skarimi" }),
+    getDialogs: async () => [], getMessages: async () => [], disconnect: async () => {},
+  };
+  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
+  const covered = new Map();
+  const received = [];
+  const classified = [];
+  const settings = { autoThreads: false };
+  const bridge = {
+    integration: () => ({ settings }),
+    upsertPerson: async () => ({ id: "p1", display_name: "سارا کریمی", username: "skarimi", category: "team" }),
+    addPersonMessage: () => {},
+    receive: async (...a) => received.push(a),
+    answer: async () => false, answerOwnerAsk: async () => false,
+    isCovered: (_id, peer) => covered.has(String(peer)),
+    coverageName: () => "Karimi",
+    classifyThread: async (args) => { classified.push(args); return { start: true, topic: "پوش با توکن", reason: "request" }; },
+    startCoverage: async (_id, peer, meta) => { covered.set(String(peer), meta); return meta; },
+    endCoverage: async (_id, peer) => { covered.delete(String(peer)); return null; },
+  };
+  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
+  await channel.start();
+  const dm = (id, text, out = false) => handler({ message: { out, chatId: 272188041n, peerId: { userId: 272188041n }, id, message: text } });
+
+  await dm(1, "سرور خرابه درست کن");
+  assert.equal(classified.length, 0, "autoThreads=false: no classification at all");
+  assert.equal(covered.has("272188041"), false, "autoThreads=false: a real request opens nothing");
+
+  await dm(2, "گریفین درستش کن");
+  assert.equal(covered.has("272188041"), false, "autoThreads=false: even an explicit «گریفین» call opens nothing");
+
+  covered.set("272188041", { name: "Karimi" }); // a thread the owner opened by hand
+  await dm(3, "جواب دادم، برو سراغ پوش");
+  assert.equal(received.length, 1, "autoThreads=false: an open thread still feeds");
+  assert.match(received[0][2].text, /سراغ پوش$/);
+});
+
 test("a colleague on the team roster is marked team on first contact", async () => {
   const { store, integrations, cleanup } = setup();
   try {

@@ -50,18 +50,6 @@ function vegaConfig() {
   };
 }
 
-// Drop fixed pixel widths so the chart can fill its container (especially in the fullscreen canvas).
-function forceContainerWidth(node) {
-  if (!node || typeof node !== "object") return;
-  if (Array.isArray(node)) return node.forEach(forceContainerWidth);
-  if (typeof node.width === "number") node.width = "container";
-  else if (node.width === undefined && (node.mark || node.layer || node.encoding)) node.width = "container";
-  for (const key of ["layer", "hconcat", "vconcat", "concat"]) {
-    if (Array.isArray(node[key])) node[key].forEach(forceContainerWidth);
-  }
-  if (node.spec) forceContainerWidth(node.spec);
-}
-
 // Align every panel title with the chart's dominant script (a Persian chart with one English
 // panel title like "CPU (core)" still gets all titles on the right).
 function applyTitleDirection(node, rtl) {
@@ -96,50 +84,37 @@ function collectTitles(node, out = []) {
   return out;
 }
 
-// Fills the container width. In fullscreen, stretch height too — a bare root height does nothing for
-// vconcat/hconcat (each child keeps its own short height), which is why maximize looked like a no-op.
-// Inline composites also need container width: agents often leave a fixed pixel width, so the chart
-// sat in one corner of the card instead of spanning it.
+// Fits the measured slot (the caller re-renders with a new width on resize). In fullscreen,
+// stretch height too — a bare root height does nothing for vconcat/hconcat (each child keeps its
+// own short height), which is why maximize looked like a no-op. Widths are left as the spec drew
+// them; the caller measures the rendered SVG and rescales with scaleWidths() when it overflows
+// the slot (layout maths of concat/hconcat is not guessable ahead of render).
 function prepare(spec, { height, maximized = false } = {}) {
   const copy = structuredClone(spec);
-  forceContainerWidth(copy);
   applyTitleDirection(copy, isRtlText(collectTitles(copy).join(" ")));
 
   if (maximized) {
     if (Array.isArray(copy.vconcat) && height) {
       const n = copy.vconcat.length;
       const each = Math.max(180, Math.floor((height - 40) / n));
-      for (const child of copy.vconcat) {
-        child.height = each;
-        child.width = "container";
-      }
+      for (const child of copy.vconcat) child.height = each;
       delete copy.height;
-      copy.width = "container";
     } else if (Array.isArray(copy.hconcat) && height) {
-      for (const child of copy.hconcat) {
-        child.height = height;
-        if (typeof child.width === "number") delete child.width;
-      }
+      for (const child of copy.hconcat) child.height = height;
       copy.height = height;
     } else if (height) {
       copy.height = height;
-      copy.width = "container";
     }
   } else if (Array.isArray(copy.vconcat)) {
     for (const child of copy.vconcat) {
       if (child.height === undefined || (typeof child.height === "number" && child.height < 120)) child.height = 200;
-      child.width = "container";
     }
-    copy.width = "container";
     delete copy.height;
-  } else if (Array.isArray(copy.hconcat)) {
-    copy.width = "container";
-  } else {
-    if (copy.width === undefined) copy.width = "container";
-    if (copy.height === undefined) copy.height = 260;
-    if (height) copy.height = height;
+  } else if (copy.height === undefined) {
+    copy.height = 260;
   }
-  copy.autosize = { type: "fit-x", contains: "padding" };
+  // No autosize override: "fit-x" re-fits to vega-embed's container measurement, which resolves
+  // to 0 in this build — the default ("pad") honours the explicit pixel widths the spec carries.
   return copy;
 }
 
@@ -162,12 +137,24 @@ function VegaView({ spec, height, maximized = false, onView }) {
       try {
         const { default: embed } = await import("vega-embed");
         if (cancelled || !ref.current) return;
-        const prepared = prepare(spec, { height, maximized });
-        const result = await embed(ref.current, prepared, { actions: false, renderer: "svg", config: vegaConfig() });
+        const options = { actions: false, renderer: "svg", config: vegaConfig() };
+        const result = await embed(ref.current, prepare(spec, { height, maximized }), options);
         view = result.view;
+        // vega-embed 7 does not inject the spec's top-level `datasets` into the view (older
+        // versions did) — bind them ourselves exactly like the server's chart-image.mjs, else
+        // the chart renders bare axes with no data (2026-09-28).
+        for (const [name, rows] of Object.entries(spec.datasets || {})) view.data(name, rows);
+        await view.runAsync();
+        if (cancelled) return;
+        // The spec draws at its natural width; width "container"/fit-x resolve to 0 through
+        // embed() in this vega build (charts rendered invisible). The SVG carries a viewBox, so
+        // CSS scales it to the slot crisply — no vega layout maths.
+        for (const svg of ref.current.querySelectorAll("svg")) {
+          svg.style.maxWidth = "100%";
+          svg.style.height = "auto";
+        }
         onView?.(view);
         setError(null);
-        // Container width can settle after the dialog opens; reflow so fit-x actually fills it.
         resizeObserver = new ResizeObserver(() => {
           try {
             view.resize().runAsync();

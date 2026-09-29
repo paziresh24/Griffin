@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { PROVIDER_OPENAI } from "./ids.mjs";
@@ -12,6 +12,52 @@ export { PROVIDER_OPENAI };
 // Not a ration (owner 2026-09-25: a cap hides the real problem — fix the cause): a model that
 // needs 300 tool rounds in one send is in a loop, and the run fails loudly so it gets looked at.
 const RUNAWAY_ROUNDS = Math.max(2, Number(process.env.GRIFFIN_OPENAI_MAX_ROUNDS) || 300);
+
+// Context management (dsh compaction-seam pattern, adapted): sessions grow without bound and one
+// long working chat crossed the endpoint's 1,048,576-token cap on 2026-09-27 — every later run in
+// that chat then failed with the same "maximum context length" error. Two triggers now: proactive
+// compaction at a pressure threshold, and an aggressive compact-and-retry when the endpoint still
+// reports overflow. The session file keeps the compacted form only; the events table already holds
+// the lossless transcript.
+const COMPACT_AT_TOKENS = Math.max(10_000, Number(process.env.GRIFFIN_OPENAI_COMPACT_AT) || 600_000);
+const COMPACT_KEEP_RECENT = Math.max(4, Number(process.env.GRIFFIN_OPENAI_KEEP_RECENT) || 12);
+const TOOL_MAX_CHARS = Math.max(2_000, Number(process.env.GRIFFIN_OPENAI_TOOL_MAX) || 20_000);
+const CONTEXT_OVERFLOW =
+  /maximum context length|context_length_exceeded|reduce the length of the messages|prompt is too long|too many tokens/i;
+
+// Stuck detection (OpenHands/Gemini-CLI pattern): identical tool rounds in a row mean a loop.
+// First offence gets an in-band nudge the model must answer; repeating after it fails loudly.
+const STUCK_AFTER = Math.max(2, Number(process.env.GRIFFIN_OPENAI_STUCK_AFTER) || 3);
+const STUCK_NUDGE =
+  "[تذکر سیستمی] همین فراخوانی ابزار را با آرگومان‌های یکسان چند بار پشت‌سرهم زدی و نتیجه همان بود. " +
+  "از حلقه خارج شو: یا نتیجه را بپذیر و کار را ادامه بده، یا روش دیگری امتحان کن. همان فراخوانی را دوباره تکرار نکن.";
+
+// Pace detection: a long streak of one-short-terminal-command rounds, or many tool rounds with no
+// text for the owner, means the run is crawling and looks silent. One in-band nudge each per send.
+const SMALL_CMD_AFTER = Math.max(3, Number(process.env.GRIFFIN_OPENAI_SMALL_CMD_AFTER) || 6);
+const SILENT_AFTER = Math.max(4, Number(process.env.GRIFFIN_OPENAI_SILENT_AFTER) || 10);
+const SMALL_CMD_NUDGE =
+  "[تذکر سیستمی] چند فراخوانی پشت‌سرهمِ debug_exec با یک دستور کوچک زدی. از این بعد در هر فراخوانی یک اسکریپت کامل بده: " +
+  "همهٔ دستورهای آن مرحله پشت‌هم، با echo برای جداکردن بخش‌ها؛ دستورِ تکی در هر دور ممنوع است — زمان اونر تلف می‌شود.";
+const SILENT_NUDGE =
+  "[تذکر سیستمی] بیش از ده فراخوانی ابزار بدون هیچ متنی گذشته است. همین حالا یک خط پیشرفت کوتاه فارسی برای اونر بنویس " +
+  "(تا اینجا چه پیدا شد، بعدش چه می‌کنی)، بعد کار را ادامه بده.";
+
+// A round is "small-terminal" when it is exactly one debug_exec carrying a single short command —
+// no newlines, no chaining. That is the breadcrumb pattern the nudge is there to break.
+function isSmallTerminalRound(toolCalls) {
+  if (toolCalls.length !== 1) return false;
+  const [call] = toolCalls;
+  if (call.name !== "debug_exec") return false;
+  const command = call.args && typeof call.args.command === "string" ? call.args.command : "";
+  return command.length > 0 && command.length <= 160 && !/[\n;]|&&/.test(command);
+}
+const SUMMARY_RULES =
+  "You summarize the middle of an operations agent's conversation for its own continuing use. " +
+  "Keep every decision, key finding, identifier (paths, hosts, ids, branches), command that was run and its " +
+  "outcome, open questions, and unfinished steps. Drop chit-chat and raw bulk output. Persian, max ~600 words, " +
+  "plain text only — no preamble.";
+
 const SESSION_DIR = ".griffin-openai-sessions";
 const FALLBACK_SYSTEM =
   "You are Griffin, an operations agent. Facts come from your tools, never from memory. " +
@@ -27,6 +73,12 @@ export function createOpenAIProvider({
   fetchImpl = globalThis.fetch.bind(globalThis),
   idleMs = 90_000,
   runawayRounds = RUNAWAY_ROUNDS,
+  compactAtTokens = COMPACT_AT_TOKENS,
+  compactKeepRecent = COMPACT_KEEP_RECENT,
+  toolMaxChars = TOOL_MAX_CHARS,
+  stuckAfter = STUCK_AFTER,
+  smallCmdAfter = SMALL_CMD_AFTER,
+  silentAfter = SILENT_AFTER,
   log = console,
 } = {}) {
   const root = String(baseUrl || "").replace(/\/+$/, "");
@@ -49,7 +101,7 @@ export function createOpenAIProvider({
       try {
         const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
         if (Array.isArray(parsed?.messages)) {
-          const session = { messages: parsed.messages };
+          const session = { messages: parsed.messages, promptTokens: 0 };
           sessions.set(agentId, session);
           return session;
         }
@@ -63,7 +115,7 @@ export function createOpenAIProvider({
         name: "AgentNotFoundError",
       });
     }
-    const session = { messages: [] };
+    const session = { messages: [], promptTokens: 0 };
     sessions.set(agentId, session);
     return session;
   }
@@ -77,6 +129,88 @@ export function createOpenAIProvider({
     } catch (error) {
       log.error?.(`[openai] session ${agentId} persist failed: ${error?.message || error}`);
     }
+  }
+
+  // ---- context management -------------------------------------------------------------
+  // Exact while available (the endpoint reports it with every completion), estimate otherwise:
+  // mixed Persian/ASCII averages ~3 chars per token — close enough for a threshold trigger.
+  function estimateTokens(messages) {
+    let chars = 0;
+    for (const message of messages) {
+      chars += 8;
+      if (typeof message?.content === "string") chars += message.content.length;
+      for (const call of message?.tool_calls || []) chars += (call?.function?.arguments || "").length + 16;
+    }
+    return Math.ceil(chars / 3);
+  }
+
+  function contextTokens(session) {
+    return session.promptTokens > 0 ? session.promptTokens : estimateTokens(session.messages);
+  }
+
+  function renderForSummary(messages) {
+    const lines = [];
+    for (const message of messages) {
+      if (message.role === "user") lines.push(`کاربر: ${String(message.content).slice(0, 2_000)}`);
+      else if (message.role === "assistant") {
+        const calls = (message.tool_calls || [])
+          .map((call) => `${call?.function?.name}(${String(call?.function?.arguments || "").slice(0, 300)})`)
+          .join("; ");
+        lines.push(`دستیار${calls ? ` [ابزار: ${calls}]` : ""}: ${String(message.content || "").slice(0, 1_500)}`);
+      } else if (message.role === "tool") lines.push(`نتیجهٔ ابزار: ${String(message.content || "").slice(0, 1_000)}`);
+    }
+    // Most recent work matters most; if the middle is huge, keep its head and tail.
+    let text = lines.join("\n");
+    if (text.length > 150_000) text = `${text.slice(0, 75_000)}\n…[بخش میانی حذف شد]…\n${text.slice(-75_000)}`;
+    return text;
+  }
+
+  async function summarizeMiddle(middle, modelId) {
+    const body = renderForSummary(middle);
+    try {
+      const completion = await requestCompletion(
+        { model: modelId, messages: [{ role: "system", content: SUMMARY_RULES }, { role: "user", content: body }] },
+        { signal: null, emit: async () => {} },
+      );
+      if (completion?.text && completion.text.trim()) return completion.text.trim();
+    } catch (error) {
+      log.error?.(`[openai] compaction summarize failed (${error?.message || error}) — keeping a raw digest`);
+    }
+    // Never block compaction on a failed summary: a clipped digest still shrinks the session.
+    return `${body.slice(0, 4_000)}\n…[خلاصهٔ خودکار در دسترس نبود؛ گزیدهٔ خام]`;
+  }
+
+  // dsh-style replace: the first user message (the original task) stays verbatim, the middle
+  // collapses into one summary message, the tail stays verbatim. Never splits a tool round.
+  async function compactSession(session, { modelId, keep, reason }) {
+    let cut = Math.max(1, session.messages.length - Math.max(2, keep));
+    while (cut > 1 && session.messages[cut - 1]?.tool_calls?.length) cut -= 1; // keep calls with their results
+    while (cut < session.messages.length && session.messages[cut]?.role === "tool") cut += 1; // don't orphan a result
+    if (cut <= 1) return false;
+    const head = session.messages[0];
+    const middle = session.messages.slice(1, cut);
+    const kept = session.messages.slice(cut);
+    const digest = await summarizeMiddle(middle, modelId);
+    session.messages = [
+      head,
+      {
+        role: "user",
+        content:
+          `[خلاصهٔ فشردهٔ بخش میانی گفتگو — ${reason}. قبل از پیام‌های اخیر:${middle.length} پیام خلاصه شد]\n` +
+          `${digest}\n\n(پیام‌های پس از این خلاصه عیناً حفظ شده‌اند؛ کار را از همان‌جا ادامه بده.)`,
+      },
+      ...kept,
+    ];
+    session.promptTokens = 0; // re-measured on the next completion
+    log.error?.(`[openai] session compacted (${reason}): ${middle.length} messages summarized, ${kept.length} kept`);
+    return true;
+  }
+
+  function roundSignature(toolCalls) {
+    if (!toolCalls?.length) return null;
+    const hash = createHash("sha256");
+    for (const call of toolCalls) hash.update(`${call.name}\\u0000${stableStringify(call.args)}\\u0000`);
+    return hash.digest("hex");
   }
 
   // One model round-trip: posts stream:true, emits live updates (text/thinking/tool fragments)
@@ -276,9 +410,16 @@ export function createOpenAIProvider({
 
         const run = {
           id: randomUUID(),
-          supports: (cap) => cap === "cancel",
+          supports: (cap) => cap === "cancel" || cap === "nudge",
           async cancel() {
             abort.abort();
+          },
+          // sweepStale() calls this before killing a silent run: break the stuck round, drop a
+          // note into the session, and let the loop continue instead of losing the work.
+          async nudge(text) {
+            if (abort.signal.aborted) return;
+            nudgeText = String(text || STUCK_NUDGE);
+            flow.abort(Object.assign(new Error("nudged"), { nudged: true }));
           },
           async steer() {
             return "revert_to_followup";
@@ -286,11 +427,25 @@ export function createOpenAIProvider({
           wait: () => done,
         };
 
+        let nudgeText = null;
+        let flow = new AbortController();
+        const flowSignal = () =>
+          AbortSignal.any ? AbortSignal.any([abort.signal, flow.signal]) : abort.signal;
+
         (async () => {
           // History is committed per round: the user message and every fully-completed round
           // survive a failure; only the in-flight round (assistant/tool_calls without all its
           // tool results) is rolled back, so the transcript never goes malformed.
           let committed = null;
+          let pressureCompacted = false;
+          let overflowCompactions = 0;
+          let stuckSignature = null;
+          let stuckRounds = 0;
+          let stuckNudged = false;
+          let smallCmdRounds = 0;
+          let smallCmdNudged = false;
+          let silentRounds = 0;
+          let silentNudged = false;
           try {
             if (!apiKey) throw new Error("OpenAI API key missing");
             if (!root) throw new Error("OpenAI base url missing");
@@ -302,18 +457,56 @@ export function createOpenAIProvider({
 
             for (let round = 0; ; round += 1) {
               if (round >= runawayRounds) throw new Error(`runaway: ${runawayRounds} tool rounds in one send — looks like a loop`);
-              const completion = await requestCompletion(
-                {
-                  model: modelId,
-                  ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-                  messages: [
-                    { role: "system", content: system },
-                    ...session.messages,
-                  ],
-                  ...(tools.length ? { tools } : {}),
-                },
-                { signal: abort.signal, emit },
-              );
+              // Pressure trigger: compact before the endpoint ever has to refuse us.
+              if (!pressureCompacted && contextTokens(session) > compactAtTokens) {
+                pressureCompacted = true;
+                await emit({ type: "summary-started" });
+                const done0 = await compactSession(session, { modelId, keep: compactKeepRecent, reason: "فشار کانتکست" });
+                if (done0) persistSession(agentId, session, options?.cwd);
+              }
+              let completion;
+              try {
+                completion = await requestCompletion(
+                  {
+                    model: modelId,
+                    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+                    messages: [
+                      { role: "system", content: system },
+                      ...session.messages,
+                    ],
+                    ...(tools.length ? { tools } : {}),
+                  },
+                  { signal: flowSignal(), emit },
+                );
+              } catch (error) {
+                // A nudge aborts the in-flight request; the loop continues with the note in-band.
+                if (flow.signal.aborted && !abort.signal.aborted) {
+                  session.messages.push({ role: "user", content: nudgeText || STUCK_NUDGE });
+                  committed = session.messages.length;
+                  flow = new AbortController();
+                  continue;
+                }
+                // Overflow trigger: compact harder and retry the same round (2026-09-27: without
+                // this, a chat over the limit failed identically 13 times in a row).
+                if (overflowCompactions < 2 && CONTEXT_OVERFLOW.test(String(error?.message || error))) {
+                  overflowCompactions += 1;
+                  await emit({ type: "summary-started" });
+                  // second attempt is more aggressive: keep less, summarize more
+                  const shrunk = await compactSession(session, {
+                    modelId,
+                    keep: overflowCompactions === 1 ? compactKeepRecent : 2,
+                    reason: `سرریز کانتکست (تلاش ${overflowCompactions})`,
+                  });
+                  if (shrunk) {
+                    persistSession(agentId, session, options?.cwd);
+                    continue;
+                  }
+                }
+                throw error;
+              }
+              if (completion.usage?.prompt_tokens) {
+                session.promptTokens = (completion.usage.prompt_tokens || 0) + (completion.usage.completion_tokens || 0);
+              }
               if (completion.usage) await emit({ type: "turn-ended", usage: completion.usage });
               if (completion.reasoning && completion.liveReasoning === false) {
                 await emit({ type: "thinking-delta", text: completion.reasoning });
@@ -342,6 +535,46 @@ export function createOpenAIProvider({
                 await runToolCall(call, { options, emit, session, log });
               }
               committed = session.messages.length;
+              // Pace: long streaks of one-short-command rounds or of owner-silence each get one
+              // in-band nudge per send (2026-09-28: a pod investigation ran ~120 one-second
+              // commands and stayed silent for ten minutes).
+              silentRounds = completion.text ? 0 : silentRounds + 1;
+              if (!silentNudged && silentRounds > silentAfter) {
+                silentNudged = true;
+                silentRounds = 0;
+                log.error?.("[openai] silent for too many tool rounds — asking for a progress line");
+                session.messages.push({ role: "user", content: SILENT_NUDGE });
+                committed = session.messages.length;
+                continue;
+              }
+              smallCmdRounds = isSmallTerminalRound(completion.toolCalls) ? smallCmdRounds + 1 : 0;
+              if (!smallCmdNudged && smallCmdRounds >= smallCmdAfter) {
+                smallCmdNudged = true;
+                smallCmdRounds = 0;
+                log.error?.("[openai] streak of one-command terminal rounds — asking for batched scripts");
+                session.messages.push({ role: "user", content: SMALL_CMD_NUDGE });
+                committed = session.messages.length;
+                continue;
+              }
+              // Stuck detection: the same calls with the same args, round after round.
+              const signature = roundSignature(completion.toolCalls);
+              if (signature !== null && signature === stuckSignature) stuckRounds += 1;
+              else {
+                stuckSignature = signature;
+                stuckRounds = signature !== null ? 1 : 0;
+              }
+              if (stuckRounds >= stuckAfter) {
+                if (!stuckNudged) {
+                  stuckNudged = true;
+                  log.error?.(`[openai] ${stuckRounds} identical tool rounds — nudging the model`);
+                  session.messages.push({ role: "user", content: STUCK_NUDGE });
+                  committed = session.messages.length;
+                  continue;
+                }
+                throw new Error(
+                  `stuck: ${stuckRounds} identical tool rounds in a row even after the nudge — stopping the loop`,
+                );
+              }
             }
           } catch (error) {
             if (committed != null && session.messages.length > committed) {
@@ -381,9 +614,20 @@ export function createOpenAIProvider({
     await emit({
       type: "tool-call-completed",
       callId: call.id,
-      toolCall: { ...mcpToolCall(call.name, call.args), result: { status: ok ? "success" : "error", value } },
+      // Cursor-SDK parity: the whole UI/delivery stack (result.js, format.mjs firstJson) reads
+      // MCP-shaped results — value.content[0].text. Emitting the bare string broke every chart
+      // card and Telegram delivery after the 2026-09-24 provider switch (charts rendered as an
+      // empty box: chartId was never parsed out).
+      toolCall: {
+        ...mcpToolCall(call.name, call.args),
+        result: { status: ok ? "success" : "error", value: { content: [{ type: "text", text: value }] } },
+      },
     });
-    session.messages.push({ role: "tool", tool_call_id: call.id, content: value });
+    // The timeline keeps the full (redacted) result; the model's context keeps a capped copy —
+    // one 40 KB dump repeated over rounds is what starves long sessions.
+    const inContext =
+      value.length > toolMaxChars ? `${value.slice(0, toolMaxChars)}\n… [خروجی ${value.length} کاراکتری برای صرفه‌جویی در کانتکست کوتاه شد]` : value;
+    session.messages.push({ role: "tool", tool_call_id: call.id, content: inContext });
     if (!ok) log.error?.(`[openai] tool ${call.name} failed: ${String(result?.error).slice(0, 300)}`);
   }
 
@@ -544,6 +788,14 @@ function tryParse(text) {
   } catch {
     return null;
   }
+}
+
+// Key order must not turn "the same call" into a different one for the stuck detector.
+function stableStringify(value) {
+  if (value == null || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
 }
 
 function errorText(body) {

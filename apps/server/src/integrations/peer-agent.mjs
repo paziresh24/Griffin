@@ -68,7 +68,11 @@ export function peerAgentPrompt({ label, userId, text }) {
 }
 
 export function isNoReply(text) {
-  return String(text || "").trim().replace(/[`*]/g, "") === NO_REPLY;
+  // Whole-message sentinel only — but tolerate the ways it actually arrives: wrapped in
+  // backticks/bold, repeated, or split across stream deltas and rejoined with stray newlines
+  // (2026-09-28: "[NO" + "_REPLY]" reached a chat timeline as the final answer).
+  const s = String(text || "").replace(/[`*]/g, "").trim();
+  return s === NO_REPLY || /^(?:\s*\[?NO_REPLY\]?\s*)+$/i.test(s);
 }
 
 // Sliding-window limiter kept in kv so a restart does not reset it.

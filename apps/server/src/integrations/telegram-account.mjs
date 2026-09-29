@@ -520,7 +520,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           }
 
           // A teammate (or their assistant) in a 1:1 chat: threads decide, signature or not.
+          // settings.autoThreads === false turns the automatic opening off (owner switch,
+          // 2026-09-27): no classification, no new thread, even on an explicit «گریفین» call.
+          // A thread the owner opens by hand (/agent) still feeds, and still closes with /agent off.
           if (threadDm) {
+            const autoThreads = bridge.integration?.(integration.id)?.settings?.autoThreads !== false;
+            if (!autoThreads && !bridge.isCovered(integration.id, key)) {
+              log.info?.(`[telegram-account] thread auto-open off peer=${key}`);
+              return;
+            }
             await handleThreadMessage(key, person, text, message, "teammate");
             return;
           }

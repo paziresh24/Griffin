@@ -156,3 +156,36 @@ test("arvan_dns_create: creates a new record, refuses to touch an existing name"
   await assert.rejects(tools.arvan_dns_create.execute({ domain: "example.com", name: "x", type: "A", value: "not-ip" }), /IPv4/);
   assert.equal(calls.filter((c) => c.method !== "GET").length, 1, "no write on refusal");
 });
+
+test("arvan_dns_delete: deletes by exact name, refuses ambiguous and NS", async () => {
+  const records = [
+    { id: "r1", type: "a", name: "staging", value: [{ ip: "203.0.113.1" }], ttl: 120, cloud: false },
+    { id: "r2", type: "cname", name: "dual", value: { host: "a.example.com" }, ttl: 120, cloud: false },
+    { id: "r3", type: "a", name: "dual", value: [{ ip: "203.0.113.2" }], ttl: 120, cloud: false },
+    { id: "r4", type: "NS", name: "example.com", value: { host: "ns1.arvancloud.ir" } },
+  ];
+  const { tools, calls } = setup({
+    responses: {
+      "GET /cdn/4.0/domains/example.com/dns-records": () => Response.json({ data: records }),
+      "DELETE /cdn/4.0/domains/example.com/dns-records/r1": () => Response.json({ data: { id: "r1" } }),
+      "DELETE /cdn/4.0/domains/example.com/dns-records/r3": () => Response.json({ data: { id: "r3" } }),
+    },
+  });
+
+  const out = await tools.arvan_dns_delete.execute({ domain: "example.com", name: "staging" });
+  assert.equal(out.deleted.id, "r1");
+  assert.equal(out.deleted.type, "a");
+  assert.match(out.deleted.value, /203\.0\.113\.1/);
+  assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
+
+  // ambiguous without type → refuse; with type → the right one
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "dual" }), /pass type/);
+  const picked = await tools.arvan_dns_delete.execute({ domain: "example.com", name: "dual", type: "A" });
+  assert.equal(picked.deleted.id, "r3");
+  assert.ok(calls.some((c) => c.method === "DELETE" && c.path.endsWith("/dns-records/r3")));
+
+  // zone infrastructure and missing names are never touched
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "example.com", type: "NS" }), /NS/);
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "ghost" }), /no record named/);
+  assert.equal(calls.filter((c) => c.method === "DELETE").length, 2, "refusals made no extra deletes");
+});

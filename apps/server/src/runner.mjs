@@ -277,6 +277,30 @@ export function createRunner({
         // throws away work they are about to approve (seen live 2026-09-21 — an approval question
         // reached Telegram, the sweeper cancelled the run 15 minutes later).
         if (isBlocked(chatId)) continue;
+        // Before killing: providers that support it (openai) get one in-band nudge — abort the
+        // silent round and inject a "report your state and continue" note. Killing a silent run
+        // threw away its whole transcript-in-progress, and the task retried from scratch
+        // (2026-09-27: five "stale: no activity" tasks, each retry re-asking the owner).
+        if (!entry.nudged && typeof entry.run?.nudge === "function") {
+          entry.nudged = true;
+          const silentMinutes = Math.round((now - entry.lastEventAt) / 60_000);
+          entry.lastEventAt = Date.now();
+          store.appendEvent(chatId, entry.runId, "run.phase", {
+            phase: "nudge",
+            note: `${silentMinutes} دقیقه سکوت — قبل از لغو، تذکر ادامه تزریق شد`,
+          });
+          log.error?.(`[runner] chat ${chatId}: silent ${silentMinutes}m — nudging before stale-cancel`);
+          try {
+            entry.run.nudge(
+              "[تذکر بعد از سکوت] مدت‌ها هیچ رویدادی ثبت نشده. همین‌جا وضعیت بده: چه کردی، چه چیزی مانده؛ " +
+                "همین کار را بدون تکرار مراحل انجام‌شده به پایان برسان و نتیجه را بده.",
+            );
+          } catch {
+            /* fall through to cancel on the next sweep */
+          }
+          acted.push({ chatId, action: "nudged" });
+          continue;
+        }
         const minutes = Math.round((now - entry.lastEventAt) / 60_000);
         store.appendEvent(chatId, entry.runId, "run.phase", { phase: "stale", note: `${minutes} دقیقه بدون رویداد — گیرکرده فرض و لغو شد` });
         log.error?.(`[runner] chat ${chatId}: no event for ${minutes}m — cancelling as stuck`);

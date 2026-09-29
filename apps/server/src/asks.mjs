@@ -15,6 +15,8 @@
 // surface (UI or Telegram), held early, or the run ended — so a caller (integrations manager)
 // can delete the mirrored Telegram question and keep only genuinely open ones visible there.
 
+import { maskText } from "./redact.mjs";
+
 export const ASK_TOOL = "ask_owner";
 
 export const ASK_REQUESTER_TOOL = "ask_requester";
@@ -70,6 +72,41 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
   // (seen up to 12 minutes on 2026-09-15). The next question of that run takes it immediately.
   const early = new Map(); // targetChatId -> answer
   const listeners = new Map(); // targetChatId -> Set<() => void>, woken when a question starts waiting
+  // The last settled owner question per chat, for the nag guard: re-asking something just answered
+  // gets the previous answer back instead of buzzing the owner again (2026-09-29: a merge approval
+  // was re-asked seven times over four hours, each in fresh wording).
+  const NAG_MS = Math.max(0, Number(process.env.GRIFFIN_ASK_NAG_MS) || 5 * 60 * 1000);
+  const settled = new Map(); // targetChatId -> { question, answer, at }
+
+  // Token overlap between two questions: Persian digits normalized, words ≥ 3 chars plus numbers,
+  // common filler dropped. The re-asked variants of one approval share its identifiers
+  // (MR, 966, finmodel, مرج …) while a genuinely different question does not; and when both
+  // questions carry numbers, different numbers mean different changes — never a nag match.
+  const STOP = new Set(["شود", "است", "بود", "میشود", "میکنید", "دوباره", "هنوز", "باز", "برای", "را", "از", "با", "که", "این", "آن", "همان", "بشه", "کن", "کنید", "what", "the"]);
+  function tokens(text) {
+    const norm = String(text || "")
+      .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
+      .replace(/[؟?!.،؛:«»"']/g, " ")
+      .toLowerCase();
+    const out = new Set(
+      (norm.match(/[a-z0-9_\u0600-\u06FF]+/g) || []).filter((t) => (t.length >= 3 || /^\d+$/.test(t)) && !STOP.has(t)),
+    );
+    return [...out];
+  }
+  function similar(a, b) {
+    const A = tokens(a);
+    const B = tokens(b);
+    if (!A.length || !B.length) return false;
+    const numsOf = (ts) => new Set(ts.filter((t) => /^\d+$/.test(t)));
+    const na = numsOf(A);
+    const nb = numsOf(B);
+    if (na.size && nb.size) {
+      for (const n of na) if (!nb.has(n)) return false;
+    }
+    let hit = 0;
+    for (const t of A) if (B.includes(t)) hit += 1;
+    return hit / Math.min(A.length, B.length) >= 0.5;
+  }
 
   function targetOf(chatId) {
     if (!store?.rootChatId) return chatId;
@@ -97,6 +134,34 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       return Promise.resolve(answer);
     }
 
+    // Everything from here reaches chat timelines and Telegram (ask.pending is what the messenger
+    // bridge delivers from): mask at the source. 2026-09-27: a GitLab glpat- travelled to the
+    // owner's Telegram inside a model-written approval question.
+    question = maskText(String(question || ""));
+
+    // Nag guard: an owner-audience question that matches one just answered is refused with the
+    // previous answer in hand — never auto-accepted (a similar-looking different change must never
+    // inherit a yes), the model applies the owner's real answer through the guarded call or asks a
+    // genuinely different question.
+    const prior = settled.get(target);
+    if (NAG_MS && audience === OWNER && args.via !== "guard" && prior && Date.now() - prior.at < NAG_MS && similar(question, prior.question)) {
+      const mins = Math.max(1, Math.round((Date.now() - prior.at) / 60_000));
+      log?.log?.(`[ask] ${target.slice(0, 8)} nag guard: similar question answered ${mins}m ago — refusing the duplicate`);
+      return Promise.resolve({
+        answered: false,
+        duplicate: true,
+        reason: `این سؤال ${mins} دقیقه پیش جواب گرفته: «${String(prior.answer?.answer || "").slice(0, 160)}». همان جواب معتبر است و دوباره پرسیدن ممنوع — اگر منظورت همان کار قبلی است، ابزارش را صدا بزن (تأییدش را خود سیستم می‌پوشاند)؛ اگر واقعاً سؤال/تغییر دیگری است، جزئیات متمایزش را واضح بنویس و یک‌بار بپرس.`,
+      });
+    }
+    const options = Array.isArray(args.options)
+      ? args.options.map((option) =>
+          option && typeof option === "object"
+            ? { ...option, label: maskText(String(option.label ?? "")), ...(option.description ? { description: maskText(String(option.description)) } : {}) }
+            : option,
+        )
+      : args.options;
+    args = { ...args, options };
+
     // Mirror the question onto the root chat so AskCard appears where the owner is looking.
     const mirrorIds = [];
     if (store && target !== chatId) {
@@ -109,7 +174,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       mirrorIds.push(started.id);
     }
 
-    const item = { question, audience, sourceChatId: chatId, mirrorIds, by: null };
+    const item = { question, audience, sourceChatId: chatId, mirrorIds, by: null, options: Array.isArray(options) ? options : null };
     return new Promise((resolve) => {
       if (!pending.has(target)) pending.set(target, []);
       Object.assign(item, {
@@ -155,7 +220,16 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       // the owner tapped it or the requester replied.
       log?.log?.(`[ask] ${target.slice(0, 8)} ${next.audience} question answered by ${by}: ${String(text.answer || "").slice(0, 80)}`);
     }
-    onSettled(target, { answer: text?.answered ? text.answer : null, cancelled: !text?.answered }); // no longer open — e.g. close the mirrored Telegram message
+    // by/question/options let a caller (the guard's owner-answer bridge) tell an approval apart
+    // from a clarification without re-reading the event log.
+    if (text?.answered) settled.set(target, { question: next.question, answer: text, at: Date.now() });
+    onSettled(target, {
+      answer: text?.answered ? text.answer : null,
+      cancelled: !text?.answered,
+      by,
+      question: next.question,
+      options: next.options,
+    }); // no longer open — e.g. close the mirrored Telegram message
     return true;
   }
 
@@ -201,7 +275,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     // The options travel with the question: a delegated child's confirm is delivered from its
     // mirror on the root chat, and without them it reached Telegram with no buttons.
     confirm(chatId, { question, options = [{ label: "بله" }, { label: "نه" }] }) {
-      return enqueue(chatId, String(question || ""), { audience: OWNER, options });
+      // via:"guard" — the guard's own approval flow manages its own repeats (decision cache +
+      // unanswered map), so the nag guard must not swallow its questions.
+      return enqueue(chatId, String(question || ""), { audience: OWNER, options, via: "guard" });
     },
 
     // Returns true when a waiting tool call received the answer. `by` says who answered: the

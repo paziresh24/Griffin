@@ -21,6 +21,14 @@ test("classify depends on args, not only the tool name", () => {
   assert.ok(classify("debug_exec", { command: "rm -rf /" }).block);
 });
 
+test("full Arvan cache purge needs the owner with the site-death warning; a narrow url purge is free", () => {
+  const full = classify("arvan_cache_purge", { domain: "example.com", scope: "all" });
+  assert.ok(full.approve);
+  assert.match(full.approve, /کل کش/);
+  assert.match(full.approve, /ساعت/); // the consequence travels with the question
+  assert.equal(classify("arvan_cache_purge", { domain: "example.com", scope: "urls", urls: ["https://example.com/a.css"] }), null);
+});
+
 test("gated call runs only after owner yes and is audited", async () => {
   const asks = createAsks();
   const store = recorder();
