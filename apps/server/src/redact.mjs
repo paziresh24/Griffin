@@ -21,6 +21,9 @@ const LITERAL_SECRET = /(\b(?:pass(word|wd)?|passwd|pw|secret|token|api[_-]?key|
 // the event log in clear, because neither matched a secret-looking key name.
 const PEM_PRIVATE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+// Provider-issued PATs (GitLab/Anthropic/OpenAI-style/Slack). 2026-09-27: a glpat-… travelled to
+// the owner's Telegram inside an approval question because it followed "login ", not "token=".
+const TOKEN_LITERAL = /\b(?:glpat|ghp|gho|ghu|github_pat|sk-ant|sk-proj|sk-svcacct|sk-none|xox[bporsa])-[A-Za-z0-9_-]{10,}\b/g;
 
 // Tools whose result *is* the secret: which fields hold it.
 const SECRET_FIELDS = {
@@ -34,7 +37,7 @@ const MAX_DEPTH = 8;
 const LITERAL_TOOLS = new Set(["debug_exec", "pg_query", "infisical_get", "infisical_upsert"]);
 
 function maskString(value, { literals = false } = {}) {
-  let out = value.replace(PEM_PRIVATE, MASK).replace(JWT, MASK);
+  let out = value.replace(PEM_PRIVATE, MASK).replace(JWT, MASK).replace(TOKEN_LITERAL, MASK);
   if (literals) out = out.replace(LITERAL_SECRET, `$1${MASK}`);
   return out.replace(SQL_PASSWORD, (_m, prefix) => `${prefix}'${MASK}'`);
 }

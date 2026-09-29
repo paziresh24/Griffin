@@ -26,7 +26,7 @@ import { jobRoutes } from "./jobs/routes.mjs";
 import { createJobTools } from "./jobs/tools.mjs";
 import { createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
 import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
-import { guardTools } from "./guard.mjs";
+import { guardTools, noteOwnerAnswer } from "./guard.mjs";
 import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL, PEER_CONNECTION_TOOL, peerConnectionTool } from "./peer-auth.mjs";
 import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
@@ -101,9 +101,20 @@ const toolSource = createToolSource({ socketPath: brokerWanted ? BROKER_SOCKET :
 const brokerEnabled = () => brokerWanted && toolSource.available();
 
 // integrationsHolder breaks the cycle: asks needs to tell integrations a question closed, but
-// integrations itself is constructed later (it takes asks as an argument).
+// integrations itself is constructed later (it takes asks as an argument). tasksHolder is the
+// same trick: a finished run anywhere settles open peer tasks immediately instead of waiting for
+// the 5-minute sweep.
 const integrationsHolder = { current: null };
-const asks = createAsks({ store, onSettled: (chatId, info) => integrationsHolder.current?.clearQuestion(chatId, info) });
+const tasksHolder = { current: null };
+const asks = createAsks({
+  store,
+  onSettled: (chatId, info) => {
+    integrationsHolder.current?.clearQuestion(chatId, info);
+    // An owner's yes/no on an approval-style ask covers the next guarded call in the chain once
+    // (double-ask fix). Requester answers never bless anything.
+    if (info?.by !== "requester" && info?.answer != null) noteOwnerAnswer(store, chatId, info);
+  },
+});
 const peersHolder = { current: null };
 const knowledge = createKnowledge({
   store,
@@ -189,7 +200,10 @@ function runModel(chat) {
 const runner = createRunner({
   store,
   runLabel: runModel,
-  onFinished: (chatId) => maybeTitle(chatId),
+  onFinished: (chatId) => {
+    maybeTitle(chatId);
+    tasksHolder.current?.sweep().catch(() => {});
+  },
   onCancel: (chatId) => {
     const leftover = asks.cancel(chatId);
     peersHolder.current?.cancelChildren(chatId);
@@ -422,6 +436,7 @@ const peerTasks = createPeerTasks({
   cancelChildren: (chatId) => peersHolder.current?.cancelChildren(chatId, { includeDelegates: true }),
   pendingWork: (chatId) => peersHolder.current?.pendingDelegates(chatId) || 0,
 });
+tasksHolder.current = peerTasks;
 setInterval(() => peerTasks.sweep().catch(() => {}), 5 * 60_000).unref();
 // A run stuck on an opaque tool call (e.g. the native `task` subagent) never emits another event
 // and would otherwise block that chat — and activeRuns-gated deploys — forever.
@@ -623,6 +638,14 @@ const app = createApp({
 // the core headless: the API, the MCP endpoint and every integration stay exactly as they are.
 const serveWeb = genv("WEB", "on") !== "off" && fs.existsSync(WEB_DIST);
 if (serveWeb) {
+  // Deployed bundles are content-hashed and never change, but index.html must always revalidate —
+  // without this the browser serves a stale index.html pointing at bundles that no longer exist.
+  app.use("*", async (c, next) => {
+    await next();
+    if (c.res && !c.res.headers.has("cache-control")) {
+      c.res.headers.set("cache-control", c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+    }
+  });
   app.use("/assets/*", serveStatic({ root: WEB_DIST }));
   app.use("/*", serveStatic({ root: WEB_DIST }));
   app.get("*", serveStatic({ path: path.join(WEB_DIST, "index.html") }));

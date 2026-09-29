@@ -172,6 +172,16 @@ export function deliverable(run) {
 }
 
 export function firstJson(result) {
+  // The openai provider emitted plain-string values before 2026-09-28; parse those too so old
+  // chats still deliver their charts/files.
+  if (typeof result?.value === "string") {
+    try {
+      const parsed = JSON.parse(result.value);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      /* not JSON */
+    }
+  }
   const content = result?.value?.content || result?.content;
   if (!Array.isArray(content)) return null;
   for (const c of content) {
