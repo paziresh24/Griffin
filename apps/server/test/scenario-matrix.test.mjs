@@ -812,6 +812,32 @@ describe("scenario matrix: owner-answer bridge (no double ask)", () => {
     forgetDecisions();
   });
 
+  it("a stop-word answer («متوفقف شو» — the owner's live typo of «متوقف شو») is a veto, never consent", async () => {
+    const neg = wired();
+    const negAsk = neg.asks.tool("b1").execute({ question: "پیام به همکار بفرستم؟", options: [{ label: "بله" }, { label: "نه" }] });
+    await new Promise((r) => setTimeout(r, 20));
+    neg.asks.answer("b1", { answer: "متوفقف شو", selected: [] });
+    await negAsk;
+    // Not consent (never executes), not ignored (the refusal reaches the model as the owner's no).
+    const out = await neg.guarded.arvan_dns_create.execute({ domain: "example.com", name: "t", type: "A", value: "127.0.0.1" });
+    assert.ok(out.isError, "«متوفقف شو» must veto");
+    assert.equal(neg.count(), 0);
+    forgetDecisions();
+
+    // The correctly-spelled forms too — both count only as a veto.
+    for (const answer of ["متوقف شو", "توقف کن", "ولش کن"]) {
+      const w = wired();
+      const ask = w.asks.tool("b1").execute({ question: "پیام به همکار بفرستم؟", options: [{ label: "بله" }, { label: "نه" }] });
+      await new Promise((r) => setTimeout(r, 20));
+      w.asks.answer("b1", { answer, selected: [] });
+      await ask;
+      const result = await w.guarded.arvan_dns_create.execute({ domain: "example.com", name: "t", type: "A", value: "127.0.0.1" });
+      assert.ok(result.isError, `«${answer}» must veto`);
+      assert.equal(w.count(), 0);
+      forgetDecisions();
+    }
+  });
+
   it("the guard's own typed answer in the owner's words («مرج کن») runs and caches as approved", async () => {
     const { asks, guarded, count, store } = wired();
     const call = guarded.arvan_dns_create.execute({ domain: "example.com", name: "t", type: "A", value: "127.0.0.1" });
