@@ -163,6 +163,27 @@ const BLESSING_MS = Math.max(0, Number(process.env.GRIFFIN_GUARD_BLESSING_MS) ||
 const blessings = new Map(); // rootChatId -> { until, question, answer }
 const vetoes = new Map(); // rootChatId -> { until, question }
 
+// Owner's standing rule (2026-09-29, live case: a peer request's secret rewrite the agent wanted
+// to run itself): work the requester's side could do itself gets a method card, not our execution.
+// Prompt text alone did not hold — the rule was in the very request and the model still executed —
+// so the FIRST gated attempt in a peer-rooted chain is refused with that instruction, and only the
+// retry (the model insisting, reason in `why`) reaches the owner, with the triage line in the
+// question so the right default is in front of them. GRIFFIN_GUARD_PEER_CARD=off disables.
+const PEER_CARD = process.env.GRIFFIN_GUARD_PEER_CARD !== "off";
+const peerCards = new Map(); // decisionKey -> firstAttemptAt
+
+// A chain is peer-rooted when the ROOT chat's caller is a peer agent (a delegated subtask carries
+// its own caller, so only the root answers "whose request is this?"). Test stores without getChat
+// simply say no.
+function peerRooted(store, chatId) {
+  try {
+    const root = store?.rootChatId?.(chatId) || chatId;
+    return String(store?.getChat?.(root)?.caller || "").startsWith("peer:");
+  } catch {
+    return false;
+  }
+}
+
 // Only yes/no-shaped questions bless: several substantive options are a clarification, and an
 // unrelated "بله" to one of those must never approve the next guarded call.
 function approvalShaped(options) {
@@ -225,6 +246,7 @@ export function forgetDecisions() {
   unanswered.clear();
   blessings.clear();
   vetoes.clear();
+  peerCards.clear();
 }
 
 const WHY = "why";
@@ -355,11 +377,33 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
           });
           return inner(args);
         }
+        const viaPeer = PEER_CARD && peerRooted(store, chatId);
+        if (viaPeer) {
+          const cardAt = peerCards.get(key);
+          if (cardAt && Date.now() - cardAt < DECISION_TTL_MS) {
+            peerCards.delete(key); // the insistence — this one reaches the owner, with the triage line
+          } else {
+            peerCards.set(key, Date.now());
+            store?.recordApproval?.({
+              chatId,
+              caller,
+              tool: name,
+              args: redactArgs(name, args),
+              decision: "peer-card",
+              detail: "نخستین تلاش اجرای کارِ همکار — روش کامل (method card) به‌جای اجرا درخواست شد",
+            });
+            return refused(
+              "این کار در زنجیرهٔ یک همکار است: پیش از اجرای خودت، راهِ کامل را به خودِ درخواست‌کننده بده (method card: مسیر، جای سکرت فقط با مرجعِ سکرت‌منیجر، دستور دقیق) تا خودش بزند و بعد راستی‌آزمایی کن. اگر واقعاً نمی‌تواند و فراهم‌کردن دسترسی برایش هم ممکن یا منطقی نیست، همین فراخوانی را دوباره صدا بزن و دلیلش را در why بنویس — آن‌گاه سؤال تأیید به Owner می‌رسد",
+            );
+          }
+        }
+        const baseQuestion = approvalQuestion(store, chatId, name, args, verdict.approve, why);
+        const question = viaPeer
+          ? `${baseQuestion}\nیک‌خطِ تصمیم: آیا خودِ درخواست‌کننده می‌توانست این کار را با دسترسی‌های خودش انجام دهد؟ اگر بله، به‌جای اجرا، روش را به او بده.`
+          : baseQuestion;
         let pending = inflight.get(key);
         if (!pending) {
-          pending = confirmWithOwner(store, asks, chatId, approvalQuestion(store, chatId, name, args, verdict.approve, why)).finally(() =>
-            inflight.delete(key),
-          );
+          pending = confirmWithOwner(store, asks, chatId, question).finally(() => inflight.delete(key));
           inflight.set(key, pending);
         }
         const conf = await pending;
