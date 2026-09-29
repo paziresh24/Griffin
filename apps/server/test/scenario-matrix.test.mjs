@@ -838,6 +838,59 @@ describe("scenario matrix: owner-answer bridge (no double ask)", () => {
     }
   });
 
+  it("peer-rooted chain: the first gated attempt gets the method-card instruction; the retry asks the owner with the triage line", async () => {
+    forgetDecisions();
+    const rows = [];
+    const events = [];
+    const store = {
+      rows,
+      events,
+      recordApproval: (row) => rows.push(row),
+      appendEvent: (_c, _r, type, data) => events.push({ type, data }),
+      rootChatId: (chatId) => (chatId === "sub1" ? "root-peer" : chatId),
+      getChat: (id) => (id === "root-peer" ? { id, caller: "peer:ali-ahmadi" } : null),
+    };
+    const asks = createAsks({ store });
+    let ran = 0;
+    const tools = { infisical_upsert: { async execute() { ran += 1; return { content: [] }; } } };
+    // The subtask carries its own caller — the peer-ness is only visible through the root chat.
+    const guarded = guardTools(tools, { chatId: "sub1", asks, store, caller: "griffin", extra: new Set(["infisical_upsert"]) });
+
+    const first = await guarded.infisical_upsert.execute({ name: "APP_PIN", path: "/team-app", value: "x" });
+    assert.ok(first.isError, "the first attempt never executes");
+    assert.match(JSON.stringify(first), /method card|راه\u200c? کامل/, "the refusal carries the method-card instruction");
+    assert.equal(ran, 0);
+    assert.equal(asks.isWaiting("root-peer"), false, "no owner question on the first attempt");
+    assert.equal(rows.at(-1).decision, "peer-card", "the audit row says what happened");
+
+    const retry = guarded.infisical_upsert.execute({ name: "APP_PIN", path: "/team-app", value: "x", why: "خودِ درخواست‌کننده به این پروژه دسترسی ندارد و فراهم‌کردنش هم ممکن نیست" });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(asks.isWaiting("root-peer"), true, "the insisted retry reaches the owner");
+    const asked = events.find((e) => e.type === "ask.pending");
+    assert.ok(asked, "ask.pending emitted");
+    assert.match(String(asked.data.args?.question || asked.data.question || JSON.stringify(asked.data)), /خودِ درخواست‌کننده/, "the question carries the triage line");
+    asks.answer("root-peer", { answer: "بله", selected: ["بله"] });
+    await retry;
+    assert.equal(ran, 1, "an explicit owner yes still executes");
+    forgetDecisions();
+  });
+
+  it("peer-card gate does not touch non-peer chains (no root chat lookup, no gate)", async () => {
+    forgetDecisions();
+    const asks = createAsks();
+    const store = recorder();
+    let ran = 0;
+    const tools = { infisical_upsert: { async execute() { ran += 1; return { content: [] }; } } };
+    const guarded = guardTools(tools, { chatId: "g9", asks, store, caller: "griffin", extra: new Set(["infisical_upsert"]) });
+    const call = guarded.infisical_upsert.execute({ name: "S", path: "/x", value: "1" });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(asks.isWaiting("g9"), true, "owner/team chains ask on the first attempt as before");
+    asks.answer("g9", { answer: "بله", selected: ["بله"] });
+    await call;
+    assert.equal(ran, 1);
+    forgetDecisions();
+  });
+
   it("the guard's own typed answer in the owner's words («مرج کن») runs and caches as approved", async () => {
     const { asks, guarded, count, store } = wired();
     const call = guarded.arvan_dns_create.execute({ domain: "example.com", name: "t", type: "A", value: "127.0.0.1" });
