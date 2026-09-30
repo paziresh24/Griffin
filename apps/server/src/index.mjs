@@ -27,6 +27,7 @@ import { createJobTools } from "./jobs/tools.mjs";
 import { createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
 import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
 import { guardTools, noteOwnerAnswer } from "./guard.mjs";
+import { createVerifier } from "./verify.mjs";
 import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL, PEER_CONNECTION_TOOL, peerConnectionTool } from "./peer-auth.mjs";
 import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
@@ -106,6 +107,7 @@ const brokerEnabled = () => brokerWanted && toolSource.available();
 // the 5-minute sweep.
 const integrationsHolder = { current: null };
 const tasksHolder = { current: null };
+const verifyHolder = { current: null };
 const asks = createAsks({
   store,
   onSettled: (chatId, info) => {
@@ -203,6 +205,10 @@ const runner = createRunner({
   onFinished: (chatId) => {
     maybeTitle(chatId);
     tasksHolder.current?.sweep().catch(() => {});
+    // Maker/checker: re-run the finished run's read-only probes outside the model; a drifted
+    // claim is corrected in-chat on the next turn. verifyHolder is filled once callBrokerTool
+    // exists below (same holder trick as tasksHolder).
+    verifyHolder.current?.verifyFinishedRun(chatId).catch(() => {});
   },
   onCancel: (chatId) => {
     const leftover = asks.cancel(chatId);
@@ -437,6 +443,8 @@ const peerTasks = createPeerTasks({
   pendingWork: (chatId) => peersHolder.current?.pendingDelegates(chatId) || 0,
 });
 tasksHolder.current = peerTasks;
+// Fresh-context checker for finished runs (see verify.mjs); needs callBrokerTool above.
+verifyHolder.current = createVerifier({ store, callTool: callBrokerTool, runner });
 setInterval(() => peerTasks.sweep().catch(() => {}), 5 * 60_000).unref();
 // A run stuck on an opaque tool call (e.g. the native `task` subagent) never emits another event
 // and would otherwise block that chat — and activeRuns-gated deploys — forever.
