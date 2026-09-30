@@ -280,6 +280,30 @@ describe("scenario matrix: provider context management", () => {
     assert.equal(mock.summaryCalls, 0);
   });
 
+  it("lossless prune before the summarizer: repeated identical probe rounds collapse", async () => {
+    const cwd = tempWorkspace();
+    mock.play([
+      { type: "tool", name: "echo", args: { text: "یکسان" } },
+      { type: "tool", name: "echo", args: { text: "یکسان" } },
+      { type: "tool", name: "echo", args: { text: "یکسان" } },
+      { type: "overflow" },
+      { type: "text", text: "ok" },
+    ]);
+    const agent = provider(baseUrl, TIGHT).create({ cwd, customTools: APPS });
+    const { result } = await send(agent, "کار پایش");
+    assert.equal(result.status, "finished");
+    assert.equal(mock.summaryCalls, 1);
+    const summaryBody = [...mock.requests]
+      .reverse()
+      .find((r) => Array.isArray(r.body?.messages) && /summarize the middle/i.test(String(r.body.messages[0]?.content || "")))?.body;
+    assert.ok(summaryBody, "summary request captured");
+    const rendered = String(summaryBody.messages[1]?.content || "");
+    assert.match(rendered, /بار تکرار شد/, "the repeat marker replaces the copies");
+    // the identical tool RESULT is sent to the summarizer exactly once, however many rounds ran
+    assert.equal((rendered.match(/"ok":true/g) || []).length, 1, "repeated result payload not re-sent");
+    assertSessionWellFormed(sessionOnDisk(cwd, agent.agentId).messages, "prune-middle");
+  });
+
   it("pressure compaction fires before the endpoint ever overflows", async () => {
     const cwd = tempWorkspace();
     mock.play([

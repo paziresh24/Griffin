@@ -148,9 +148,52 @@ export function createOpenAIProvider({
     return session.promptTokens > 0 ? session.promptTokens : estimateTokens(session.messages);
   }
 
+  // Lossless-first stage before paying the summarizer: identical (call, result) pairs — the
+  // steady diet of a monitoring/looping run, the same probe round after round — are emitted once
+  // with a repeat count and dropped afterwards. Nothing the summary needs is lost, and the
+  // summarizer input can shrink several-fold for free ("lossless before lossy" in the compaction
+  // funnel). A tool result is paired with its call through tool_call_id, so repeats anywhere in
+  // the middle collapse, not just adjacent ones.
+  function pruneMiddle(messages) {
+    const callOf = new Map(); // tool_call_id -> name(args) key of the round that issued it
+    const items = []; // { message, key } — key set for tool results only
+    const counts = new Map(); // key -> occurrences
+    for (const message of messages) {
+      if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls) {
+          callOf.set(call?.id, `${call?.function?.name}(${String(call?.function?.arguments || "").slice(0, 400)})`);
+        }
+        items.push({ message });
+        continue;
+      }
+      if (message.role === "tool") {
+        const key = `${callOf.get(message.tool_call_id) || "?"}\u0000${String(message.content || "")}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
+        items.push({ message, key });
+        continue;
+      }
+      items.push({ message });
+    }
+    const emitted = new Set();
+    const out = [];
+    for (const item of items) {
+      if (!item.key) {
+        out.push(item.message);
+        continue;
+      }
+      const first = !emitted.has(item.key);
+      if (!first) continue; // a later identical (call, result) — already represented
+      emitted.add(item.key);
+      out.push(item.message);
+      const total = counts.get(item.key) || 1;
+      if (total > 1) out.push({ role: "tool", content: `[همان نتیجهٔ فوق — در این بخش ${total} بار تکرار شد]` });
+    }
+    return out;
+  }
+
   function renderForSummary(messages) {
     const lines = [];
-    for (const message of messages) {
+    for (const message of pruneMiddle(messages)) {
       if (message.role === "user") lines.push(`کاربر: ${String(message.content).slice(0, 2_000)}`);
       else if (message.role === "assistant") {
         const calls = (message.tool_calls || [])
