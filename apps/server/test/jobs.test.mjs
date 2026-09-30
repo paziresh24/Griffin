@@ -44,18 +44,21 @@ function setup({ answer = "مصرف مموری گیت‌لب ۳٫۲ گیگ اس�
   };
   const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {} } });
   const delivered = [];
-  const jobs = createJobs({
-    store,
-    runner,
-    deliver: async (chatId, targets, meta) => {
-      delivered.push({ chatId, targets, meta });
-      return targets.map((t) => ({ ...t, ok: true }));
-    },
-    log: { error() {} },
-    tickMs: 10_000,
-    ...(timeoutMs ? { timeoutFor: () => timeoutMs } : {}),
-  });
-  return { store, jobs, runner, prompts, delivered };
+  const makeJobs = (extra = {}) =>
+    createJobs({
+      store,
+      runner,
+      deliver: async (chatId, targets, meta) => {
+        delivered.push({ chatId, targets, meta });
+        return targets.map((t) => ({ ...t, ok: true }));
+      },
+      log: { error() {} },
+      tickMs: 10_000,
+      ...(timeoutMs ? { timeoutFor: () => timeoutMs } : {}),
+      ...extra,
+    });
+  const jobs = makeJobs();
+  return { store, jobs, makeJobs, runner, prompts, delivered };
 }
 
 test("cron and interval are computed in Tehran wall-clock time", () => {
@@ -186,6 +189,38 @@ test("a job cannot run twice at once", async () => {
 
 test("jobMessage keeps the owner's prompt verbatim", () => {
   assert.match(jobMessage({ name: "n", prompt: "متن اصلی" }), /متن اصلی$/);
+});
+
+test("a restart keeps a future due time instead of pushing it another day", () => {
+  const { store, makeJobs } = setup();
+  let clock = new Date("2026-09-29T06:00:00Z");
+  const first = makeJobs({ now: () => clock });
+  const job = first.create({ name: "روزانه", prompt: "کار", triggerType: "schedule", trigger: { every: "1d" } });
+  assert.equal(job.nextAt, "2026-09-30T06:00:00.000Z");
+
+  // Boot a fresh scheduler over the same store (a process restart) while the job is not due yet.
+  clock = new Date("2026-09-29T20:00:00Z");
+  const second = makeJobs({ now: () => clock });
+  second.start();
+  assert.equal(store.getJob(job.id).nextAt, job.nextAt, "boot must not postpone the scheduled fire");
+  second.stop();
+});
+
+test("a job overdue while the app was down fires once as a catch-up on boot", async () => {
+  const { store, makeJobs } = setup();
+  let clock = new Date("2026-09-28T06:00:00Z");
+  const first = makeJobs({ now: () => clock });
+  const job = first.create({ name: "روزانه", prompt: "کار", triggerType: "schedule", trigger: { every: "1d" } });
+
+  // Come back 3h after the missed due time: the first tick runs the missed job once.
+  clock = new Date("2026-09-29T09:00:00Z");
+  const second = makeJobs({ now: () => clock });
+  second.start();
+  second.tick();
+  await waitFor(() => store.lastJobRun(job.id)?.status === "finished");
+  assert.equal(store.lastJobRun(job.id).trigger, "schedule");
+  assert.equal(store.getJob(job.id).nextAt, "2026-09-30T09:00:00.000Z", "the next fire is one interval after the catch-up");
+  second.stop();
 });
 
 function waitFor(check, ms = 4000) {
