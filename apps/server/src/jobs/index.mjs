@@ -155,6 +155,11 @@ export function createJobs({
         for (const run of store.listJobRuns(job.id, 5)) {
           if (run.status === "running") store.finishJobRun(run.id, { status: "cancelled", error: "به‌خاطر ری‌استارت سرور قطع شد" });
         }
+        // Recomputing nextAt from "now" on every boot postpones a daily job by a full day per
+        // restart, and this app restarts most days — the job never becomes due. Keep any due
+        // time the job already has: a future one is honored, an overdue one is left for the
+        // first tick to fire as a missed catch-up instead of silently skipping a whole interval.
+        if (job.enabled && job.nextAt) continue;
         schedule(job);
       }
       timer = setInterval(() => {
