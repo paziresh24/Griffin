@@ -90,6 +90,32 @@ test("verify: owner chats and chats without probes are skipped untouched", async
   assert.deepEqual(await none.verifier.verifyFinishedRun("c1"), { skipped: "no-probes" });
 });
 
+test("verify: a delegated subtask inherits trust from its ROOT chat and reports drift there (2026-10-03 live gap)", async () => {
+  const appended = [];
+  const sent = [];
+  const events = [
+    { type: "run.started", runId: "r9", data: {} },
+    probe("http_check", { url: "https://x.example/" }, { status: 200 }),
+  ];
+  const store = {
+    // the subtask carries caller "griffin"; its root is a peer chat that received the report
+    getChat: (id) => (id === "sub9" ? { id, caller: "griffin" } : id === "peer-root" ? { id, caller: "peer:aida-ardani" } : null),
+    rootChatId: (id) => (id === "sub9" ? "peer-root" : id),
+    lastEventId: () => events.length,
+    eventsAfter: () => events,
+    appendEvent: (chatId, runId, type, data) => appended.push({ chatId, runId, type, data }),
+  };
+  const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, msg }) };
+  const verifier = createVerifier({ store, callTool: async () => ({ status: 523 }), runner, log: { error() {} } });
+  const out = await verifier.verifyFinishedRun("sub9");
+  assert.deepEqual(out, { checks: 1, mismatches: 1 }, "subtask of a peer root IS verified");
+  assert.equal(appended.at(-1).chatId, "sub9", "the verify event stays in the subtask chat");
+  assert.equal(appended.at(-1).data.phase, "verify-mismatch");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chatId, "peer-root", "the correction goes where the claim was consumed");
+  assert.match(sent[0].msg.text, /523/);
+});
+
 test("verify: a busy chat is left alone (verifying a moving target is noise), and the kill switch works", async () => {
   const { createVerifier } = await import("../src/verify.mjs");
   const busyVerifier = createVerifier({
