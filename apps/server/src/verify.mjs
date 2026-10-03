@@ -6,6 +6,10 @@
 // the record with the person it reported to. Read-only probes only; GRIFFIN_VERIFY=off disables.
 
 const PROBES = ["http_check", "dns_lookup"];
+// The report a person receives usually comes from a DELEGATED subtask (caller "griffin") — the
+// trust question is who the ROOT chat belongs to, not who ran this particular leg (2026-10-03:
+// three days live, zero verifications, because probes live in subtask chats the direct caller
+// gate never covered — same root-lookup lesson as the guard's peerRooted).
 const VERIFY_CALLERS = (caller) => caller === "team" || caller === "scheduler" || caller === "ops" || String(caller || "").startsWith("peer:");
 const MAX_PROBES = 5;
 const CALL_MS = 20_000;
@@ -61,15 +65,22 @@ export function createVerifier({
   }
 
   /**
-   * Re-check the probes of the LAST finished run in this chat. Returns a small summary object
+   * Re-check the probes of the LAST finished run in this chat. The gate reads the ROOT chat's
+   * caller (delegated subtasks inherit trust from their root); a mismatch is reported to the
+   * ROOT chat — the conversation that received the claim. Returns a small summary object
    * (also {skipped: reason} shapes) so tests and callers can assert without parsing logs.
    */
   async function verifyFinishedRun(chatId) {
     try {
       if (!enabled()) return { skipped: "off" };
-      const chat = store.getChat?.(chatId);
-      if (!mayVerifyCaller(chat?.caller)) return { skipped: "caller" };
-      if (typeof runner?.isActive === "function" && runner.isActive(chatId)) return { skipped: "active" };
+      const chat = store.getChat?.(chatId) || null;
+      const rootId = store?.rootChatId?.(chatId) || chatId;
+      const rootChat = rootId === chatId ? chat : store.getChat?.(rootId) || null;
+      if (!mayVerifyCaller(rootChat?.caller ?? chat?.caller)) return { skipped: "caller" };
+      const reportChatId = rootChat ? rootId : chatId; // where the claim was consumed
+      if (typeof runner?.isActive === "function" && (runner.isActive(chatId) || runner.isActive(reportChatId))) {
+        return { skipped: "active" };
+      }
 
       const lastId = store.lastEventId?.(chatId) ?? 0;
       const events = (store.eventsAfter?.(chatId, Math.max(0, lastId - 4000), 4000) || []);
@@ -120,8 +131,8 @@ export function createVerifier({
           `[راستی‌آزمایی خودکار — این پیام را سیستم فرستاده، نه Owner]\n` +
           `ادعای پایان کارِ همین رند با وضعیت فعلی سیستم نمی‌خواند:\n${lines}\n` +
           `به کسی که کار را گزارش کردی یک خط اصلاح بفرست؛ ادعای قبلی را تکرار نکن و اگر ریشه‌اش را می‌دانی بگو.`;
-        await runner.send(chatId, { text, images: [], intent: "queue" });
-        log.error?.(`[verify] chat ${chatId}: ${mismatches.length}/${checks.length} probe(s) drifted — correction queued`);
+        await runner.send(reportChatId, { text, images: [], intent: "queue" });
+        log.error?.(`[verify] chat ${chatId}: ${mismatches.length}/${checks.length} probe(s) drifted — correction queued in ${reportChatId}`);
       } else {
         store.appendEvent?.(chatId, runId, "run.phase", { phase: "verified", note: `${checks.length} probe(s) re-checked, unchanged` });
       }

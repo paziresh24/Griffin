@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { redactArgs, redactResult } from "../src/redact.mjs";
+import { maskText, redactArgs, redactResult } from "../src/redact.mjs";
 
 test("infisical_upsert args mask the value and only the value", () => {
   const out = redactArgs("infisical_upsert", {
@@ -71,4 +71,19 @@ test("secret-shaped results are masked: private keys, JWTs, infisical values, ku
   assert.match(JSON.stringify(ks), /JWT_SECRET/);
   const out = redactResult("debug_exec", { stdout: `cat id\n${key}\ntoken eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3OCJ9.abcdefghijkl` });
   assert.doesNotMatch(JSON.stringify(out), /b3BlbnNzaC1rZXkt|eyJhbGci/);
+});
+
+// 2026-10-01 live case: an Arvan key is "apikey"+UUID with NO separator, so key-name and
+// literal-assignment patterns both missed it inside a debug_exec command — it sat raw in events.
+test("arvan apikey+uuid literals are masked wherever they appear, separator or not", () => {
+  const command =
+    `umask 077\ncat > /root/.arvan.json <<'EOF'\n{"key":"apikeyc9fb923a-5f28-5095-a068-087d5629af4f"}\nEOF\n` +
+    `curl -s -H 'Apikey: apikey11111111-2222-3333-4444-555555555555' https://napi.arvancloud.ir/cdn/4.0/domains`;
+  const out = redactArgs("debug_exec", { command });
+  assert.doesNotMatch(out.command, /apikeyc9fb923a|apikey11111111/, "the key value never persists");
+  assert.match(out.command, /"key":"\*\*\*"/, "a mask replaces the JSON-embedded value");
+  assert.match(out.command, /Apikey: \*\*\*/, "and the header form too");
+  assert.match(out.command, /napi\.arvancloud\.ir\/cdn\/4\.0\/domains/, "the rest of the command stays auditable");
+  // and in free text (asks, approval questions) through maskText
+  assert.doesNotMatch(maskText(`کلید توکنش این بود: apikeyc9fb923a-5f28-5095-a068-087d5629af4f`), /apikeyc9fb/);
 });
