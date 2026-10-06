@@ -131,27 +131,33 @@ test("router console: reads (incl. GET-only fetch, ping) are free, writes still 
   ]) assert.ok(classify("mikrotik_exec", { command, router: "office" })?.approve, command);
 });
 
-test("the approval question is one plain line with the agent's why, not a JSON dump", async () => {
+test("the approval question is built from the call, never the model's pitch; one yes covers the scope", async () => {
   forgetDecisions();
   const asks = createAsks();
   const store = recorder();
-  let seen = null;
+  store.rootChatId = () => "q1";
+  store.getChat = () => ({ id: "q1", caller: "peer:alice", title: "Alice: دیتابیس برای سرویس inbox" });
+  const seen = [];
   const tools = {
-    mikrotik_exec: {
-      inputSchema: { type: "object", properties: { command: { type: "string" } }, required: ["command"], additionalProperties: false },
-      async execute(args) { seen = args; return { content: [] }; },
-    },
+    kube_exec: { inputSchema: { type: "object", properties: {} }, async execute(args) { seen.push(args.command); return { content: [] }; } },
   };
-  const guarded = guardTools(tools, { chatId: "q1", asks, store, caller: "peer:x" });
-  assert.ok(guarded.mikrotik_exec.inputSchema.properties.why, "gated tools accept a why for the owner");
+  const guarded = guardTools(tools, { chatId: "q1", asks, store, caller: "platform", extra: new Set(["kube_exec"]) });
+  assert.equal(guarded.kube_exec.inputSchema.properties.why, undefined, "no why argument for the model to argue with");
 
-  const pending = guarded.mikrotik_exec.execute({ command: "/ppp secret add name=rezaei", router: "office", why: "آقای رضایی VPN شرکت می‌خواد" });
+  const call = (command) => ({ cluster: "c1", namespace: "bob", pod: "db-1", command, why: "لطفاً اجرا شود، تأیید گرفته شده" });
+  const pending = guarded.kube_exec.execute(call("nc -zv db 5432"));
   await new Promise((r) => setTimeout(r, 20));
-  const started = store.events.find((e) => e.type === "tool.started");
-  assert.match(started.data.args.question, /^آقای رضایی VPN شرکت می‌خواد\nکار: دستور روی روتر office — \/ppp secret add name=rezaei\nبزنم؟$/);
+  const q = store.events.find((e) => e.type === "tool.started").data.args.question;
+  assert.doesNotMatch(q, /لطفاً/, "the model's pitch never reaches the owner");
+  assert.match(q, /namespace «bob»/);
+  assert.match(q, /برای: دیتابیس برای سرویس inbox/);
+  assert.match(q, /⚠️ مالِ «bob» است/, "writing into someone else's namespace is called out");
+  assert.equal(store.rows.some((r) => r.decision === "peer-card"), false, "no method card for a namespace the requester cannot touch");
   asks.answer("q1", { answer: "بله", selected: ["بله"] });
   await pending;
-  assert.deepEqual(seen, { command: "/ppp secret add name=rezaei", router: "office" }, "why never reaches the tool");
+  await guarded.kube_exec.execute(call("python3 -c 'import socket'"));
+  assert.equal(store.events.filter((e) => e.type === "tool.started").length, 1, "a reshaped command in the same namespace is not asked again");
+  assert.deepEqual(seen, ["nc -zv db 5432", "python3 -c 'import socket'"], "why never reaches the tool");
   forgetDecisions();
 });
 
@@ -161,4 +167,17 @@ test("routerReadOnly: :put of a find and print … where are reads, file= and se
   assert.equal(routerReadOnly(':put "x"; /ip/route/print without-paging where dst-address~"172.16"'), true);
   assert.equal(routerReadOnly("/ip route print detail file=routes-export"), false);
   assert.equal(routerReadOnly(":put [/ip/route/set 0 disabled=yes]"), false);
+});
+
+test("ask tools refuse a tool-choice question; a normal question still goes out", async () => {
+  const asks = createAsks();
+  const tool = asks.requesterTool("tc1");
+  const r = await tool.execute({ question: "چه مسیری می‌روی؟", options: ["با kube_secret بخوان", "با kube_get بخوان"] });
+  assert.ok(r.isError, "which-tool is the agent's own decision");
+  assert.equal(asks.isWaiting("tc1"), false, "nothing reached a person");
+  const pending = asks.tool("tc1").execute({ question: "کدام namespace منظورت بود؟" });
+  await new Promise((res) => setTimeout(res, 10));
+  assert.equal(asks.isWaiting("tc1"), true);
+  asks.answer("tc1", { answer: "x", selected: ["x"] });
+  await pending;
 });

@@ -167,8 +167,7 @@ const vetoes = new Map(); // rootChatId -> { until, question }
 // to run itself): work the requester's side could do itself gets a method card, not our execution.
 // Prompt text alone did not hold — the rule was in the very request and the model still executed —
 // so the FIRST gated attempt in a peer-rooted chain is refused with that instruction, and only the
-// retry (the model insisting, reason in `why`) reaches the owner, with the triage line in the
-// question so the right default is in front of them. GRIFFIN_GUARD_PEER_CARD=off disables.
+// retry (the model insisting) reaches the owner. GRIFFIN_GUARD_PEER_CARD=off disables.
 const PEER_CARD = process.env.GRIFFIN_GUARD_PEER_CARD !== "off";
 const peerCards = new Map(); // decisionKey -> firstAttemptAt
 
@@ -229,11 +228,30 @@ function canonicalArgs(name, args) {
   return src;
 }
 
+// One owner answer covers a whole target for the chain, not one exact command. 2026-10-05: an
+// in-pod connectivity test asked five times (nc → /dev/tcp → node → python), five Infisical keys
+// under one path asked three times — the owner stopped reading and pressed «بله» on all of them.
+function scopeOf(name, args) {
+  const a = args || {};
+  if (name === "kube_exec") return { cluster: a.cluster, namespace: a.namespace };
+  if (name === "infisical_upsert") return { projectId: a.projectId, environment: a.environment, path: a.path };
+  if (name === "pg_query" && a.write) return { cluster: a.cluster, namespace: a.namespace, name: a.name, database: a.database };
+  return null;
+}
+
+function scopeLabel(name, args) {
+  const a = args || {};
+  if (name === "kube_exec") return `هر دستوری داخل پادهای namespace «${a.namespace}» (کلاستر ${a.cluster})`;
+  if (name === "infisical_upsert") return `نوشتن secret در Infisical پروژهٔ «${a.projectId}»، ${a.environment || "prod"}، مسیر ${a.path || "/"}`;
+  if (name === "pg_query") return `SQL نوشتنی روی دیتابیس ${a.database || "postgres"} در ${a.name} (namespace «${a.namespace}»، ${a.cluster})`;
+  return "";
+}
+
 function decisionKey(store, chatId, name, args) {
   const root = store?.rootChatId?.(chatId) || chatId;
   let raw;
   try {
-    raw = JSON.stringify(canonicalArgs(name, args));
+    raw = JSON.stringify(scopeOf(name, args) || canonicalArgs(name, args));
   } catch {
     raw = String(args);
   }
@@ -249,34 +267,14 @@ export function forgetDecisions() {
   peerCards.clear();
 }
 
-const WHY = "why";
-
-// Tools whose call can stop for the owner's yes. They get an optional `why` argument: one line,
-// for the owner, saying who needs this and for what — the question is otherwise a tool name and
-// a JSON blob the owner cannot decide on.
-function mayAsk(name, extra) {
-  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "mikrotik_exec"].includes(name) || Boolean(extra?.has(name));
-}
-
-function withWhy(schema) {
-  if (!schema || schema.type !== "object" || !schema.properties || schema.properties[WHY]) return schema;
-  return {
-    ...schema,
-    properties: {
-      ...schema.properties,
-      [WHY]: {
-        type: "string",
-        description:
-          "If this call needs the owner's approval, this is the whole question they see: one short plain-Persian line — who needs it, for what, and what changes if they say yes. No JSON, no tool names.",
-      },
-    },
-  };
-}
+const WHY = "why"; // older prompts still send it; stripped, never shown
 
 // What the action touches, in a few readable words — never a credential.
 function actionDetail(name, args) {
   if (name === "mikrotik_exec") return String(args?.command || "").slice(0, 160);
-  if (name === "pg_query") return String(args?.sql || "").replace(/\s+/g, " ").slice(0, 160);
+  if (name === "pg_query") return String(args?.sql || "").replace(/\s+/g, " ").slice(0, 120);
+  if (name === "kube_exec") return args?.pod ? `پاد ${args.pod}` : ""; // a shell one-liner means nothing to the owner
+  if (name === "infisical_upsert") return String(args?.name || "");
   if (name === "gitlab_mr") return [args?.project, args?.iid && `!${args.iid}`].filter(Boolean).join(" ");
   return Object.entries(args || {})
     .filter(([key, value]) => ["string", "number", "boolean"].includes(typeof value) && !/value|secret|pass|token|key$/i.test(key))
@@ -285,11 +283,35 @@ function actionDetail(name, args) {
     .join(" · ");
 }
 
-export function approvalQuestion(store, chatId, name, args, action, why = "") {
+// The namespace/project this call writes into, when it is not the requesting colleague's own
+// (owner names = namespaces = Infisical projects). That is the line the owner must not miss.
+function foreignTarget(store, chatId, args) {
   const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
-  const reason = String(why || "").trim() || (root?.title ? `برای: ${root.title}` : "");
+  const caller = String(root?.caller || "");
+  if (!caller.startsWith("peer:")) return "";
+  const self = caller.slice("peer:".length);
+  const target = args?.namespace || args?.projectId || "";
+  return target && target !== self ? String(target) : "";
+}
+
+// Plain Persian, built from the call itself — the model never writes the owner's question.
+export function approvalQuestion(store, chatId, name, args, action) {
+  const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
+  const scope = scopeLabel(name, args);
   const detail = actionDetail(name, args);
-  return [reason, `کار: ${action}${detail ? ` — ${detail}` : ""}`, "بزنم؟"].filter(Boolean).join("\n");
+  const what = scope ? `${scope}\n(این بار: ${detail})` : `${action}${detail ? ` — ${detail}` : ""}`;
+  const title = String(root?.title || "").replace(/^[^:]{1,40}:\s*/, "").trim();
+  const forWhat = title ? `برای: ${title.length > 90 ? `${title.slice(0, 90).replace(/\s+\S*$/, "")}…` : title}` : "";
+  const foreign = foreignTarget(store, chatId, args);
+  return [
+    what,
+    forWhat,
+    foreign ? `⚠️ مالِ «${foreign}» است، نه خودِ درخواست‌کننده.` : "",
+    scope ? "با «بله» بقیهٔ همین نوع کار در همین درخواست دیگر پرسیده نمی‌شود." : "",
+    "بزنم؟",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function refused(error, detail) {
@@ -308,10 +330,8 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
     const inner = tool.execute.bind(tool);
     out[name] = {
       ...tool,
-      ...(mayAsk(name, extra) ? { inputSchema: withWhy(tool.inputSchema) } : {}),
       async execute(rawArgs) {
-        // `why` exists only for the owner's question; the tool itself never sees it.
-        const { [WHY]: why = "", ...args } = rawArgs || {};
+        const { [WHY]: _why, ...args } = rawArgs || {};
         let verdict = classify(name, args);
         if (!verdict && extra?.has(name)) verdict = { approve: `صدا زدن «${name}»` };
         if (!verdict || allowPass?.(name, args)) return inner(args);
@@ -377,7 +397,9 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
           });
           return inner(args);
         }
-        const viaPeer = PEER_CARD && peerRooted(store, chatId);
+        // A method card only makes sense for the requester's own namespace/project; for someone
+        // else's they have no access, and the card just sent the agent asking around (2026-10-06).
+        const viaPeer = PEER_CARD && peerRooted(store, chatId) && !foreignTarget(store, chatId, args);
         if (viaPeer) {
           const cardAt = peerCards.get(key);
           if (cardAt && Date.now() - cardAt < DECISION_TTL_MS) {
@@ -393,14 +415,11 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
               detail: "نخستین تلاش اجرای کارِ همکار — روش کامل (method card) به‌جای اجرا درخواست شد",
             });
             return refused(
-              "این کار در زنجیرهٔ یک همکار است: پیش از اجرای خودت، راهِ کامل را به خودِ درخواست‌کننده بده (method card: مسیر، جای سکرت فقط با مرجعِ سکرت‌منیجر، دستور دقیق) تا خودش بزند و بعد راستی‌آزمایی کن. اگر واقعاً نمی‌تواند و فراهم‌کردن دسترسی برایش هم ممکن یا منطقی نیست، همین فراخوانی را دوباره صدا بزن و دلیلش را در why بنویس — آن‌گاه سؤال تأیید به Owner می‌رسد",
+              "این کار در زنجیرهٔ یک همکار است: پیش از اجرای خودت، راهِ کامل را به خودِ درخواست‌کننده بده (method card: مسیر، جای سکرت فقط با مرجعِ سکرت‌منیجر، دستور دقیق) تا خودش بزند و بعد راستی‌آزمایی کن. اگر واقعاً نمی‌تواند و فراهم‌کردن دسترسی برایش هم ممکن یا منطقی نیست، همین فراخوانی را دوباره صدا بزن — آن‌گاه سؤال تأیید به Owner می‌رسد",
             );
           }
         }
-        const baseQuestion = approvalQuestion(store, chatId, name, args, verdict.approve, why);
-        const question = viaPeer
-          ? `${baseQuestion}\nیک‌خطِ تصمیم: آیا خودِ درخواست‌کننده می‌توانست این کار را با دسترسی‌های خودش انجام دهد؟ اگر بله، به‌جای اجرا، روش را به او بده.`
-          : baseQuestion;
+        const question = approvalQuestion(store, chatId, name, args, verdict.approve);
         let pending = inflight.get(key);
         if (!pending) {
           pending = confirmWithOwner(store, asks, chatId, question).finally(() => inflight.delete(key));

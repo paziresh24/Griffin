@@ -887,12 +887,12 @@ describe("scenario matrix: owner-answer bridge (no double ask)", () => {
     assert.equal(asks.isWaiting("root-peer"), false, "no owner question on the first attempt");
     assert.equal(rows.at(-1).decision, "peer-card", "the audit row says what happened");
 
-    const retry = guarded.infisical_upsert.execute({ name: "APP_PIN", path: "/team-app", value: "x", why: "خودِ درخواست‌کننده به این پروژه دسترسی ندارد و فراهم‌کردنش هم ممکن نیست" });
+    const retry = guarded.infisical_upsert.execute({ name: "APP_PIN", path: "/team-app", value: "x" });
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(asks.isWaiting("root-peer"), true, "the insisted retry reaches the owner");
     const asked = events.find((e) => e.type === "ask.pending");
     assert.ok(asked, "ask.pending emitted");
-    assert.match(String(asked.data.args?.question || asked.data.question || JSON.stringify(asked.data)), /خودِ درخواست‌کننده/, "the question carries the triage line");
+    assert.match(String(asked.data.args?.question || asked.data.question || JSON.stringify(asked.data)), /مسیر \/team-app/, "the question names the target");
     asks.answer("root-peer", { answer: "بله", selected: ["بله"] });
     await retry;
     assert.equal(ran, 1, "an explicit owner yes still executes");
