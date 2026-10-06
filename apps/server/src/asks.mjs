@@ -66,6 +66,19 @@ const requesterSchema = {
   properties: Object.fromEntries(Object.entries(inputSchema.properties).filter(([key]) => key !== "audience")),
 };
 
+// «با kube_secret بخوانم یا kube_exec؟» is the agent's call, never a person's. 2026-10-06: a
+// sub-agent sent exactly that to a colleague's agent mid-task. A tool name (lowercase snake_case
+// with a known prefix) in the question or options means the agent is outsourcing a tool choice.
+const TOOL_NAME_RE = /\b(?:kube|infisical|debug|pg|gitlab|arvan|nsin|mikrotik|s3|grafana|dns|http|tls|telegram|knowledge|jobs)_[a-z_]+\b/;
+function toolChoiceQuestion(args) {
+  const text = [args?.question, ...(Array.isArray(args?.options) ? args.options.map((o) => o?.label ?? o) : [])].join("\n");
+  return TOOL_NAME_RE.test(String(text));
+}
+const TOOL_CHOICE_REFUSAL = {
+  isError: true,
+  content: [{ type: "text", text: "انتخاب ابزار یا مسیر کار با خودت است، نه با آدم‌ها — بهترین گزینه را بزن و ادامه بده؛ اگر واقعاً مانعی هست، همان مانع را در جواب نهایی بگو." }],
+};
+
 export function createAsks({ store = null, onSettled = () => {}, log = console } = {}) {
   const pending = new Map(); // targetChatId -> [{ question, resolve, sourceChatId, mirrorIds }]
   // Answers that arrived while the question card was visible but the SDK had not called execute() yet
@@ -242,6 +255,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
         async execute(args) {
           const question = String(args?.question || "").trim();
           if (!question) return { isError: true, content: [{ type: "text", text: "question is required" }] };
+          if (toolChoiceQuestion(args)) return TOOL_CHOICE_REFUSAL;
           const audience = audienceFor(store?.getChat?.(chatId), args || {});
           const answer = await enqueue(chatId, question, { ...(args || {}), audience });
           return { content: [{ type: "text", text: JSON.stringify(answer) }] };
@@ -263,6 +277,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
         async execute(args) {
           const question = String(args?.question || "").trim();
           if (!question) return { isError: true, content: [{ type: "text", text: "question is required" }] };
+          if (toolChoiceQuestion(args)) return TOOL_CHOICE_REFUSAL;
           const audience = audienceFor(store?.getChat?.(chatId), { audience: REQUESTER });
           const answer = await enqueue(chatId, question, { ...(args || {}), audience });
           return { content: [{ type: "text", text: JSON.stringify(answer) }] };
