@@ -575,8 +575,12 @@ export function createOpenAIProvider({
                 })),
               });
               for (const call of completion.toolCalls) {
+                // A cancel mid-round must not run the rest of the batch: a stopped run still fired
+                // ask_owner and pinged the owner's Telegram (2026-10-06). The catch rolls back the round.
+                if (abort.signal.aborted) throw new Error("cancelled");
                 await runToolCall(call, { options, emit, session, log });
               }
+              if (abort.signal.aborted) throw new Error("cancelled");
               committed = session.messages.length;
               // Pace: long streaks of one-short-command rounds or of owner-silence each get one
               // in-band nudge per send (2026-09-28: a pod investigation ran ~120 one-second

@@ -368,6 +368,30 @@ describe("openai-compatible provider", () => {
     assert.deepEqual(sent.body.messages.filter((m) => m.role === "user").map((m) => m.content), ["go", "retry"]);
   });
 
+  it("a cancel mid-batch stops the remaining tool calls (no ask_owner after stop)", async () => {
+    const cwd = tempWorkspace();
+    mock.on((req, res) => {
+      sse(res, [
+        { choices: [{ index: 0, delta: { tool_calls: [
+          { index: 0, id: "c1", type: "function", function: { name: "first", arguments: "{}" } },
+          { index: 1, id: "c2", type: "function", function: { name: "second", arguments: "{}" } },
+        ] } }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+      ]);
+      return { raw: true };
+    });
+    let run;
+    const ran = [];
+    const tools = {
+      first: { description: "x", inputSchema: { type: "object", properties: {} }, async execute() { ran.push("first"); await run.cancel(); return { content: [] }; } },
+      second: { description: "x", inputSchema: { type: "object", properties: {} }, async execute() { ran.push("second"); return { content: [] }; } },
+    };
+    run = await providerFor(baseUrl).create({ cwd, customTools: tools }).send("go", {});
+    const result = await run.wait();
+    assert.equal(result.status, "cancelled");
+    assert.deepEqual(ran, ["first"]);
+  });
+
   it("resumes a session from disk in a fresh provider instance", async () => {
     const cwd = tempWorkspace("RULES resume");
     mock.on((req, res) => {
