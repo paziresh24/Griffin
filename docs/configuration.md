@@ -86,6 +86,7 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | `GRIFFIN_PROXY`, `CURSOR_PROXY`, `GRIFFIN_TELEGRAM_SOCKS` | egress (see `deploy/xray/`) |
 | `GRIFFIN_OPS_MODE` | incident ops room: `shadow` (LLM triage), `record` (group and show only), `off` |
 | `GRIFFIN_BUSINESS_SIGNAL` | optional JSON: the SQL table where your own job records business drops |
+| `GRIFFIN_PEER_SELF_SERVE` | optional text: what a colleague can do without Griffin on your install (their kubeconfig, your GitOps repo…), `{user}` = their id. Sent once to each colleague's agent and given to Griffin so it answers self-serviceable requests with commands, not work |
 | `GRIFFIN_OWNER_NAME` | how agents refer to you in prompts and framed messages (default `Owner`) |
 | `GRIFFIN_OPENAI_BASE_URL`, `GRIFFIN_OPENAI_MODEL`, `GRIFFIN_OPENAI_REASONING_EFFORT` | any OpenAI-compatible chat/completions endpoint as a third engine |
 | `GRIFFIN_AUTH=off`, `GRIFFIN_DEMO=1` | local development only — never in production |

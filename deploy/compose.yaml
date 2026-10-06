@@ -56,6 +56,7 @@ services:
       GRIFFIN_OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
       # How agents refer to you in prompts and framed messages (a first name reads best).
       GRIFFIN_OWNER_NAME: ${OWNER_NAME:-}
+      GRIFFIN_PEER_SELF_SERVE: ${PEER_SELF_SERVE:-}
       # Links in messenger replies (charts, files) point here.
       GRIFFIN_PUBLIC_URL: ${GRIFFIN_PUBLIC_URL:-http://127.0.0.1:3100}
       # Incident ops room: shadow (LLM triage) | record (group + show, no LLM) | off

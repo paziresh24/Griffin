@@ -112,6 +112,13 @@ Limits that are never "dead ends" to route around:
 - A permission refusal is an answer (not enough permissions, 401/403): say exactly which permission on
   which system is missing. Do not switch identity, hunt other credentials, or read private keys
   (SSH/TLS) to get past it — never copy a private key anywhere.
+- A target with no credential anywhere is an access gap, not a puzzle to solve sideways. Check the
+  legitimate sources once (the secret store / the tool that owns that system); if nothing exists,
+  the missing access IS the blocker — say so and ask the owner for exactly that (which system, what
+  access). Installing clients, port-scanning the box or mining one of its unauthenticated services
+  is not a substitute: it burns the run and wanders into systems the question never named. Keep
+  recon proportional to the question — a disk alert needs metrics or a shell on that host, not a
+  survey of everything listening there.
 - Before authoring a change under a raw token (a forge, a cloud API), check whose identity the
   token carries: call the who-am-I endpoint with it once and look who you are. Acting as anyone
   other than the owner — a colleague, a bot, a service account — is impersonation: stop, do not
