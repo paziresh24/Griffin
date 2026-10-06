@@ -61,6 +61,24 @@ test("quick task finishes inline; peer sees answer and tool names, not args", as
   assert.equal(r.answer, "۸٫۶G آزاد");
   assert.ok(r.progress.some((p) => p.kind === "tool" && p.tool === "kube_df"));
   assert.ok(!JSON.stringify(r).includes("secret"));
+  assert.equal(r.selfServe, undefined, "no kit unless GRIFFIN_PEER_SELF_SERVE is set");
+});
+
+test("the self-serve kit rides once on a colleague's answer and reaches Griffin's prompt", async () => {
+  process.env.GRIFFIN_PEER_SELF_SERVE = "kubeconfig in project {user}";
+  try {
+    let seen = "";
+    const { tasks, peer, runner } = setup(async (_id, emit) => { emit("text", { text: "ok" }); });
+    const send = runner.send.bind(runner);
+    runner.send = (chatId, msg) => { seen = msg.text; return send(chatId, msg); };
+    const r = await tasks.send(peer, { message: "لاگ اپ من؟", waitSec: 2 });
+    assert.equal(r.selfServe, `kubeconfig in project ${peer.userId}`);
+    assert.match(seen, new RegExp(`kubeconfig in project ${peer.userId}`), "Griffin knows what the colleague can run");
+    const again = await tasks.send(peer, { message: "دوباره؟", waitSec: 2 });
+    assert.equal(again.selfServe, undefined, "once per colleague");
+  } finally {
+    delete process.env.GRIFFIN_PEER_SELF_SERVE;
+  }
 });
 
 test("long task returns working quickly and streams progress through wait", async () => {
