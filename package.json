@@ -1,6 +1,6 @@
 {
   "name": "griffin",
-  "description": "Self-hosted shell for a small team of agents that work for you: your agents, your tools, your box.",
+  "description": "Self-hosted multi-agent AI assistant: your agents, your tools, your box. Claude, Cursor or any OpenAI-compatible model.",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -20,5 +20,24 @@
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "homepage": "https://paziresh24.github.io/Griffin/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paziresh24/Griffin.git"
+  },
+  "keywords": [
+    "ai-agent",
+    "multi-agent",
+    "self-hosted",
+    "devops",
+    "sre",
+    "mcp",
+    "claude",
+    "cursor",
+    "openai",
+    "kubernetes",
+    "chatops",
+    "telegram-bot"
+  ]
 }

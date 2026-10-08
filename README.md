@@ -1,19 +1,22 @@
 <img src="docs/media/griffin-mark.svg" width="76" alt="">
 
-# Griffin
+# Griffin — self-hosted multi-agent AI assistant
 
-**A self-hosted shell for a small team of agents that work for you.** You make the agents — what
+**A self-hosted shell for a small team of AI agents that work for you.** You make the agents — what
 each one is, what it may touch, who may ask it — and they answer from typed tools instead of from
-the model's memory.
+the model's memory. Built for DevOps and infrastructure work: Kubernetes, Prometheus, Grafana,
+PostgreSQL, GitLab, MCP and Telegram, on Claude, Cursor or any OpenAI-compatible model.
 
 `Node 24` · `Cursor, Claude Agent SDK or any OpenAI-compatible API` · `SQLite` · no SaaS control plane · MIT
+
+**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/)
 
 <img src="docs/media/chat.png" width="900" alt="Griffin answering a question: a plan, a tool card marked with the path its answer came from, and a disk-usage card">
 
 ## Two minutes to your own
 
 ```bash
-git clone <this repo> griffin && cd griffin
+git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
 npm ci && npm run build
 
 mkdir -p data workspace

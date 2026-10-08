@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://paziresh24.github.io/Griffin/sitemap.xml
