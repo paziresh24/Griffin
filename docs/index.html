@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Griffin — self-hosted multi-agent AI assistant for DevOps and infrastructure</title>
+<meta name="description" content="Griffin is an open-source, self-hosted multi-agent AI shell: build your own agents, give each one typed tools and a per-caller quota, and run them on Claude, Cursor or any OpenAI-compatible model. Kubernetes, Prometheus, Grafana, PostgreSQL, GitLab, MCP, Telegram. MIT.">
+<meta name="keywords" content="Griffin, AI agent, multi-agent, self-hosted AI agent, DevOps AI agent, SRE agent, MCP server, Claude Agent SDK, Cursor SDK, OpenAI-compatible, Kubernetes AI assistant, agent orchestrator, ChatOps, Telegram bot">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/">
+<link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="Griffin — self-hosted multi-agent AI assistant">
+<meta property="og:description" content="Make your own agents, give each one typed tools and who may call it, and get answers from tools instead of the model's memory. Open source, MIT.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Griffin — self-hosted multi-agent AI assistant">
+<meta name="twitter:description" content="Your agents, your tools, your box. Claude, Cursor or any OpenAI-compatible model. MIT.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Griffin",
+  "alternateName": "Griffin AI agent",
+  "description": "Open-source, self-hosted multi-agent AI shell for running your own infrastructure: agents with typed tools, per-caller quotas, delegation, scheduled jobs, MCP and messenger interfaces.",
+  "url": "https://paziresh24.github.io/Griffin/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS, Docker",
+  "license": "https://opensource.org/licenses/MIT",
+  "codeRepository": "https://github.com/paziresh24/Griffin",
+  "programmingLanguage": "JavaScript",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24" }
+}
+</script>
+<style>
+:root{--bg:#fbf7f3;--fg:#21170f;--muted:#6b5a4b;--card:#fff;--line:#eadfd4;--accent:#d9722a;--code:#f3ebe3}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#140d08;--fg:#f4ece4;--muted:#b3a291;--card:#1d140d;--line:#33261b;--accent:#f0a35a;--code:#241910}}
+:root[data-theme="dark"]{--bg:#140d08;--fg:#f4ece4;--muted:#b3a291;--card:#1d140d;--line:#33261b;--accent:#f0a35a;--code:#241910}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:920px;margin:0 auto;padding:48px 16px 64px}
+header{display:flex;gap:18px;align-items:center}
+header img{width:64px;height:64px}
+h1{font-size:clamp(28px,5vw,42px);line-height:1.15;margin:0}
+h2{font-size:24px;margin:48px 0 12px}
+h3{font-size:18px;margin:0 0 6px}
+p.lead{font-size:20px;color:var(--muted);margin:20px 0}
+a{color:var(--accent)}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0}
+.btn{padding:10px 18px;border-radius:10px;border:1px solid var(--line);text-decoration:none;color:var(--fg);background:var(--card);font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+figure{margin:28px 0}
+figure img{width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}
+figcaption{color:var(--muted);font-size:14px;margin-top:6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+.card p{margin:0;color:var(--muted);font-size:15px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-x:auto;font-size:14px}
+code{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+footer{margin-top:56px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <img src="media/griffin-mark.svg" alt="Griffin logo">
+  <h1>Griffin — a self-hosted multi-agent AI assistant</h1>
+</header>
+<p class="lead">Griffin is an open-source shell for a small team of AI agents that work for you. You decide what each
+agent is, which typed tools it may use and who may call it — and the agents answer from those tools
+instead of from the model's memory. It runs on your own box, on Claude, Cursor or any OpenAI-compatible model.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">View on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+  <a class="btn" href="agents.html">Docs</a>
+</div>
+
+<figure>
+  <img src="media/chat.png" width="1400" height="900" alt="Griffin answering an infrastructure question with a plan, a tool card that shows which path produced the answer, and a disk-usage card">
+  <figcaption>An agent answering from typed tools, showing the path each answer came from (demo mode).</figcaption>
+</figure>
+
+<h2>What Griffin does</h2>
+<div class="grid">
+  <div class="card"><h3>Agents you define</h3><p>Agents are rows in a table, not code: instructions, model, tools and callers. Create one from the UI, the API or a JSON profile.</p></div>
+  <div class="card"><h3>Per-caller tool quotas</h3><p>The owner, another agent, a scheduled job, a colleague or an external MCP client each get exactly the tools you grant — enforced in code, not in the prompt.</p></div>
+  <div class="card"><h3>Delegation</h3><p>An orchestrator agent plans, delegates to specialist sub-agents without blocking, and reports back when subtasks land.</p></div>
+  <div class="card"><h3>Any model</h3><p>Claude Agent SDK, Cursor SDK, or any OpenAI-compatible endpoint, chosen per agent and per chat, with automatic fallback when a plan limit is hit.</p></div>
+  <div class="card"><h3>Infrastructure tools</h3><p>Kubernetes, Prometheus, Grafana, PostgreSQL, S3, GitLab, MikroTik, CDN and DNS/HTTP/TLS probes — behind a broker that holds every credential.</p></div>
+  <div class="card"><h3>Works during the outage</h3><p>Cluster tools try the public API first and fall back to emergency SSH, so the assistant stays useful when the thing it watches is down.</p></div>
+  <div class="card"><h3>MCP, Telegram, terminal</h3><p>An MCP endpoint for Claude Code and other agents, Telegram and Bale bots, a CLI, a Bearer API — or run headless.</p></div>
+  <div class="card"><h3>Charts, files, jobs</h3><p>Vega-Lite charts from real rows, inline media, and scheduled jobs that deliver to the chat you already use.</p></div>
+  <div class="card"><h3>Guarded writes</h3><p>Irreversible actions wait for the owner's approval; unattended chains refuse them. Every approval is audited.</p></div>
+</div>
+
+<h2>Run it in two minutes</h2>
+<pre><code>git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
+npm ci && npm run build
+mkdir -p data workspace
+echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key
+GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs</code></pre>
+<p>Or with Docker: <code>docker compose -f deploy/compose.yaml up -d --build</code>. No cluster, vault or YAML is
+needed to start; infrastructure tools appear only once you configure them.</p>
+
+<h2>Documentation</h2>
+<ul>
+  <li><a href="agents.html">Agents</a> — profiles, tools, callers and quotas</li>
+  <li><a href="interfaces.html">Interfaces</a> — web, terminal, HTTP API, MCP, messengers</li>
+  <li><a href="architecture.html">Architecture</a> — the app/broker split and the security posture</li>
+  <li><a href="configuration.html">Configuration</a> — environment, site inventory, vault items</li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. Source on <a href="https://github.com/paziresh24/Griffin">GitHub</a>.</footer>
+</main>
+</body>
+</html>

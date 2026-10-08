@@ -67,7 +67,7 @@ curl -sX POST localhost:3100/api/agents -H 'content-type: application/json' -d '
 }'
 ```
 
-Or import one of the ready-made profiles in [`examples/agents/`](../examples/agents):
+Or import one of the ready-made profiles in [`examples/agents/`](https://github.com/paziresh24/Griffin/tree/main/examples/agents):
 
 ```bash
 curl -sX POST localhost:3100/api/agents -H 'content-type: application/json' \
