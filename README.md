@@ -91,6 +91,25 @@ needs, so an agent never sees a tool that cannot work.
 
 The UI is Persian-first and right-to-left; the code, tools and docs are English.
 
+## Use it as an MCP server
+
+Griffin is also an MCP server: Claude Code, Claude Desktop, Cursor or any other MCP client can hand
+it a task and follow it to the end (`griffin_send`, `griffin_wait`, `griffin_reply`,
+`griffin_cancel`, `griffin_tasks`). Each client gets its own scoped token from **#/peers**.
+
+```bash
+# streamable HTTP (Claude Code)
+claude mcp add --transport http griffin https://griffin.example.com/mcp --header "Authorization: Bearer grf_…"
+```
+
+For stdio-only clients, `bin/griffin-mcp.mjs` bridges stdio to the same endpoint and needs no
+`npm install`:
+
+```json
+{ "mcpServers": { "griffin": { "command": "node", "args": ["/path/to/griffin/bin/griffin-mcp.mjs"],
+  "env": { "GRIFFIN_URL": "https://griffin.example.com", "GRIFFIN_TOKEN": "grf_…" } } } }
+```
+
 ## How it fits together
 
 ```
@@ -141,6 +160,7 @@ tests declare their own fixture site.
 | `examples/agents/` | importable agent profiles |
 | `deploy/` | compose, environment example, egress proxy notes, backup script |
 | `bin/griffin.mjs` | the terminal client |
+| `bin/griffin-mcp.mjs` | MCP over stdio, forwarding to a Griffin server |
 | `docs/` | [agents](docs/agents.md) · [interfaces](docs/interfaces.md) · [architecture](docs/architecture.md) · [configuration](docs/configuration.md) |
 
 ## Security posture

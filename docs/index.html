@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Griffin — self-hosted multi-agent AI assistant for DevOps and infrastructure</title>
 <meta name="description" content="Griffin is an open-source, self-hosted multi-agent AI shell: build your own agents, give each one typed tools and a per-caller quota, and run them on Claude, Cursor or any OpenAI-compatible model. Kubernetes, Prometheus, Grafana, PostgreSQL, GitLab, MCP, Telegram. MIT.">
-<meta name="keywords" content="Griffin, AI agent, multi-agent, self-hosted AI agent, DevOps AI agent, SRE agent, MCP server, Claude Agent SDK, Cursor SDK, OpenAI-compatible, Kubernetes AI assistant, agent orchestrator, ChatOps, Telegram bot">
+<meta name="keywords" content="open source AI agent, AI agent platform, Kubernetes AI agent, AI SRE, AI ops assistant, LLM agents, Griffin, AI agent, multi-agent, self-hosted AI agent, DevOps AI agent, SRE agent, MCP server, Claude Agent SDK, Cursor SDK, OpenAI-compatible, Kubernetes AI assistant, agent orchestrator, ChatOps, Telegram bot">
 <link rel="canonical" href="https://paziresh24.github.io/Griffin/">
 <link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
@@ -37,6 +37,70 @@
   "author": { "@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24" }
 }
 </script>
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@type": "FAQPage",
+ "mainEntity": [
+  {
+   "@type": "Question",
+   "name": "What is Griffin?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Griffin is an open-source, self-hosted multi-agent AI assistant. You define a small team of AI agents, give each one typed tools and decide who may call which tool; the agents answer from those tools instead of from the model's memory."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Is Griffin an AI agent for DevOps and Kubernetes?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Yes. With the optional broker, agents get typed tools for Kubernetes (status, get, logs, in-pod df, secrets, CloudNativePG), Prometheus and Grafana, PostgreSQL, S3, GitLab, MikroTik routers, CDNs and DNS/HTTP/TLS probes. Cluster tools fall back to SSH on a node when the public API is down."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Can I use Griffin as an MCP server?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Yes. Griffin exposes a streamable-HTTP MCP endpoint and a stdio bridge, so Claude Code, Claude Desktop, Cursor and other MCP clients can delegate long-running tasks to it with their own scoped token."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Which models does Griffin support?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Each agent picks its engine: the Claude Agent SDK, the Cursor SDK, or any OpenAI-compatible API, including local models served behind an OpenAI-compatible endpoint."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "How is access controlled?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Tool access is filtered per caller before tools reach the model: the owner, another agent, a scheduled job, a colleague on Telegram and an external MCP client each get exactly the tools granted to them. Irreversible actions wait for the owner's approval, and the process running the model holds no credentials and no shell."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Does Griffin work as a Telegram ChatOps bot?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Yes. Telegram and Bale bots, a Telegram account bridge with colleague threads, and scheduled jobs that deliver answers and charts to the chat you already use."
+   }
+  },
+  {
+   "@type": "Question",
+   "name": "Is Griffin free?",
+   "acceptedAnswer": {
+    "@type": "Answer",
+    "text": "Griffin is MIT-licensed and runs on your own server with Node 24 and SQLite. There is no SaaS control plane; you only pay for the model you choose."
+   }
+  }
+ ]
+}
+</script>
 <style>
 :root{--bg:#fbf7f3;--fg:#21170f;--muted:#6b5a4b;--card:#fff;--line:#eadfd4;--accent:#d9722a;--code:#f3ebe3}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#140d08;--fg:#f4ece4;--muted:#b3a291;--card:#1d140d;--line:#33261b;--accent:#f0a35a;--code:#241910}}
@@ -62,6 +126,7 @@ figcaption{color:var(--muted);font-size:14px;margin-top:6px}
 .card p{margin:0;color:var(--muted);font-size:15px}
 pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-x:auto;font-size:14px}
 code{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointer;font-weight:600}details p{color:var(--muted);margin:8px 0 0}
 footer{margin-top:56px;color:var(--muted);font-size:14px}
 </style>
 </head>
@@ -106,6 +171,15 @@ echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key
 GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs</code></pre>
 <p>Or with Docker: <code>docker compose -f deploy/compose.yaml up -d --build</code>. No cluster, vault or YAML is
 needed to start; infrastructure tools appear only once you configure them.</p>
+
+<h2>Frequently asked questions</h2>
+<details><summary>What is Griffin?</summary><p>Griffin is an open-source, self-hosted multi-agent AI assistant. You define a small team of AI agents, give each one typed tools and decide who may call which tool; the agents answer from those tools instead of from the model&#x27;s memory.</p></details>
+<details><summary>Is Griffin an AI agent for DevOps and Kubernetes?</summary><p>Yes. With the optional broker, agents get typed tools for Kubernetes (status, get, logs, in-pod df, secrets, CloudNativePG), Prometheus and Grafana, PostgreSQL, S3, GitLab, MikroTik routers, CDNs and DNS/HTTP/TLS probes. Cluster tools fall back to SSH on a node when the public API is down.</p></details>
+<details><summary>Can I use Griffin as an MCP server?</summary><p>Yes. Griffin exposes a streamable-HTTP MCP endpoint and a stdio bridge, so Claude Code, Claude Desktop, Cursor and other MCP clients can delegate long-running tasks to it with their own scoped token.</p></details>
+<details><summary>Which models does Griffin support?</summary><p>Each agent picks its engine: the Claude Agent SDK, the Cursor SDK, or any OpenAI-compatible API, including local models served behind an OpenAI-compatible endpoint.</p></details>
+<details><summary>How is access controlled?</summary><p>Tool access is filtered per caller before tools reach the model: the owner, another agent, a scheduled job, a colleague on Telegram and an external MCP client each get exactly the tools granted to them. Irreversible actions wait for the owner&#x27;s approval, and the process running the model holds no credentials and no shell.</p></details>
+<details><summary>Does Griffin work as a Telegram ChatOps bot?</summary><p>Yes. Telegram and Bale bots, a Telegram account bridge with colleague threads, and scheduled jobs that deliver answers and charts to the chat you already use.</p></details>
+<details><summary>Is Griffin free?</summary><p>Griffin is MIT-licensed and runs on your own server with Node 24 and SQLite. There is no SaaS control plane; you only pay for the model you choose.</p></details>
 
 <h2>Documentation</h2>
 <ul>
