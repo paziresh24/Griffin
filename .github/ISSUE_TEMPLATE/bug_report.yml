@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      placeholder: "1. …\n2. …"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 / main@abc123 / ghcr.io/paziresh24/griffin:latest
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Model engine
+      options: [Claude, Cursor, OpenAI-compatible, Demo mode, Not sure]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server output around the failure. Remove keys and tokens first.
+      render: text
