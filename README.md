@@ -3,6 +3,7 @@
 # Griffin — your own team of AI agents
 
 [![GitHub stars](https://img.shields.io/github/stars/paziresh24/Griffin?style=flat&color=f0913f)](https://github.com/paziresh24/Griffin/stargazers)
+[![CI](https://github.com/paziresh24/Griffin/actions/workflows/ci.yml/badge.svg)](https://github.com/paziresh24/Griffin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2dd4bf)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/paziresh24/Griffin?color=34d399)](https://github.com/paziresh24/Griffin/releases)
 [![Website](https://img.shields.io/badge/website-paziresh24.github.io%2FGriffin-f0913f)](https://paziresh24.github.io/Griffin/)
