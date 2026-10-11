@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How to run your own AI assistant on Telegram (self-hosted, any model) | Griffin</title>
+<meta name="description" content="Step by step: run a self-hosted AI assistant on Telegram with Griffin — create a bot with BotFather, pair it, chat with Claude, a local model or any OpenAI-compatible model, and get scheduled reports in the chat.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/guides/telegram-ai-assistant.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="How to run your own AI assistant on Telegram (self-hosted, any model) | Griffin">
+<meta property="og:description" content="Step by step: run a self-hosted AI assistant on Telegram with Griffin — create a bot with BotFather, pair it, chat with Claude, a local model or any OpenAI-compatible model, and get scheduled reports in the chat.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/guides/telegram-ai-assistant.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to run your own AI assistant on Telegram (self-hosted, any model) | Griffin">
+<meta name="twitter:description" content="Step by step: run a self-hosted AI assistant on Telegram with Griffin — create a bot with BotFather, pair it, chat with Claude, a local model or any OpenAI-compatible model, and get scheduled reports in the chat.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "How to run your own AI assistant on Telegram (self-hosted, any model) | Griffin", "description": "Step by step: run a self-hosted AI assistant on Telegram with Griffin — create a bot with BotFather, pair it, chat with Claude, a local model or any OpenAI-compatible model, and get scheduled reports in the chat.", "inLanguage": "en", "datePublished": "2026-10-11", "dateModified": "2026-10-11", "url": "https://paziresh24.github.io/Griffin/guides/telegram-ai-assistant.html", "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}, "about": {"@type": "SoftwareApplication", "name": "Griffin", "url": "https://paziresh24.github.io/Griffin/", "codeRepository": "https://github.com/paziresh24/Griffin"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "Guides", "item": "https://paziresh24.github.io/Griffin/guides/"}, {"@type": "ListItem", "position": 3, "name": "How to run your own AI assistant on Telegram (self-hosted, any model) | Griffin", "item": "https://paziresh24.github.io/Griffin/guides/telegram-ai-assistant.html"}]}</script>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<nav><a href=".././">Overview</a> <a href="../use-cases.html">Use cases</a> <a href="../self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="../telegram-ai-assistant.html">Telegram AI assistant</a> <a href="../mcp-server.html">MCP server</a> <a href="../guides/">Guides</a> <a href="../agents.html">Docs</a> <a href="../fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="../media/griffin-mark.svg" alt="Griffin logo">
+  <h1>How to run your own AI assistant on Telegram</h1>
+</header>
+<p class="lead">A step-by-step guide to a self-hosted AI assistant you talk to in Telegram: it runs on your machine, uses the model you choose, remembers what you tell it, and can post scheduled reports to a chat. About fifteen minutes from start to first message.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+</div>
+<h2>What you need</h2>
+<ul class="plain">
+<li>A machine that stays on: a small VPS, a home server or a Raspberry Pi-class box with Docker or Node.js 24.</li>
+<li>An API key for Claude, or OpenAI, or any OpenAI-compatible server — including a local model (see <a href="local-llm-agents.html">running agents on a local LLM</a>).</li>
+<li>A Telegram account, to create a bot with @BotFather.</li>
+</ul>
+<h2>1. Start Griffin</h2>
+<pre><code>docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker exec griffin cat /data/owner.token   # the token you sign in with</code></pre>
+<p>Open <code>http://your-server:3100</code> and sign in with the token. Put Griffin behind HTTPS (a reverse proxy such as Caddy or nginx) before you expose it to the internet.</p>
+
+<h2>2. Create a Telegram bot</h2>
+<p>In Telegram, open <strong>@BotFather</strong>, send <code>/newbot</code>, choose a name and a username, and copy the token it gives you.</p>
+
+<h2>3. Connect the bot to Griffin</h2>
+<p>In Griffin go to <strong>Settings → Integrations → Telegram bot</strong> and paste the token. Griffin shows a pairing command such as <code>/start 4F7K2Q</code>; send it to your bot. The bot replies that the chat is connected, and from then on everything you write to it reaches your agent.</p>
+<ul class="plain">
+<li><code>/new</code> starts a fresh conversation.</li>
+<li><code>/stop</code> stops the work in progress.</li>
+<li>Photos you send reach the agent too; charts and files come back as images and attachments.</li>
+</ul>
+<h2>4. Make it yours</h2>
+<p>Go to <strong>Agents</strong> to change what the assistant is: its instructions, its model, and its tools. The repository ships a ready-made personal assistant profile (<code>examples/agents/assistant.json</code>) that keeps notes and turns recurring requests into scheduled jobs; import it and edit the instructions to taste.</p>
+
+<h2>5. Get a scheduled report in the chat</h2>
+<p>Just ask in Telegram: “every Monday at 9, send me a summary of last week”. The agent creates a job; you can also create one under <strong>Jobs → New job</strong> with a prompt, a schedule (an interval like <code>1d</code> or a cron expression) and the chat to deliver to. Schedules follow your server's time zone, or <code>GRIFFIN_TZ</code>.</p>
+
+<h2>Optional: your own Telegram account</h2>
+<p>Instead of — or next to — a bot, Griffin can sign in to your own Telegram account (<strong>Settings → Integrations → Telegram account</strong>). Then you talk to it in Saved Messages by starting a message with “Griffin”, it can read groups you're in when you ask, and, optionally, colleagues' direct messages can open a work thread that the agent answers within the limits you set. Signing in an account is more powerful than a bot, so read the <a href="ai-agent-tool-permissions.html">permissions guide</a> first.</p>
+
+<h2>Keeping it safe</h2>
+<ul class="plain">
+<li>Only paired chats reach the agent; a stranger messaging your bot gets nothing.</li>
+<li>Anything irreversible waits for your approval button in the chat.</li>
+<li>Your keys and conversations stay on your server; Griffin has no hosted control plane.</li>
+</ul>
+<p>Griffin is open source (MIT): <a href="https://github.com/paziresh24/Griffin">github.com/paziresh24/Griffin</a>.</p>
+<h2>More guides</h2>
+<ul class="plain">
+<li><a href="ai-agent-tool-permissions.html">AI agent tool permissions: give each caller only the tools it needs</a></li>
+<li><a href="local-llm-agents.html">Run AI agents on a local LLM with Ollama</a></li>
+<li><a href="claude-code-delegate-mcp.html">Let Claude Code delegate long-running tasks over MCP</a></li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>

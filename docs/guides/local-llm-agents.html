@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run AI agents on a local LLM with Ollama or any OpenAI-compatible server | Griffin</title>
+<meta name="description" content="How to run self-hosted AI agents on a local model: point Griffin at Ollama, LM Studio, vLLM or llama.cpp through the OpenAI-compatible API, pick a tool-calling model, and mix local and hosted models per agent.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/guides/local-llm-agents.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="Run AI agents on a local LLM with Ollama or any OpenAI-compatible server | Griffin">
+<meta property="og:description" content="How to run self-hosted AI agents on a local model: point Griffin at Ollama, LM Studio, vLLM or llama.cpp through the OpenAI-compatible API, pick a tool-calling model, and mix local and hosted models per agent.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/guides/local-llm-agents.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Run AI agents on a local LLM with Ollama or any OpenAI-compatible server | Griffin">
+<meta name="twitter:description" content="How to run self-hosted AI agents on a local model: point Griffin at Ollama, LM Studio, vLLM or llama.cpp through the OpenAI-compatible API, pick a tool-calling model, and mix local and hosted models per agent.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Run AI agents on a local LLM with Ollama or any OpenAI-compatible server | Griffin", "description": "How to run self-hosted AI agents on a local model: point Griffin at Ollama, LM Studio, vLLM or llama.cpp through the OpenAI-compatible API, pick a tool-calling model, and mix local and hosted models per agent.", "inLanguage": "en", "datePublished": "2026-10-11", "dateModified": "2026-10-11", "url": "https://paziresh24.github.io/Griffin/guides/local-llm-agents.html", "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}, "about": {"@type": "SoftwareApplication", "name": "Griffin", "url": "https://paziresh24.github.io/Griffin/", "codeRepository": "https://github.com/paziresh24/Griffin"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "Guides", "item": "https://paziresh24.github.io/Griffin/guides/"}, {"@type": "ListItem", "position": 3, "name": "Run AI agents on a local LLM with Ollama or any OpenAI-compatible server | Griffin", "item": "https://paziresh24.github.io/Griffin/guides/local-llm-agents.html"}]}</script>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<nav><a href=".././">Overview</a> <a href="../use-cases.html">Use cases</a> <a href="../self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="../telegram-ai-assistant.html">Telegram AI assistant</a> <a href="../mcp-server.html">MCP server</a> <a href="../guides/">Guides</a> <a href="../agents.html">Docs</a> <a href="../fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="../media/griffin-mark.svg" alt="Griffin logo">
+  <h1>Run AI agents on a local LLM with Ollama</h1>
+</header>
+<p class="lead">Griffin talks to any server that speaks the OpenAI chat completions API — Ollama, LM Studio, vLLM, llama.cpp's server and others. This guide gets a fully local agent running and explains which models work well with tools.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+</div>
+<h2>1. Run a model that supports tool calling</h2>
+<p>Agents call tools, so the model must support function calling. With Ollama, models such as <code>qwen2.5</code>, <code>llama3.1</code> and <code>mistral-nemo</code> do; bigger variants follow multi-step instructions noticeably better.</p>
+<pre><code>ollama pull qwen2.5:14b
+ollama serve   # listens on http://127.0.0.1:11434</code></pre>
+
+<h2>2. Point Griffin at it</h2>
+<p>Griffin uses the OpenAI-compatible engine when <code>GRIFFIN_OPENAI_BASE_URL</code> is set. A local server usually needs no key.</p>
+<p><strong>From source</strong>, on the same machine as Ollama:</p>
+<pre><code>GRIFFIN_OPENAI_BASE_URL=http://127.0.0.1:11434/v1 \
+GRIFFIN_OPENAI_MODEL=qwen2.5:14b \
+GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 \
+  node apps/server/src/index.mjs</code></pre>
+<p><strong>With Docker</strong>, reach Ollama on the host through <code>host.docker.internal</code>:</p>
+<pre><code>docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  --add-host=host.docker.internal:host-gateway \
+  -e GRIFFIN_OPENAI_BASE_URL=http://host.docker.internal:11434/v1 \
+  -e GRIFFIN_OPENAI_MODEL=qwen2.5:14b \
+  ghcr.io/paziresh24/griffin:latest</code></pre>
+<p>On a fresh install the built-in agent picks the engine whose settings are present, so with only these two variables it runs on your local model. Other servers work the same way: LM Studio's default is <code>http://127.0.0.1:1234/v1</code>, vLLM's <code>http://127.0.0.1:8000/v1</code>.</p>
+
+<h2>3. Mix local and hosted models</h2>
+<p>Each agent chooses its own engine and model under <strong>Agents → engine and model</strong>. A practical split is a local model for high-volume, low-risk agents (summaries, note keeping, classification) and a hosted frontier model for the orchestrator that plans and delegates. You can also pick a model for a single chat from the model menu.</p>
+
+<h2>Tips for local models</h2>
+<ul class="plain">
+<li>Fewer tools per agent help small models a lot: give each agent only the tools its job needs.</li>
+<li>Keep instructions short and concrete; small models follow examples better than long rules.</li>
+<li>If tool calls come back as plain text, the model or its chat template doesn't support tools — try another model.</li>
+<li>Watch context length: long tool outputs fill a small context window quickly.</li>
+</ul>
+<p>Griffin is open source (MIT): <a href="https://github.com/paziresh24/Griffin">github.com/paziresh24/Griffin</a> · <a href="../self-hosted-ai-agent.html">self-hosted agent platform overview</a>.</p>
+<h2>More guides</h2>
+<ul class="plain">
+<li><a href="ai-agent-tool-permissions.html">AI agent tool permissions: give each caller only the tools it needs</a></li>
+<li><a href="telegram-ai-assistant.html">Run your own AI assistant on Telegram</a></li>
+<li><a href="claude-code-delegate-mcp.html">Let Claude Code delegate long-running tasks over MCP</a></li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>
