@@ -106,10 +106,9 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
 }
 
 // When an answer arrived, on the Tehran clock: "۰۹:۳۴" today, with the date on any other day.
-const TEHRAN = "Asia/Tehran";
-const clock = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hour12: false });
-const day = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, day: "numeric", month: "long" });
-const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
+const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+const day = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long" });
+const dayKey = new Intl.DateTimeFormat("en-CA", {});
 
 export function formatAnsweredAt(iso, now = new Date()) {
   const at = new Date(iso);

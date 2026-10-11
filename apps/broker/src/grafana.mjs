@@ -308,7 +308,7 @@ export function summarizeResults(json) {
         fields.forEach((field, j) => {
           const label = field.config?.displayNameFromDS || field.name + (field.labels ? ` ${JSON.stringify(field.labels)}` : "");
           let value = values[j]?.[i] ?? null;
-          if (field.type === "time" && typeof value === "number") value = tehran(value);
+          if (field.type === "time" && typeof value === "number") value = new Date(value).toISOString();
           row[label] = value;
         });
         rows.push(row);
@@ -326,8 +326,3 @@ function limitRows(results, maxRows) {
     : { ...r, lastRow: r.rows?.at(-1) }));
 }
 
-function tehran(ms) {
-  const date = new Date(ms);
-  const local = date.toLocaleString("sv-SE", { timeZone: "Asia/Tehran" }).replace(" ", "T");
-  return `${local}+03:30`;
-}

@@ -9,6 +9,7 @@ import {
 } from "./coverage.mjs";
 import { isAgentSigned, looksAssistantSigned, peerAgentConfig } from "./peer-agent.mjs";
 import { threadInboundPrompt, threadOwnerPrompt, threadStartPrompt, wantsGriffin } from "./threads.mjs";
+import { DEFAULT_TZ } from "../jobs/cron.mjs";
 
 // The owner's own Telegram account (MTProto, gramjs). Uses:
 //   1. chat with Platform-Ban in Saved Messages (call word),
@@ -699,7 +700,7 @@ export function createAccountTools({ getClient }) {
     return { entity: match.entity, title: match.title };
   }
 
-  const tehran = (seconds) => new Date(seconds * 1000).toLocaleString("sv-SE", { timeZone: "Asia/Tehran" });
+  const tehran = (seconds) => new Date(seconds * 1000).toLocaleString("sv-SE", { timeZone: DEFAULT_TZ });
   const text = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
   const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: error.message }) }] });
 

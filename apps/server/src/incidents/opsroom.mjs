@@ -1,4 +1,5 @@
 import { incidentView } from "./index.mjs";
+import { DEFAULT_TZ } from "../jobs/cron.mjs";
 
 // Griffin's ops room: one long-lived chat per day (Tehran) where incident state changes arrive as
 // batched digests. Griffin is the manager here — it triages and delegates (ask_agent), it does not
@@ -11,9 +12,9 @@ export const INCIDENT_UPDATE = "incident_update";
 export const INCIDENT_ACK = "incident_ack";
 export const INCIDENT_HISTORY = "incident_history";
 
-const tehranDay = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(d);
+const tehranDay = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: DEFAULT_TZ }).format(d);
 const tehranTime = (iso) =>
-  iso ? new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(iso)) : "—";
+  iso ? new Intl.DateTimeFormat("fa-IR", { timeZone: DEFAULT_TZ, hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(iso)) : "—";
 
 export const OPS_CHARTER = `[اتاق عملیات گریفین — حالت سایه]
 این چت را لایهٔ حادثهٔ گریفین خودکار می‌سازد، نه Owner. کسی پشت چت نیست.

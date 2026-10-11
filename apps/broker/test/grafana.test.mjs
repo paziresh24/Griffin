@@ -51,7 +51,7 @@ test("panel query sends the panel's SQL with variables filled and Grafana macros
   assert.equal(query.body.queries[0].rawSql, "SELECT SUM(x) FROM t WHERE center = '5532' AND $__timeFilter(created_at)");
   assert.deepEqual(query.body.queries[0].datasource, { uid: "pg1", type: "grafana-postgresql-datasource" });
   assert.equal(result.results[0].rowCount, 2);
-  assert.deepEqual(result.results[0].lastRow, { time: "2026-09-14T20:03:20+03:30", value: 42 });
+  assert.deepEqual(result.results[0].lastRow, { time: "2026-09-14T16:33:20.000Z", value: 42 });
   assert.equal(result.source, "grafana grafana.example.com");
   assert.ok(!JSON.stringify(result).includes("glsa_TEST"), "token never in results");
 });

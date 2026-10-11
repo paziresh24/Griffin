@@ -75,6 +75,7 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | Variable | Meaning |
 |---|---|
 | `GRIFFIN_DATA` | data dir: SQLite, API keys, TLS, owner token |
+| `GRIFFIN_TZ` | time zone for job schedules and times in messages (default: the server's own, e.g. `Europe/Berlin`) |
 | `GRIFFIN_BROKER` | `off` to run without infrastructure tools even if a socket exists |
 | `GRIFFIN_WEB` | `off` to run headless: API, MCP, messengers and jobs, no web UI |
 | `GRIFFIN_TOKEN`, `GRIFFIN_URL` | used by the terminal client (`bin/griffin.mjs`) |
