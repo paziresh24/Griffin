@@ -9,7 +9,7 @@ PostgreSQL, GitLab, MCP and Telegram, on Claude, Cursor or any OpenAI-compatible
 
 `Node 24` · `Cursor, Claude Agent SDK or any OpenAI-compatible API` · `SQLite` · no SaaS control plane · MIT
 
-**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/)
+**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/) · [Kubernetes AI agent](https://paziresh24.github.io/Griffin/kubernetes-ai-agent.html) · [MCP server](https://paziresh24.github.io/Griffin/mcp-server.html) · [Self-hosted AI agents](https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html) · [فارسی](https://paziresh24.github.io/Griffin/fa/)
 
 <img src="docs/media/chat.png" width="900" alt="Griffin answering a question: a plan, a tool card marked with the path its answer came from, and a disk-usage card">
 
