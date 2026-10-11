@@ -146,7 +146,7 @@ const visualizer = createVisualizer({
 
 // Tool-less one-shot agent for chat titles (no workspace, no custom tools, fastest model the account routes).
 async function generateText(prompt) {
-  if (genv("DEMO") === "1") return "گفتگوی نمایشی";
+  if (genv("DEMO") === "1") return /[\u0600-\u06FF]/.test(prompt.split("Question:")[1] || "") ? "گفتگوی نمایشی" : "Demo chat";
   const os = await import("node:os");
   const key = cursorApiKey();
   if (!key) return "گفتگو";

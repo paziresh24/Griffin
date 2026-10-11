@@ -9,12 +9,27 @@ const mcpResult = (value, isError = false) => ({
   value: { content: [{ text: { text: JSON.stringify(value) } }], isError },
 });
 
+// The demo answers in the language of the message: Persian in, Persian out; anything else, English.
+const isFa = (text) => /[\u0600-\u06FF]/.test(String(text || ""));
+const L = (text, en, fa) => (isFa(text) ? fa : en);
+
 function script(text) {
   const words = (s) => s.split(/(?<= )/).map((chunk) => ({ type: "text-delta", text: chunk }));
   const thinking = (s) => s.split(/(?<= )/).map((chunk) => ({ type: "thinking-delta", text: chunk }));
+  const notes = {
+    count: 3,
+    notes: [
+      { file: "team-preferences.md", title: L(text, "How the team likes reports", "گزارش‌ها را تیم چطور می‌خواهد"), reviewed: true },
+      { file: "customers.md", title: L(text, "Top customer questions this month", "سؤال‌های پرتکرار مشتری‌ها این ماه"), reviewed: true },
+      { file: "billing.md", title: L(text, "Where invoices go", "فاکتورها کجا می‌روند"), reviewed: false },
+    ],
+  };
+  const jobs = { jobs: [{ name: L(text, "Weekly feedback", "بازخورد هفتگی"), trigger: L(text, "Mondays 09:00", "دوشنبه‌ها ۰۹:۰۰"), destination: L(text, "Team chat", "چت تیم"), enabled: true }] };
   return [
-    ...thinking("کاربر وضعیت کلاستر و دیسک را می‌خواهد. اول وضعیت پروداکشن را از broker می‌گیرم، بعد df دیسک ۱. "),
-    { type: "thinking-completed", thinkingDurationMs: 2100 },
+    ...thinking(L(text,
+      "They want to know what I can do here. I'll check what I already know and what runs on a schedule, then answer with concrete examples. ",
+      "می‌خواهد بداند این‌جا چه کارهایی از دستم برمی‌آید. اول می‌بینم چه چیزهایی می‌دانم و چه کاری زمان‌بندی شده، بعد با مثال جواب می‌دهم. ")),
+    { type: "thinking-completed", thinkingDurationMs: 1800 },
     {
       type: "tool-call-completed",
       callId: "todo1",
@@ -25,62 +40,32 @@ function script(text) {
           status: "success",
           value: {
             todos: [
-              { content: "وضعیت پادهای پروداکشن", status: "in_progress" },
-              { content: "فضای دیسک ۱ S3", status: "pending" },
-              { content: "جمع‌بندی برای Owner", status: "pending" },
+              { content: L(text, "Read saved notes", "خواندن یادداشت‌ها"), status: "in_progress" },
+              { content: L(text, "Check scheduled jobs", "دیدن جاب‌های زمان‌بندی‌شده"), status: "pending" },
+              { content: L(text, "Answer with examples", "جواب با مثال"), status: "pending" },
             ],
           },
         },
       },
     },
-    ...words(`برای «${text.slice(0, 40)}» اول وضعیت کلاستر پروداکشن را می‌خوانم. `),
-    { type: "tool-call-started", callId: "k1", toolCall: mcp("kube_status", { cluster: "prod" }) },
-    { pause: 1600 },
-    {
-      type: "tool-call-completed",
-      callId: "k1",
-      toolCall: {
-        ...mcp("kube_status", { cluster: "prod" }),
-        result: mcpResult({
-          cluster: "prod",
-          scope: "cluster",
-          counts: { total: 412, by_phase: { Running: 405, Pending: 3, Failed: 4 } },
-          pods: [
-            { namespace: "team-a", name: "web-auth-7c9d", phase: "Running", reason: "CrashLoopBackOff", ready: "0/1", restarts: 37, node: "node-2" },
-            { namespace: "storage", name: "seaweedfs-filer-2", phase: "Pending", reason: null, ready: "0/1", restarts: 0, node: "" },
-          ],
-          cnpg: [],
-          source: "emergency-ssh 203.0.113.10:22",
-          attempts: [
-            { path: "public-api", ok: false, error: "timeout" },
-            { path: "emergency-ssh", ok: true },
-          ],
-        }),
-      },
-    },
-    ...words("API عمومی جواب نداد و از مسیر اضطراری خواندم؛ ۲ پاد مشکل دارند. حالا فضای دیسک ۱ را می‌گیرم. "),
-    { type: "tool-call-started", callId: "d1", toolCall: mcp("kube_df", { cluster: "prod", namespace: "storage", pod: "seaweedfs-volume-1", path: "/data0" }) },
-    { pause: 1200 },
-    {
-      type: "tool-call-completed",
-      callId: "d1",
-      toolCall: {
-        ...mcp("kube_df", { cluster: "prod", namespace: "storage", pod: "seaweedfs-volume-1", path: "/data0" }),
-        result: mcpResult({
-          df: [{ filesystem: "/dev/sdb1", size: "905G", used: "896G", available: "8.6G", usePercent: "99%", mount: "/data0" }],
-          source: "emergency-ssh 203.0.113.10:22",
-          attempts: [{ path: "emergency-ssh", ok: true }],
-        }),
-      },
-    },
-    ...words("**نتیجه:**\n\n| مورد | مقدار |\n|---|---|\n| پادهای پروداکشن | `412` (۷ ناسالم) |\n| دیسک ۱ S3 آزاد | **8.6G** از 905G (۹۹٪ پر) |\n\n"),
-    ...words("- `web-auth-7c9d` در `CrashLoopBackOff` با ۳۷ restart\n- `seaweedfs-filer-2` در Pending مانده\n\n"),
-    ...words("دیسک ۱ تقریباً پر است؛ بدون دستور صریح شما PVC را تغییر نمی‌دهم."),
-    { type: "turn-ended", usage: { inputTokens: 18234, outputTokens: 612 } },
+    ...words(L(text, "Let me check what I already know. ", "اول می‌بینم چه چیزهایی می‌دانم. ")),
+    { type: "tool-call-started", callId: "n1", toolCall: mcp("knowledge_list", {}) },
+    { pause: 1100 },
+    { type: "tool-call-completed", callId: "n1", toolCall: { ...mcp("knowledge_list", {}), result: mcpResult(notes) } },
+    { type: "tool-call-started", callId: "j1", toolCall: mcp("jobs_list", {}) },
+    { pause: 900 },
+    { type: "tool-call-completed", callId: "j1", toolCall: { ...mcp("jobs_list", {}), result: mcpResult(jobs) } },
+    ...words(L(text,
+      "**Here is what I can do for you right now:**\n\n| Ask me to… | For example |\n|---|---|\n| Summarize | “Summarize this document in five lines” |\n| Schedule | “Every Monday, send the team last week's summary” |\n| Delegate | “Have the researcher compare these two tools” |\n| Remember | “Remember that invoices go to finance” |\n\n",
+      "**این کارها الان از دستم برمی‌آید:**\n\n| از من بخواه… | مثلاً |\n|---|---|\n| خلاصه کنم | «این متن را در پنج خط خلاصه کن» |\n| زمان‌بندی کنم | «هر دوشنبه خلاصهٔ هفتهٔ قبل را برای تیم بفرست» |\n| بسپارم | «از پژوهشگر بخواه این دو ابزار را مقایسه کند» |\n| به خاطر بسپارم | «یادت باشد فاکتورها به مالی می‌روند» |\n\n")),
+    ...words(L(text,
+      "I already have **3 notes** and **1 scheduled job** (Weekly feedback, Mondays 09:00). Add agents and tools on the Agents page and I'll use them. Try “chart”, “report” or “ask me a question” to see more.",
+      "الان **۳ یادداشت** و **۱ جاب زمان‌بندی‌شده** دارم (بازخورد هفتگی، دوشنبه‌ها ۰۹:۰۰). از صفحهٔ ایجنت‌ها ایجنت و ابزار اضافه کن تا از آن‌ها استفاده کنم. برای دیدن بقیه بنویس «نمودار»، «گزارش» یا «سؤال».")),
+    { type: "turn-ended", usage: { inputTokens: 12480, outputTokens: 418 } },
   ];
 }
 
-// "سؤال" in the message: the agent asks through ask_owner and continues with the answer.
+// "question" / "سؤال" in the message: the agent asks through ask_owner and continues with the answer.
 async function askScenario(options, localTools, cancelledRef) {
   const say = async (s) => {
     for (const chunk of s.split(/(?<= )/)) {
@@ -88,12 +73,13 @@ async function askScenario(options, localTools, cancelledRef) {
       await sleep(35);
     }
   };
-  await say("قبل از ساخت نمودار باید بدانم کدام کلاستر را می‌خواهی. ");
+  const text = options.text || "";
+  await say(L(text, "Before I write the summary I need one decision from you. ", "قبل از نوشتن خلاصه یک تصمیم از تو لازم دارم. "));
   const args = {
-    question: "مصرف مموری api را برای کدام کلاستر نشان بدهم؟",
+    question: L(text, "Who should the weekly summary go to?", "خلاصهٔ هفتگی برای چه کسی برود؟"),
     options: [
-      { label: "پروداکشن", description: "۱۶ پاد در team-b (پیشنهادی)" },
-      { label: "staging", description: "در staging پادی از api پیدا نشد" },
+      { label: L(text, "The whole team", "کل تیم"), description: L(text, "Posted in the Team chat (suggested)", "در چت تیم (پیشنهادی)") },
+      { label: L(text, "Just me", "فقط خودم"), description: L(text, "Sent to you privately", "فقط برای خودت") },
     ],
   };
   const call = { type: "mcp", args: { providerIdentifier: "custom-user-tools", toolName: "ask_owner", args } };
@@ -102,23 +88,26 @@ async function askScenario(options, localTools, cancelledRef) {
   await options.onDelta({ update: { type: "tool-call-completed", callId: "ask1", toolCall: { ...call, result: { status: "success", value: result } } } });
   if (cancelledRef.cancelled) return;
   const answer = JSON.parse(result.content[0].text);
-  await say(answer.answered ? `باشه، ${answer.answer}. ` : "جوابی نیامد؛ متوقف می‌شوم.");
+  await say(answer.answered ? L(text, `Okay — ${answer.answer}. `, `باشه، ${answer.answer}. `) : L(text, "No answer came; stopping here.", "جوابی نیامد؛ متوقف می‌شوم."));
 }
 
-// "گزارش" / "فایل" in the message: write a Markdown report into the workspace and show it through
+// "report" / "file" (or Persian) in the message: write a Markdown report into the workspace and show it through
 // the real show_media tool (same content shape as with Cursor: summary JSON + text for the model).
 async function mediaScenario(options, localTools) {
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
   const workspace = process.env.GRIFFIN_WORKSPACE || process.env.GRIFFIN_WORKSPACE || "/workspace";
   const file = path.join(workspace, "demo-report.md");
-  await fs.writeFile(file, "# گزارش نمایشی\n\n| پاد | وضعیت | ری‌استارت |\n|---|---|---|\n| `prescription-v2-db-0` | CrashLoopBackOff | ۷۹ |\n| `seapi-7f7c9f44b9-bk47v` | Evicted | ۱ |\n\n1. **اولویت بالا:** دیتابیس نسخه‌ها\n2. پادهای Evicted را پاک کن\n");
-  const args = { path: file, title: "گزارش نمایشی" };
+  const text = options.text || "";
+  await fs.writeFile(file, L(text,
+    "# Weekly feedback (demo)\n\n| Theme | Mentions |\n|---|---|\n| Faster replies | 14 |\n| Clearer pricing | 9 |\n| Mobile app bugs | 6 |\n\n1. **Top request:** faster replies\n2. Follow up on the pricing questions\n",
+    "# بازخورد هفتگی (نمایشی)\n\n| موضوع | تعداد |\n|---|---|\n| جواب سریع‌تر | ۱۴ |\n| قیمت‌گذاری روشن‌تر | ۹ |\n| باگ اپ موبایل | ۶ |\n\n1. **درخواست اول:** جواب سریع‌تر\n2. پیگیری سؤال‌های قیمت\n"));
+  const args = { path: file, title: L(text, "Weekly feedback (demo)", "بازخورد هفتگی (نمایشی)") };
   const call = { type: "mcp", args: { providerIdentifier: "custom-user-tools", toolName: "show_media", args } };
   await options.onDelta({ update: { type: "tool-call-started", callId: "media1", toolCall: call } });
   const result = await localTools.show_media.execute(args);
   await options.onDelta({ update: { type: "tool-call-completed", callId: "media1", toolCall: { ...call, result: { status: "success", value: { ...result, content: result.content.map((c) => (c.type === "text" ? { text: { text: c.text } } : c)) } } } } });
-  for (const chunk of "گزارش آماده است و بالا نمایش داده شد.".split(/(?<= )/)) {
+  for (const chunk of L(text, "The report is ready and shown above.", "گزارش آماده است و بالا نمایش داده شد.").split(/(?<= )/)) {
     await options.onDelta({ update: { type: "text-delta", text: chunk } });
     await sleep(35);
   }
@@ -141,7 +130,7 @@ export async function demoMetrics({ range = "24h", scale = 1 }) {
   return { instant: false, step, start: points[0][0], end, series: [{ labels: {}, points }], scale, overall: { min, max }, domain: [0, Math.ceil(max / 2) * 2], source: "demo", attempts: [] };
 }
 
-// "نمودار" in the message: query stats, then draw with visualize.
+// "chart" / "نمودار" in the message: query stats, then draw with visualize.
 async function chartScenario(options, localTools) {
   const say = async (s) => {
     for (const chunk of s.split(/(?<= )/)) {
@@ -149,18 +138,19 @@ async function chartScenario(options, localTools) {
       await sleep(35);
     }
   };
-  await say("مصرف مموری api در ۲۴ ساعت اخیر را جمع می‌زنم و نمودارش را می‌کشم. ");
+  const text = options.text || "";
+  await say(L(text, "I'll add up activity over the last 24 hours and draw it. ", "فعالیت ۲۴ ساعت اخیر را جمع می‌زنم و نمودارش را می‌کشم. "));
   const args = {
-    title: "مصرف مموری api",
-    description: "پروداکشن · team-b · مجموع همهٔ پادها · ۲۴ ساعت · GiB (دادهٔ دمو)",
-    datasets: [{ name: "memory", prometheus: { cluster: "prod", promql: 'sum(container_memory_working_set_bytes{namespace="team-b",pod=~"api-.*",container!="",container!="POD"})', range: "24h", scale: 1 / 2 ** 30, unit: "GiB" } }],
+    title: L(text, "Activity over 24 hours", "فعالیت ۲۴ ساعت اخیر"),
+    description: L(text, "Requests per 5 minutes, in hundreds (demo data)", "درخواست در هر ۵ دقیقه، به صد (دادهٔ نمایشی)"),
+    datasets: [{ name: "memory", prometheus: { cluster: "demo", promql: "sum(rate(requests_total[5m]))", range: "24h", scale: 1 / 2 ** 30, unit: "×100" } }],
     spec: {
       data: { name: "memory" },
       mark: "line",
       encoding: {
         x: { field: "time", type: "temporal", title: null },
-        y: { field: "value", type: "quantitative", title: "GiB" },
-        tooltip: [{ field: "time", type: "temporal", title: "زمان", format: "%H:%M" }, { field: "value", type: "quantitative", title: "GiB", format: ".2f" }],
+        y: { field: "value", type: "quantitative", title: L(text, "requests (×100)", "درخواست (×۱۰۰)") },
+        tooltip: [{ field: "time", type: "temporal", title: L(text, "time", "زمان"), format: "%H:%M" }, { field: "value", type: "quantitative", title: L(text, "requests (×100)", "درخواست (×۱۰۰)"), format: ".1f" }],
       },
     },
   };
@@ -168,7 +158,7 @@ async function chartScenario(options, localTools) {
   await options.onDelta({ update: { type: "tool-call-started", callId: "viz1", toolCall: call } });
   const result = await localTools.visualize.execute(args);
   await options.onDelta({ update: { type: "tool-call-completed", callId: "viz1", toolCall: { ...call, result: { status: "success", value: result } } } });
-  await say("اوج حدود **۱۱٫۹ GiB** حوالی ظهر و کمینه **۲ GiB** نیمه‌شب است.");
+  await say(L(text, "Activity peaks around noon and is lowest after midnight.", "اوج فعالیت حوالی ظهر و کمترینش بعد از نیمه‌شب است."));
 }
 
 function makeAgent(agentId, agentOptions = {}) {
@@ -189,17 +179,17 @@ function makeAgent(agentId, agentOptions = {}) {
         async wait() {
           await sleep(700);
           const localTools = agentOptions.local?.customTools;
-          if (/نمودار/.test(text) && localTools?.visualize) {
-            await chartScenario(options, localTools);
+          if (/نمودار|chart/i.test(text) && localTools?.visualize) {
+            await chartScenario({ ...options, text }, localTools);
             return { id: run.id, status: cancelled ? "cancelled" : "finished" };
           }
-          if (/فایل|گزارش/.test(text) && localTools?.show_media) {
-            await mediaScenario(options, localTools);
+          if (/فایل|گزارش|report|file/i.test(text) && localTools?.show_media) {
+            await mediaScenario({ ...options, text }, localTools);
             return { id: run.id, status: cancelled ? "cancelled" : "finished" };
           }
-          if (/سؤال|سوال/.test(text) && localTools?.ask_owner) {
+          if (/سؤال|سوال|question/i.test(text) && localTools?.ask_owner) {
             const ref = { get cancelled() { return cancelled; } };
-            await askScenario(options, localTools, ref);
+            await askScenario({ ...options, text }, localTools, ref);
             return { id: run.id, status: cancelled ? "cancelled" : "finished" };
           }
           for (const step of script(text)) {
