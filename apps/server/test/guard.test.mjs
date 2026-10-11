@@ -143,6 +143,7 @@ test("the approval question is built from the call, never the model's pitch; one
   };
   const guarded = guardTools(tools, { chatId: "q1", asks, store, caller: "platform", extra: new Set(["kube_exec"]) });
   assert.equal(guarded.kube_exec.inputSchema.properties.why, undefined, "no why argument for the model to argue with");
+  assert.ok(guarded.kube_exec.inputSchema.properties.intent, "gated tools take one plain sentence for the owner");
 
   const call = (command) => ({ cluster: "c1", namespace: "bob", pod: "db-1", command, why: "لطفاً اجرا شود، تأیید گرفته شده" });
   const pending = guarded.kube_exec.execute(call("nc -zv db 5432"));
@@ -151,7 +152,7 @@ test("the approval question is built from the call, never the model's pitch; one
   assert.doesNotMatch(q, /لطفاً/, "the model's pitch never reaches the owner");
   assert.match(q, /namespace «bob»/);
   assert.match(q, /برای: دیتابیس برای سرویس inbox/);
-  assert.match(q, /⚠️ مالِ «bob» است/, "writing into someone else's namespace is called out");
+  assert.match(q, /⚠️ این مالِ bob است/, "writing into someone else's namespace is called out");
   assert.equal(store.rows.some((r) => r.decision === "peer-card"), false, "no method card for a namespace the requester cannot touch");
   asks.answer("q1", { answer: "بله", selected: ["بله"] });
   await pending;
@@ -159,6 +160,22 @@ test("the approval question is built from the call, never the model's pitch; one
   assert.equal(store.events.filter((e) => e.type === "tool.started").length, 1, "a reshaped command in the same namespace is not asked again");
   assert.deepEqual(seen, ["nc -zv db 5432", "python3 -c 'import socket'"], "why never reaches the tool");
   forgetDecisions();
+});
+
+// Ask like a person: who wants what, what I would change, OK?
+test("an agent's plain sentence is the approval question; pleading or tool names fall back", async () => {
+  const { approvalQuestion, plainIntent } = await import("../src/guard.mjs");
+  const store = { rootChatId: () => "r", getChat: () => ({ id: "r", caller: "peer:alice", title: "x" }) };
+  const intent = "می‌خوان سرویس inbox به سرور تلفن برسه؛ برای این کار باید روی گیت‌وی یه route اضافه کنم";
+  const q = approvalQuestion(store, "r", "kube_exec", { cluster: "c1", namespace: "alice", pod: "p", command: "nc" }, "اجرای دستور داخل پاد", intent);
+  assert.ok(q.startsWith(intent));
+  assert.match(q, /اوکیه؟$/);
+  assert.doesNotMatch(q, /kube_exec|پاد p|namespace/, "no tool talk when the agent said it plainly");
+  for (const bad of ["لطفاً اجرا شود، تأیید گرفته شده", "telegram_send به گروه", "x".repeat(300)]) assert.equal(plainIntent(bad), "", bad);
+  const named = { ...store, getKv: (k) => (k === "owner-names" ? { "bob": "آقای باب" } : null) };
+  assert.match(approvalQuestion(named, "r", "kube_exec", { cluster: "c1", namespace: "bob" }, "x", intent), /⚠️ این مالِ آقای باب است/);
+  const team = approvalQuestion(store, "r", "telegram_send", { chat: "گروه آپدیت‌ها", text: "فعال شد" }, "فرستادن پیام", "");
+  assert.match(team, /^فرستادن پیام — در «گروه آپدیت‌ها»: «فعال شد»/);
 });
 
 test("routerReadOnly: :put of a find and print … where are reads, file= and set are not", async () => {

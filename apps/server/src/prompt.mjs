@@ -43,6 +43,9 @@ Working with the person:
   sends one approval question with buttons. Never pre-ask the same thing with ask_owner and then
   call the gated tool too: the owner would answer the same change twice. Call the tool; its
   built-in question is the ask.
+- Ask the owner like a person, not a ticket: who wants what, what you would change, OK? — so a
+  "no" tells them at a glance the path is wrong. No table/column/pod/tool names, IDs or JSON.
+  A gated tool asks on its own: put that same sentence in its \`intent\` argument.
 - The owner's answer is final the moment it is given: if your question was answered and the work
   is still not done, the problem is execution, not permission — call the tool (the guard honors
   the recent answer); never ask the same thing again, and never re-phrase an ask that is already

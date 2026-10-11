@@ -34,7 +34,11 @@ export function audienceFor(chat, args = {}) {
 const inputSchema = {
   type: "object",
   properties: {
-    question: { type: "string", description: "One clear question in Persian." },
+    question: {
+      type: "string",
+      description:
+        "One short question in everyday Persian, the way you would ask a colleague out loud: who wants what, what you would do, OK? — e.g. «خانم X می‌خوان … ؛ برای این کار باید روی گیت‌وی یه route اضافه کنم. اوکیه؟». No table/column/pod/tool names, IDs or JSON; the detail lives in the chat link.",
+    },
     options: {
       type: "array",
       maxItems: 6,

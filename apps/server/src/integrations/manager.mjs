@@ -7,6 +7,7 @@ import { COVERAGE_CALLER } from "./coverage.mjs";
 import { isNoReply, peerAgentPrompt, takeRate, derivePeerUserId } from "./peer-agent.mjs";
 import { answerStamp, deliverable, liveStatusLine } from "./format.mjs";
 import { OWNER, REQUESTER } from "../asks.mjs";
+import { ownerLabel } from "../guard.mjs";
 import { createAccountChannel, createAccountLogin } from "./telegram-account.mjs";
 import { chartMedia } from "../chart-image.mjs";
 import { normalizeProvider } from "../providers/ids.mjs";
@@ -177,8 +178,8 @@ export function createIntegrations({ store, runner, asks, peerAuth = null, publi
     if (!chat || chat.caller === OWNER) return "";
     if (String(chat.caller).startsWith("peer:")) {
       const userId = String(chat.caller).slice("peer:".length);
-      const label = store.getPeerUser?.(userId)?.label || userId;
-      return `🔐 درخواست از ایجنتِ «${label}» (${userId}) — تأیید با توست:`;
+      const label = ownerLabel(store, userId);
+      return `🔐 درخواست «${label}»:`;
     }
     return `🔐 از مسیر «${chat.caller}» — تأیید با توست:`;
   }
