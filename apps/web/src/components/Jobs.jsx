@@ -309,7 +309,7 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
                 ) : (
                   <input value={form.trigger.cron || ""} onChange={(e) => set({ trigger: { cron: e.target.value } })} placeholder="0,30 * * * *" className={`ltr font-mono ${input}`} />
                 )}
-                <p className="text-[11px] text-muted-foreground">{t("ساعت تهران. «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.")}</p>
+                <p className="text-[11px] text-muted-foreground">{t("به وقت سرور (GRIFFIN_TZ). «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.")}</p>
               </div>
             ) : null}
 

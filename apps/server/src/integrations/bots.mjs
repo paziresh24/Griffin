@@ -254,15 +254,17 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
       if (!message) return;
       const from = String(message.chat.id);
       const text = String(message.text || message.caption || "").trim();
+      // The bot answers in the sender's Telegram language: Persian for fa, English otherwise.
+      const say = (fa, en) => (String(message.from?.language_code || "").startsWith("fa") ? fa : en);
 
       const start = text.match(/^\/start(?:@\w+)?\s*(\S+)?$/);
       if (start) {
         const code = bridge.integration(id)?.settings.pairingCode;
         if (code && start[1] && start[1].toUpperCase() === code) {
           bridge.pair(id, from, message.chat);
-          await sendText(from, "✅ این گفتگو به گریفین وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /stop توقف کار فعلی");
+          await sendText(from, say("✅ این گفتگو به گریفین وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /stop توقف کار فعلی", "✅ This chat is connected to Griffin. Everything you write here reaches the agent.\n/new new chat · /stop stop the current work"));
         } else if (!paired().has(from)) {
-          await sendText(from, "این ربات خصوصی است. کد اتصال را از تنظیمات گریفین بگیر و بفرست: /start CODE");
+          await sendText(from, say("این ربات خصوصی است. کد اتصال را از تنظیمات گریفین بگیر و بفرست: /start CODE", "This bot is private. Get the pairing code from Griffin's settings and send: /start CODE"));
         }
         return;
       }
@@ -271,11 +273,11 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
       const choice = text.match(/^([1-6])$/);
       if (choice) {
         if (await bridge.answerOwnerAsk?.(id, Number(choice[1]) - 1)) {
-          await sendText(from, "✅ گرفتم.").catch(() => {});
+          await sendText(from, say("✅ گرفتم.", "✅ Got it.")).catch(() => {});
           return;
         }
         if ((bridge.openOwnerAskCount?.() || 0) > 1) {
-          await sendText(from, "چند سؤال باز است؛ دکمهٔ همان پیام را بزن تا به چت درست برود.").catch(() => {});
+          await sendText(from, say("چند سؤال باز است؛ دکمهٔ همان پیام را بزن تا به چت درست برود.", "Several questions are open; tap the button on the one you mean so the answer reaches the right chat.")).catch(() => {});
           return;
         }
       }
@@ -284,12 +286,12 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
 
       if (/^\/new(?:@\w+)?$/.test(text)) {
         bridge.newChat(id, from);
-        await sendText(from, "🆕 گفتگوی تازه شروع شد. سؤالت را بفرست.");
+        await sendText(from, say("🆕 گفتگوی تازه شروع شد. سؤالت را بفرست.", "🆕 New chat started. Send your question."));
         return;
       }
       if (/^\/stop(?:@\w+)?$/.test(text)) {
         const outcome = await bridge.stop(id, from);
-        await sendText(from, outcome ? "⏹ متوقف شد." : "کاری در جریان نیست.");
+        await sendText(from, outcome ? say("⏹ متوقف شد.", "⏹ Stopped.") : say("کاری در جریان نیست.", "Nothing is running."));
         return;
       }
 
