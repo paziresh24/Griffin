@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Let Claude Code delegate long-running tasks over MCP | Griffin</title>
+<meta name="description" content="How to give Claude Code (or Claude Desktop, Cursor) an MCP server it can hand long-running tasks to: start a task, keep working, and collect the answer later — with a scoped token and human approval for risky actions.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/guides/claude-code-delegate-mcp.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="Let Claude Code delegate long-running tasks over MCP | Griffin">
+<meta property="og:description" content="How to give Claude Code (or Claude Desktop, Cursor) an MCP server it can hand long-running tasks to: start a task, keep working, and collect the answer later — with a scoped token and human approval for risky actions.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/guides/claude-code-delegate-mcp.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Let Claude Code delegate long-running tasks over MCP | Griffin">
+<meta name="twitter:description" content="How to give Claude Code (or Claude Desktop, Cursor) an MCP server it can hand long-running tasks to: start a task, keep working, and collect the answer later — with a scoped token and human approval for risky actions.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Let Claude Code delegate long-running tasks over MCP | Griffin", "description": "How to give Claude Code (or Claude Desktop, Cursor) an MCP server it can hand long-running tasks to: start a task, keep working, and collect the answer later — with a scoped token and human approval for risky actions.", "inLanguage": "en", "datePublished": "2026-10-11", "dateModified": "2026-10-11", "url": "https://paziresh24.github.io/Griffin/guides/claude-code-delegate-mcp.html", "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}, "about": {"@type": "SoftwareApplication", "name": "Griffin", "url": "https://paziresh24.github.io/Griffin/", "codeRepository": "https://github.com/paziresh24/Griffin"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "Guides", "item": "https://paziresh24.github.io/Griffin/guides/"}, {"@type": "ListItem", "position": 3, "name": "Let Claude Code delegate long-running tasks over MCP | Griffin", "item": "https://paziresh24.github.io/Griffin/guides/claude-code-delegate-mcp.html"}]}</script>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<nav><a href=".././">Overview</a> <a href="../use-cases.html">Use cases</a> <a href="../self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="../telegram-ai-assistant.html">Telegram AI assistant</a> <a href="../mcp-server.html">MCP server</a> <a href="../guides/">Guides</a> <a href="../agents.html">Docs</a> <a href="../fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="../media/griffin-mark.svg" alt="Griffin logo">
+  <h1>Let Claude Code delegate long-running tasks over MCP</h1>
+</header>
+<p class="lead">Coding agents block while a tool call runs, and most MCP tools are expected to answer in seconds. Some work takes minutes: research, reports, checks across several systems. This guide connects Claude Code to Griffin's MCP server so it can hand that work off and pick up the result later.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+</div>
+<h2>How it works</h2>
+<p>Griffin exposes five task-shaped MCP tools. <code>griffin_send</code> starts a task in plain language and returns quickly — with the answer if it was fast, otherwise with a task id. <code>griffin_wait</code> long-polls for progress and the final answer. <code>griffin_reply</code> answers a question the task asked, <code>griffin_cancel</code> stops it, and <code>griffin_tasks</code> lists recent tasks. Tasks keep running if the connection drops and survive a server restart.</p>
+
+<h2>1. Run Griffin and create a client token</h2>
+<pre><code>docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker exec griffin cat /data/owner.token   # the token you sign in with</code></pre>
+<p>In Griffin open <strong>Peers → New peer</strong> (one peer per person), then <strong>New client</strong> (one per device) and copy the token. It is shown once. Each client has its own token and its own tool quota, so you can revoke a laptop without touching anything else.</p>
+
+<h2>2. Add it to Claude Code</h2>
+<pre><code>claude mcp add --transport http griffin https://your-griffin.example.com/mcp \
+  --header &quot;Authorization: Bearer grf_…&quot;</code></pre>
+<p>For Claude Desktop, Cursor and other stdio-only clients, use the bridge that ships in the repository; it needs no <code>npm install</code>:</p>
+<pre><code>{ &quot;mcpServers&quot;: { &quot;griffin&quot;: {
+  &quot;command&quot;: &quot;node&quot;,
+  &quot;args&quot;: [&quot;/path/to/griffin/bin/griffin-mcp.mjs&quot;],
+  &quot;env&quot;: { &quot;GRIFFIN_URL&quot;: &quot;https://your-griffin.example.com&quot;, &quot;GRIFFIN_TOKEN&quot;: &quot;grf_…&quot; } } } }</code></pre>
+
+<h2>3. Use it</h2>
+<p>Ask Claude Code something like “ask Griffin to compare the error rates of last week and this week and summarise it”. Claude Code calls <code>griffin_send</code>, keeps working, and calls <code>griffin_wait</code> until the answer is in. Griffin's own agents do the work with their own tools — the credentials they use never reach Claude Code.</p>
+
+<h2>Why delegate instead of giving Claude Code the tools</h2>
+<ul class="plain">
+<li>Credentials stay in Griffin; the coding agent only sees results.</li>
+<li>Each client gets a quota: by default a peer can read but not change things.</li>
+<li>Irreversible actions go to a human for approval instead of being decided by whoever asked.</li>
+<li>Every call is logged per client, so “it doesn't answer” becomes a lookup.</li>
+</ul>
+<p>Griffin is open source (MIT): <a href="https://github.com/paziresh24/Griffin">github.com/paziresh24/Griffin</a> · <a href="../mcp-server.html">MCP server overview</a>.</p>
+<h2>More guides</h2>
+<ul class="plain">
+<li><a href="ai-agent-tool-permissions.html">AI agent tool permissions: give each caller only the tools it needs</a></li>
+<li><a href="telegram-ai-assistant.html">Run your own AI assistant on Telegram</a></li>
+<li><a href="local-llm-agents.html">Run AI agents on a local LLM with Ollama</a></li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>

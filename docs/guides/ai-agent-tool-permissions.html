@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI agent tool permissions: give each caller only the tools it needs | Griffin</title>
+<meta name="description" content="How to stop an AI agent from becoming a confused deputy: grant tools per caller, enforce the grant in code before tools reach the model, and send irreversible actions to a human. With working examples.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/guides/ai-agent-tool-permissions.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="AI agent tool permissions: give each caller only the tools it needs | Griffin">
+<meta property="og:description" content="How to stop an AI agent from becoming a confused deputy: grant tools per caller, enforce the grant in code before tools reach the model, and send irreversible actions to a human. With working examples.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/guides/ai-agent-tool-permissions.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="AI agent tool permissions: give each caller only the tools it needs | Griffin">
+<meta name="twitter:description" content="How to stop an AI agent from becoming a confused deputy: grant tools per caller, enforce the grant in code before tools reach the model, and send irreversible actions to a human. With working examples.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "AI agent tool permissions: give each caller only the tools it needs | Griffin", "description": "How to stop an AI agent from becoming a confused deputy: grant tools per caller, enforce the grant in code before tools reach the model, and send irreversible actions to a human. With working examples.", "inLanguage": "en", "datePublished": "2026-10-11", "dateModified": "2026-10-11", "url": "https://paziresh24.github.io/Griffin/guides/ai-agent-tool-permissions.html", "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}, "about": {"@type": "SoftwareApplication", "name": "Griffin", "url": "https://paziresh24.github.io/Griffin/", "codeRepository": "https://github.com/paziresh24/Griffin"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "Guides", "item": "https://paziresh24.github.io/Griffin/guides/"}, {"@type": "ListItem", "position": 3, "name": "AI agent tool permissions: give each caller only the tools it needs | Griffin", "item": "https://paziresh24.github.io/Griffin/guides/ai-agent-tool-permissions.html"}]}</script>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<nav><a href=".././">Overview</a> <a href="../use-cases.html">Use cases</a> <a href="../self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="../telegram-ai-assistant.html">Telegram AI assistant</a> <a href="../mcp-server.html">MCP server</a> <a href="../guides/">Guides</a> <a href="../agents.html">Docs</a> <a href="../fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="../media/griffin-mark.svg" alt="Griffin logo">
+  <h1>AI agent tool permissions: give each caller only the tools it needs</h1>
+</header>
+<p class="lead">An agent that can send email, run SQL or call an API is safe only if you control <em>who</em> can make it do those things. This guide explains the problem, the pattern that solves it, and how to set it up in Griffin, an open-source agent platform.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+</div>
+<h2>The problem: the agent is a confused deputy</h2>
+<p>Most agent setups give an agent one list of tools. That list is fine when you are the only one talking to it. It stops being fine the moment anyone else can reach the agent: a colleague on a chat app, another agent that delegates work to it, a scheduled job that runs at night, or an external tool such as Claude Code.</p>
+<p>Each of those callers can ask the agent for anything, and the agent will happily use every tool it has. A colleague who should only read a report can ask the agent to send a message in your name; another agent that only needed a summary can trigger a database write. Security people call this a <strong>confused deputy</strong>: the agent has the authority, and whoever talks to it borrows that authority.</p>
+<p>Writing “only do X for Y” in the prompt does not fix it. A prompt is a request, not a control; a persuasive enough message gets past it.</p>
+
+<h2>The pattern: a tool grant per (agent, caller)</h2>
+<p>Treat permissions as a table, not as an instruction. For every agent, list who may call it and which of its tools each caller gets:</p>
+<ul class="plain">
+<li><strong>The owner</strong> gets every tool the agent has.</li>
+<li><strong>Another agent</strong> that delegates a subtask gets the read-only subset — it cannot send messages or create jobs on your behalf.</li>
+<li><strong>A scheduled job</strong>, which runs with nobody watching, gets what it needs to produce its result and nothing irreversible.</li>
+<li><strong>A colleague or an external client</strong> gets the narrow set you chose for them.</li>
+<li><strong>A caller with no row gets no tools at all.</strong> Fail closed.</li>
+</ul>
+<p>Then enforce the table <em>where tools are handed to the model</em>. If a caller wasn't granted a tool, the tool is not in the model's tool list for that run, so there is nothing to talk the model into.</p>
+
+<h2>Irreversible actions go to a human</h2>
+<p>Some actions should never be decided by whoever happens to be asking: merging to production, deleting data, changing access, sending money. Mark those tools as irreversible in code. When a chain that you didn't start reaches one of them, the agent asks you — with a button — and waits. When nobody is watching (a nightly job), it refuses instead of guessing. Record every approval.</p>
+
+<h2>Doing it in Griffin</h2>
+<p>Griffin is built around this table. Every agent is a profile with its instructions, model, tools and <code>callers</code>:</p>
+<pre><code>{
+  &quot;id&quot;: &quot;assistant&quot;,
+  &quot;label&quot;: &quot;Assistant&quot;,
+  &quot;tools&quot;: [&quot;ask_owner&quot;, &quot;knowledge_write&quot;, &quot;knowledge_list&quot;, &quot;jobs_create&quot;, &quot;telegram_read&quot;, &quot;telegram_send&quot;],
+  &quot;callers&quot;: {
+    &quot;owner&quot;:     { &quot;tools&quot;: &quot;*&quot; },
+    &quot;griffin&quot;:   { &quot;tools&quot;: [&quot;knowledge_list&quot;, &quot;telegram_read&quot;] },
+    &quot;scheduler&quot;: { &quot;tools&quot;: [&quot;knowledge_list&quot;, &quot;telegram_read&quot;] }
+  }
+}</code></pre>
+<p>Here the owner gets everything, the orchestrator agent (<code>griffin</code>) can read messages and notes but never send as you, and scheduled jobs can read but not write. You can edit the same thing in the web UI: <strong>Agents → your agent → who can call it</strong>, then pick the tools for each caller.</p>
+<p>Under the hood, the tool list for each run is filtered by the caller before it reaches the model, and a separate guard asks the owner before any tool marked irreversible runs in a chain the owner didn't start. Credentials live in a separate broker process, so the process running the model never sees a secret even if it is tricked into trying.</p>
+
+<h2>Checklist</h2>
+<ul class="plain">
+<li>Write permissions as data (agent × caller → tools), not as prompt text.</li>
+<li>Filter the tool list before the model sees it; don't rely on the model to refuse.</li>
+<li>Split read tools from write tools, and keep write tools narrow.</li>
+<li>Make irreversible actions wait for a human, and refuse them when nobody is watching.</li>
+<li>Keep credentials out of the model's process.</li>
+<li>Log who asked, which tool ran, and who approved it.</li>
+</ul>
+<p>Griffin is open source (MIT). Try it with one command:</p>
+<pre><code>docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker exec griffin cat /data/owner.token   # the token you sign in with</code></pre>
+<p>Source and docs: <a href="https://github.com/paziresh24/Griffin">github.com/paziresh24/Griffin</a> · <a href="../agents.html">how agents and callers work</a>.</p>
+<h2>More guides</h2>
+<ul class="plain">
+<li><a href="telegram-ai-assistant.html">Run your own AI assistant on Telegram</a></li>
+<li><a href="local-llm-agents.html">Run AI agents on a local LLM with Ollama</a></li>
+<li><a href="claude-code-delegate-mcp.html">Let Claude Code delegate long-running tasks over MCP</a></li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>

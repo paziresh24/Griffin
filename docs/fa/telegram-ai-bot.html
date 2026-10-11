@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ساخت دستیار هوش مصنوعی در تلگرام روی سرور خودتان | گریفین</title>
+<meta name="description" content="راهنمای قدم‌به‌قدم ساخت ربات و دستیار هوش مصنوعی تلگرام با گریفین: ساخت ربات با BotFather، اتصال به گریفین، انتخاب مدل (Claude، مدل محلی یا سازگار با OpenAI) و گزارش زمان‌بندی‌شده در تلگرام.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/fa/telegram-ai-bot.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="ساخت دستیار هوش مصنوعی در تلگرام روی سرور خودتان | گریفین">
+<meta property="og:description" content="راهنمای قدم‌به‌قدم ساخت ربات و دستیار هوش مصنوعی تلگرام با گریفین: ساخت ربات با BotFather، اتصال به گریفین، انتخاب مدل (Claude، مدل محلی یا سازگار با OpenAI) و گزارش زمان‌بندی‌شده در تلگرام.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/fa/telegram-ai-bot.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ساخت دستیار هوش مصنوعی در تلگرام روی سرور خودتان | گریفین">
+<meta name="twitter:description" content="راهنمای قدم‌به‌قدم ساخت ربات و دستیار هوش مصنوعی تلگرام با گریفین: ساخت ربات با BotFather، اتصال به گریفین، انتخاب مدل (Claude، مدل محلی یا سازگار با OpenAI) و گزارش زمان‌بندی‌شده در تلگرام.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "ساخت دستیار هوش مصنوعی در تلگرام روی سرور خودتان | گریفین", "description": "راهنمای قدم‌به‌قدم ساخت ربات و دستیار هوش مصنوعی تلگرام با گریفین: ساخت ربات با BotFather، اتصال به گریفین، انتخاب مدل (Claude، مدل محلی یا سازگار با OpenAI) و گزارش زمان‌بندی‌شده در تلگرام.", "inLanguage": "fa", "datePublished": "2026-10-11", "dateModified": "2026-10-11", "url": "https://paziresh24.github.io/Griffin/fa/telegram-ai-bot.html", "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}, "about": {"@type": "SoftwareApplication", "name": "Griffin", "url": "https://paziresh24.github.io/Griffin/", "codeRepository": "https://github.com/paziresh24/Griffin"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "راهنماها", "item": "https://paziresh24.github.io/Griffin/fa/"}, {"@type": "ListItem", "position": 3, "name": "ساخت دستیار هوش مصنوعی در تلگرام روی سرور خودتان | گریفین", "item": "https://paziresh24.github.io/Griffin/fa/telegram-ai-bot.html"}]}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<nav><a href="./">گریفین</a> <a href="ai-agent.html">ایجنت هوش مصنوعی</a> <a href="telegram-ai-bot.html">دستیار تلگرام</a> <a href="../">English</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="../media/griffin-mark.svg" alt="Griffin logo">
+  <h1>ساخت دستیار هوش مصنوعی در تلگرام</h1>
+</header>
+<p class="lead">در این راهنما یک دستیار هوش مصنوعی می‌سازیم که در تلگرام با آن حرف می‌زنید، روی سرور خودتان اجرا می‌شود، مدلش را خودتان انتخاب می‌کنید و می‌تواند گزارش زمان‌بندی‌شده بفرستد.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">گریفین در گیت‌هاب</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">راه‌اندازی در دو دقیقه</a>
+</div>
+<h2>پیش‌نیازها</h2>
+<ul class="plain">
+<li>یک سرور یا سیستمی که روشن می‌ماند، با Docker یا Node.js نسخهٔ ۲۴.</li>
+<li>کلید API یکی از مدل‌ها: Claude، OpenAI یا هر سرور سازگار با OpenAI (مدل محلی هم می‌شود).</li>
+<li>یک حساب تلگرام برای ساختن ربات با ‎@BotFather.</li>
+</ul>
+<h2>۱. گریفین را اجرا کنید</h2>
+<pre><code>docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker exec griffin cat /data/owner.token</code></pre>
+<p>آدرس <code>http://سرور-شما:3100</code> را باز کنید و با توکن وارد شوید. اگر می‌خواهید از اینترنت در دسترس باشد، اول پشت HTTPS بگذاریدش.</p>
+
+<h2>۲. ربات تلگرام بسازید</h2>
+<p>در تلگرام به ‎<strong>@BotFather</strong> پیام بدهید، دستور <code>/newbot</code> را بفرستید، اسم و نام کاربری ربات را انتخاب کنید و توکنی را که می‌دهد کپی کنید.</p>
+
+<h2>۳. ربات را به گریفین وصل کنید</h2>
+<p>در گریفین به <strong>تنظیمات ← اتصال‌ها ← ربات تلگرام</strong> بروید و توکن را بچسبانید. گریفین یک دستور جفت‌سازی مثل <code>/start 4F7K2Q</code> نشان می‌دهد؛ آن را برای ربات بفرستید. از این به بعد هر چه به ربات بنویسید به ایجنت می‌رسد.</p>
+<ul class="plain">
+<li><code>/new</code> گفتگوی تازه شروع می‌کند.</li>
+<li><code>/stop</code> کار در حال انجام را متوقف می‌کند.</li>
+<li>عکسی که بفرستید به ایجنت می‌رسد و نمودار و فایل به‌صورت عکس و پیوست برمی‌گردد.</li>
+</ul>
+<h2>۴. گزارش زمان‌بندی‌شده</h2>
+<p>کافی است در تلگرام بنویسید: «هر دوشنبه ساعت ۹ خلاصهٔ هفتهٔ قبل را برایم بفرست». ایجنت خودش جاب می‌سازد. از صفحهٔ <strong>جاب‌ها ← جاب جدید</strong> هم می‌شود با یک پرامپت، یک زمان‌بندی و مقصد تحویل جاب ساخت.</p>
+
+<h2>امنیت</h2>
+<ul class="plain">
+<li>فقط چت‌های جفت‌شده به ایجنت می‌رسند؛ پیام غریبه به ربات بی‌اثر است.</li>
+<li>کار برگشت‌ناپذیر منتظر دکمهٔ تأیید شما در همان چت می‌ماند.</li>
+<li>کلیدها و گفتگوها روی سرور خودتان می‌ماند.</li>
+</ul>
+<p>نسخهٔ انگلیسی همین راهنما با جزئیات بیشتر: <a href="../guides/telegram-ai-assistant.html">Run your own AI assistant on Telegram</a>. کد گریفین: <a href="https://github.com/paziresh24/Griffin">گیت‌هاب</a>.</p>
+
+<footer>گریفین متن‌باز است (MIT)، ساختهٔ <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>
