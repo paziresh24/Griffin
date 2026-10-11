@@ -24,12 +24,26 @@ to your own systems — on Claude, Cursor or any OpenAI-compatible model, includ
 
 ## Two minutes to your own
 
+**With Docker** — one line, no clone:
+
+```bash
+docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
+  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker exec griffin cat /data/owner.token   # the token you log in with
+```
+
+Use `-e OPENAI_API_KEY=…` (plus `-e GRIFFIN_OPENAI_BASE_URL=…` for a local or other OpenAI-compatible
+server) or `-e CURSOR_API_KEY=…` instead; the first agent uses whichever key you give it. No key yet?
+`-e GRIFFIN_DEMO=1` runs a scripted demo.
+
+**From source:**
+
 ```bash
 git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
 npm ci && npm run build
 
 mkdir -p data workspace
-echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key   # or data/cursor.api-key
+echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key   # or openai.api-key / cursor.api-key
 GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs
 ```
 
@@ -40,12 +54,12 @@ agent, and everything else is something you add when you want it.
 Or stay in the terminal:
 
 ```bash
-node bin/griffin.mjs "what changed in the last deploy?"   # streams the answer
-node bin/griffin.mjs -i                                   # keep the chat open
-node bin/griffin.mjs agents                               # who exists, what they may use
+node bin/griffin.mjs "summarise what I asked you this week"   # streams the answer
+node bin/griffin.mjs -i                                       # keep the chat open
+node bin/griffin.mjs agents                                   # who exists, what they may use
 ```
 
-Prefer Docker? `docker compose -f deploy/compose.yaml up -d --build` runs the same thing.
+`docker compose -f deploy/compose.yaml up -d --build` builds and runs the same thing from source.
 
 To look around before wiring anything up, `GRIFFIN_DEMO=1 GRIFFIN_AUTH=off …` replaces the model
 with a scripted stand-in — the screenshots on this page are that demo.
@@ -99,7 +113,7 @@ in-pod `df`, secrets, CNPG), Prometheus and Grafana, PostgreSQL, S3, GitLab, Mik
 ArvanCloud and NSIN CDNs, DNS/HTTP/TLS probes — and a new pack is one module with a schema. Each pack
 appears only once you configure what it needs, so an agent never sees a tool that cannot work.
 
-The UI is Persian-first and right-to-left; the code, tools and docs are English.
+The UI speaks English and Persian (right-to-left), picked from your browser and switchable in Settings.
 
 ## Use it as an MCP server
 
