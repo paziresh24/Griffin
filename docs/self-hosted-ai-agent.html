@@ -4,27 +4,32 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Self-hosted AI agent platform with per-caller permissions | Griffin</title>
-<meta name="description" content="Griffin is an open-source, self-hosted AI agent platform: define agents from the UI, give each one typed tools, decide who may call which tool, and run them on Claude, Cursor or any OpenAI-compatible model. Node 24 and SQLite, MIT.">
+<meta name="description" content="Griffin is an open-source, self-hosted AI agent platform: define agents from the UI, give each one tools, decide who may call which tool, and run them on Claude, Cursor or any OpenAI-compatible model, including local ones. Node 24 and SQLite, MIT.">
 <link rel="canonical" href="https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html">
 <link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
-<meta property="og:type" content="article">
+<meta property="og:type" content="website">
 <meta property="og:site_name" content="Griffin">
 <meta property="og:title" content="Self-hosted AI agent platform with per-caller permissions | Griffin">
-<meta property="og:description" content="Griffin is an open-source, self-hosted AI agent platform: define agents from the UI, give each one typed tools, decide who may call which tool, and run them on Claude, Cursor or any OpenAI-compatible model. Node 24 and SQLite, MIT.">
+<meta property="og:description" content="Griffin is an open-source, self-hosted AI agent platform: define agents from the UI, give each one tools, decide who may call which tool, and run them on Claude, Cursor or any OpenAI-compatible model, including local ones. Node 24 and SQLite, MIT.">
 <meta property="og:url" content="https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html">
 <meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Self-hosted AI agent platform with per-caller permissions | Griffin">
+<meta name="twitter:description" content="Griffin is an open-source, self-hosted AI agent platform: define agents from the UI, give each one tools, decide who may call which tool, and run them on Claude, Cursor or any OpenAI-compatible model, including local ones. Node 24 and SQLite, MIT.">
+<meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "A self-hosted AI agent platform you control", "item": "https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html"}]}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
-<nav><a href="./">Overview</a> <a href="kubernetes-ai-agent.html">Kubernetes AI agent</a> <a href="mcp-server.html">MCP server</a> <a href="self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="agents.html">Docs</a> <a href="fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<nav><a href="./">Overview</a> <a href="use-cases.html">Use cases</a> <a href="self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="telegram-ai-assistant.html">Telegram AI assistant</a> <a href="mcp-server.html">MCP server</a> <a href="agents.html">Docs</a> <a href="fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
 <header>
   <img src="media/griffin-mark.svg" alt="Griffin logo">
   <h1>A self-hosted AI agent platform you control</h1>
 </header>
-<p class="lead">Griffin runs a small team of AI agents on your own server. Agents are rows in a table, not code: instructions, a model, a set of tools, and a list of who may call them — with no SaaS control plane in the middle.</p>
+<p class="lead">Griffin runs a small team of AI agents on your own machine. Agents are rows in a table, not code: instructions, a model, a set of tools, and a list of who may call them — with no SaaS control plane in the middle.</p>
 <div class="btns">
   <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
   <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
@@ -32,26 +37,27 @@
 <h2>What you get</h2>
 <div class="grid">
 <div class="card"><h3>Agents as data</h3><p>Create, edit and import agents from the web UI, the HTTP API or a JSON profile. Nothing about an agent needs a deploy.</p></div>
-<div class="card"><h3>Per-caller permissions</h3><p>The owner, another agent, a scheduled job, a Telegram colleague and an external MCP client each get exactly the tools granted to them, enforced before tools reach the model.</p></div>
-<div class="card"><h3>Any model</h3><p>Claude Agent SDK, Cursor SDK, or any OpenAI-compatible endpoint — Z.ai, OpenAI, or a local model — chosen per agent and per chat, with fallback on plan limits.</p></div>
-<div class="card"><h3>Delegation</h3><p>An orchestrator agent delegates to specialists without blocking and reports back when subtasks finish.</p></div>
-<div class="card"><h3>Every interface</h3><p>Web UI (right-to-left aware), terminal client, Bearer HTTP API, MCP endpoint, Telegram and Bale bots, scheduled jobs — or fully headless.</p></div>
-<div class="card"><h3>Rehearsal mode</h3><p>Simulation chats run the whole delegation tree but record side effects instead of executing them, with scenario evals.</p></div>
+<div class="card"><h3>Per-caller permissions</h3><p>Each caller gets exactly the tools granted to it, enforced before tools reach the model; a caller with no grant gets nothing.</p></div>
+<div class="card"><h3>Any model</h3><p>Claude Agent SDK, Cursor SDK, or any OpenAI-compatible endpoint — hosted or local — chosen per agent and per chat.</p></div>
+<div class="card"><h3>Delegation</h3><p>An orchestrator delegates to specialist agents without blocking and reports back when subtasks finish.</p></div>
+<div class="card"><h3>Every interface</h3><p>Web UI (right-to-left aware), terminal client, Bearer HTTP API, MCP endpoint, Telegram and Bale, scheduled jobs — or fully headless.</p></div>
+<div class="card"><h3>Rehearsal mode</h3><p>Simulation chats run the whole agent tree but record side effects instead of executing them, with scenario evals.</p></div>
 </div>
 <h2>Runs on one small box</h2>
-<p>Node 24 and SQLite, one <code>docker compose up</code>. A fresh install is a chat with one agent and no infrastructure at all; tool packs for Kubernetes, PostgreSQL, Grafana, S3, GitLab and routers switch on only when you configure them.</p>
+<p>Node 24 and SQLite, one <code>docker compose up</code>. A fresh install is a chat with one agent; optional tool packs switch on only when you configure what they need.</p>
 <h2>Self-hosted, open source, MIT</h2>
 <ul class="plain">
-<li>Your data, prompts and credentials stay on your server.</li>
-<li>Owner login is local and keeps working when your SSO is down.</li>
-<li>The code is MIT licensed and has no telemetry or hosted dependency.</li>
+<li>Your conversations, prompts and credentials stay on your server.</li>
+<li>Login is local and keeps working when your SSO is down.</li>
+<li>MIT licensed, with no telemetry and no hosted dependency.</li>
 </ul>
 <h2>More about Griffin</h2>
 <ul class="plain">
 <li><a href="./">Griffin overview</a></li>
-<li><a href="kubernetes-ai-agent.html">AI agent for Kubernetes and DevOps</a></li>
-<li><a href="mcp-server.html">Griffin as an MCP server for Claude Code and Cursor</a></li>
-<li><a href="self-hosted-ai-agent.html">Self-hosted AI agent platform with per-caller permissions</a></li>
+<li><a href="use-cases.html">What people use Griffin for</a></li>
+<li><a href="self-hosted-ai-agent.html">A self-hosted AI agent platform with per-caller permissions</a></li>
+<li><a href="telegram-ai-assistant.html">An AI assistant on Telegram for you and your team</a></li>
+<li><a href="mcp-server.html">Griffin as an MCP server for Claude Code, Claude Desktop and Cursor</a></li>
 <li><a href="agents.html">Documentation: agents, tools and callers</a></li>
 </ul>
 

@@ -1,6 +1,6 @@
 {
   "name": "griffin",
-  "description": "Self-hosted multi-agent AI assistant: your agents, your tools, your box. Claude, Cursor or any OpenAI-compatible model.",
+  "description": "Self-hosted platform for a small team of AI agents: your agents, your tools, your box. Claude, Cursor or any OpenAI-compatible model.",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -28,16 +28,16 @@
   },
   "keywords": [
     "ai-agent",
+    "ai-assistant",
     "multi-agent",
     "self-hosted",
-    "devops",
-    "sre",
+    "agent-platform",
     "mcp",
     "claude",
     "cursor",
-    "openai",
-    "kubernetes",
-    "chatops",
-    "telegram-bot"
+    "openai-compatible",
+    "telegram-bot",
+    "llm",
+    "open-source"
   ]
 }

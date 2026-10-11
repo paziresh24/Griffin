@@ -4,12 +4,13 @@
 
 **A self-hosted shell for a small team of AI agents that work for you.** You make the agents — what
 each one is, what it may touch, who may ask it — and they answer from typed tools instead of from
-the model's memory. Built for DevOps and infrastructure work: Kubernetes, Prometheus, Grafana,
-PostgreSQL, GitLab, MCP and Telegram, on Claude, Cursor or any OpenAI-compatible model.
+the model's memory. Use it as a personal assistant on Telegram, a research or writing helper, an
+assistant your colleagues can message, an MCP backend for Claude Code, or an operations agent wired
+to your own systems — on Claude, Cursor or any OpenAI-compatible model, including local ones.
 
 `Node 24` · `Cursor, Claude Agent SDK or any OpenAI-compatible API` · `SQLite` · no SaaS control plane · MIT
 
-**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/) · [Kubernetes AI agent](https://paziresh24.github.io/Griffin/kubernetes-ai-agent.html) · [MCP server](https://paziresh24.github.io/Griffin/mcp-server.html) · [Self-hosted AI agents](https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html) · [فارسی](https://paziresh24.github.io/Griffin/fa/)
+**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/) · [Use cases](https://paziresh24.github.io/Griffin/use-cases.html) · [Self-hosted AI agents](https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html) · [Telegram AI assistant](https://paziresh24.github.io/Griffin/telegram-ai-assistant.html) · [MCP server](https://paziresh24.github.io/Griffin/mcp-server.html) · [فارسی](https://paziresh24.github.io/Griffin/fa/)
 
 <img src="docs/media/chat.png" width="900" alt="Griffin answering a question: a plan, a tool card marked with the path its answer came from, and a disk-usage card">
 
@@ -50,7 +51,8 @@ colleague on a messenger, or an external agent over MCP — and which of its too
 Agents are rows in a table, not code. Quotas are enforced where tools are handed to the model, so a
 tool a caller was not given does not exist for that run. [`docs/agents.md`](docs/agents.md) explains
 the model; [`examples/agents/`](examples/agents) has profiles you can import as a starting point
-(a researcher that only reads, an infrastructure agent, two CDN agents).
+(a personal assistant, a writer, a researcher that only reads — and, if you run servers, a platform
+agent and two CDN agents).
 
 ## What you get
 
@@ -83,11 +85,11 @@ a terminal client, a Bearer-authenticated HTTP API, MCP for other agents, messen
 jobs that deliver where you already are — and `GRIFFIN_WEB=off` runs the whole thing headless. See
 [docs/interfaces.md](docs/interfaces.md).
 
-**Infrastructure tools, if you want them.** A separate broker process holds credentials and exposes
-typed tools: Kubernetes (status, get, logs, in-pod `df`, secrets, CNPG), Prometheus and Grafana
-(including running a dashboard panel's own query), PostgreSQL, S3, GitLab, MikroTik routers,
-ArvanCloud and NSIN CDNs, DNS/HTTP/TLS probes. Each pack appears only once you configure what it
-needs, so an agent never sees a tool that cannot work.
+**Tools for your own systems, if you want them.** A separate broker process holds credentials and
+exposes typed tools. The packs that ship today are operational — Kubernetes (status, get, logs,
+in-pod `df`, secrets, CNPG), Prometheus and Grafana, PostgreSQL, S3, GitLab, MikroTik routers,
+ArvanCloud and NSIN CDNs, DNS/HTTP/TLS probes — and a new pack is one module with a schema. Each pack
+appears only once you configure what it needs, so an agent never sees a tool that cannot work.
 
 The UI is Persian-first and right-to-left; the code, tools and docs are English.
 
@@ -130,11 +132,7 @@ The split is the point: the process running the model holds no credential and ha
 process that holds them exposes only named tools with schemas. More in
 [docs/architecture.md](docs/architecture.md).
 
-The second point is that it keeps working when what it is watching does not: every cluster tool
-tries the public API first and falls back to SSH on a node, and every answer says which path
-produced it.
-
-## Add your infrastructure (when you need it)
+## Connect your own systems (optional)
 
 1. Copy `config/site.example.json` to `config/site.json` and describe your world: clusters and their
    emergency SSH paths, GitLab, object storage, routers, shell hosts.
