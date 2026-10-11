@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=24"
   },
-  "homepage": "https://paziresh24.github.io/Griffin/",
+  "homepage": "https://griffin.paziresh24.com/",
   "repository": {
     "type": "git",
     "url": "https://github.com/paziresh24/Griffin.git"

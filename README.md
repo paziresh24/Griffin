@@ -6,7 +6,7 @@
 [![CI](https://github.com/paziresh24/Griffin/actions/workflows/ci.yml/badge.svg)](https://github.com/paziresh24/Griffin/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2dd4bf)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/paziresh24/Griffin?color=34d399)](https://github.com/paziresh24/Griffin/releases)
-[![Website](https://img.shields.io/badge/website-paziresh24.github.io%2FGriffin-f0913f)](https://paziresh24.github.io/Griffin/)
+[![Website](https://img.shields.io/badge/website-griffin.paziresh24.com-f0913f)](https://griffin.paziresh24.com/)
 
 **A self-hosted shell for a small team of AI agents that work for you.** You make the agents — what
 each one is, what it may touch, who may ask it — and they answer from typed tools instead of from
@@ -16,7 +16,7 @@ to your own systems — on Claude, Cursor or any OpenAI-compatible model, includ
 
 `Node 24` · `Cursor, Claude Agent SDK or any OpenAI-compatible API` · `SQLite` · no SaaS control plane · MIT
 
-**Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/) · [Use cases](https://paziresh24.github.io/Griffin/use-cases.html) · [Self-hosted AI agents](https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html) · [Telegram AI assistant](https://paziresh24.github.io/Griffin/telegram-ai-assistant.html) · [MCP server](https://paziresh24.github.io/Griffin/mcp-server.html) · [فارسی](https://paziresh24.github.io/Griffin/fa/)
+**Website:** [griffin.paziresh24.com](https://griffin.paziresh24.com/) · [Use cases](https://griffin.paziresh24.com/use-cases.html) · [Self-hosted AI agents](https://griffin.paziresh24.com/self-hosted-ai-agent.html) · [Telegram AI assistant](https://griffin.paziresh24.com/telegram-ai-assistant.html) · [MCP server](https://griffin.paziresh24.com/mcp-server.html) · [فارسی](https://griffin.paziresh24.com/fa/)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/demo-dark.gif">
