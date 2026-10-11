@@ -7,6 +7,9 @@
 <meta name="description" content="Griffin is an open-source, self-hosted multi-agent AI shell: build your own agents, give each one typed tools and a per-caller quota, and run them on Claude, Cursor or any OpenAI-compatible model. Kubernetes, Prometheus, Grafana, PostgreSQL, GitLab, MCP, Telegram. MIT.">
 <meta name="keywords" content="open source AI agent, AI agent platform, Kubernetes AI agent, AI SRE, AI ops assistant, LLM agents, Griffin, AI agent, multi-agent, self-hosted AI agent, DevOps AI agent, SRE agent, MCP server, Claude Agent SDK, Cursor SDK, OpenAI-compatible, Kubernetes AI assistant, agent orchestrator, ChatOps, Telegram bot">
 <link rel="canonical" href="https://paziresh24.github.io/Griffin/">
+<link rel="alternate" hreflang="en" href="https://paziresh24.github.io/Griffin/">
+<link rel="alternate" hreflang="fa" href="https://paziresh24.github.io/Griffin/fa/">
+<link rel="alternate" hreflang="x-default" href="https://paziresh24.github.io/Griffin/">
 <link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Griffin">
@@ -101,37 +104,11 @@
  ]
 }
 </script>
-<style>
-:root{--bg:#fbf7f3;--fg:#21170f;--muted:#6b5a4b;--card:#fff;--line:#eadfd4;--accent:#d9722a;--code:#f3ebe3}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#140d08;--fg:#f4ece4;--muted:#b3a291;--card:#1d140d;--line:#33261b;--accent:#f0a35a;--code:#241910}}
-:root[data-theme="dark"]{--bg:#140d08;--fg:#f4ece4;--muted:#b3a291;--card:#1d140d;--line:#33261b;--accent:#f0a35a;--code:#241910}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:920px;margin:0 auto;padding:48px 16px 64px}
-header{display:flex;gap:18px;align-items:center}
-header img{width:64px;height:64px}
-h1{font-size:clamp(28px,5vw,42px);line-height:1.15;margin:0}
-h2{font-size:24px;margin:48px 0 12px}
-h3{font-size:18px;margin:0 0 6px}
-p.lead{font-size:20px;color:var(--muted);margin:20px 0}
-a{color:var(--accent)}
-.btns{display:flex;flex-wrap:wrap;gap:10px;margin:24px 0}
-.btn{padding:10px 18px;border-radius:10px;border:1px solid var(--line);text-decoration:none;color:var(--fg);background:var(--card);font-weight:600}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-figure{margin:28px 0}
-figure img{width:100%;height:auto;border-radius:12px;border:1px solid var(--line)}
-figcaption{color:var(--muted);font-size:14px;margin-top:6px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
-.card p{margin:0;color:var(--muted);font-size:15px}
-pre{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-x:auto;font-size:14px}
-code{font-family:ui-monospace,"SF Mono",Menlo,monospace}
-details{border-bottom:1px solid var(--line);padding:12px 0}summary{cursor:pointer;font-weight:600}details p{color:var(--muted);margin:8px 0 0}
-footer{margin-top:56px;color:var(--muted);font-size:14px}
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
+<nav><a href="kubernetes-ai-agent.html">Kubernetes AI agent</a> <a href="mcp-server.html">MCP server</a> <a href="self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="agents.html">Docs</a> <a href="fa/" hreflang="fa">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
 <header>
   <img src="media/griffin-mark.svg" alt="Griffin logo">
   <h1>Griffin — a self-hosted multi-agent AI assistant</h1>
@@ -171,6 +148,14 @@ echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key
 GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs</code></pre>
 <p>Or with Docker: <code>docker compose -f deploy/compose.yaml up -d --build</code>. No cluster, vault or YAML is
 needed to start; infrastructure tools appear only once you configure them.</p>
+
+<h2>Use cases</h2>
+<ul class="plain">
+<li><a href="kubernetes-ai-agent.html">An open-source AI agent for Kubernetes and DevOps</a> — live cluster answers that survive an outage</li>
+<li><a href="mcp-server.html">Griffin as an MCP server</a> — delegate long-running tasks from Claude Code, Claude Desktop and Cursor</li>
+<li><a href="self-hosted-ai-agent.html">A self-hosted AI agent platform</a> — agents as data, permissions per caller, any model</li>
+<li><a href="fa/" hreflang="fa">گریفین به فارسی</a> — ایجنت هوش مصنوعی متن‌باز برای دواپس</li>
+</ul>
 
 <h2>Frequently asked questions</h2>
 <details><summary>What is Griffin?</summary><p>Griffin is an open-source, self-hosted multi-agent AI assistant. You define a small team of AI agents, give each one typed tools and decide who may call which tool; the agents answer from those tools instead of from the model&#x27;s memory.</p></details>

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open-source AI agent for Kubernetes and DevOps | Griffin</title>
+<meta name="description" content="Griffin is a self-hosted, open-source AI agent for Kubernetes, Prometheus, Grafana and PostgreSQL. It answers ops questions from live typed tools, keeps working over SSH when the API is down, and asks before irreversible changes.">
+<link rel="canonical" href="https://paziresh24.github.io/Griffin/kubernetes-ai-agent.html">
+<link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Griffin">
+<meta property="og:title" content="Open-source AI agent for Kubernetes and DevOps | Griffin">
+<meta property="og:description" content="Griffin is a self-hosted, open-source AI agent for Kubernetes, Prometheus, Grafana and PostgreSQL. It answers ops questions from live typed tools, keeps working over SSH when the API is down, and asks before irreversible changes.">
+<meta property="og:url" content="https://paziresh24.github.io/Griffin/kubernetes-ai-agent.html">
+<meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://paziresh24.github.io/Griffin/"}, {"@type": "ListItem", "position": 2, "name": "An open-source AI agent for Kubernetes and DevOps", "item": "https://paziresh24.github.io/Griffin/kubernetes-ai-agent.html"}]}</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<nav><a href="./">Overview</a> <a href="kubernetes-ai-agent.html">Kubernetes AI agent</a> <a href="mcp-server.html">MCP server</a> <a href="self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="agents.html">Docs</a> <a href="fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
+<header>
+  <img src="media/griffin-mark.svg" alt="Griffin logo">
+  <h1>An open-source AI agent for Kubernetes and DevOps</h1>
+</header>
+<p class="lead">Ask in plain language why a pod restarts, which disk is filling or what changed in the last deploy. Griffin answers from live cluster data through typed tools — never from the model's memory — and tells you which path each answer came from.</p>
+<div class="btns">
+  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
+  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
+</div>
+<h2>What the Kubernetes AI agent can check</h2>
+<div class="grid">
+<div class="card"><h3>Cluster status and logs</h3><p>Pod health across clusters, kubectl-style get on any resource, container logs, and disk usage inside a pod.</p></div>
+<div class="card"><h3>Metrics and dashboards</h3><p>PromQL queries, and the exact query behind a Grafana panel, so the answer matches the dashboard your team already trusts.</p></div>
+<div class="card"><h3>Databases</h3><p>SQL on CloudNativePG PostgreSQL clusters, read-only by default, with writes only after the owner approves.</p></div>
+<div class="card"><h3>CI/CD and GitOps</h3><p>GitLab pipelines, commits, merge requests and file search; changes are proposed as draft merge requests, never merged silently.</p></div>
+<div class="card"><h3>Network and edge</h3><p>DNS, HTTP and TLS probes, CDN cache and DNS settings, MikroTik routers.</p></div>
+<div class="card"><h3>Storage</h3><p>S3-compatible buckets: list objects and show images, PDFs or logs inline in the chat.</p></div>
+</div>
+<h2>Built for the day the cluster is down</h2>
+<p>Every cluster tool tries the public Kubernetes API first and falls back to SSH on a node when the API, the SSO in front of it or the ingress is broken. Each answer is labelled with the path that produced it, so an SRE knows whether it came from the API or the emergency route. Griffin itself depends only on the box it runs on, so it stays available to diagnose the outage it is part of.</p>
+<h2>Safe by construction</h2>
+<ul class="plain">
+<li>The process that runs the model has no shell and no infrastructure credentials; a separate broker holds them and exposes only typed tools.</li>
+<li>Write tools are narrow: S3 is read-only, router changes touch only items Griffin created, GitLab changes are draft merge requests.</li>
+<li>Irreversible actions wait for the owner's approval; unattended chains such as scheduled jobs refuse them. Every approval is audited.</li>
+<li>Tool access is filtered per caller, so a colleague or another agent gets only the tools you granted.</li>
+</ul>
+<h2>Example questions</h2>
+<ul class="plain">
+<li>“Which pods are not ready on the production cluster, and why?”</li>
+<li>“How full is the S3 volume on node 3, and what grew this week?”</li>
+<li>“Why did yesterday's pipeline fail on the runner?”</li>
+<li>“Is the site slow for users or just the internal hostname?”</li>
+</ul>
+<p>Griffin runs on Claude, Cursor or any OpenAI-compatible model, including local models. Infrastructure tools appear only once you describe your clusters in <code>config/site.json</code>.</p>
+<h2>More about Griffin</h2>
+<ul class="plain">
+<li><a href="./">Griffin overview</a></li>
+<li><a href="kubernetes-ai-agent.html">AI agent for Kubernetes and DevOps</a></li>
+<li><a href="mcp-server.html">Griffin as an MCP server for Claude Code and Cursor</a></li>
+<li><a href="self-hosted-ai-agent.html">Self-hosted AI agent platform with per-caller permissions</a></li>
+<li><a href="agents.html">Documentation: agents, tools and callers</a></li>
+</ul>
+
+<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+</main>
+</body>
+</html>
