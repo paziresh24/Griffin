@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/paziresh24/Griffin/discussions
+    about: Ask how to do something or share what you built.
+  - name: Security report
+    url: https://github.com/paziresh24/Griffin/security/advisories/new
+    about: Please report vulnerabilities privately.
