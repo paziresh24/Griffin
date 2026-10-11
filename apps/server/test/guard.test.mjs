@@ -178,6 +178,31 @@ test("an agent's plain sentence is the approval question; pleading or tool names
   assert.match(team, /^فرستادن پیام — در «گروه آپدیت‌ها»: «فعال شد»/);
 });
 
+// The agent writes intent once, then the same secrets go to a new folder without it.
+test("a chain's plain sentence carries over to its next approval, naming what this one touches", async () => {
+  forgetDecisions();
+  const asks = createAsks();
+  const store = recorder();
+  store.rootChatId = () => "c1";
+  store.getChat = (id) => (id === "c1" ? { id: "c1", caller: "team", title: "/agent · Bob" } : null);
+  const tools = { infisical_upsert: { inputSchema: { type: "object", properties: {} }, async execute() { return { content: [] }; } } };
+  const guarded = guardTools(tools, { chatId: "c1", asks, store, caller: "team" });
+  const intent = "برای استیجینگ inbox، رمز دیتابیس را در پروژهٔ آقای باب می‌گذارم";
+  const first = guarded.infisical_upsert.execute({ projectId: "bob", path: "/", name: "MAIN_DB", value: "x", intent });
+  await new Promise((r) => setTimeout(r, 20));
+  asks.answer("c1", { answer: "بله", selected: ["بله"] });
+  await first;
+  const second = guarded.infisical_upsert.execute({ projectId: "bob", path: "/staging", name: "LOG_DB", value: "y" });
+  await new Promise((r) => setTimeout(r, 20));
+  const q = store.events.filter((e) => e.type === "tool.started").at(-1).data.args.question;
+  assert.ok(q.startsWith(intent), q);
+  assert.match(q, /\(این بار: LOG_DB\)/);
+  assert.doesNotMatch(q, /\/agent|نوشتن secret/);
+  asks.answer("c1", { answer: "نه", selected: ["نه"] });
+  await second;
+  forgetDecisions();
+});
+
 test("routerReadOnly: :put of a find and print … where are reads, file= and set are not", async () => {
   const { routerReadOnly } = await import("../src/guard.mjs");
   assert.equal(routerReadOnly(":put [:len [/ip/route/find]]"), true);

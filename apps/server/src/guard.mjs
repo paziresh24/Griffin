@@ -171,6 +171,11 @@ const vetoes = new Map(); // rootChatId -> { until, question }
 const PEER_CARD = process.env.GRIFFIN_GUARD_PEER_CARD !== "off";
 const peerCards = new Map(); // decisionKey -> firstAttemptAt
 
+// The agent tends to write `intent` once and drop it on the next calls (e.g. the same secrets moved
+// to a new folder = a new scope = a new question). The chain's last plain sentence carries over.
+const INTENT_MS = 60 * 60 * 1000;
+const intents = new Map(); // rootChatId -> { text, at }
+
 // A chain is peer-rooted when the ROOT chat's caller is a peer agent (a delegated subtask carries
 // its own caller, so only the root answers "whose request is this?"). Test stores without getChat
 // simply say no.
@@ -265,6 +270,7 @@ export function forgetDecisions() {
   blessings.clear();
   vetoes.clear();
   peerCards.clear();
+  intents.clear();
 }
 
 const WHY = "why"; // older prompts still send it; stripped, never shown
@@ -340,15 +346,22 @@ function foreignTarget(store, chatId, args) {
 
 // «X می‌خواد …؛ برای این کار باید …. اوکیه؟» — the agent's sentence when it gave a usable one,
 // otherwise the code-built action. The requester's name comes from the delivery header.
-export function approvalQuestion(store, chatId, name, args, action, intent = "") {
+export function approvalQuestion(store, chatId, name, args, action, intent = "", carried = false) {
   const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
   const scope = scopeLabel(name, args);
   const plain = plainIntent(intent);
   const foreign = foreignTarget(store, chatId, args);
-  const title = String(root?.title || "").replace(/^[^:]{1,40}:\s*/, "").trim();
+  const own = store?.getChat?.(chatId);
+  const source = /^←/.test(String(own?.title || "")) ? own.title : root?.title;
+  const title = String(source || "").replace(/^[^:]{1,40}:\s*/, "").replace(/^\/agent\b.*$/, "").trim();
   const lines = [];
   if (plain) {
     lines.push(plain);
+    // A carried-over sentence was about an earlier call; name what this one touches.
+    if (carried) {
+      const detail = actionDetail(name, args);
+      if (detail) lines.push(`(این بار: ${detail})`);
+    }
     // The exact call stays visible for a raw control-plane write or a full-cache purge.
     if (name === "debug_exec" || name === "arvan_cache_purge") lines.push(`(${action})`);
   } else {
@@ -468,7 +481,14 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
             );
           }
         }
-        const question = approvalQuestion(store, chatId, name, args, verdict.approve, intent);
+        let plain = plainIntent(intent);
+        let carried = false;
+        if (plain) intents.set(root, { text: plain, at: Date.now() });
+        else if (intents.get(root) && Date.now() - intents.get(root).at < INTENT_MS) {
+          plain = intents.get(root).text;
+          carried = true;
+        }
+        const question = approvalQuestion(store, chatId, name, args, verdict.approve, plain, carried);
         let pending = inflight.get(key);
         if (!pending) {
           pending = confirmWithOwner(store, asks, chatId, question).finally(() => inflight.delete(key));
