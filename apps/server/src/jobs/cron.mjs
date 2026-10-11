@@ -2,7 +2,8 @@
 // Tehran time), without pulling in a date library: the zone offset is read once from Intl and the
 // arithmetic then happens on a shifted timestamp.
 
-export const DEFAULT_TZ = "Asia/Tehran";
+// Schedules run on the owner's wall clock: GRIFFIN_TZ, else the server's own time zone.
+export const DEFAULT_TZ = process.env.GRIFFIN_TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 

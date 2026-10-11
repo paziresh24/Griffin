@@ -1,5 +1,6 @@
 import { finalText } from "@griffin/timeline";
 import { CALLER_LABELS } from "../agents/registry.mjs";
+import { DEFAULT_TZ } from "../jobs/cron.mjs";
 
 // Turning a finished run into messenger messages.
 
@@ -145,7 +146,7 @@ export function withAgentFooter(text) {
 
 // "⏱ ۰۹:۳۴ · ۲۳ث": when the answer arrived (Tehran clock) and how long the run took. The owner
 // wanted to see both under every answer (2026-09-24).
-const STAMP_CLOCK = new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", hour12: false });
+const STAMP_CLOCK = new Intl.DateTimeFormat("fa-IR", { timeZone: DEFAULT_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
 
 export function answerStamp(run) {
   const end = new Date(run?.endedAt || NaN);
