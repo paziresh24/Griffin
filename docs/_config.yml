@@ -1,7 +1,7 @@
 title: Griffin
-description: Open-source, self-hosted multi-agent AI assistant for DevOps and infrastructure — your agents, your tools, your box.
-url: https://paziresh24.github.io
-baseurl: /Griffin
+description: Open-source, self-hosted platform for your own team of AI agents — define agents, grant tools per caller, run on any model.
+url: https://griffin.paziresh24.com
+baseurl: ""
 theme: jekyll-theme-primer
 plugins:
   - jekyll-sitemap
