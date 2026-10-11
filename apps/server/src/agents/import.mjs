@@ -1,5 +1,6 @@
 import { AGENT_ID, CORE_TOOLS } from "./registry.mjs";
 import { SELF_MGMT_TOOLS, unique } from "./profiles.mjs";
+import { normalizeProvider } from "../providers/ids.mjs";
 
 // One shape for "here is an agent": the UI form, POST /api/agents, and the ready-made profiles in
 // examples/agents/*.json all go through this. An agent is data — id, what it is, what it may use,
@@ -24,7 +25,7 @@ export function agentPayload(raw = {}, { builtIn = false } = {}) {
     domain: str(raw.domain, 500),
     blurb: str(raw.blurb, 500),
     instructions: str(raw.instructions, 20_000),
-    provider: raw.provider === "claude" ? "claude" : "cursor",
+    provider: normalizeProvider(raw.provider),
     model: raw.model ? str(raw.model, 120) : null,
     tools: unique([...tools, ...SELF_MGMT_TOOLS]),
     meta: { callers, ...(allTools ? { allTools: true } : {}) },

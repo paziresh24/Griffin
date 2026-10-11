@@ -134,6 +134,13 @@ test("the shipped example agents are valid and keep their callers bounded", () =
   const researcher = agentPayload(exampleAgent("researcher.json"));
   const researcherOwner = resolveEnabledTools(researcher, { caller: "owner", catalogNames: catalog });
   assert.deepEqual(researcherOwner.sort(), ["ask_owner", "list_agents", "show_media", "visualize"]);
+
+  const assistant = agentPayload(exampleAgent("assistant.json"));
+  assert.equal(assistant.provider, "openai", "an OpenAI-compatible profile keeps its engine on import");
+  const assistantForGriffin = resolveEnabledTools(assistant, { caller: "griffin", catalogNames: catalog });
+  assert.ok(!assistantForGriffin.includes("telegram_send"), "another agent cannot speak for the owner");
+  const writer = agentPayload(exampleAgent("writer.json"));
+  assert.ok(!resolveEnabledTools(writer, { caller: "owner", catalogNames: catalog }).includes("telegram_send"), "the writer never sends");
 });
 
 test("buildRules: griffin in a colleague thread is not sent to itself and sees only its real tools", async () => {

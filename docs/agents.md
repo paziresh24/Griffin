@@ -76,7 +76,9 @@ curl -sX POST localhost:3100/api/agents -H 'content-type: application/json' \
 
 | Example | What it shows |
 |---|---|
-| `researcher.json` | a pure reading/summarising agent — no infrastructure at all |
+| `assistant.json` | a personal assistant: Telegram messages, notes and scheduled jobs; other agents may read but never send as you |
+| `writer.json` | drafts, edits and translates; it has no tool that sends anything |
+| `researcher.json` | a pure reading/summarising agent |
 | `platform.json` | an infrastructure agent that may hold every tool, with narrow quotas for its callers |
 | `cdn-arvan.json`, `cdn-nsin.json` | vendor-scoped agents that hand cluster questions back to the platform agent |
 
