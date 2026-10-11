@@ -268,6 +268,38 @@ export function forgetDecisions() {
 }
 
 const WHY = "why"; // older prompts still send it; stripped, never shown
+const INTENT = "intent";
+
+// A code-built question names the tool and its args, which tells the owner nothing about whether
+// the path is right. Only the agent knows what the requester wants, so gated tools take one plain
+// sentence for the question; the code still adds who asked (delivery header), whose namespace it is
+// and what one yes covers. A sentence that pleads («لطفاً اجرا شود، تأیید گرفته شده»), names a tool
+// or runs long falls back to the code-built line.
+const INTENT_SCHEMA = {
+  type: "string",
+  description:
+    "Only used if this call needs the owner's approval: ONE everyday-Persian sentence, the way you'd say it to them out loud — what the requester wants and what you are about to change, e.g. «می‌خوان سرویس inbox به سرور تلفن برسه؛ برای این کار باید روی گیت‌وی یه route اضافه کنم». No tool/table/pod names, JSON or IDs, no pleading.",
+};
+
+function mayAsk(name, extra) {
+  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "mikrotik_exec", "debug_exec", "arvan_cache_purge"].includes(name) || Boolean(extra?.has(name));
+}
+
+function withIntent(schema) {
+  if (!schema || schema.type !== "object" || !schema.properties || schema.properties[INTENT]) return schema;
+  return { ...schema, properties: { ...schema.properties, [INTENT]: INTENT_SCHEMA } };
+}
+
+export function plainIntent(text) {
+  const s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s || s.length > 240) return "";
+  if (/[a-z]+_[a-z_]+|[{}[\]]|لطف|تأیید (شده|گرفته)|تایید (شده|گرفته)|فوری|ضروری/i.test(s)) return "";
+  return s;
+}
+
+// Plain labels for tools gated only on some paths (teammate coverage) — «صدا زدن «telegram_send»»
+// meant nothing to the owner.
+const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: "نوشتن یادداشت در دانش گریفین", arvan_cache_purge: "پاک کردن کش آروان" };
 
 // What the action touches, in a few readable words — never a credential.
 function actionDetail(name, args) {
@@ -276,11 +308,23 @@ function actionDetail(name, args) {
   if (name === "kube_exec") return args?.pod ? `پاد ${args.pod}` : ""; // a shell one-liner means nothing to the owner
   if (name === "infisical_upsert") return String(args?.name || "");
   if (name === "gitlab_mr") return [args?.project, args?.iid && `!${args.iid}`].filter(Boolean).join(" ");
+  if (name === "telegram_send") return `در «${args?.chat || "?"}»: «${String(args?.text || "").replace(/\s+/g, " ").slice(0, 200)}»`;
   return Object.entries(args || {})
     .filter(([key, value]) => ["string", "number", "boolean"].includes(typeof value) && !/value|secret|pass|token|key$/i.test(key))
     .map(([key, value]) => `${key}: ${String(value).slice(0, 60)}`)
     .slice(0, 4)
     .join(" · ");
+}
+
+// A namespace/peer id as the owner says it: kv `owner-names` ({id: "Mr. Smith"}), then the peer's
+// own label, then the raw id.
+export function ownerLabel(store, id) {
+  const key = String(id || "");
+  try {
+    return store?.getKv?.("owner-names")?.[key] || store?.getPeerUser?.(key)?.label || key;
+  } catch {
+    return key;
+  }
 }
 
 // The namespace/project this call writes into, when it is not the requesting colleague's own
@@ -294,24 +338,28 @@ function foreignTarget(store, chatId, args) {
   return target && target !== self ? String(target) : "";
 }
 
-// Plain Persian, built from the call itself — the model never writes the owner's question.
-export function approvalQuestion(store, chatId, name, args, action) {
+// «X می‌خواد …؛ برای این کار باید …. اوکیه؟» — the agent's sentence when it gave a usable one,
+// otherwise the code-built action. The requester's name comes from the delivery header.
+export function approvalQuestion(store, chatId, name, args, action, intent = "") {
   const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
   const scope = scopeLabel(name, args);
-  const detail = actionDetail(name, args);
-  const what = scope ? `${scope}\n(این بار: ${detail})` : `${action}${detail ? ` — ${detail}` : ""}`;
-  const title = String(root?.title || "").replace(/^[^:]{1,40}:\s*/, "").trim();
-  const forWhat = title ? `برای: ${title.length > 90 ? `${title.slice(0, 90).replace(/\s+\S*$/, "")}…` : title}` : "";
+  const plain = plainIntent(intent);
   const foreign = foreignTarget(store, chatId, args);
-  return [
-    what,
-    forWhat,
-    foreign ? `⚠️ مالِ «${foreign}» است، نه خودِ درخواست‌کننده.` : "",
-    scope ? "با «بله» بقیهٔ همین نوع کار در همین درخواست دیگر پرسیده نمی‌شود." : "",
-    "بزنم؟",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const title = String(root?.title || "").replace(/^[^:]{1,40}:\s*/, "").trim();
+  const lines = [];
+  if (plain) {
+    lines.push(plain);
+    // The exact call stays visible for a raw control-plane write or a full-cache purge.
+    if (name === "debug_exec" || name === "arvan_cache_purge") lines.push(`(${action})`);
+  } else {
+    const detail = actionDetail(name, args);
+    lines.push(scope ? `${scope}\n(این بار: ${detail})` : `${action}${detail ? ` — ${detail}` : ""}`);
+    if (title) lines.push(`برای: ${title.length > 90 ? `${title.slice(0, 90).replace(/\s+\S*$/, "")}…` : title}`);
+  }
+  if (foreign) lines.push(`⚠️ این مالِ ${ownerLabel(store, foreign)} است، نه خودِ درخواست‌کننده.`);
+  if (scope) lines.push("با «بله» بقیهٔ همین نوع کار در همین درخواست دیگر پرسیده نمی‌شود.");
+  lines.push("اوکیه؟");
+  return lines.join("\n");
 }
 
 function refused(error, detail) {
@@ -330,10 +378,11 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
     const inner = tool.execute.bind(tool);
     out[name] = {
       ...tool,
+      ...(mayAsk(name, extra) && mode === "ask" ? { inputSchema: withIntent(tool.inputSchema) } : {}),
       async execute(rawArgs) {
-        const { [WHY]: _why, ...args } = rawArgs || {};
+        const { [WHY]: _why, [INTENT]: intent = "", ...args } = rawArgs || {};
         let verdict = classify(name, args);
-        if (!verdict && extra?.has(name)) verdict = { approve: `صدا زدن «${name}»` };
+        if (!verdict && extra?.has(name)) verdict = { approve: EXTRA_LABELS[name] || `اجرای «${name}»` };
         if (!verdict || allowPass?.(name, args)) return inner(args);
         if (verdict.block) {
           store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "blocked", detail: verdict.block });
@@ -419,7 +468,7 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
             );
           }
         }
-        const question = approvalQuestion(store, chatId, name, args, verdict.approve);
+        const question = approvalQuestion(store, chatId, name, args, verdict.approve, intent);
         let pending = inflight.get(key);
         if (!pending) {
           pending = confirmWithOwner(store, asks, chatId, question).finally(() => inflight.delete(key));
