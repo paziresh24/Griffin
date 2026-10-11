@@ -1,0 +1,14 @@
+{
+  "لینک عمومی غیرفعال شد": "Public link disabled",
+  "خطا: {message}": "Error: {message}",
+  "لینک کپی شد": "Link copied",
+  "اشتراک‌گذاری": "Share",
+  "با لینک عمومی قابل مشاهده است": "Visible via public link",
+  "خصوصی": "Private",
+  "هر کس لینک را دارد، بدون ورود می‌بیند": "Anyone with the link can view it without signing in",
+  "فقط شما بعد از ورود می‌بینید": "Only you can see it, after signing in",
+  "کپی": "Copy",
+  "خروجی ابزارها، فایل‌ها و نمودارهای همین گفتگو هم دیده می‌شوند؛ پیام‌های بعدی هم در لینک می‌آیند.": "Tool output, files and charts from this chat are visible too; later messages also appear at the link.",
+  "غیرفعال کردن لینک": "Disable link",
+  "ساخت لینک عمومی": "Create public link"
+}

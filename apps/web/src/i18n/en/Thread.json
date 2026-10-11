@@ -1,0 +1,23 @@
+{
+  "ایجنت": "Agent",
+  "در صف؛ بعد از کار فعلی اجرا می‌شود": "Queued; runs after the current work",
+  "وسط کار به ایجنت رسید": "Reached the agent mid-run",
+  "{n} تصویر": "{n} images",
+  "در حال فکر کردن": "Thinking",
+  "فکر کرد": "Thought",
+  "خطا": "Error",
+  "متوقف شد": "Stopped",
+  "جواب: {time}": "Answered: {time}",
+  "طول کشید: {duration}": "Took {duration}",
+  "کپی پاسخ": "Copy answer",
+  "در حال اتصال": "Connecting",
+  "در حال کار": "Working",
+  "خلاصه‌سازی": "Summarizing",
+  "افزودن تصویر": "Add image",
+  "پیام بده تا وسط کار برسد…": "Message to steer the run…",
+  "پیام بده تا وسط کار به ایجنت برسد…": "Message the agent mid-run…",
+  "از {agent} بپرس…": "Ask {agent}…",
+  "توقف": "Stop",
+  "ارسال": "Send",
+  "پیام جدید وسط کار ارسال می‌شود": "New messages are sent mid-run"
+}

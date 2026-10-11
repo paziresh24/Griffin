@@ -1,0 +1,22 @@
+{
+  "ایجنت": "Agent",
+  "خودش کار را انجام می‌دهد: ابزارها را صدا می‌زند و نتیجه می‌آورد": "Does the work itself: calls tools and brings back the result",
+  "برنامه‌ریزی": "Plan",
+  "اول نقشهٔ کار را می‌نویسد و بدون اجرای تغییر منتظر تأیید می‌ماند": "Writes the plan first and waits for approval without making changes",
+  "ایجنت Cursor (مدل‌های حساب Cursor)": "Cursor agent (your Cursor account's models)",
+  "Claude Agent SDK مستقیم از Anthropic": "Claude Agent SDK, directly from Anthropic",
+  "حالت": "Mode",
+  "تا پایان کار فعلی نمی‌شود ایجنت را عوض کرد": "The agent can't be changed until the current run finishes",
+  "انتخاب ایجنت": "Choose agent",
+  "جستجوی ایجنت…": "Search agents…",
+  "ایجنتی پیدا نشد": "No agents found",
+  "متخصص‌ها": "Specialists",
+  "موتور: {label}": "Engine: {label}",
+  "خودکار": "Auto",
+  "مدل: {label}": "Model: {label}",
+  "جستجوی مدل…": "Search models…",
+  "مدلی پیدا نشد": "No models found",
+  "بهترین مدل به‌صورت خودکار انتخاب می‌شود": "The best model is picked automatically",
+  "تم تیره": "Dark theme",
+  "تم روشن": "Light theme"
+}

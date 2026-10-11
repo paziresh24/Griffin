@@ -1,0 +1,9 @@
+{
+  "پاسخ رسید؛ ادامه می‌دهد…": "Answer received; continuing…",
+  "پاسخ ثبت شد؛ همین که ایجنت به این سؤال برسد، ادامه می‌دهد.": "Answer saved; the agent continues as soon as it reaches this question.",
+  "کار قبلاً تمام شده بود؛ پاسخ به‌عنوان پیام جدید فرستاده شد.": "The run had already finished; your answer was sent as a new message.",
+  "این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود.": "This question went unanswered; if you answer now, it goes as a new message.",
+  "توضیح یا گزینهٔ دیگر…": "Details or another option…",
+  "پاسخ…": "Answer…",
+  "ارسال پاسخ": "Send answer"
+}

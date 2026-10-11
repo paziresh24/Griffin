@@ -6,6 +6,7 @@ import {
 } from "@assistant-ui/react";
 import { api, navigate } from "./api.js";
 import { unwrapResult } from "./result.js";
+import { t } from "./i18n.js";
 
 export { unwrapResult };
 
@@ -82,7 +83,7 @@ function toPayload(message) {
       if (match) images.push({ mimeType: match[1], data: match[2] });
     }
   }
-  return { text: text || (images.length ? "این تصویر را ببین." : ""), images };
+  return { text: text || (images.length ? t("این تصویر را ببین.") : ""), images };
 }
 
 function convertMessage(message) {

@@ -3,6 +3,7 @@ import { Globe, Moon, Sun } from "lucide-react";
 import { ApiBase } from "./base.js";
 import { GriffinRuntime } from "./runtime.jsx";
 import { Thread } from "./components/Thread.jsx";
+import { t } from "./i18n.js";
 
 export function shareToken(hash = window.location.hash) {
   return hash.match(/^#\/s\/([A-Za-z0-9_-]{32})$/)?.[1] || null;
@@ -25,11 +26,11 @@ export function PublicChat({ token }) {
     const load = async () => {
       try {
         const response = await fetch(`/api/public/${token}`, { credentials: "omit" });
-        if (!response.ok) throw new Error(response.status === 404 ? "این لینک وجود ندارد یا غیرفعال شده است." : `خطا ${response.status}`);
+        if (!response.ok) throw new Error(response.status === 404 ? t("این لینک وجود ندارد یا غیرفعال شده است.") : t("خطا {status}", { status: response.status }));
         const body = await response.json();
         if (!alive) return;
         setState({ chat: body.chat, timeline: body.timeline });
-        document.title = `${body.chat.title} · گریفین`;
+        document.title = `${body.chat.title} · ${t("گریفین")}`;
         const running = body.timeline.messages.some((m) => m.role === "assistant" && m.status === "running");
         if (running) timer = setTimeout(load, 4000);
       } catch (error) {
@@ -47,7 +48,7 @@ export function PublicChat({ token }) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-3 p-6 text-center">
         <img src="/icon.svg" alt="" className="size-12 opacity-80" />
-        <p className="text-muted-foreground">{state.error || "در حال بارگذاری…"}</p>
+        <p className="text-muted-foreground">{state.error || t("در حال بارگذاری…")}</p>
       </div>
     );
   }
@@ -63,9 +64,9 @@ export function PublicChat({ token }) {
                 <img src="/icon.svg" alt="" className="size-6" />
                 <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir="auto">{state.chat.title}</h1>
                 <span className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                  <Globe className="size-3.5" /> فقط خواندنی
+                  <Globe className="size-3.5" /> {t("فقط خواندنی")}
                 </span>
-                <button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="press flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted" aria-label="تم">
+                <button type="button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="press flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted" aria-label={t("تم")}>
                   {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
                 </button>
               </header>

@@ -1,9 +1,10 @@
 import { Bot, Cable, Radar, Server, Sparkles } from "lucide-react";
 import { usePolling } from "../api.js";
+import { num, t } from "../i18n.js";
 import { Group, Item } from "./SettingsParts.jsx";
 
 const CLUSTER_NAMES = {}; // optional display names per cluster id
-const OPS_MODES = { record: "فقط ثبت", shadow: "سایه (بدون ارسال)", live: "فعال", off: "خاموش" };
+const OPS_MODES = { record: t("فقط ثبت"), shadow: t("سایه (بدون ارسال)"), live: t("فعال"), off: t("خاموش") };
 
 // A provider with no key/URL is a choice, not an outage: shown muted and not counted as a problem.
 const notConfigured = (check) => /^no .*(api key|base url)/i.test(String(check?.error || ""));
@@ -21,7 +22,7 @@ export function StatusSection() {
     return (
       <div className="flex items-center gap-2 rounded-2xl border bg-card p-5 text-sm text-muted-foreground">
         <span className="agent-dots text-primary" aria-hidden><i /><i /><i /></span>
-        در حال بررسی…
+        {t("در حال بررسی…")}
       </div>
     );
   }
@@ -47,37 +48,37 @@ export function StatusSection() {
       <div className={`flex items-center gap-3 rounded-2xl border px-4 py-3.5 ${warn ? "border-warn/40 bg-warn/8" : "border-ok/30 bg-ok/8"}`}>
         <Dot state={warn ? "warn" : "ok"} large />
         <div className="min-w-0 flex-1">
-          <p className="font-medium">{health.stale ? "اتصال به سرور قطع است" : problems ? `${problems.toLocaleString("fa")} مورد نیاز به توجه دارد` : "همه‌چیز سالم است"}</p>
+          <p className="font-medium">{health.stale ? t("اتصال به سرور قطع است") : problems ? t("{n} مورد نیاز به توجه دارد", { n: num(problems) }) : t("همه‌چیز سالم است")}</p>
           <p className="text-xs text-muted-foreground">
-            {health.activeRuns ? `${health.activeRuns.toLocaleString("fa")} کار در حال اجرا` : "کاری در حال اجرا نیست"} · هر ۱۵ ثانیه به‌روز می‌شود
+            {health.activeRuns ? t("{n} کار در حال اجرا", { n: num(health.activeRuns) }) : t("کاری در حال اجرا نیست")} · {t("هر ۱۵ ثانیه به‌روز می‌شود")}
           </p>
         </div>
       </div>
 
-      <Group title="مدل‌ها">
+      <Group title={t("مدل‌ها")}>
         {providers.map(([name, check]) => (
           <Item key={name} icon={name === "Cursor" ? Sparkles : Bot} title={name} trailing={<Check check={check} />} />
         ))}
       </Group>
 
-      <Group title="زیرساخت">
-        <Item icon={Cable} title="کارگزار ابزارها" trailing={<Check check={health.broker} />} />
+      <Group title={t("زیرساخت")}>
+        <Item icon={Cable} title={t("کارگزار ابزارها")} trailing={<Check check={health.broker} />} />
         {ops ? (
           <Item
             icon={Radar}
-            title="دریافت هشدارها"
+            title={t("دریافت هشدارها")}
             subtitle={[
               OPS_MODES[ops.mode] || ops.mode,
-              ops.openIncidents ? `${ops.openIncidents} حادثهٔ باز` : null,
-              ops.lastOkAt ? `آخرین خواندن ${ago(ops.lastOkAt)}` : "هنوز خوانده نشده",
+              ops.openIncidents ? t("{n} حادثهٔ باز", { n: num(ops.openIncidents) }) : null,
+              ops.lastOkAt ? t("آخرین خواندن {when}", { when: ago(ops.lastOkAt) }) : t("هنوز خوانده نشده"),
             ].filter(Boolean).join(" · ")}
-            trailing={<Pill state={ops.mode === "off" ? "none" : opsBad ? "bad" : "ok"} title={ops.error || ""}>{ops.mode === "off" ? "خاموش" : opsBad ? "خطا" : "فعال"}</Pill>}
+            trailing={<Pill state={ops.mode === "off" ? "none" : opsBad ? "bad" : "ok"} title={ops.error || ""}>{ops.mode === "off" ? t("خاموش") : opsBad ? t("خطا") : t("فعال")}</Pill>}
           />
         ) : null}
       </Group>
 
       {clusters.length ? (
-        <Group title="کلاسترها">
+        <Group title={t("کلاسترها")}>
           {clusters.map(([name, c]) => (
             <Item
               key={name}
@@ -86,7 +87,7 @@ export function StatusSection() {
               trailing={
                 <>
                   <Pill state={stateOf(c.api)} title={tip(c.api)}>API</Pill>
-                  <Pill state={c.emergency ? stateOf(c.emergency) : "none"} title={c.emergency ? tip(c.emergency) : "تعریف نشده"}>اضطراری</Pill>
+                  <Pill state={c.emergency ? stateOf(c.emergency) : "none"} title={c.emergency ? tip(c.emergency) : t("تعریف نشده")}>{t("اضطراری")}</Pill>
                 </>
               }
             />
@@ -99,7 +100,7 @@ export function StatusSection() {
 
 function Check({ check }) {
   const state = stateOf(check);
-  const label = state === "ok" ? "سالم" : state === "none" ? "پیکربندی نشده" : "قطع";
+  const label = state === "ok" ? t("سالم") : state === "none" ? t("پیکربندی نشده") : t("قطع");
   return (
     <>
       {state === "ok" && check?.ms != null ? <span className="ltr text-[11px] text-muted-foreground">{check.ms}ms</span> : null}
@@ -130,7 +131,7 @@ function tip(check) {
 
 function ago(at) {
   const s = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 1000));
-  if (s < 60) return "همین حالا";
-  if (s < 3600) return `${Math.round(s / 60)} دقیقه پیش`;
-  return `${Math.round(s / 3600)} ساعت پیش`;
+  if (s < 60) return t("همین حالا");
+  if (s < 3600) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
+  return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
 }

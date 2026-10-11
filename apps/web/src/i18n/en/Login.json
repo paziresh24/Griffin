@@ -1,0 +1,8 @@
+{
+  "تلاش زیادی شد؛ ۱۵ دقیقه بعد دوباره امتحان کنید.": "Too many attempts. Try again in 15 minutes.",
+  "توکن درست نیست.": "That token is not valid. Copy it again from data/owner.token on the server.",
+  "سرور در دسترس نیست.": "Can't reach the server.",
+  "گریفین": "Griffin",
+  "ورود با توکن Owner": "Sign in with the owner token from data/owner.token on the server",
+  "ورود": "Sign in"
+}

@@ -1,8 +1,9 @@
 // Griffin shell brand + per-agent accents. Agent ids stay stable; labels/colors are UI-facing.
+import { t } from "./i18n.js";
 
 export const BRAND = {
   id: "griffin",
-  name: "گریفین",
+  name: t("گریفین"),
   nameEn: "Griffin",
   color: "#e8873a",
 };
@@ -40,43 +41,43 @@ export function writeSetting(key, value) {
 
 export const AGENT_META = {
   griffin: {
-    label: "گریفین",
-    short: "گریفین",
+    label: t("گریفین"),
+    short: t("گریفین"),
     color: "#e8873a",
     colorDark: "#f0a35a",
     icon: "/agents/griffin.svg",
-    blurb: "دستیار عملیاتی شما",
+    blurb: t("دستیار هوشمند شما"),
   },
   platform: {
-    label: "پلتفرم‌بان",
-    short: "پلتفرم",
+    label: t("پلتفرم‌بان"),
+    short: t("پلتفرم"),
     color: "#1baf7a",
     colorDark: "#34d399",
     icon: "/agents/platform.svg",
-    blurb: "مسئلهٔ پلتفرم را می‌فهمد و خودش عیب‌یابی می‌کند.",
+    blurb: t("مسئلهٔ پلتفرم را می‌فهمد و خودش عیب‌یابی می‌کند."),
   },
   "arvan-ban": {
-    label: "آروان‌بان",
-    short: "آروان",
+    label: t("آروان‌بان"),
+    short: t("آروان"),
     color: "#039595",
     colorDark: "#2dd4bf",
     icon: "/agents/arvan-ban.svg",
-    blurb: "CDN آروان را می‌فهمد؛ اگر origin خراب باشد ارجاع می‌دهد.",
+    blurb: t("CDN آروان را می‌فهمد؛ اگر origin خراب باشد ارجاع می‌دهد."),
   },
   "nsin-ban": {
-    label: "انسین‌بان",
+    label: t("انسین‌بان"),
     short: "NSIN",
     color: "#22b8c8",
     colorDark: "#5eead4",
     icon: "/agents/nsin-ban.png",
-    blurb: "CDN انسین: دامنه، DNS، کش، آنالیتیکس و آپ‌تایم.",
+    blurb: t("CDN انسین: دامنه، DNS، کش، آنالیتیکس و آپ‌تایم."),
   },
 };
 
 export function agentMeta(id) {
   return AGENT_META[id] || {
-    label: id || "ایجنت",
-    short: id || "ایجنت",
+    label: id || t("ایجنت"),
+    short: id || t("ایجنت"),
     color: "var(--brand)",
     colorDark: "var(--brand)",
     icon: null,

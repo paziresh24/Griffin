@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, ChevronDown, Loader2, MessageSquare, Radar } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
+import { locale, num, t } from "../i18n.js";
 
 // Griffin's incident layer: alerts of every cluster grouped into incidents, plus human signals
 // (a teammate asking the owner). Shadow mode: Griffin triages in its ops room and records here.
@@ -13,19 +14,19 @@ const SEVERITY = {
   none: "bg-muted-foreground",
 };
 
-const time = (iso) => (iso ? new Date(iso).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" }) : "—");
+const time = (iso) => (iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "—");
 const ago = (iso) => {
   if (!iso) return "—";
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 90) return `${s} ثانیه پیش`;
-  if (s < 5400) return `${Math.round(s / 60)} دقیقه پیش`;
-  return `${Math.round(s / 3600)} ساعت پیش`;
+  if (s < 90) return t("{n} ثانیه پیش", { n: num(s) });
+  if (s < 5400) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
+  return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
 };
 
 const FILTERS = [
-  ["open", "باز"],
-  ["resolved", "رفع‌شده"],
-  ["all", "همه"],
+  ["open", t("باز")],
+  ["resolved", t("رفع‌شده")],
+  ["all", t("همه")],
 ];
 
 export function IncidentsPage({ onBack }) {
@@ -49,27 +50,27 @@ export function IncidentsPage({ onBack }) {
     <div className="scrollbar-thin h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-4 sm:px-6">
         <div className="mb-4 flex items-center gap-2">
-          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label="بازگشت">
-            <ArrowRight className="size-4" />
+          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
+            <ArrowRight className="size-4 rtl-mirror" />
           </button>
-          <h1 className="text-lg font-semibold">حادثه‌ها</h1>
+          <h1 className="text-lg font-semibold">{t("حادثه‌ها")}</h1>
           {data?.room ? (
             <button type="button" onClick={() => navigate(data.room)} className="press ms-auto flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm hover:bg-muted">
-              <MessageSquare className="size-4" /> اتاق عملیات
+              <MessageSquare className="size-4" /> {t("اتاق عملیات")}
             </button>
           ) : null}
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          آلارم‌های هر سه کلاستر بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. گریفین در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.
+          {t("آلارم‌های سیستم‌هایی که وصل کرده‌ای بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. گریفین در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.")}
         </p>
 
         {intake ? (
           <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border bg-card px-3 py-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><Radar className="size-3.5" /> آخرین خواندن: {ago(intake.lastPollAt)}</span>
+            <span className="flex items-center gap-1.5"><Radar className="size-3.5" /> {t("آخرین خواندن: {when}", { when: ago(intake.lastPollAt) })}</span>
             {Object.entries(intake.clusters || {}).map(([name, c]) => (
               <span key={name} className="flex items-center gap-1" title={c.ok ? c.source : c.error}>
                 <span className={`size-2 rounded-full ${c.ok ? "bg-ok" : "bg-bad"}`} />
-                {name}{c.ok ? ` (${c.count})` : ""}
+                {name}{c.ok ? ` (${num(c.count)})` : ""}
               </span>
             ))}
             {intake.error ? <span className="text-bad">{intake.error}</span> : null}
@@ -92,11 +93,11 @@ export function IncidentsPage({ onBack }) {
         {!data ? (
           <div className="flex justify-center py-16"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
         ) : incidents.length === 0 ? (
-          <p className="py-12 text-center text-sm text-muted-foreground">حادثه‌ای نیست.</p>
+          <p className="py-12 text-center text-sm text-muted-foreground">{t("حادثه‌ای نیست.")}</p>
         ) : (
           <>
-            {humans.length ? <Section title="سیگنال انسانی (پیام همکاران)" items={humans} expanded={expanded} setExpanded={setExpanded} onChanged={load} /> : null}
-            <Section title="آلارم‌ها" items={machine} expanded={expanded} setExpanded={setExpanded} onChanged={load} />
+            {humans.length ? <Section title={t("سیگنال انسانی (پیام همکاران)")} items={humans} expanded={expanded} setExpanded={setExpanded} onChanged={load} /> : null}
+            <Section title={t("آلارم‌ها")} items={machine} expanded={expanded} setExpanded={setExpanded} onChanged={load} />
           </>
         )}
       </div>
@@ -108,7 +109,7 @@ function Section({ title, items, expanded, setExpanded, onChanged }) {
   if (!items.length) return null;
   return (
     <section className="mb-6">
-      <h2 className="mb-2 text-sm font-medium text-muted-foreground">{title} · {items.length}</h2>
+      <h2 className="mb-2 text-sm font-medium text-muted-foreground">{title} · {num(items.length)}</h2>
       <ul className="space-y-2">
         {items.map((i) => (
           <IncidentRow key={i.id} incident={i} open={expanded === i.id} onToggle={() => setExpanded(expanded === i.id ? null : i.id)} onChanged={onChanged} />
@@ -126,16 +127,16 @@ function AckButton({ incident: i, onDone }) {
     if (acked) {
       body = { remove: true, member: i.ack[0]?.member || "" };
     } else {
-      const member = i.members.length > 1 ? window.prompt(`کدام مورد عمدی است؟ خالی = کل حادثه\n${i.members.slice(0, 10).join("\n")}`, "") : "";
+      const member = i.members.length > 1 ? window.prompt(`${t("کدام مورد عمدی است؟ خالی = کل حادثه")}\n${i.members.slice(0, 10).join("\n")}`, "") : "";
       if (member === null) return;
-      const reason = window.prompt("چرا عمدی است؟ (گریفین دیگر برای این هشدار بیدار نمی‌شود)", "");
+      const reason = window.prompt(t("چرا عمدی است؟ (گریفین دیگر برای این هشدار بیدار نمی‌شود)"), "");
       if (!reason) return;
       body = { member: member.trim(), reason };
     }
     setBusy(true);
     try {
       await api(`/api/incidents/${i.id}/ack`, { method: "POST", body });
-      toast.success(acked ? "برداشته شد" : "ثبت شد: عمدی");
+      toast.success(acked ? t("برداشته شد") : t("ثبت شد: عمدی"));
       onDone?.();
     } catch (e) {
       toast.error(e.message);
@@ -145,13 +146,13 @@ function AckButton({ incident: i, onDone }) {
   }
   return (
     <button type="button" disabled={busy} onClick={run} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
-      {acked ? "برداشتن «عمدی»" : "عمدی است"}
+      {acked ? t("برداشتن «عمدی»") : t("عمدی است")}
     </button>
   );
 }
 
 function IncidentRow({ incident: i, open, onToggle, onChanged }) {
-  const t = i.triage;
+  const tr = i.triage;
   return (
     <li className="rounded-xl border bg-card">
       <button type="button" onClick={onToggle} className="flex w-full items-start gap-2 px-3 py-2.5 text-start">
@@ -162,27 +163,27 @@ function IncidentRow({ incident: i, open, onToggle, onChanged }) {
             <span className="text-xs font-normal text-muted-foreground">@{i.cluster}{i.scope ? ` · ${i.scope}` : ""}</span>
           </span>
           <span className="mt-0.5 block text-xs text-muted-foreground">
-            {i.members.length > 1 ? `${i.members.length} مورد · ` : ""}از {time(i.startsAt || i.firstSeen)}
+            {i.members.length > 1 ? `${t("{n} مورد", { n: num(i.members.length) })} · ` : ""}{t("از {when}", { when: time(i.startsAt || i.firstSeen) })}
             {i.flaps ? ` · flap×${i.flaps}` : ""}
-            {i.ack ? " · عمدی (Owner)" : t ? ` · ${t.noise ? "نویز" : t.missed ? "جا ماند" : t.coveredBy ? "پوشش داشت" : "تشخیص داده شد"}` : " · بدون تشخیص"}
+            {i.ack ? ` · ${t("عمدی (Owner)")}` : tr ? ` · ${tr.noise ? t("نویز") : tr.missed ? t("جا ماند") : tr.coveredBy ? t("پوشش داشت") : t("تشخیص داده شد")}` : ` · ${t("بدون تشخیص")}`}
           </span>
-          {t?.cause ? <span dir="auto" className="mt-1 block text-sm leading-6">{t.cause}</span> : null}
+          {tr?.cause ? <span dir="auto" className="mt-1 block text-sm leading-6">{tr.cause}</span> : null}
         </span>
         <ChevronDown className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open ? (
         <div className="space-y-2 border-t px-3 py-2.5 text-sm leading-6" dir="auto">
           {i.summary ? <p className="text-muted-foreground">{i.summary}</p> : null}
-          {t ? (
+          {tr ? (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               {[
-                ["اثر", t.impact],
-                ["مالک", t.owner],
-                ["چه کسی می‌پرسید", t.whoWouldAsk],
-                ["اقدام", t.action],
-                ["برگشت‌پذیر", t.reversible === undefined ? null : t.reversible ? "بله" : "خیر"],
-                ["اطمینان", t.confidence],
-                ["پوشش", t.coveredBy],
+                [t("اثر"), tr.impact],
+                [t("مالک"), tr.owner],
+                [t("چه کسی می‌پرسید"), tr.whoWouldAsk],
+                [t("اقدام"), tr.action],
+                [t("برگشت‌پذیر"), tr.reversible === undefined ? null : tr.reversible ? t("بله") : t("خیر")],
+                [t("اطمینان"), tr.confidence],
+                [t("پوشش"), tr.coveredBy],
               ]
                 .filter(([, v]) => v)
                 .map(([k, v]) => (
@@ -197,7 +198,7 @@ function IncidentRow({ incident: i, open, onToggle, onChanged }) {
             <p className="text-xs text-muted-foreground" dir="ltr">{i.members.slice(0, 30).join(" · ")}{i.members.length > 30 ? " …" : ""}</p>
           ) : null}
           {i.ack ? (
-            <p className="text-xs text-muted-foreground">عمدی: {i.ack.map((a) => `${a.member || "کل حادثه"} — ${a.reason}`).join("؛ ")}</p>
+            <p className="text-xs text-muted-foreground">{t("عمدی: {list}", { list: i.ack.map((a) => `${a.member || t("کل حادثه")} — ${a.reason}`).join(t("؛ ")) })}</p>
           ) : null}
           {i.cluster !== "human" ? <AckButton incident={i} onDone={onChanged} /> : null}
         </div>

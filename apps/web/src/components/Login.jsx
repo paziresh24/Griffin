@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
+import { t } from "../i18n.js";
 
 export function AuthGate({ children }) {
   const [state, setState] = useState("checking");
@@ -46,9 +47,9 @@ function Login({ onDone }) {
         body: JSON.stringify({ token: token.trim() }),
       });
       if (response.ok) return onDone();
-      setError(response.status === 429 ? "تلاش زیادی شد؛ ۱۵ دقیقه بعد دوباره امتحان کنید." : "توکن درست نیست.");
+      setError(response.status === 429 ? t("تلاش زیادی شد؛ ۱۵ دقیقه بعد دوباره امتحان کنید.") : t("توکن درست نیست."));
     } catch {
-      setError("سرور در دسترس نیست.");
+      setError(t("سرور در دسترس نیست."));
     } finally {
       setBusy(false);
     }
@@ -60,8 +61,8 @@ function Login({ onDone }) {
         <div className="flex items-center gap-3">
           <img src="/icon.svg" alt="" className="size-10" />
           <div>
-            <h1 className="font-semibold">گریفین</h1>
-            <p className="text-xs text-muted-foreground">ورود با توکن Owner</p>
+            <h1 className="font-semibold">{t("گریفین")}</h1>
+            <p className="text-xs text-muted-foreground">{t("ورود با توکن Owner")}</p>
           </div>
         </div>
         <input type="text" name="username" value="owner" autoComplete="username" readOnly hidden />
@@ -83,7 +84,7 @@ function Login({ onDone }) {
           disabled={!token.trim() || busy}
           className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2 font-medium text-primary-foreground disabled:opacity-40"
         >
-          {busy ? <span className="agent-dots" aria-hidden><i /><i /><i /></span> : null} ورود
+          {busy ? <span className="agent-dots" aria-hidden><i /><i /><i /></span> : null} {t("ورود")}
         </button>
       </form>
     </div>

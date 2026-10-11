@@ -1,0 +1,13 @@
+{
+  "{first} ردیف اول از {total}": "First {first} of {total} rows",
+  "نمودار": "Chart",
+  "ساخت نمودار ناموفق بود": "Couldn't build the chart",
+  "جدول داده": "Data table",
+  "دانلود PNG": "Download PNG",
+  "بوم تمام‌صفحه": "Full-screen canvas",
+  "در حال خواندن داده و ساخت نمودار…": "Reading data and building the chart…",
+  "{n} سری": "{n} series",
+  "محور خودکار": "auto axis",
+  "{title} — در بوم باز است": "{title} — open in the canvas",
+  "بستن": "Close"
+}

@@ -1,0 +1,16 @@
+{
+ "ایجنت پوشش: {agent}": "Coverage agent: {agent}",
+ "بازگشت": "Back",
+ "هم‌تیمی‌ها": "Teammates",
+ "اتصال تلگرام": "Telegram connection",
+ "اینجا فقط پروفایل و گفتگوی هم‌تیمی‌هاست. برای هر نفر می‌توانی بگویی `/agent` با کدام ایجنت باز شود.": "Only teammate profiles and chats live here. For each person you can choose which agent `/agent` opens with.",
+ "در حال بارگذاری…": "Loading…",
+ "جستجوی هم‌تیمی…": "Search teammates…",
+ "هنوز پروفایل هم‌تیمی نیست. بعد از `/agent` در یک گفتگوی تلگرام اینجا ظاهر می‌شود.": "No teammate profiles yet. They appear here after `/agent` in a Telegram chat.",
+ "افزودن گفتگوی هم‌تیمی": "Add teammate chat",
+ "ایجنت پوشش `/agent`": "`/agent` coverage agent",
+ "از `/agent` بعدی در چت این هم‌تیمی با همین ایجنت باز می‌شود. پیش‌فرض: پلتفرم‌بان.": "From the next `/agent` on, this teammate's chat opens with this agent. Default: Platform.",
+ "هنوز گفتگویی برای این هم‌تیمی نیست — با دکمهٔ «افزودن گفتگوی هم‌تیمی» بساز.": "No chats with this teammate yet — create one with “Add teammate chat”.",
+ "یک هم‌تیمی را از فهرست انتخاب کن.": "Select a teammate from the list.",
+ "گفتگوی هم‌تیمی با «{name}» شروع شد.": "Started a teammate chat with “{name}”."
+}
