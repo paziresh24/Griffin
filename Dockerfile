@@ -1,26 +1,27 @@
 # Two images from one tree: `app` (UI + agent runtime) and `broker` (credentials + typed tools).
-# The build needs no network: .build/npm-cache is prepared on a machine with good
-# registry access (see deploy/README.md) and installed with --offline.
+# Packages come from the npm registry. A host that cannot reach it can ship a prepared
+# .build/npm-cache next to the source (see deploy/README.md); it is used offline when present.
 
 # The Cursor SDK ships glibc native modules, so the app side uses Debian.
 FROM node:24-bookworm-slim AS deps
 WORKDIR /src
-COPY .build/npm-cache /tmp/npm-cache
-COPY package.json package-lock.json ./
+# .build* matches nothing on a normal checkout; package.json keeps the COPY valid either way.
+COPY package.json package-lock.json .build* ./
 COPY packages/timeline/package.json packages/timeline/
 COPY apps/server/package.json apps/server/
 COPY apps/broker/package.json apps/broker/
 COPY apps/web/package.json apps/web/
-RUN npm ci --offline --cache /tmp/npm-cache --no-audit --no-fund
+RUN if [ -d npm-cache ]; then npm ci --offline --cache npm-cache --no-audit --no-fund; \
+    else npm ci --no-audit --no-fund; fi
 
 FROM deps AS web
 COPY packages packages
 COPY apps/web apps/web
 RUN npm run build --workspace apps/web
 
-# Packages are downloaded once (deps); production modules are pruned offline.
+# Packages are downloaded once (deps); production modules are pruned without a second download.
 FROM deps AS prod-deps
-RUN npm prune --omit=dev --offline --cache /tmp/npm-cache --no-audit --no-fund
+RUN npm prune --omit=dev --offline --no-audit --no-fund
 
 FROM node:24-bookworm-slim AS app
 WORKDIR /app
@@ -44,8 +45,8 @@ ENV NODE_ENV=production \
     GRIFFIN_WORKSPACE=/workspace \
     GRIFFIN_WEB_DIST=/app/apps/web/dist \
     GRIFFIN_BROKER_SOCKET=/run/griffin/broker.sock
-# Named volume for the broker socket inherits this ownership on first use.
-RUN mkdir -p /run/griffin && chown node:node /run/griffin
+# Named volumes inherit this ownership on first use, so `docker run -v griffin-data:/data` just works.
+RUN mkdir -p /run/griffin /data /workspace && chown node:node /run/griffin /data /workspace
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"

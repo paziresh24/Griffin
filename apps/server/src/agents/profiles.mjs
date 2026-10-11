@@ -39,7 +39,7 @@ export const APP_TOOL_NAMES = [
 ];
 
 /** Built-in seed rows from the static registry (owner tools + self-mgmt). */
-export function seedProfilesFromRegistry() {
+export function seedProfilesFromRegistry({ provider = "cursor" } = {}) {
   const rows = [];
   for (const [id, agent] of Object.entries(AGENTS)) {
     const callers = {};
@@ -53,7 +53,7 @@ export function seedProfilesFromRegistry() {
       domain: agent.domain,
       blurb: "",
       instructions: "",
-      provider: "cursor",
+      provider,
       model: null,
       tools: allTools ? [...SELF_MGMT_TOOLS] : unique([...(agent.tools || []), ...SELF_MGMT_TOOLS]),
       meta: { callers, ...(allTools ? { allTools: true } : {}) },

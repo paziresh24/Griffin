@@ -82,7 +82,10 @@ function openaiApiKey() {
 }
 
 fs.mkdirSync(DATA, { recursive: true });
-const store = openStore(resolveDbPath(DATA));
+// A fresh install gives the built-in agent the engine whose key is present, so the first chat works
+// with whichever key the owner brought. Existing profiles are never changed.
+const seedProvider = anthropicApiKey() ? "claude" : openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "cursor";
+const store = openStore(resolveDbPath(DATA), { seedProvider });
 const refreshWorkspaces = () => {
   const profiles = store.listAgentProfiles();
   prepareAgentWorkspaces(WORKSPACE, {
@@ -175,7 +178,7 @@ const providers = createProviders({
   cursorApiKey: cursorApiKey(),
   anthropicApiKey: anthropicApiKey(),
   openaiApiKey: openaiApiKey(),
-  openaiBaseUrl: genv("OPENAI_BASE_URL", ""),
+  openaiBaseUrl: genv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
   openaiModel: genv("OPENAI_MODEL", ""),
   openaiReasoningEffort: genv("OPENAI_REASONING_EFFORT", ""),
   cursorModel: env.CURSOR_MODEL || "auto",

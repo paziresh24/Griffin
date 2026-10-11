@@ -38,6 +38,15 @@ test("a fresh install has exactly one agent; more are imported like any user wou
   for (const name of SELF_MGMT_TOOLS) assert.ok(griffin.tools.includes(name), name);
   assert.equal(store.seedAgentProfiles(), 0, "second seed is a no-op");
 
+  const claudeDir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-seed-"));
+  const claudeStore = openStore(path.join(claudeDir, "t.sqlite"), { seedProvider: "claude" });
+  assert.equal(claudeStore.getAgentProfile("griffin").provider, "claude", "a fresh install uses the engine whose key is present");
+  claudeStore.close();
+  const reopened = openStore(path.join(claudeDir, "t.sqlite"), { seedProvider: "openai" });
+  assert.equal(reopened.getAgentProfile("griffin").provider, "claude", "an existing profile is never switched");
+  reopened.close();
+  fs.rmSync(claudeDir, { recursive: true, force: true });
+
   seedExampleAgents(store);
   assert.deepEqual(store.listAgentProfiles().map((p) => p.id).sort(), ["arvan-ban", "griffin", "nsin-ban", "platform", "researcher"]);
   assert.equal(store.getAgentProfile("platform").meta.allTools, true);
