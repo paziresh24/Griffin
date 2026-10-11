@@ -17,7 +17,10 @@ to your own systems — on Claude, Cursor or any OpenAI-compatible model, includ
 
 **Website:** [paziresh24.github.io/Griffin](https://paziresh24.github.io/Griffin/) · [Use cases](https://paziresh24.github.io/Griffin/use-cases.html) · [Self-hosted AI agents](https://paziresh24.github.io/Griffin/self-hosted-ai-agent.html) · [Telegram AI assistant](https://paziresh24.github.io/Griffin/telegram-ai-assistant.html) · [MCP server](https://paziresh24.github.io/Griffin/mcp-server.html) · [فارسی](https://paziresh24.github.io/Griffin/fa/)
 
-<img src="docs/media/chat.png" width="900" alt="Griffin answering a question: a plan, a tool card marked with the path its answer came from, and a disk-usage card">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/demo-dark.gif">
+  <img src="docs/media/demo-light.gif" width="720" alt="Griffin in Telegram: the orchestrator delegates to a researcher and a writer, asks for approval to create a weekly job, then delivers the report with a chart">
+</picture>
 
 ## Two minutes to your own
 
