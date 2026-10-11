@@ -1,0 +1,13 @@
+{
+ "گریفین": "Griffin",
+ "پلتفرم‌بان": "Platform keeper",
+ "پلتفرم": "Platform",
+ "مسئلهٔ پلتفرم را می‌فهمد و خودش عیب‌یابی می‌کند.": "Understands platform problems and troubleshoots them itself.",
+ "آروان‌بان": "Arvan keeper",
+ "آروان": "Arvan",
+ "CDN آروان را می‌فهمد؛ اگر origin خراب باشد ارجاع می‌دهد.": "Knows the Arvan CDN; hands off when the origin is the problem.",
+ "انسین‌بان": "NSIN keeper",
+ "CDN انسین: دامنه، DNS، کش، آنالیتیکس و آپ‌تایم.": "NSIN CDN: domains, DNS, cache, analytics and uptime.",
+ "ایجنت": "Agent",
+ "دستیار هوشمند شما": "Your AI assistant"
+}

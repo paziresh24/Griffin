@@ -1,0 +1,20 @@
+{
+  "ایجنت هنوز روی پیام قبلی کار می‌کند.": "The agent is still working on the previous message.",
+  "خطا: {message}": "Error: {message}",
+  "منو": "Menu",
+  "← بازگشت": "← Back",
+  "گفتگوی جدید": "New chat",
+  "اتصال…": "Connecting…",
+  "قطع": "Offline",
+  "به درخواست {caller}": "Requested by {caller}",
+  "زمان‌بند": "Scheduler",
+  "گریفین": "Griffin",
+  "آروان‌بان": "Arvan keeper",
+  "انسین‌بان": "NSIN keeper",
+  "پلتفرم‌بان": "Platform keeper",
+  "زیرایجنت": "Subagent",
+  "{n} زیرایجنت": "{n} subagents",
+  "{n} در حال کار": "{n} working",
+  "خطا": "Error",
+  "و {n} مورد قدیمی‌تر": "and {n} older"
+}

@@ -1,0 +1,14 @@
+{
+  "{duration} کار": "Worked {duration}",
+  "در حال کار": "Working",
+  "کار": "Work",
+  "{n} ابزار": "{n} tools",
+  "{n} فکر": "{n} thoughts",
+  "{day}، {time}": "{day}, {time}",
+  "{s}ث": "{s}s",
+  "{s} ثانیه": "{s} sec",
+  "{m}د {s}ث": "{m}m {s}s",
+  "{m}د": "{m}m",
+  "{m} دقیقه و {s} ثانیه": "{m} min {s} sec",
+  "{m} دقیقه": "{m} min"
+}

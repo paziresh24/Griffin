@@ -352,3 +352,6 @@ button:not(:disabled):active {
 .scrollbar-none {
   scrollbar-width: none;
 }
+
+/* Back arrows point right in Persian (RTL) and left in English. */
+html[dir="ltr"] .rtl-mirror { transform: scaleX(-1); }

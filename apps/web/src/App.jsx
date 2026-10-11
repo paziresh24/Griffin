@@ -4,6 +4,7 @@ import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTimeline } from "./api.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
+import { num, t, isRtl } from "./i18n.js";
 import { AgentsPage } from "./components/Agents.jsx";
 import { JobsPage } from "./components/Jobs.jsx";
 import { IncidentsPage } from "./components/Incidents.jsx";
@@ -137,7 +138,7 @@ export default function App() {
 
   const onError = useCallback((e) => setError(e), []);
   useEffect(() => {
-    if (error) toast.error(error.status === 409 ? "ایجنت هنوز روی پیام قبلی کار می‌کند." : `خطا: ${error.message}`);
+    if (error) toast.error(error.status === 409 ? t("ایجنت هنوز روی پیام قبلی کار می‌کند.") : t("خطا: {message}", { message: error.message }));
   }, [error]);
 
   const quickSend = async (prompt) => {
@@ -202,7 +203,7 @@ export default function App() {
               <Thread
                 header={
                   <header className="flex items-center gap-2 border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
-                    <button type="button" onClick={() => setDrawer(true)} className="rounded-lg p-2 hover:bg-muted md:hidden" aria-label="منو">
+                    <button type="button" onClick={() => setDrawer(true)} className="rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
                       <Menu className="size-5" />
                     </button>
                     {chat?.parentChatId ? (
@@ -211,18 +212,18 @@ export default function App() {
                         onClick={() => navigate(chat.parentChatId)}
                         className="rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                       >
-                        ← بازگشت
+                        {t("← بازگشت")}
                       </button>
                     ) : null}
-                    <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || "گفتگوی جدید")}>{chat?.title || "گفتگوی جدید"}</h1>
+                    <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
                     {chatId && connection !== "live" ? (
                       <span className="flex items-center gap-1 text-xs text-warn" title={connection}>
-                        <WifiOff className="size-3.5" /> {connection === "connecting" ? "اتصال…" : "قطع"}
+                        <WifiOff className="size-3.5" /> {connection === "connecting" ? t("اتصال…") : t("قطع")}
                       </span>
                     ) : null}
                     {chat?.caller && chat.caller !== "owner" ? (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground" dir="auto">
-                        به درخواست {({ scheduler: "زمان‌بند", griffin: "گریفین", "arvan-ban": "آروان‌بان", "nsin-ban": "انسین‌بان", "platform": "پلتفرم‌بان", task: "زیرایجنت" })[chat.caller] || chat.caller}
+                        {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: t("گریفین"), "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
                     ) : null}
                     <ShareButton chatId={chatId} />
@@ -247,7 +248,7 @@ export default function App() {
         </>
       )}
 
-      <Toaster position="top-center" theme={theme} dir="rtl" toastOptions={{ className: "font-sans" }} />
+      <Toaster position="top-center" theme={theme} dir={isRtl ? "rtl" : "ltr"} toastOptions={{ className: "font-sans" }} />
     </div>
   );
 }
@@ -304,8 +305,8 @@ function SubagentsBar({ chat }) {
       <Popover.Trigger asChild>
         <button type="button" className="press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
           <Network className="size-3.5 text-primary" />
-          <span>{count} زیرایجنت</span>
-          {running ? <span className="flex items-center gap-1 text-primary"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{running} در حال کار</span> : null}
+          <span>{t("{n} زیرایجنت", { n: num(count) })}</span>
+          {running ? <span className="flex items-center gap-1 text-primary"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{t("{n} در حال کار", { n: num(running) })}</span> : null}
           <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
       </Popover.Trigger>
@@ -323,11 +324,11 @@ function SubagentsBar({ chat }) {
               {child.runStatus === "running" ? (
                 <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
               ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
-                <span className="size-1.5 shrink-0 rounded-full bg-bad" title="خطا" />
+                <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
               ) : null}
             </button>
           ))}
-          {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">و {count - children.length} مورد قدیمی‌تر</p> : null}
+          {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">{t("و {n} مورد قدیمی‌تر", { n: num(count - children.length) })}</p> : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

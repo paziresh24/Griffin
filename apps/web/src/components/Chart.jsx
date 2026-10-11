@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { useApiBase } from "../base.js";
 import { isRtlText, textDir } from "../dir.js";
 import { SourceBadge } from "./Tool.jsx";
+import { num, t } from "../i18n.js";
 
 // Categorical slots from the dataviz reference palette, validated against this app's card
 // surfaces (#ffffff light, #12161c dark): fixed order, never cycled.
@@ -208,7 +209,7 @@ function DataTable({ datasets }) {
           </tbody>
         </table>
       </div>
-      {rows.length > 1000 ? <p className="text-xs text-muted-foreground">۱۰۰۰ ردیف اول از {rows.length.toLocaleString("fa")}</p> : null}
+      {rows.length > 1000 ? <p className="text-xs text-muted-foreground">{t("{first} ردیف اول از {total}", { first: num(1000), total: num(rows.length) })}</p> : null}
     </div>
   );
 }
@@ -265,7 +266,7 @@ export function ChartCard({ args = {}, result, isError, status }) {
     return () => observer.disconnect();
   }, [canvas, table]);
 
-  const title = chart?.title || args.title || "نمودار";
+  const title = chart?.title || args.title || t("نمودار");
   const description = chart?.meta?.description || args.description;
   const sources = [...new Set((chart?.meta?.datasets || []).map((d) => d.source).filter(Boolean))];
 
@@ -273,7 +274,7 @@ export function ChartCard({ args = {}, result, isError, status }) {
     return (
       <div className="my-2 rounded-lg border border-bad/50 bg-card px-3 py-2 text-sm">
         <p className="flex items-center gap-2 font-medium"><AreaChart className="size-4 text-bad" />{title}</p>
-        <p className="ltr mt-1 text-xs text-bad">{result?.error || "ساخت نمودار ناموفق بود"}</p>
+        <p className="ltr mt-1 text-xs text-bad">{result?.error || t("ساخت نمودار ناموفق بود")}</p>
       </div>
     );
   }
@@ -289,9 +290,9 @@ export function ChartCard({ args = {}, result, isError, status }) {
         {sources.map((source) => <SourceBadge key={source} source={source} />)}
         {chart ? (
           <>
-            <IconButton label="جدول داده" active={table} onClick={() => setTable(!table)}><Table2 className="size-4" /></IconButton>
-            <IconButton label="دانلود PNG" onClick={() => view && downloadPng(view, title)}><Download className="size-4" /></IconButton>
-            {canvas ? null : <IconButton label="بوم تمام‌صفحه" onClick={() => setCanvas(true)}><Maximize2 className="size-4" /></IconButton>}
+            <IconButton label={t("جدول داده")} active={table} onClick={() => setTable(!table)}><Table2 className="size-4" /></IconButton>
+            <IconButton label={t("دانلود PNG")} onClick={() => view && downloadPng(view, title)}><Download className="size-4" /></IconButton>
+            {canvas ? null : <IconButton label={t("بوم تمام‌صفحه")} onClick={() => setCanvas(true)}><Maximize2 className="size-4" /></IconButton>}
           </>
         ) : null}
       </div>
@@ -300,7 +301,7 @@ export function ChartCard({ args = {}, result, isError, status }) {
 
   const body = running ? (
     <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-      <Loader2 className="me-2 size-4 animate-spin" /> در حال خواندن داده و ساخت نمودار…
+      <Loader2 className="me-2 size-4 animate-spin" /> {t("در حال خواندن داده و ساخت نمودار…")}
     </div>
   ) : loadError ? (
     <p className="ltr px-3 py-2 text-xs text-bad">{loadError}</p>
@@ -322,8 +323,8 @@ export function ChartCard({ args = {}, result, isError, status }) {
   const footer = queries.length ? (
     <details className="px-3 pb-2 text-xs text-muted-foreground">
       <summary className="cursor-pointer select-none">
-        {queries.map((d) => `${d.cluster} · ${d.range || "instant"} · ${d.series} سری`).join(" | ")}
-        {chart.meta.axes?.some((a) => a.by === "auto") ? " · محور خودکار" : ""}
+        {queries.map((d) => `${d.cluster} · ${d.range || "instant"} · ${t("{n} سری", { n: num(d.series) })}`).join(" | ")}
+        {chart.meta.axes?.some((a) => a.by === "auto") ? ` · ${t("محور خودکار")}` : ""}
       </summary>
       {queries.map((d) => (
         <pre key={d.name} className="ltr mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-muted/60 p-2 font-mono">{d.promql}</pre>
@@ -334,12 +335,12 @@ export function ChartCard({ args = {}, result, isError, status }) {
   if (canvas) {
     return (
       <>
-        <div className="my-2 rounded-lg border bg-card px-3 py-2 text-sm text-muted-foreground">{title} — در بوم باز است</div>
+        <div className="my-2 rounded-lg border bg-card px-3 py-2 text-sm text-muted-foreground">{t("{title} — در بوم باز است", { title })}</div>
         <div className="fixed inset-0 z-50 flex flex-col bg-background/95 p-2 backdrop-blur sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card shadow-2xl">
             <div className="flex shrink-0 items-start border-b">
               <div className="min-w-0 flex-1">{header}</div>
-              <IconButton label="بستن" onClick={() => setCanvas(false)} className="m-2"><X className="size-5" /></IconButton>
+              <IconButton label={t("بستن")} onClick={() => setCanvas(false)} className="m-2"><X className="size-5" /></IconButton>
             </div>
             <div ref={canvasArea} className="min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-5">{body}</div>
             {footer ? <div className="shrink-0 border-t">{footer}</div> : null}

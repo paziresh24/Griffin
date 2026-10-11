@@ -14,6 +14,7 @@ import { textDir } from "../dir.js";
 import { AgentGlyph, ModeToggle, ModelPicker } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
+import { num, t, isRtl } from "../i18n.js";
 
 const plugins = { code };
 
@@ -21,7 +22,7 @@ export function Thread({
   header,
   runInfo,
   readOnly = false,
-  agentLabel = "ایجنت",
+  agentLabel = t("ایجنت"),
   agent = "griffin",
   fresh = false,
   recentTitles = [],
@@ -107,8 +108,8 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
         <AgentGlyph id={agent} className="size-14" />
       </motion.div>
       <motion.div variants={fadeUp} className="text-center">
-        <h2 className="text-xl font-semibold" dir="rtl">{meta.label}</h2>
-        <p className="mt-1 text-sm text-muted-foreground" dir="rtl">{meta.blurb}</p>
+        <h2 className="text-xl font-semibold" dir="auto">{meta.label}</h2>
+        <p className="mt-1 text-sm text-muted-foreground" dir="auto">{meta.blurb}</p>
       </motion.div>
       <motion.div variants={fadeUp} className="w-full">
         <Composer
@@ -132,7 +133,7 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
             transition={{ delay: 0.28 + i * 0.05, type: "spring", stiffness: 380, damping: 28 }}
             onClick={() => onSuggestion?.(item.prompt)}
             className="press rounded-full border bg-card px-3.5 py-2 text-sm text-foreground/90 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-sm"
-            dir="rtl"
+            dir="auto"
           >
             {item.title}
           </motion.button>
@@ -161,13 +162,13 @@ function UserMessage() {
     return (Array.isArray(parts) ? parts : []).map((p) => (typeof p === "string" ? p : p?.text || "")).join("\n");
   });
   const dir = chatDir(text);
-  const label = custom?.intent === "queue" ? "در صف؛ بعد از کار فعلی اجرا می‌شود" : custom?.intent === "steer" ? "وسط کار به ایجنت رسید" : null;
+  const label = custom?.intent === "queue" ? t("در صف؛ بعد از کار فعلی اجرا می‌شود") : custom?.intent === "steer" ? t("وسط کار به ایجنت رسید") : null;
   return (
     <MessagePrimitive.Root className="group my-3 flex flex-col items-start">
       <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7" dir={dir}>
         <MessagePrimitive.Parts />
       </div>
-      {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {custom.images} تصویر</span> : null}
+      {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
     </MessagePrimitive.Root>
   );
@@ -218,7 +219,7 @@ function Reasoning({ text, status }) {
     <div className="my-1.5">
       <button type="button" onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
         <Brain className="size-4" />
-        <span className={running ? "agent-pulse" : ""}>{running ? "در حال فکر کردن" : "فکر کرد"}</span>
+        <span className={running ? "agent-pulse" : ""}>{running ? t("در حال فکر کردن") : t("فکر کرد")}</span>
         <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open || running ? (
@@ -245,11 +246,11 @@ function RunFooter({ run }) {
     <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
       {run.status === "running" ? <RunPhase phase={run.phase} /> : null}
       {run.status === "error" ? (
-        <span className="rounded-md bg-bad/10 px-2 py-0.5 text-xs text-bad" dir="auto">{run.error || "خطا"}</span>
+        <span className="rounded-md bg-bad/10 px-2 py-0.5 text-xs text-bad" dir="auto">{run.error || t("خطا")}</span>
       ) : null}
       {run.status === "cancelled" ? (
         <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground" dir="auto">
-          {run.error || "متوقف شد"}
+          {run.error || t("متوقف شد")}
         </span>
       ) : null}
 
@@ -258,7 +259,7 @@ function RunFooter({ run }) {
           {answeredAt || seconds ? (
             <span
               className="inline-flex items-center gap-1"
-              title={[answeredAt && `جواب: ${answeredAt}`, seconds && `طول کشید: ${formatDuration(seconds)}`].filter(Boolean).join(" · ")}
+              title={[answeredAt && t("جواب: {time}", { time: answeredAt }), seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) })].filter(Boolean).join(" · ")}
             >
               <Clock className="size-3 opacity-70" />
               {answeredAt ? <span>{answeredAt}</span> : null}
@@ -279,7 +280,7 @@ function RunFooter({ run }) {
         <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="flex items-center">
           <ActionBarPrimitive.Copy
             className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="کپی پاسخ"
+            title={t("کپی پاسخ")}
           >
             <MessagePrimitive.If copied><Check className="size-3.5 text-ok" /></MessagePrimitive.If>
             <MessagePrimitive.If copied={false}><Copy className="size-3.5" /></MessagePrimitive.If>
@@ -290,7 +291,7 @@ function RunFooter({ run }) {
   );
 }
 
-const PHASES = { connecting: "در حال اتصال", working: "در حال کار", summarizing: "خلاصه‌سازی" };
+const PHASES = { connecting: t("در حال اتصال"), working: t("در حال کار"), summarizing: t("خلاصه‌سازی") };
 
 function RunPhase({ phase }) {
   return (
@@ -302,7 +303,7 @@ function RunPhase({ phase }) {
       <span className="agent-dots" aria-hidden>
         <i /><i /><i />
       </span>
-      <span className="agent-pulse">{PHASES[phase] || "در حال کار"}</span>
+      <span className="agent-pulse">{PHASES[phase] || t("در حال کار")}</span>
     </motion.span>
   );
 }
@@ -314,17 +315,17 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     <ComposerPrimitive.Root className="rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
-        <ComposerPrimitive.AddAttachment className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title="افزودن تصویر">
+        <ComposerPrimitive.AddAttachment className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")}>
           <ImagePlus className={hero ? "size-4" : "size-5"} />
         </ComposerPrimitive.AddAttachment>
         <ComposerPrimitive.Input
           rows={1}
           autoFocus
-          dir="rtl"
+          dir={isRtl ? "rtl" : "auto"}
           submitMode="enter"
           unstable_insertNewlineOnTouchEnter
-          placeholder={running ? (hero ? "پیام بده تا وسط کار برسد…" : "پیام بده تا وسط کار به ایجنت برسد…") : `از ${agentLabel} بپرس…`}
-          className={`scrollbar-thin min-w-0 flex-1 resize-none bg-transparent px-1 text-right outline-none placeholder:text-muted-foreground ${
+          placeholder={running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agent} بپرس…", { agent: agentLabel })}
+          className={`scrollbar-thin min-w-0 flex-1 resize-none bg-transparent px-1 text-start outline-none placeholder:text-muted-foreground ${
             hero
               ? "max-h-12 min-h-10 py-2 text-sm leading-6"
               : "max-h-48 min-h-10 py-2 leading-7"
@@ -334,7 +335,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} icons /> : null}
           {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} icons /> : null}
           {running ? (
-            <ComposerPrimitive.Cancel className="flex size-9 items-center justify-center rounded-full bg-foreground text-background" title="توقف">
+            <ComposerPrimitive.Cancel className="flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
               {hero ? (
                 <span className="agent-dots agent-dots-on-dark" aria-hidden><i /><i /><i /></span>
               ) : (
@@ -342,7 +343,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               )}
             </ComposerPrimitive.Cancel>
           ) : (
-            <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-30" title="ارسال">
+            <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-30" title={t("ارسال")}>
               <ArrowUp className="size-5" />
             </ComposerPrimitive.Send>
           )}
@@ -351,7 +352,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       {running && !hero ? (
         <div className="flex items-center gap-2 px-3 pb-2 text-xs text-primary">
           <span className="agent-dots" aria-hidden><i /><i /><i /></span>
-          پیام جدید وسط کار ارسال می‌شود
+          {t("پیام جدید وسط کار ارسال می‌شود")}
         </div>
       ) : null}
     </ComposerPrimitive.Root>

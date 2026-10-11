@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Brain, ChevronDown, Wrench } from "lucide-react";
 import { unwrapResult } from "../result.js";
 import { ToolCard } from "./Tool.jsx";
+import { locale, num, t } from "../i18n.js";
 
 // Tools whose output is the answer itself; they stay visible outside the collapsed work log.
 const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", "ask_agent"]);
@@ -51,9 +52,9 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
   const thoughts = parts.filter((p) => p.type === "reasoning").length;
   const seconds = run.endedAt && run.startedAt ? Math.max(1, Math.round((new Date(run.endedAt) - new Date(run.startedAt)) / 1000)) : null;
   const summary = [
-    seconds ? `${formatDuration(seconds, { compact: true })} کار` : running ? "در حال کار" : "کار",
-    tools ? `${tools.toLocaleString("fa-IR")} ابزار` : null,
-    thoughts ? `${thoughts.toLocaleString("fa-IR")} فکر` : null,
+    seconds ? t("{duration} کار", { duration: formatDuration(seconds, { compact: true }) }) : running ? t("در حال کار") : t("کار"),
+    tools ? t("{n} ابزار", { n: num(tools) }) : null,
+    thoughts ? t("{n} فکر", { n: num(thoughts) }) : null,
   ].filter(Boolean).join(" · ");
   const current = running ? [...parts].reverse().find((p) => p.type === "tool") : null;
 
@@ -106,22 +107,22 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
 
 // When an answer arrived, on the Tehran clock: "۰۹:۳۴" today, with the date on any other day.
 const TEHRAN = "Asia/Tehran";
-const clock = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hour12: false });
-const day = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, day: "numeric", month: "long" });
+const clock = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hour12: false });
+const day = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, day: "numeric", month: "long" });
 const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
 
 export function formatAnsweredAt(iso, now = new Date()) {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;
   const time = clock.format(at);
-  return dayKey.format(at) === dayKey.format(now) ? time : `${day.format(at)}، ${time}`;
+  return dayKey.format(at) === dayKey.format(now) ? time : t("{day}، {time}", { day: day.format(at), time });
 }
 
 export function formatDuration(seconds, { compact = false } = {}) {
-  const fa = (n) => n.toLocaleString("fa-IR");
-  if (seconds < 60) return compact ? `${fa(seconds)}ث` : `${fa(seconds)} ثانیه`;
-  const minutes = Math.floor(seconds / 60);
+  if (seconds < 60) return compact ? t("{s}ث", { s: num(seconds) }) : t("{s} ثانیه", { s: num(seconds) });
+  const m = num(Math.floor(seconds / 60));
   const rest = seconds % 60;
-  if (compact) return rest ? `${fa(minutes)}د ${fa(rest)}ث` : `${fa(minutes)}د`;
-  return rest ? `${fa(minutes)} دقیقه و ${fa(rest)} ثانیه` : `${fa(minutes)} دقیقه`;
+  const s = num(rest);
+  if (compact) return rest ? t("{m}د {s}ث", { m, s }) : t("{m}د", { m });
+  return rest ? t("{m} دقیقه و {s} ثانیه", { m, s }) : t("{m} دقیقه", { m });
 }

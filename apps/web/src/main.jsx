@@ -4,6 +4,9 @@ import App from "./App.jsx";
 import { AuthGate } from "./components/Login.jsx";
 import { PublicChat, shareToken } from "./Public.jsx";
 import "./styles.css";
+import { applyDocumentLang } from "./i18n.js";
+
+applyDocumentLang();
 
 try {
   document.documentElement.classList.toggle("dark", (localStorage.getItem("griffin.theme") || "dark") === "dark");

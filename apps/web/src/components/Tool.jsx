@@ -9,6 +9,7 @@ import { AskCard } from "./Ask.jsx";
 import { MediaView } from "./Media.jsx";
 import { ChartCard } from "./Chart.jsx";
 import { AgentGlyph } from "./Controls.jsx";
+import { t, num } from "../i18n.js";
 import {
   AlertTriangle, Boxes, Check, ChevronDown, CircleDashed, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
@@ -21,92 +22,97 @@ export const ChatChildrenContext = createContext([]);
 const mdPlugins = { code };
 
 const TOOLS = {
-  read: { icon: FileText, label: "خواندن فایل", subtitle: (a) => a.path },
-  edit: { icon: PencilLine, label: "ویرایش فایل", subtitle: (a) => a.path, open: true },
-  write: { icon: PencilLine, label: "نوشتن فایل", subtitle: (a) => a.path },
-  delete: { icon: Trash2, label: "حذف فایل", subtitle: (a) => a.path },
-  grep: { icon: Search, label: "جستجو در کد", subtitle: (a) => a.pattern },
-  glob: { icon: FolderTree, label: "یافتن فایل‌ها", subtitle: (a) => a.globPattern },
-  ls: { icon: FolderTree, label: "فهرست پوشه", subtitle: (a) => a.path },
-  semSearch: { icon: Search, label: "جستجوی معنایی", subtitle: (a) => a.query },
-  readLints: { icon: AlertTriangle, label: "بررسی خطاهای lint" },
-  updateTodos: { icon: ListChecks, label: "برنامهٔ کار", open: true },
-  readTodos: { icon: ListChecks, label: "خواندن برنامهٔ کار" },
-  webSearch: { icon: Globe, label: "جستجوی وب", subtitle: (a) => a.searchTerm || a.query },
-  webFetch: { icon: Globe, label: "خواندن صفحهٔ وب", subtitle: (a) => a.url },
-  task: { icon: Workflow, label: "زیرایجنت", subtitle: (a) => a.description },
-  gitlab_version: { icon: GitBranch, label: "نسخهٔ GitLab" },
-  kube_status: { icon: Boxes, label: "وضعیت کلاستر", subtitle: (a) => [a.cluster, a.namespace, a.prefix].filter(Boolean).join(" / "), open: true },
-  kube_get: { icon: Database, label: "خواندن منابع کلاستر", subtitle: (a) => [a.cluster, a.kind, a.namespace, a.name].filter(Boolean).join(" / ") },
-  kube_logs: { icon: ScrollText, label: "لاگ پاد", subtitle: (a) => [a.cluster, a.namespace, a.pod].filter(Boolean).join(" / ") },
-  kube_df: { icon: HardDrive, label: "فضای دیسک پاد", subtitle: (a) => [a.cluster, a.namespace, a.pod, a.path].filter(Boolean).join(" / "), open: true },
-  metrics_query: { icon: Search, label: "کوئری Prometheus", subtitle: (a) => [a.cluster, a.range, a.promql].filter(Boolean).join(" · "), open: false },
-  pg_query: { icon: Database, label: "کوئری Postgres", subtitle: (a) => `${a.cluster}/${a.namespace}/${a.name}${a.database ? `/${a.database}` : ""}${a.write ? " ✎" : ""}`, open: true },
-  show_media: { icon: FileText, label: "نمایش فایل", subtitle: (a) => a.title || a.path || a.url, open: true },
-  telegram_dialogs: { icon: Send, label: "گفتگوهای تلگرام", subtitle: (a) => a.query },
-  telegram_read: { icon: Send, label: "خواندن تلگرام", subtitle: (a) => a.chat, open: true },
-  telegram_send: { icon: Send, label: "ارسال در تلگرام", subtitle: (a) => a.chat, open: true },
-  grafana_search: { icon: Search, label: "جستجوی داشبورد Grafana", subtitle: (a) => [a.cluster, a.query].filter(Boolean).join(" / ") },
-  grafana_dashboard: { icon: Boxes, label: "خواندن داشبورد Grafana", subtitle: (a) => a.uid },
-  grafana_panel_query: { icon: Database, label: "دادهٔ پنل Grafana", subtitle: (a) => `${a.uid} #${a.panelId}${a.from ? ` · ${a.from}` : ""}`, open: true },
-  grafana_query: { icon: Database, label: "کوئری روی دیتاسورس Grafana", subtitle: (a) => a.datasourceUid, open: true },
-  s3_list: { icon: Database, label: "فهرست باکت S3", subtitle: (a) => [a.bucket, a.prefix].filter(Boolean).join(" / ") },
-  s3_get: { icon: FileText, label: "دریافت فایل از S3", subtitle: (a) => `${a.bucket}/${a.key}`, open: true },
-  mikrotik_print: { icon: Router, label: "خواندن میکروتیک", subtitle: (a) => [a.router, a.path, a.where && Object.entries(a.where).map(([k, v]) => `${k}=${v}`).join(" ")].filter(Boolean).join(" ") },
-  mikrotik_ping: { icon: Router, label: "پینگ از میکروتیک", subtitle: (a) => a.address },
-  mikrotik_forward_add: { icon: Router, label: "افزودن port forward", subtitle: (a) => `:${a.publicPort} → ${a.toAddress}:${a.toPort}`, open: true },
-  mikrotik_address_list_add: { icon: Router, label: "افزودن به address-list", subtitle: (a) => `${a.list} ← ${a.address}`, open: true },
-  mikrotik_set_enabled: { icon: Router, label: "فعال/غیرفعال قاعدهٔ میکروتیک", subtitle: (a) => `${a.path} ${a.id} ${a.enabled ? "on" : "off"}`, open: true },
-  mikrotik_remove: { icon: Router, label: "حذف از میکروتیک", subtitle: (a) => `${a.path} ${a.id}`, open: true },
-  debug_exec: { icon: Terminal, label: "دستور روی سرور debug", subtitle: (a) => a.command },
-  kube_secret: { icon: KeyRound, label: "خواندن Secret کلاستر", subtitle: (a) => [a.cluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
-  infisical_get: { icon: KeyRound, label: "خواندن از Infisical", subtitle: (a) => a.name, open: true },
-  gitlab_projects: { icon: GitBranch, label: "پروژه‌های GitLab", subtitle: (a) => a.search },
-  gitlab_search: { icon: Search, label: "جستجوی کد GitLab", subtitle: (a) => `${a.scope || "blobs"}: ${a.search}`, open: true },
-  gitlab_file: { icon: FileText, label: "خواندن فایل GitLab", subtitle: (a) => `${a.project}/${a.path}`, open: true },
-  gitlab_mr: { icon: GitBranch, label: "Merge Request گیت‌لب", subtitle: (a) => `${a.project}!${a.iid} · ${a.action || "view"}`, open: true },
-  infisical_projects: { icon: FolderTree, label: "پروژه‌های Infisical" },
-  infisical_list: { icon: FolderTree, label: "فهرست Infisical", subtitle: (a) => a.path },
-  infisical_upsert: { icon: KeyRound, label: "ذخیره در Infisical", subtitle: (a) => a.name, open: true },
-  arvan_domains: { icon: Cloud, label: "دامنه‌های آروان", subtitle: (a) => a.search },
-  arvan_dns_records: { icon: Globe, label: "رکوردهای DNS آروان", subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
-  arvan_dns_export: { icon: FileText, label: "خروجی BIND آروان", subtitle: (a) => a.domain },
-  arvan_dnssec: { icon: Lock, label: "وضعیت DNSSEC", subtitle: (a) => a.domain },
-  arvan_cache_settings: { icon: Cloud, label: "تنظیمات کش آروان", subtitle: (a) => a.domain, open: true },
-  arvan_purge_tags: { icon: Cloud, label: "تگ‌های purge", subtitle: (a) => a.domain },
-  arvan_cache_purge: { icon: Cloud, label: "پاک‌کردن کش آروان", subtitle: (a) => [a.domain, a.scope].filter(Boolean).join(" · "), open: true },
-  dns_lookup: { icon: Network, label: "جست‌وجوی DNS", subtitle: (a) => `${a.type || "A"} ${a.name || ""}`.trim(), open: true },
-  http_check: { icon: Globe, label: "بررسی HTTP", subtitle: (a) => a.url, open: true },
-  tls_check: { icon: Lock, label: "بررسی گواهی TLS", subtitle: (a) => a.host, open: true },
-  nsin_edge_ranges: { icon: Network, label: "رنج‌های لبهٔ NSIN" },
-  nsin_domains: { icon: Cloud, label: "دامنه‌های NSIN", subtitle: (a) => a.search },
-  nsin_domain: { icon: Globe, label: "جزئیات دامنهٔ NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_dns_records: { icon: Globe, label: "رکوردهای DNS انسین", subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
-  nsin_dns_create: { icon: Globe, label: "ساخت رکورد NSIN", subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
-  nsin_dns_update: { icon: Globe, label: "ویرایش رکورد NSIN", subtitle: (a) => [a.domain, a.recordId].filter(Boolean).join(" #"), open: true },
-  nsin_dns_delete: { icon: Globe, label: "حذف رکورد NSIN", subtitle: (a) => [a.domain, a.recordId].filter(Boolean).join(" #"), open: true },
-  nsin_ssl_status: { icon: Lock, label: "وضعیت SSL انسین", subtitle: (a) => a.domain, open: true },
-  nsin_ssl_issue: { icon: Lock, label: "صدور گواهی NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_check_nameservers: { icon: Network, label: "چک نیم‌سرور NSIN", subtitle: (a) => a.domain },
-  nsin_developer_mode: { icon: Cloud, label: "حالت توسعه‌دهنده NSIN", subtitle: (a) => `${a.domain} · ${a.enabled ? "روشن" : "خاموش"}`, open: true },
-  nsin_cache_stats: { icon: Cloud, label: "آمار کش NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_cache_keys: { icon: Cloud, label: "کلیدهای کش NSIN", subtitle: (a) => [a.domain, a.path].filter(Boolean).join(" · ") },
-  nsin_cache_purge: { icon: Cloud, label: "پاک‌کردن کل کش NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_cache_purge_path: { icon: Cloud, label: "پاک‌کردن مسیر کش NSIN", subtitle: (a) => [a.domain, a.path].filter(Boolean).join(" · "), open: true },
-  nsin_rules: { icon: FolderTree, label: "قوانین لبهٔ NSIN", subtitle: (a) => [a.domain, a.kind].filter(Boolean).join(" / "), open: true },
-  nsin_rule_toggle: { icon: FolderTree, label: "سوییچ قانون NSIN", subtitle: (a) => [a.domain, a.kind, a.ruleId].filter(Boolean).join(" / "), open: true },
-  nsin_analytics_summary: { icon: Network, label: "خلاصهٔ ترافیک NSIN", subtitle: (a) => [a.domain, a.period].filter(Boolean).join(" · "), open: true },
-  nsin_top_uris: { icon: Network, label: "URIهای پربازدید NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_request_logs: { icon: FileText, label: "لاگ درخواست NSIN", subtitle: (a) => a.domain },
-  nsin_waf_logs: { icon: Lock, label: "لاگ WAF انسین", subtitle: (a) => a.domain },
-  nsin_analytics_query: { icon: FileText, label: "کوئری آنالیتیکس NSIN", open: true },
-  nsin_uptime_live: { icon: Network, label: "آپ‌تایم زندهٔ NSIN", subtitle: (a) => a.domain, open: true },
-  nsin_uptime_incidents: { icon: Network, label: "قطع‌های NSIN", subtitle: (a) => a.domain },
-  nsin_recommendations: { icon: FileText, label: "پیشنهادهای NSIN", subtitle: (a) => a.domain, open: true },
-  ask_agent: { icon: Workflow, label: "درخواست از ایجنت همتا", subtitle: (a) => a.agent, open: true },
-  task: { icon: Workflow, label: "زیرایجنت", subtitle: (a) => a.description, open: false },
-  knowledge_write: { icon: FileText, label: "یادداشت دانش", subtitle: (a) => a.title, open: true },
-  knowledge_list: { icon: FolderTree, label: "فهرست دانش", subtitle: (a) => a.agent },
+  read: { icon: FileText, label: t("خواندن فایل"), subtitle: (a) => a.path },
+  edit: { icon: PencilLine, label: t("ویرایش فایل"), subtitle: (a) => a.path, open: true },
+  write: { icon: PencilLine, label: t("نوشتن فایل"), subtitle: (a) => a.path },
+  delete: { icon: Trash2, label: t("حذف فایل"), subtitle: (a) => a.path },
+  grep: { icon: Search, label: t("جستجو در کد"), subtitle: (a) => a.pattern },
+  glob: { icon: FolderTree, label: t("یافتن فایل‌ها"), subtitle: (a) => a.globPattern },
+  ls: { icon: FolderTree, label: t("فهرست پوشه"), subtitle: (a) => a.path },
+  semSearch: { icon: Search, label: t("جستجوی معنایی"), subtitle: (a) => a.query },
+  readLints: { icon: AlertTriangle, label: t("بررسی خطاهای lint") },
+  updateTodos: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
+  readTodos: { icon: ListChecks, label: t("خواندن برنامهٔ کار") },
+  webSearch: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.searchTerm || a.query },
+  webFetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
+  task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description },
+  gitlab_version: { icon: GitBranch, label: t("نسخهٔ GitLab") },
+  kube_status: { icon: Boxes, label: t("وضعیت کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.prefix].filter(Boolean).join(" / "), open: true },
+  kube_get: { icon: Database, label: t("خواندن منابع کلاستر"), subtitle: (a) => [a.cluster, a.kind, a.namespace, a.name].filter(Boolean).join(" / ") },
+  kube_logs: { icon: ScrollText, label: t("لاگ پاد"), subtitle: (a) => [a.cluster, a.namespace, a.pod].filter(Boolean).join(" / ") },
+  kube_df: { icon: HardDrive, label: t("فضای دیسک پاد"), subtitle: (a) => [a.cluster, a.namespace, a.pod, a.path].filter(Boolean).join(" / "), open: true },
+  metrics_query: { icon: Search, label: t("کوئری Prometheus"), subtitle: (a) => [a.cluster, a.range, a.promql].filter(Boolean).join(" · "), open: false },
+  pg_query: { icon: Database, label: t("کوئری Postgres"), subtitle: (a) => `${a.cluster}/${a.namespace}/${a.name}${a.database ? `/${a.database}` : ""}${a.write ? " ✎" : ""}`, open: true },
+  show_media: { icon: FileText, label: t("نمایش فایل"), subtitle: (a) => a.title || a.path || a.url, open: true },
+  telegram_dialogs: { icon: Send, label: t("گفتگوهای تلگرام"), subtitle: (a) => a.query },
+  telegram_read: { icon: Send, label: t("خواندن تلگرام"), subtitle: (a) => a.chat, open: true },
+  telegram_send: { icon: Send, label: t("ارسال در تلگرام"), subtitle: (a) => a.chat, open: true },
+  grafana_search: { icon: Search, label: t("جستجوی داشبورد Grafana"), subtitle: (a) => [a.cluster, a.query].filter(Boolean).join(" / ") },
+  grafana_dashboard: { icon: Boxes, label: t("خواندن داشبورد Grafana"), subtitle: (a) => a.uid },
+  grafana_panel_query: { icon: Database, label: t("دادهٔ پنل Grafana"), subtitle: (a) => `${a.uid} #${a.panelId}${a.from ? ` · ${a.from}` : ""}`, open: true },
+  grafana_query: { icon: Database, label: t("کوئری روی دیتاسورس Grafana"), subtitle: (a) => a.datasourceUid, open: true },
+  s3_list: { icon: Database, label: t("فهرست باکت S3"), subtitle: (a) => [a.bucket, a.prefix].filter(Boolean).join(" / ") },
+  s3_get: { icon: FileText, label: t("دریافت فایل از S3"), subtitle: (a) => `${a.bucket}/${a.key}`, open: true },
+  mikrotik_print: { icon: Router, label: t("خواندن میکروتیک"), subtitle: (a) => [a.router, a.path, a.where && Object.entries(a.where).map(([k, v]) => `${k}=${v}`).join(" ")].filter(Boolean).join(" ") },
+  mikrotik_ping: { icon: Router, label: t("پینگ از میکروتیک"), subtitle: (a) => a.address },
+  mikrotik_forward_add: { icon: Router, label: t("افزودن port forward"), subtitle: (a) => `:${a.publicPort} → ${a.toAddress}:${a.toPort}`, open: true },
+  mikrotik_address_list_add: { icon: Router, label: t("افزودن به address-list"), subtitle: (a) => `${a.list} ← ${a.address}`, open: true },
+  mikrotik_set_enabled: { icon: Router, label: t("فعال/غیرفعال قاعدهٔ میکروتیک"), subtitle: (a) => `${a.path} ${a.id} ${a.enabled ? "on" : "off"}`, open: true },
+  mikrotik_remove: { icon: Router, label: t("حذف از میکروتیک"), subtitle: (a) => `${a.path} ${a.id}`, open: true },
+  debug_exec: { icon: Terminal, label: t("دستور روی سرور debug"), subtitle: (a) => a.command },
+  kube_secret: { icon: KeyRound, label: t("خواندن Secret کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
+  infisical_get: { icon: KeyRound, label: t("خواندن از Infisical"), subtitle: (a) => a.name, open: true },
+  gitlab_projects: { icon: GitBranch, label: t("پروژه‌های GitLab"), subtitle: (a) => a.search },
+  gitlab_search: { icon: Search, label: t("جستجوی کد GitLab"), subtitle: (a) => `${a.scope || "blobs"}: ${a.search}`, open: true },
+  gitlab_file: { icon: FileText, label: t("خواندن فایل GitLab"), subtitle: (a) => `${a.project}/${a.path}`, open: true },
+  gitlab_mr: { icon: GitBranch, label: t("Merge Request گیت‌لب"), subtitle: (a) => `${a.project}!${a.iid} · ${a.action || "view"}`, open: true },
+  infisical_projects: { icon: FolderTree, label: t("پروژه‌های Infisical") },
+  infisical_list: { icon: FolderTree, label: t("فهرست Infisical"), subtitle: (a) => a.path },
+  infisical_upsert: { icon: KeyRound, label: t("ذخیره در Infisical"), subtitle: (a) => a.name, open: true },
+  arvan_domains: { icon: Cloud, label: t("دامنه‌های آروان"), subtitle: (a) => a.search },
+  arvan_dns_records: { icon: Globe, label: t("رکوردهای DNS آروان"), subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
+  arvan_dns_export: { icon: FileText, label: t("خروجی BIND آروان"), subtitle: (a) => a.domain },
+  arvan_dnssec: { icon: Lock, label: t("وضعیت DNSSEC"), subtitle: (a) => a.domain },
+  arvan_cache_settings: { icon: Cloud, label: t("تنظیمات کش آروان"), subtitle: (a) => a.domain, open: true },
+  arvan_purge_tags: { icon: Cloud, label: t("تگ‌های purge"), subtitle: (a) => a.domain },
+  arvan_cache_purge: { icon: Cloud, label: t("پاک‌کردن کش آروان"), subtitle: (a) => [a.domain, a.scope].filter(Boolean).join(" · "), open: true },
+  dns_lookup: { icon: Network, label: t("جست‌وجوی DNS"), subtitle: (a) => `${a.type || "A"} ${a.name || ""}`.trim(), open: true },
+  http_check: { icon: Globe, label: t("بررسی HTTP"), subtitle: (a) => a.url, open: true },
+  tls_check: { icon: Lock, label: t("بررسی گواهی TLS"), subtitle: (a) => a.host, open: true },
+  nsin_edge_ranges: { icon: Network, label: t("رنج‌های لبهٔ NSIN") },
+  nsin_domains: { icon: Cloud, label: t("دامنه‌های NSIN"), subtitle: (a) => a.search },
+  nsin_domain: { icon: Globe, label: t("جزئیات دامنهٔ NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_dns_records: { icon: Globe, label: t("رکوردهای DNS انسین"), subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
+  nsin_dns_create: { icon: Globe, label: t("ساخت رکورد NSIN"), subtitle: (a) => [a.domain, a.type, a.name].filter(Boolean).join(" / "), open: true },
+  nsin_dns_update: { icon: Globe, label: t("ویرایش رکورد NSIN"), subtitle: (a) => [a.domain, a.recordId].filter(Boolean).join(" #"), open: true },
+  nsin_dns_delete: { icon: Globe, label: t("حذف رکورد NSIN"), subtitle: (a) => [a.domain, a.recordId].filter(Boolean).join(" #"), open: true },
+  nsin_ssl_status: { icon: Lock, label: t("وضعیت SSL انسین"), subtitle: (a) => a.domain, open: true },
+  nsin_ssl_issue: { icon: Lock, label: t("صدور گواهی NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_check_nameservers: { icon: Network, label: t("چک نیم‌سرور NSIN"), subtitle: (a) => a.domain },
+  nsin_developer_mode: { icon: Cloud, label: t("حالت توسعه‌دهنده NSIN"), subtitle: (a) => `${a.domain} · ${a.enabled ? t("روشن") : t("خاموش")}`, open: true },
+  nsin_cache_stats: { icon: Cloud, label: t("آمار کش NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_cache_keys: { icon: Cloud, label: t("کلیدهای کش NSIN"), subtitle: (a) => [a.domain, a.path].filter(Boolean).join(" · ") },
+  nsin_cache_purge: { icon: Cloud, label: t("پاک‌کردن کل کش NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_cache_purge_path: { icon: Cloud, label: t("پاک‌کردن مسیر کش NSIN"), subtitle: (a) => [a.domain, a.path].filter(Boolean).join(" · "), open: true },
+  nsin_rules: { icon: FolderTree, label: t("قوانین لبهٔ NSIN"), subtitle: (a) => [a.domain, a.kind].filter(Boolean).join(" / "), open: true },
+  nsin_rule_toggle: { icon: FolderTree, label: t("سوییچ قانون NSIN"), subtitle: (a) => [a.domain, a.kind, a.ruleId].filter(Boolean).join(" / "), open: true },
+  nsin_analytics_summary: { icon: Network, label: t("خلاصهٔ ترافیک NSIN"), subtitle: (a) => [a.domain, a.period].filter(Boolean).join(" · "), open: true },
+  nsin_top_uris: { icon: Network, label: t("URIهای پربازدید NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_request_logs: { icon: FileText, label: t("لاگ درخواست NSIN"), subtitle: (a) => a.domain },
+  nsin_waf_logs: { icon: Lock, label: t("لاگ WAF انسین"), subtitle: (a) => a.domain },
+  nsin_analytics_query: { icon: FileText, label: t("کوئری آنالیتیکس NSIN"), open: true },
+  nsin_uptime_live: { icon: Network, label: t("آپ‌تایم زندهٔ NSIN"), subtitle: (a) => a.domain, open: true },
+  nsin_uptime_incidents: { icon: Network, label: t("قطع‌های NSIN"), subtitle: (a) => a.domain },
+  nsin_recommendations: { icon: FileText, label: t("پیشنهادهای NSIN"), subtitle: (a) => a.domain, open: true },
+  ask_agent: { icon: Workflow, label: t("درخواست از ایجنت همتا"), subtitle: (a) => a.agent, open: true },
+  task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description, open: false },
+  knowledge_write: { icon: FileText, label: t("یادداشت دانش"), subtitle: (a) => a.title, open: true },
+  knowledge_list: { icon: FolderTree, label: t("فهرست دانش"), subtitle: (a) => a.agent },
+  jobs_list: { icon: FolderTree, label: t("فهرست جاب‌ها") },
+  jobs_create: { icon: FolderTree, label: t("ساخت جاب"), subtitle: (a) => a.name },
+  jobs_update: { icon: FolderTree, label: t("ویرایش جاب"), subtitle: (a) => a.name || a.id },
+  jobs_delete: { icon: FolderTree, label: t("حذف جاب"), subtitle: (a) => a.id },
+  jobs_run: { icon: FolderTree, label: t("اجرای جاب"), subtitle: (a) => a.id },
 };
 
 export function ToolCard(props) {
@@ -132,10 +138,10 @@ function PeerCard({ args = {}, result, isError, status }) {
     ? children.find((child) => child.agent === args.agent && child.runStatus === "running") || null
     : null;
   const headline = running
-    ? `${meta.label} در حال انجام ${taskLine || "درخواست"}…`
+    ? t("{agent} در حال انجام {task}…", { agent: meta.label, task: taskLine || t("درخواست") })
     : isError
-      ? `${meta.label} · خطا`
-      : `${meta.label} · انجام شد`;
+      ? t("{agent} · خطا", { agent: meta.label })
+      : t("{agent} · انجام شد", { agent: meta.label });
 
   return (
     <div
@@ -167,10 +173,10 @@ function PeerCard({ args = {}, result, isError, status }) {
               onClick={(e) => { e.stopPropagation(); navigate(liveChild.id); }}
               className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium hover:bg-muted"
               style={{ borderColor: `${meta.color}55` }}
-              title="باز کردن چت این ایجنت (زنده)"
+              title={t("باز کردن چت این ایجنت (زنده)")}
             >
               <ExternalLink className="size-3" />
-              دیدن چت
+              {t("دیدن چت")}
             </button>
           ) : null}
           {!running && envelope?.chatRef ? (
@@ -179,10 +185,10 @@ function PeerCard({ args = {}, result, isError, status }) {
               onClick={(e) => { e.stopPropagation(); navigate(envelope.chatRef); }}
               className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium hover:bg-muted"
               style={{ borderColor: `${meta.color}55` }}
-              title="باز کردن چت این ایجنت"
+              title={t("باز کردن چت این ایجنت")}
             >
               <ExternalLink className="size-3" />
-              چت
+              {t("چت")}
             </button>
           ) : null}
           {running ? (
@@ -245,7 +251,7 @@ function PeerFacts({ facts, color }) {
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
       >
-        <span>{facts.length.toLocaleString("fa-IR")} خروجی ابزار</span>
+        <span>{t("{n} خروجی ابزار", { n: num(facts.length) })}</span>
         <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }} className="ms-auto flex">
           <ChevronDown className="size-3.5" />
         </motion.span>
@@ -310,7 +316,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
   const [open, setOpen] = useState(false);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState(null);
-  const description = String(args.description || "").trim() || "زیرایجنت";
+  const description = String(args.description || "").trim() || t("زیرایجنت");
   const steps = Array.isArray(result?.conversationSteps) ? result.conversationSteps : [];
   const summary = taskFinalText(steps);
   const hasBody = Boolean(summary || steps.length || isError);
@@ -325,7 +331,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
       const { chat } = await api(`/api/chats/${parentId}/tasks`, { method: "POST", body: { callId } });
       navigate(chat.id);
     } catch (err) {
-      setError(err.message || "باز نشد");
+      setError(err.message || t("باز نشد"));
     } finally {
       setOpening(false);
     }
@@ -343,13 +349,13 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
           <Workflow className={`mt-0.5 size-4 shrink-0 ${running ? "animate-pulse text-primary" : "text-muted-foreground"}`} />
           <div className="min-w-0 flex-1 space-y-0.5">
             <p className={`font-medium leading-snug ${running ? "shimmer" : ""}`} dir="auto">
-              {running ? `زیرایجنت در حال انجام ${description}…` : `زیرایجنت · ${description}`}
+              {running ? t("زیرایجنت در حال انجام {task}…", { task: description }) : t("زیرایجنت · {task}", { task: description })}
             </p>
             {!running && steps.length ? (
               <p className="text-xs text-muted-foreground">
-                {toolCount ? `${toolCount.toLocaleString("fa-IR")} ابزار` : null}
+                {toolCount ? t("{n} ابزار", { n: num(toolCount) }) : null}
                 {toolCount && result?.durationMs ? " · " : null}
-                {result?.durationMs ? `${Math.max(1, Math.round(result.durationMs / 1000)).toLocaleString("fa-IR")}ث` : null}
+                {result?.durationMs ? t("{n}ث", { n: num(Math.max(1, Math.round(result.durationMs / 1000))) }) : null}
               </p>
             ) : null}
           </div>
@@ -361,15 +367,15 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
               onClick={openSubchat}
               disabled={opening}
               className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium hover:bg-muted"
-              title="باز کردن ساب‌چت"
+              title={t("باز کردن ساب‌چت")}
             >
               {opening ? <Loader2 className="size-3 animate-spin" /> : <ExternalLink className="size-3" />}
-              ساب‌چت
+              {t("ساب‌چت")}
             </button>
           ) : null}
           {running ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : isError ? <X className="size-4 text-bad" /> : <Check className="size-4 text-ok" />}
           {!running && hasBody ? (
-            <button type="button" onClick={() => setOpen(!open)} className="rounded p-0.5 hover:bg-muted" aria-label="جزئیات">
+            <button type="button" onClick={() => setOpen(!open)} className="rounded p-0.5 hover:bg-muted" aria-label={t("جزئیات")}>
               <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }} className="flex">
                 <ChevronDown className="size-4 text-muted-foreground" />
               </motion.span>
@@ -389,7 +395,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
             className="overflow-hidden"
           >
             <div className="space-y-3 border-t px-3 py-2.5 text-sm">
-              {summary ? <PeerMarkdown text={summary} /> : <p className="text-xs text-muted-foreground">خلاصه‌ای نبود؛ ساب‌چت را باز کن.</p>}
+              {summary ? <PeerMarkdown text={summary} /> : <p className="text-xs text-muted-foreground">{t("خلاصه‌ای نبود؛ ساب‌چت را باز کن.")}</p>}
             </div>
           </motion.div>
         ) : null}
@@ -430,7 +436,7 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
           {running ? (
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           ) : result?.cancelled ? (
-            <span className="text-xs text-muted-foreground">متوقف شد</span>
+            <span className="text-xs text-muted-foreground">{t("متوقف شد")}</span>
           ) : isError ? (
             <X className="size-4 text-bad" />
           ) : (
@@ -463,7 +469,7 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
 
 export function SourceBadge({ source, attempts }) {
   const emergency = String(source).startsWith("emergency");
-  const label = String(source).startsWith("routeros") ? "میکروتیک" : String(source).startsWith("public-api") ? "API عمومی" : String(source).startsWith("s3 ") ? "S3" : String(source).startsWith("grafana ") ? "Grafana" : String(source).split(" ")[0];
+  const label = String(source).startsWith("routeros") ? t("میکروتیک") : String(source).startsWith("public-api") ? t("API عمومی") : String(source).startsWith("s3 ") ? "S3" : String(source).startsWith("grafana ") ? "Grafana" : String(source).split(" ")[0];
   const failed = (attempts || []).filter((a) => !a.ok);
   const title = [source, ...failed.map((a) => `${a.path}: ${a.error}`)].join("\n");
   return (
@@ -474,7 +480,7 @@ export function SourceBadge({ source, attempts }) {
       }`}
     >
       {emergency ? <ShieldAlert className="size-3" /> : null}
-      {emergency ? "مسیر اضطراری" : label}
+      {emergency ? t("مسیر اضطراری") : label}
     </span>
   );
 }
@@ -489,7 +495,7 @@ function ToolBody({ toolName, args, result, isError }) {
     case "edit":
       return result?.diffString ? <Diff text={result.diffString} /> : <Json value={result} />;
     case "read":
-      return <Code text={result?.content} footer={result?.totalLines ? `${result.totalLines} خط` : null} />;
+      return <Code text={result?.content} footer={result?.totalLines ? t("{n} خط", { n: num(result.totalLines) }) : null} />;
     case "updateTodos":
     case "readTodos":
       return <Todos todos={result?.todos || args.todos || []} />;
@@ -502,13 +508,13 @@ function ToolBody({ toolName, args, result, isError }) {
     case "kube_logs":
       return <Code text={result?.logs} />;
     case "kube_get":
-      return <Table rows={result?.items} footer={result?.truncated ? `${result.items.length} از ${result.total}` : `${result?.total ?? 0} مورد`} />;
+      return <Table rows={result?.items} footer={result?.truncated ? t("{shown} از {total}", { shown: num(result.items.length), total: num(result.total) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
     case "kube_secret":
       return <SecretBody data={result?.data} note={`${result?.namespace}/${result?.name}`} />;
     case "infisical_get":
       return <SecretBody data={result?.value != null ? { [args.name || "value"]: result.value } : {}} note={result?.path} />;
     case "gitlab_projects":
-      return <Table rows={(result?.projects || []).map((p) => ({ path: p.path, branch: p.defaultBranch }))} columns={["path", "branch"]} footer={`${result?.projects?.length ?? 0} پروژه`} />;
+      return <Table rows={(result?.projects || []).map((p) => ({ path: p.path, branch: p.defaultBranch }))} columns={["path", "branch"]} footer={t("{n} پروژه", { n: num(result?.projects?.length ?? 0) })} />;
     case "gitlab_search":
       return result?.scope === "projects"
         ? <List items={(result?.results || []).map((r) => r.path)} total={result?.results?.length} />
@@ -516,7 +522,7 @@ function ToolBody({ toolName, args, result, isError }) {
           <div className="space-y-2">
             {(result?.results || []).map((r, i) => (
               <div key={i} className="rounded-md border bg-muted/40 p-2">
-                <p className="ltr text-xs text-muted-foreground">پروژه {r.project} · {r.path}{r.startline ? `:${r.startline}` : ""}</p>
+                <p className="ltr text-xs text-muted-foreground">{t("پروژه {project}", { project: r.project })} · {r.path}{r.startline ? `:${r.startline}` : ""}</p>
                 <pre className="ltr mt-1 overflow-x-auto whitespace-pre-wrap break-words text-xs">{r.line}</pre>
               </div>
             ))}
@@ -526,7 +532,7 @@ function ToolBody({ toolName, args, result, isError }) {
     case "gitlab_file":
       return <Code text={result?.content} footer={`${result?.path} @ ${result?.ref}`} />;
     case "arvan_dns_records":
-      return <Table rows={result?.records} columns={["type", "name", "value", "ttl", "cloud"]} footer={`${result?.total ?? 0} رکورد`} />;
+      return <Table rows={result?.records} columns={["type", "name", "value", "ttl", "cloud"]} footer={t("{n} رکورد", { n: num(result?.total ?? 0) })} />;
     case "arvan_dns_export":
       return <Code text={result?.bind} footer={result?.domain} />;
     case "dns_lookup":
@@ -547,9 +553,9 @@ function ToolBody({ toolName, args, result, isError }) {
           {result?.error ? <p className="ltr text-bad">{result.error}</p> : null}
           <div className="flex flex-wrap gap-2">
             <Stat label="CN" value={result?.subject?.CN} />
-            <Stat label="صادرکننده" value={result?.issuer?.O || result?.issuer?.CN} />
-            <Stat label="روز مانده" value={result?.daysLeft} tone={result?.daysLeft != null && result.daysLeft < 14 ? "bad" : "ok"} />
-            <Stat label="پروتکل" value={result?.protocol} />
+            <Stat label={t("صادرکننده")} value={result?.issuer?.O || result?.issuer?.CN} />
+            <Stat label={t("روز مانده")} value={result?.daysLeft} tone={result?.daysLeft != null && result.daysLeft < 14 ? "bad" : "ok"} />
+            <Stat label={t("پروتکل")} value={result?.protocol} />
           </div>
           {result?.altNames?.length ? <List items={result.altNames} total={result.altNames.length} /> : null}
         </div>
@@ -557,21 +563,21 @@ function ToolBody({ toolName, args, result, isError }) {
 
 
     case "infisical_projects":
-      return <Table rows={result?.projects} columns={["name", "id"]} footer={`${result?.projects?.length ?? 0} پروژه`} />;
+      return <Table rows={result?.projects} columns={["name", "id"]} footer={t("{n} پروژه", { n: num(result?.projects?.length ?? 0) })} />;
     case "infisical_list":
       return <List items={[...(result?.folders || []).map((f) => `📁 ${f}`), ...(result?.secrets || [])]} total={(result?.folders?.length || 0) + (result?.secrets?.length || 0)} />;
     case "infisical_upsert":
       return (
         <div className="space-y-1 text-sm">
-          <p>{result?.action === "created" ? "ساخته شد" : "به‌روزرسانی شد"}: <code className="ltr">{result?.name}</code> در <span className="ltr">{result?.project}{result?.path}</span></p>
-          {result?.consoleUrl ? <a href={result.consoleUrl} target="_blank" rel="noreferrer" className="text-primary underline">باز کردن در Infisical</a> : null}
+          <p>{result?.action === "created" ? t("ساخته شد") : t("به‌روزرسانی شد")}: <code className="ltr">{result?.name}</code> {t("در")} <span className="ltr">{result?.project}{result?.path}</span></p>
+          {result?.consoleUrl ? <a href={result.consoleUrl} target="_blank" rel="noreferrer" className="text-primary underline">{t("باز کردن در Infisical")}</a> : null}
           {result?.note ? <p className="text-xs text-muted-foreground">{result.note}</p> : null}
         </div>
       );
     case "debug_exec":
       return <Code text={[result?.stdout, result?.stderr].filter(Boolean).join("\n")} />;
     case "mikrotik_print":
-      return <Table rows={result?.items} footer={`${result?.total ?? 0} مورد${result?.truncated ? " (بریده شد)" : ""}`} />;
+      return <Table rows={result?.items} footer={result?.truncated ? t("{n} مورد (بریده شد)", { n: num(result?.total ?? 0) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
     case "mikrotik_ping":
       return <p className="ltr font-mono">{result?.received}/{result?.sent} {result?.times?.length ? `· ${result.times.join(" ")}` : ""}</p>;
     case "pg_query":
@@ -581,12 +587,12 @@ function ToolBody({ toolName, args, result, isError }) {
           <Table
             rows={result?.rows}
             columns={result?.columns?.length ? result.columns.slice(0, 12) : undefined}
-            footer={`${result?.rowCount ?? 0} ردیف${result?.truncated ? " (۵۰۰ ردیف اول)" : ""} · ${result?.mode === "read-write" ? "خواندن‌ونوشتن" : "فقط‌خواندنی"} · ${result?.database} · ${result?.ms ?? ""}ms`}
+            footer={`${result?.truncated ? t("{n} ردیف (۵۰۰ ردیف اول)", { n: num(result?.rowCount ?? 0) }) : t("{n} ردیف", { n: num(result?.rowCount ?? 0) })} · ${result?.mode === "read-write" ? t("خواندن‌ونوشتن") : t("فقط‌خواندنی")} · ${result?.database} · ${result?.ms ?? ""}ms`}
           />
         </div>
       );
     case "telegram_dialogs":
-      return <Table rows={result?.dialogs} columns={["title", "type", "unread", "lastAt"]} footer={`${result?.dialogs?.length ?? 0} گفتگو`} />;
+      return <Table rows={result?.dialogs} columns={["title", "type", "unread", "lastAt"]} footer={t("{n} گفتگو", { n: num(result?.dialogs?.length ?? 0) })} />;
     case "telegram_read":
       return (
         <ul className="scrollbar-thin max-h-96 space-y-2 overflow-y-auto">
@@ -599,15 +605,15 @@ function ToolBody({ toolName, args, result, isError }) {
         </ul>
       );
     case "telegram_send":
-      return <p className="text-sm">{result?.sent ? `✓ فرستاده شد به «${result.chat}»` : `فرستاده نشد${result?.reason ? ` (${result.reason})` : ""}`}</p>;
+      return <p className="text-sm">{result?.sent ? t("✓ فرستاده شد به «{chat}»", { chat: result.chat }) : result?.reason ? t("فرستاده نشد ({reason})", { reason: result.reason }) : t("فرستاده نشد")}</p>;
     case "grafana_search":
-      return <Table rows={result?.dashboards} columns={["title", "folder", "uid"]} footer={`${result?.dashboards?.length ?? 0} داشبورد`} />;
+      return <Table rows={result?.dashboards} columns={["title", "folder", "uid"]} footer={t("{n} داشبورد", { n: num(result?.dashboards?.length ?? 0) })} />;
     case "grafana_dashboard":
       return (
         <Table
           rows={(result?.panels || []).map((p) => ({ id: p.id, title: p.title, type: p.type, query: p.targets?.[0]?.query?.replace(/\s+/g, " ").slice(0, 80) || "" }))}
           columns={["id", "title", "type", "query"]}
-          footer={`${result?.title || ""} · ${result?.panels?.length ?? 0} پنل`}
+          footer={`${result?.title || ""} · ${t("{n} پنل", { n: num(result?.panels?.length ?? 0) })}`}
         />
       );
     case "grafana_panel_query":
@@ -618,7 +624,7 @@ function ToolBody({ toolName, args, result, isError }) {
         <Table
           rows={(result?.objects || []).map((o) => ({ key: o.key, size: o.size, lastModified: o.lastModified }))}
           columns={["key", "size", "lastModified"]}
-          footer={`${result?.scanned ?? 0} کلید خوانده شد${result?.complete ? "" : " — کل باکت نه؛ ترتیب فقط روی همین‌ها"}`}
+          footer={result?.complete ? t("{n} کلید خوانده شد", { n: num(result?.scanned ?? 0) }) : t("{n} کلید خوانده شد — کل باکت نه؛ ترتیب فقط روی همین‌ها", { n: num(result?.scanned ?? 0) })}
         />
       );
     case "s3_get":
@@ -628,7 +634,7 @@ function ToolBody({ toolName, args, result, isError }) {
     default:
       return (
         <details open>
-          <summary className="cursor-pointer text-xs text-muted-foreground">جزئیات</summary>
+          <summary className="cursor-pointer text-xs text-muted-foreground">{t("جزئیات")}</summary>
           <Json value={{ args, result }} />
         </details>
       );
@@ -645,7 +651,7 @@ function GrafanaResults({ value }) {
         r.error ? (
           <p key={i} className="ltr text-bad">{r.refId}: {r.error}</p>
         ) : (
-          <Table key={i} rows={r.rows} footer={[r.name || r.refId, `${r.rowCount} ردیف`, r.truncated].filter(Boolean).join(" · ")} />
+          <Table key={i} rows={r.rows} footer={[r.name || r.refId, t("{n} ردیف", { n: num(r.rowCount) }), r.truncated].filter(Boolean).join(" · ")} />
         ),
       )}
     </div>
@@ -655,7 +661,7 @@ function GrafanaResults({ value }) {
 // Secret values: hidden behind a reveal so they are not shoulder-surfed; each can be copied.
 function SecretBody({ data, note }) {
   const entries = Object.entries(data || {});
-  if (!entries.length) return <p className="text-sm text-muted-foreground">مقداری برنگشت.</p>;
+  if (!entries.length) return <p className="text-sm text-muted-foreground">{t("مقداری برنگشت.")}</p>;
   return (
     <div className="space-y-1.5">
       {note ? <p className="ltr text-xs text-muted-foreground">{note}</p> : null}
@@ -671,10 +677,10 @@ function SecretRow({ name, value }) {
     <div className="flex items-center gap-2 rounded-md border px-2 py-1.5">
       <span className="ltr shrink-0 font-mono text-xs text-muted-foreground">{name}</span>
       <code className="ltr min-w-0 flex-1 truncate font-mono text-xs">{shown ? value : "•".repeat(Math.min(value.length, 16))}</code>
-      <button type="button" onClick={() => setShown(!shown)} className="press shrink-0 text-muted-foreground hover:text-foreground" aria-label="نمایش">
+      <button type="button" onClick={() => setShown(!shown)} className="press shrink-0 text-muted-foreground hover:text-foreground" aria-label={t("نمایش")}>
         {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
       </button>
-      <button type="button" onClick={() => navigator.clipboard?.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {})} className="press shrink-0 text-muted-foreground hover:text-foreground" aria-label="کپی">
+      <button type="button" onClick={() => navigator.clipboard?.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {})} className="press shrink-0 text-muted-foreground hover:text-foreground" aria-label={t("کپی")}>
         {copied ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
       </button>
     </div>
@@ -729,13 +735,13 @@ function ErrorBody({ result }) {
   const attempts = result?.attempts || [];
   return (
     <div className="space-y-2">
-      <p className="ltr text-bad">{result?.error || result?.text || "خطا"}</p>
+      <p className="ltr text-bad">{result?.error || result?.text || t("خطا")}</p>
       {attempts.length ? (
         <ul className="space-y-1 text-xs">
           {attempts.map((a, i) => (
             <li key={i} className="flex items-center gap-2">
               {a.ok ? <Check className="size-3 text-ok" /> : <X className="size-3 text-bad" />}
-              <span>{a.path === "public-api" ? "API عمومی" : "مسیر اضطراری SSH"}</span>
+              <span>{a.path === "public-api" ? t("API عمومی") : t("مسیر اضطراری SSH")}</span>
               {a.error ? <span className="ltr truncate text-muted-foreground">{a.error}</span> : null}
             </li>
           ))}
@@ -751,18 +757,18 @@ function KubeStatus({ value }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
-        <Stat label="کل پادها" value={value.counts?.total} />
+        <Stat label={t("کل پادها")} value={value.counts?.total} />
         {phases.map(([phase, count]) => (
           <Stat key={phase} label={phase} value={count} tone={phase === "Running" || phase === "Succeeded" ? "ok" : "bad"} />
         ))}
       </div>
       {value.pods?.length ? (
         <>
-          <p className="text-xs text-muted-foreground">{value.scope === "cluster" ? "پادهایی که نیاز به توجه دارند" : "پادها"}</p>
+          <p className="text-xs text-muted-foreground">{value.scope === "cluster" ? t("پادهایی که نیاز به توجه دارند") : t("پادها")}</p>
           <Table rows={value.pods} columns={["namespace", "name", "phase", "reason", "ready", "restarts", "node"]} />
         </>
       ) : value.scope === "cluster" ? (
-        <p className="text-ok">پاد ناسالمی دیده نشد.</p>
+        <p className="text-ok">{t("پاد ناسالمی دیده نشد.")}</p>
       ) : null}
       {value.cnpg?.length ? <Table rows={value.cnpg} /> : null}
     </div>
@@ -841,7 +847,7 @@ function Diff({ text }) {
 function Code({ text, footer }) {
   return (
     <div>
-      <pre className="ltr scrollbar-thin max-h-96 overflow-auto whitespace-pre rounded-md bg-muted p-2 font-mono text-xs leading-5">{text || "(خالی)"}</pre>
+      <pre className="ltr scrollbar-thin max-h-96 overflow-auto whitespace-pre rounded-md bg-muted p-2 font-mono text-xs leading-5">{text || t("(خالی)")}</pre>
       {footer ? <p className="mt-1 text-xs text-muted-foreground">{footer}</p> : null}
     </div>
   );
@@ -853,20 +859,20 @@ function List({ items = [], total }) {
       <ul className="ltr scrollbar-thin max-h-72 overflow-auto font-mono text-xs leading-5">
         {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
-      {total ? <p className="mt-1 text-xs text-muted-foreground">{total} فایل</p> : null}
+      {total ? <p className="mt-1 text-xs text-muted-foreground">{t("{n} فایل", { n: num(total) })}</p> : null}
     </div>
   );
 }
 
 function Table({ rows = [], columns, footer }) {
-  if (!rows.length) return <p className="text-muted-foreground">موردی نیست.</p>;
+  if (!rows.length) return <p className="text-muted-foreground">{t("موردی نیست.")}</p>;
   const keys = columns || [...new Set(rows.flatMap((row) => Object.keys(row)))].slice(0, 8);
   return (
     <div>
       <div className="ltr scrollbar-thin max-h-96 overflow-auto rounded-md border">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-muted">
-            <tr>{keys.map((k) => <th key={k} className="px-2 py-1 text-left font-medium whitespace-nowrap">{k}</th>)}</tr>
+            <tr>{keys.map((k) => <th key={k} className="px-2 py-1 text-start font-medium whitespace-nowrap">{k}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((row, i) => (

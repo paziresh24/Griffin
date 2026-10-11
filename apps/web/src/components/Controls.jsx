@@ -6,15 +6,16 @@ import { AnimatePresence, motion } from "motion/react";
 import { Check, ChevronsUpDown, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
 import { usePolling } from "../api.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
+import { t } from "../i18n.js";
 
 const MODES = [
-  { value: "agent", label: "ایجنت", icon: InfinityIcon, hint: "خودش کار را انجام می‌دهد: ابزارها را صدا می‌زند و نتیجه می‌آورد" },
-  { value: "plan", label: "برنامه‌ریزی", icon: ListTree, hint: "اول نقشهٔ کار را می‌نویسد و بدون اجرای تغییر منتظر تأیید می‌ماند" },
+  { value: "agent", label: t("ایجنت"), icon: InfinityIcon, hint: t("خودش کار را انجام می‌دهد: ابزارها را صدا می‌زند و نتیجه می‌آورد") },
+  { value: "plan", label: t("برنامه‌ریزی"), icon: ListTree, hint: t("اول نقشهٔ کار را می‌نویسد و بدون اجرای تغییر منتظر تأیید می‌ماند") },
 ];
 
 const PROVIDERS = [
-  { value: "cursor", label: "Cursor", hint: "ایجنت Cursor (مدل‌های حساب Cursor)" },
-  { value: "claude", label: "Claude", hint: "Claude Agent SDK مستقیم از Anthropic" },
+  { value: "cursor", label: "Cursor", hint: t("ایجنت Cursor (مدل‌های حساب Cursor)") },
+  { value: "claude", label: "Claude", hint: t("Claude Agent SDK مستقیم از Anthropic") },
 ];
 
 export function AgentGlyph({ id, className = "size-8" }) {
@@ -40,7 +41,7 @@ export function ModeToggle({ mode, onChange, compact = false, icons = false }) {
     <Tooltip.Provider delayDuration={400}>
       <div
         role="radiogroup"
-        aria-label="حالت"
+        aria-label={t("حالت")}
         className={`relative flex shrink-0 rounded-full bg-muted p-0.5 ${compact || icons ? "text-[11px]" : "text-xs"}`}
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget)) setExpanded(false);
@@ -119,7 +120,7 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
   const current = agents.find((a) => a.id === agent) || agents.find((a) => a.id === "griffin");
   const id = current?.id || agent || "griffin";
   const meta = agentMeta(id);
-  const label = current?.label || meta.label;
+  const label = t(current?.label || meta.label);
   const main = agents.filter((a) => a.id === "griffin");
   const specialists = agents.filter((a) => a.id !== "griffin");
 
@@ -140,7 +141,7 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
         className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-sm data-[selected=true]:bg-muted"
       >
         <AgentGlyph id={a.id} className="size-8" />
-        <span className="min-w-0 flex-1 truncate text-start font-medium" dir="auto">{a.label}</span>
+        <span className="min-w-0 flex-1 truncate text-start font-medium" dir="auto">{t(a.label)}</span>
         {selected ? <Check className="size-4 shrink-0" style={{ color: m.color }} /> : null}
       </Command.Item>
     );
@@ -152,9 +153,9 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
         <button
           type="button"
           disabled={locked}
-          title={locked ? "تا پایان کار فعلی نمی‌شود ایجنت را عوض کرد" : "انتخاب ایجنت"}
+          title={locked ? t("تا پایان کار فعلی نمی‌شود ایجنت را عوض کرد") : t("انتخاب ایجنت")}
           className={`press flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl border bg-background px-3 text-start transition-colors hover:border-primary/50 data-[state=open]:border-primary/60 data-[state=open]:bg-accent/40 disabled:cursor-default disabled:opacity-80 ${className}`}
-          aria-label="ایجنت"
+          aria-label={t("ایجنت")}
           style={{ boxShadow: open ? `0 0 0 1px ${meta.color}44` : undefined }}
         >
           <AgentGlyph id={id} className="size-7" />
@@ -165,13 +166,13 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
       <Popover.Portal>
         <Popover.Content align="start" sideOffset={8} className="pop z-50 w-[min(22rem,calc(100vw-1.5rem))] overflow-hidden rounded-xl border bg-card shadow-xl">
           <Command loop className="flex flex-col">
-            <Command.Input autoFocus placeholder="جستجوی ایجنت…" className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
+            <Command.Input autoFocus placeholder={t("جستجوی ایجنت…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
             <Command.List className="scrollbar-thin max-h-80 overflow-y-auto p-1">
-              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">ایجنتی پیدا نشد</Command.Empty>
+              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">{t("ایجنتی پیدا نشد")}</Command.Empty>
               {main.map(row)}
               {specialists.length ? (
                 <>
-                  <div className="my-1 border-t px-2 pb-1 pt-2 text-[11px] text-muted-foreground" dir="auto">متخصص‌ها</div>
+                  <div className="my-1 border-t px-2 pb-1 pt-2 text-[11px] text-muted-foreground" dir="auto">{t("متخصص‌ها")}</div>
                   {specialists.map(row)}
                 </>
               ) : null}
@@ -194,7 +195,7 @@ export function ProviderPicker({ provider = "cursor", onChange, compact = false,
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={`موتور: ${label}`}
+          aria-label={t("موتور: {label}", { label })}
           title={label}
           className={`press flex h-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground ${
             icons
@@ -251,7 +252,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
   const models = data?.models || [];
   const [open, setOpen] = useState(false);
   const current = models.find((m) => m.id === model);
-  const label = model ? current?.name || model : "خودکار";
+  const label = model ? current?.name || model : t("خودکار");
   const showLabel = !icons || open;
 
   const pick = (id) => {
@@ -264,7 +265,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={`مدل: ${label}`}
+          aria-label={t("مدل: {label}", { label })}
           title={label}
           className={`press flex h-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground ${
             icons
@@ -288,10 +289,10 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
       <Popover.Portal>
         <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-72 overflow-hidden rounded-xl border bg-card shadow-xl">
           <Command loop className="flex flex-col">
-            <Command.Input autoFocus placeholder="جستجوی مدل…" className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
+            <Command.Input autoFocus placeholder={t("جستجوی مدل…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
             <Command.List className="scrollbar-thin max-h-80 overflow-y-auto p-1">
-              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">مدلی پیدا نشد</Command.Empty>
-              <ModelItem id="" name="خودکار" note="بهترین مدل به‌صورت خودکار انتخاب می‌شود" selected={!model} onSelect={pick} />
+              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">{t("مدلی پیدا نشد")}</Command.Empty>
+              <ModelItem id="" name={t("خودکار")} note={t("بهترین مدل به‌صورت خودکار انتخاب می‌شود")} selected={!model} onSelect={pick} />
               {models.filter((m) => m.id !== "default").map((m) => (
                 <ModelItem key={m.id} id={m.id} name={m.name} selected={model === m.id} onSelect={pick} />
               ))}
@@ -341,7 +342,7 @@ export function ThemeToggle({ theme, onChange }) {
     });
   };
   return (
-    <button type="button" onClick={toggle} className="press relative flex size-8 items-center justify-center overflow-hidden rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label={next === "dark" ? "تم تیره" : "تم روشن"}>
+    <button type="button" onClick={toggle} className="press relative flex size-8 items-center justify-center overflow-hidden rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label={next === "dark" ? t("تم تیره") : t("تم روشن")}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.span
           key={theme}

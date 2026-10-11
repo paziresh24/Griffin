@@ -1,0 +1,23 @@
+{
+ "گریفین": "Griffin",
+ "دستیار عمومی: مسئله را می‌فهمد، پلن می‌چیند و اگر ایجنت متخصصی هست کار را به او می‌سپارد": "General assistant: understands the problem, makes a plan, and hands work to a specialist agent when there is one",
+ "زمان‌بندی": "Schedule",
+ "فقط دستی": "Manual only",
+ "فقط وقتی خودت اجرا کنی": "Only when you run it",
+ "این جاب همین حالا در حال اجراست": "This job is already running",
+ "دستیار": "Assistant",
+ "نویسنده": "Writer",
+ "پژوهشگر": "Researcher",
+ "پلتفرم‌بان": "Platform",
+ "آروان‌بان": "ArvanCloud CDN",
+ "انسین‌بان": "NSIN CDN",
+ "دستیار شخصی: پیام‌ها، یادآوری‌ها، گزارش‌های زمان‌بندی‌شده و یادداشت‌ها": "Personal assistant: messages, reminders, scheduled reports and notes",
+ "نوشتن و ویرایش: پیش‌نویس، خلاصه، ترجمه و بازنویسی با لحن خواسته‌شده": "Writing and editing: drafts, summaries, translations and rewrites in the tone you ask for",
+ "جست‌وجو و جمع‌بندی: می‌خواند، مقایسه می‌کند و خلاصهٔ قابل‌استناد می‌دهد": "Research and synthesis: reads, compares and gives a summary with sources",
+ "زیرساخت: کلاستر، دیتابیس، گیت‌لب، گرافانا، ذخیره‌سازی، روتر": "Infrastructure: clusters, databases, GitLab, Grafana, storage, routers",
+ "NSIN CDN: دامنه، DNS، SSL، کش، قوانین لبه، آنالیتیکس، آپ‌تایم": "NSIN CDN: domains, DNS, SSL, cache, edge rules, analytics, uptime",
+ "CDN آروان: دامنه، DNS، کش، purge": "ArvanCloud CDN: domains, DNS, cache, purge",
+ "هر {n} روز": "Every {n} days",
+ "هر {n} ساعت": "Every {n} hours",
+ "هر {n} دقیقه": "Every {n} minutes"
+}

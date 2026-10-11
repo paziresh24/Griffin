@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, CircleHelp, Loader2, Send } from "lucide-react";
 import { api, useRoute } from "../api.js";
+import { t } from "../i18n.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
 // run continues. If the run is already over, the same answer is sent as a follow-up message.
@@ -51,13 +52,13 @@ export function AskCard({ args = {}, result, isError, status }) {
         </p>
       ) : sent ? (
         <p className="px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground">
-          {sent === "tool" ? "پاسخ رسید؛ ادامه می‌دهد…" : sent === "held" ? "پاسخ ثبت شد؛ همین که ایجنت به این سؤال برسد، ادامه می‌دهد." : "کار قبلاً تمام شده بود؛ پاسخ به‌عنوان پیام جدید فرستاده شد."}
+          {sent === "tool" ? t("پاسخ رسید؛ ادامه می‌دهد…") : sent === "held" ? t("پاسخ ثبت شد؛ همین که ایجنت به این سؤال برسد، ادامه می‌دهد.") : t("کار قبلاً تمام شده بود؛ پاسخ به‌عنوان پیام جدید فرستاده شد.")}
         </p>
       ) : (
         <div className="space-y-2 px-3 pb-3 pt-2">
           {!waiting ? (
             <p className="text-xs text-muted-foreground">
-              {result?.answered === false || isError ? "این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود." : null}
+              {result?.answered === false || isError ? t("این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود.") : null}
             </p>
           ) : null}
           {options.length ? (
@@ -93,7 +94,7 @@ export function AskCard({ args = {}, result, isError, status }) {
             <input
               value={text}
               onChange={(event) => setText(event.target.value)}
-              placeholder={options.length ? "توضیح یا گزینهٔ دیگر…" : "پاسخ…"}
+              placeholder={options.length ? t("توضیح یا گزینهٔ دیگر…") : t("پاسخ…")}
               dir="auto"
               className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             />
@@ -101,7 +102,7 @@ export function AskCard({ args = {}, result, isError, status }) {
               type="submit"
               disabled={sending || (!text.trim() && !selected.length)}
               className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground disabled:opacity-40"
-              aria-label="ارسال پاسخ"
+              aria-label={t("ارسال پاسخ")}
             >
               {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4 rtl:-scale-x-100" />}
             </button>

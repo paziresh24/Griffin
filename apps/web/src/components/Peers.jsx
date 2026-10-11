@@ -3,6 +3,7 @@ import { Switch } from "radix-ui";
 import { ArrowRight, Check, Copy, KeyRound, Loader2, Plus, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
+import { locale, num, t } from "../i18n.js";
 
 // External agents (MCP now, A2A later): who they are, their device tokens, what they may use,
 // what they asked for, and every gated (irreversible) call on record.
@@ -10,31 +11,31 @@ import { api, navigate } from "../api.js";
 const MCP_URL = `${window.location.origin}/mcp`;
 const input = "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary";
 
-const time = (iso) => (iso ? new Date(iso).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" }) : "—");
+const time = (iso) => (iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "—");
 const ago = (iso) => {
-  if (!iso) return "هرگز";
+  if (!iso) return t("هرگز");
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 90) return `${s} ثانیه پیش`;
-  if (s < 5400) return `${Math.round(s / 60)} دقیقه پیش`;
-  if (s < 172800) return `${Math.round(s / 3600)} ساعت پیش`;
-  return `${Math.round(s / 86400)} روز پیش`;
+  if (s < 90) return t("{n} ثانیه پیش", { n: num(s) });
+  if (s < 5400) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
+  if (s < 172800) return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
+  return t("{n} روز پیش", { n: num(Math.round(s / 86400)) });
 };
 
 const TASK_STATE = {
-  submitted: ["bg-muted-foreground", "در صف"],
-  working: ["bg-primary animate-pulse", "در حال کار"],
-  "input-required": ["bg-warn", "منتظر جواب"],
-  completed: ["bg-ok", "تمام"],
-  failed: ["bg-bad", "خطا"],
-  canceled: ["bg-muted-foreground", "لغو"],
-  rejected: ["bg-bad", "رد"],
+  submitted: ["bg-muted-foreground", t("در صف")],
+  working: ["bg-primary animate-pulse", t("در حال کار")],
+  "input-required": ["bg-warn", t("منتظر جواب")],
+  completed: ["bg-ok", t("تمام")],
+  failed: ["bg-bad", t("خطا")],
+  canceled: ["bg-muted-foreground", t("لغو")],
+  rejected: ["bg-bad", t("رد")],
 };
 
 const DECISION = {
-  approved: ["text-ok", "تأیید شد"],
-  denied: ["text-bad", "تأیید نشد"],
-  refused: ["text-warn", "رد (مسیر همتا)"],
-  blocked: ["text-bad", "مسدود (مخرب)"],
+  approved: ["text-ok", t("تأیید شد")],
+  denied: ["text-bad", t("تأیید نشد")],
+  refused: ["text-warn", t("رد (مسیر همتا)")],
+  blocked: ["text-bad", t("مسدود (مخرب)")],
 };
 
 export function PeersPage({ onBack }) {
@@ -60,16 +61,16 @@ export function PeersPage({ onBack }) {
     <div className="scrollbar-thin h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-4 sm:px-6">
         <div className="mb-4 flex items-center gap-2">
-          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label="بازگشت">
-            <ArrowRight className="size-4" />
+          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
+            <ArrowRight className="size-4 rtl-mirror" />
           </button>
-          <h1 className="text-lg font-semibold">همتاها</h1>
+          <h1 className="text-lg font-semibold">{t("همتاها")}</h1>
           <button type="button" onClick={() => setAdding((v) => !v)} className="press ms-auto flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:shadow">
-            <Plus className="size-4" /> همتای جدید
+            <Plus className="size-4" /> {t("همتای جدید")}
           </button>
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          ایجنت‌های همکاران از راه MCP (<span className="ltr font-mono text-xs">{MCP_URL}</span>) مستقیم با گریفین کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.
+          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با گریفین کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.").split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
         </p>
 
         {adding ? <NewPeer onDone={() => { setAdding(false); load(); }} /> : null}
@@ -81,10 +82,10 @@ export function PeersPage({ onBack }) {
             {users.map((user) => <PeerCard key={user.id} user={user} catalog={catalog} onChange={load} />)}
           </div>
         ) : (
-          <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">هنوز همتایی تعریف نشده.</p>
+          <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{t("هنوز همتایی تعریف نشده.")}</p>
         )}
 
-        <h2 className="mb-2 mt-8 flex items-center gap-1.5 text-sm font-semibold"><ShieldAlert className="size-4" /> کارهای برگشت‌ناپذیر (ممیزی)</h2>
+        <h2 className="mb-2 mt-8 flex items-center gap-1.5 text-sm font-semibold"><ShieldAlert className="size-4" /> {t("کارهای برگشت‌ناپذیر (ممیزی)")}</h2>
         {approvals.length ? (
           <div className="overflow-hidden rounded-xl border bg-card">
             {approvals.map((a) => {
@@ -93,15 +94,15 @@ export function PeersPage({ onBack }) {
                 <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs last:border-b-0">
                   <span className="text-muted-foreground">{time(a.at)}</span>
                   <span className="ltr font-mono">{a.tool}</span>
-                  <span className="text-muted-foreground">به درخواست {a.caller}</span>
+                  <span className="text-muted-foreground">{t("به درخواست {caller}", { caller: a.caller })}</span>
                   <span className={`ms-auto font-medium ${color}`}>{label}</span>
-                  {a.chat_id ? <button type="button" onClick={() => navigate(a.chat_id)} className="text-primary hover:underline">گفتگو</button> : null}
+                  {a.chat_id ? <button type="button" onClick={() => navigate(a.chat_id)} className="text-primary hover:underline">{t("گفتگو")}</button> : null}
                 </div>
               );
             })}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">موردی ثبت نشده.</p>
+          <p className="text-xs text-muted-foreground">{t("موردی ثبت نشده.")}</p>
         )}
       </div>
     </div>
@@ -116,7 +117,7 @@ function NewPeer({ onDone }) {
     setBusy(true);
     try {
       await api("/api/peers", { method: "POST", body: form });
-      toast.success("همتا ساخته شد؛ سهمیهٔ پیش‌فرضِ فقط‌خواندنی گرفت.");
+      toast.success(t("همتا ساخته شد؛ سهمیهٔ پیش‌فرضِ فقط‌خواندنی گرفت."));
       onDone();
     } catch (e) {
       toast.error(e.message);
@@ -126,9 +127,9 @@ function NewPeer({ onDone }) {
   };
   return (
     <form onSubmit={submit} className="mb-4 grid gap-2 rounded-xl border bg-card p-3 sm:grid-cols-[1fr_1fr_auto]">
-      <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} required placeholder="شناسه (مثل ali-ahmadi)" className={`ltr ${input}`} />
-      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="نام (مثل آقای رضایی)" className={input} />
-      <button type="submit" disabled={busy} className="press rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">ساخت</button>
+      <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} required placeholder={t("شناسه (مثل ali-ahmadi)")} className={`ltr ${input}`} />
+      <input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder={t("نام (مثل آقای رضایی)")} className={input} />
+      <button type="submit" disabled={busy} className="press rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{t("ساخت")}</button>
     </form>
   );
 }
@@ -161,13 +162,13 @@ function PeerCard({ user, catalog, onChange }) {
           onCheckedChange={toggle}
           dir="ltr"
           className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-          aria-label="فعال"
+          aria-label={t("فعال")}
         >
           <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
         </Switch.Root>
       </div>
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">دستگاه‌ها ({active.length} فعال)</h3>
+      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("دستگاه‌ها ({n} فعال)", { n: num(active.length) })}</h3>
       <div className="space-y-1">
         {user.clients.map((c) => (
           <ClientRow key={c.id} userId={user.id} client={c} onChange={onChange} />
@@ -175,12 +176,12 @@ function PeerCard({ user, catalog, onChange }) {
       </div>
       {issued ? <IssuedToken token={issued} onClose={() => setIssued(null)} /> : <NewClient userId={user.id} onIssued={(t) => { setIssued(t); onChange(); }} />}
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">سهمیهٔ ابزار (به ازای هر ایجنت)</h3>
+      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("سهمیهٔ ابزار (به ازای هر ایجنت)")}</h3>
       <div className="space-y-2">
         {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} onChange={onChange} />)}
       </div>
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">کارهای اخیر</h3>
+      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("کارهای اخیر")}</h3>
       {tasks === null ? (
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
       ) : tasks.length ? (
@@ -197,10 +198,10 @@ function PeerCard({ user, catalog, onChange }) {
           })}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">هنوز کاری نخواسته.</p>
+        <p className="text-xs text-muted-foreground">{t("هنوز کاری نخواسته.")}</p>
       )}
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">تماس‌های ایجنتش (MCP)</h3>
+      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("تماس‌های ایجنتش (MCP)")}</h3>
       {calls === null ? (
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
       ) : calls.length ? (
@@ -217,12 +218,12 @@ function PeerCard({ user, catalog, onChange }) {
           ))}
           {calls.every((c) => c.method !== "tools/call") ? (
             <p className="rounded-lg bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">
-              ایجنتش فقط وصل شده و فهرست ابزار گرفته — هیچ‌وقت ابزاری صدا نزده. یعنی مشکل سمت کلاینت اوست، نه گریفین.
+              {t("ایجنتش فقط وصل شده و فهرست ابزار گرفته — هیچ‌وقت ابزاری صدا نزده. یعنی مشکل سمت کلاینت اوست، نه گریفین.")}
             </p>
           ) : null}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">هنوز تماسی نگرفته.</p>
+        <p className="text-xs text-muted-foreground">{t("هنوز تماسی نگرفته.")}</p>
       )}
     </section>
   );
@@ -232,7 +233,7 @@ function ClientRow({ userId, client, onChange }) {
   const revoked = Boolean(client.revoked_at);
   const expired = client.expires_at && new Date(client.expires_at) < new Date();
   const revoke = async () => {
-    if (!window.confirm(`توکن «${client.label}» باطل شود؟ آن دستگاه دیگر وصل نمی‌شود.`)) return;
+    if (!window.confirm(t("توکن «{label}» باطل شود؟ آن دستگاه دیگر وصل نمی‌شود.", { label: client.label }))) return;
     try {
       await api(`/api/peers/${userId}/clients/${client.id}`, { method: "DELETE" });
       onChange();
@@ -244,15 +245,15 @@ function ClientRow({ userId, client, onChange }) {
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/40 px-3 py-2 text-xs ${revoked || expired ? "opacity-50" : ""}`}>
       <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate" dir="auto">{client.label}</span>
-      <span className="text-muted-foreground">آخرین اتصال: {ago(client.last_used_at)}</span>
-      {client.expires_at ? <span className="text-muted-foreground">انقضا: {time(client.expires_at)}</span> : null}
+      <span className="text-muted-foreground">{t("آخرین اتصال: {when}", { when: ago(client.last_used_at) })}</span>
+      {client.expires_at ? <span className="text-muted-foreground">{t("انقضا: {when}", { when: time(client.expires_at) })}</span> : null}
       {revoked ? (
-        <span className="text-bad">باطل‌شده</span>
+        <span className="text-bad">{t("باطل‌شده")}</span>
       ) : expired ? (
-        <span className="text-bad">منقضی</span>
+        <span className="text-bad">{t("منقضی")}</span>
       ) : (
         <button type="button" onClick={revoke} className="press flex items-center gap-1 rounded-full px-2 py-0.5 text-bad hover:bg-bad/10">
-          <Trash2 className="size-3.5" /> ابطال
+          <Trash2 className="size-3.5" /> {t("ابطال")}
         </button>
       )}
     </div>
@@ -278,36 +279,36 @@ function NewClient({ userId, onIssued }) {
   };
   return (
     <form onSubmit={submit} className="mt-2 grid grid-cols-[1fr_auto_auto] gap-2">
-      <input value={label} onChange={(e) => setLabel(e.target.value)} required placeholder="دستگاه جدید (مثل لپ‌تاپ)" className={`${input} min-w-0 py-1.5`} />
+      <input value={label} onChange={(e) => setLabel(e.target.value)} required placeholder={t("دستگاه جدید (مثل لپ‌تاپ)")} className={`${input} min-w-0 py-1.5`} />
       <select value={ttl} onChange={(e) => setTtl(e.target.value)} className="rounded-lg border bg-background px-2 py-1.5 text-sm outline-none focus:border-primary">
-        <option value="">بدون انقضا</option>
-        <option value="30">۳۰ روز</option>
-        <option value="90">۹۰ روز</option>
-        <option value="1">۱ روز (آزمایشی)</option>
+        <option value="">{t("بدون انقضا")}</option>
+        <option value="30">{t("{n} روز", { n: num(30) })}</option>
+        <option value="90">{t("{n} روز", { n: num(90) })}</option>
+        <option value="1">{t("{n} روز (آزمایشی)", { n: num(1) })}</option>
       </select>
-      <button type="submit" disabled={busy} className="press rounded-lg border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50">توکن</button>
+      <button type="submit" disabled={busy} className="press rounded-lg border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50">{t("توکن")}</button>
     </form>
   );
 }
 
 function IssuedToken({ token, onClose }) {
   const command = `claude mcp add --transport http griffin ${MCP_URL} --header "Authorization: Bearer ${token}"`;
-  const copy = (text) => navigator.clipboard.writeText(text).then(() => toast.success("کپی شد"), () => toast.error("کپی نشد"));
+  const copy = (text) => navigator.clipboard.writeText(text).then(() => toast.success(t("کپی شد")), () => toast.error(t("کپی نشد")));
   return (
     <div className="mt-2 rounded-lg border border-warn/50 bg-warn/10 p-3 text-xs">
       <div className="mb-2 flex items-center gap-2">
-        <span className="font-medium">توکن فقط همین یک‌بار نمایش داده می‌شود.</span>
-        <button type="button" onClick={onClose} className="ms-auto rounded p-1 hover:bg-muted" aria-label="بستن"><X className="size-3.5" /></button>
+        <span className="font-medium">{t("توکن فقط همین یک‌بار نمایش داده می‌شود.")}</span>
+        <button type="button" onClick={onClose} className="ms-auto rounded p-1 hover:bg-muted" aria-label={t("بستن")}><X className="size-3.5" /></button>
       </div>
       <div className="ltr flex items-center gap-2 rounded bg-background px-2 py-1.5 font-mono">
         <span className="min-w-0 flex-1 truncate">{token}</span>
-        <button type="button" onClick={() => copy(token)} className="rounded p-1 hover:bg-muted" aria-label="کپی توکن"><Copy className="size-3.5" /></button>
+        <button type="button" onClick={() => copy(token)} className="rounded p-1 hover:bg-muted" aria-label={t("کپی توکن")}><Copy className="size-3.5" /></button>
       </div>
       <div className="ltr mt-2 flex items-center gap-2 rounded bg-background px-2 py-1.5 font-mono">
         <span className="min-w-0 flex-1 truncate">{command}</span>
-        <button type="button" onClick={() => copy(command)} className="rounded p-1 hover:bg-muted" aria-label="کپی دستور"><Copy className="size-3.5" /></button>
+        <button type="button" onClick={() => copy(command)} className="rounded p-1 hover:bg-muted" aria-label={t("کپی دستور")}><Copy className="size-3.5" /></button>
       </div>
-      <p className="mt-2 text-muted-foreground">بهتر است توکن را در Infisical پروژهٔ همان همکار بگذاری، نه در پیام.</p>
+      <p className="mt-2 text-muted-foreground">{t("بهتر است توکن را در Infisical پروژهٔ همان همکار بگذاری، نه در پیام.")}</p>
     </div>
   );
 }
@@ -340,34 +341,34 @@ function QuotaRow({ userId, quota, catalog, onChange }) {
         <span className="ltr font-mono text-muted-foreground">{quota.agent}</span>
         {editing ? (
           <span className="ms-auto flex gap-1">
-            <button type="button" onClick={save} className="press flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-primary-foreground"><Check className="size-3.5" /> ذخیره</button>
-            <button type="button" onClick={() => { setTools(quota.tools || []); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">انصراف</button>
+            <button type="button" onClick={save} className="press flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-primary-foreground"><Check className="size-3.5" /> {t("ذخیره")}</button>
+            <button type="button" onClick={() => { setTools(quota.tools || []); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">{t("انصراف")}</button>
           </span>
         ) : (
-          <button type="button" onClick={() => setEditing(true)} className="press ms-auto rounded-full px-2.5 py-0.5 text-primary hover:bg-muted">ویرایش</button>
+          <button type="button" onClick={() => setEditing(true)} className="press ms-auto rounded-full px-2.5 py-0.5 text-primary hover:bg-muted">{t("ویرایش")}</button>
         )}
       </div>
       {tools.length ? (
         <div className="flex flex-wrap gap-1">
-          {tools.map((t) => (
-            <span key={t} className="ltr flex items-center gap-1 rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">
-              {t}
+          {tools.map((tool) => (
+            <span key={tool} className="ltr flex items-center gap-1 rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">
+              {tool}
               {editing ? (
-                <button type="button" onClick={() => setTools(tools.filter((x) => x !== t))} aria-label={`حذف ${t}`}><X className="size-3" /></button>
+                <button type="button" onClick={() => setTools(tools.filter((x) => x !== tool))} aria-label={t("حذف {tool}", { tool })}><X className="size-3" /></button>
               ) : null}
             </span>
           ))}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">بدون دسترسی (بسته)</p>
+        <p className="text-xs text-muted-foreground">{t("بدون دسترسی (بسته)")}</p>
       )}
       {editing ? (
         <div className="mt-2 flex gap-2">
-          <input list={`catalog-${userId}-${quota.agent}`} value={pick} onChange={(e) => setPick(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder="نام ابزار" className={`ltr ${input} py-1 font-mono text-xs`} />
+          <input list={`catalog-${userId}-${quota.agent}`} value={pick} onChange={(e) => setPick(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder={t("نام ابزار")} className={`ltr ${input} py-1 font-mono text-xs`} />
           <datalist id={`catalog-${userId}-${quota.agent}`}>
             {catalog.filter((n) => !tools.includes(n)).map((n) => <option key={n} value={n} />)}
           </datalist>
-          <button type="button" onClick={add} className="press rounded-lg border px-3 text-xs hover:bg-muted">افزودن</button>
+          <button type="button" onClick={add} className="press rounded-lg border px-3 text-xs hover:bg-muted">{t("افزودن")}</button>
         </div>
       ) : null}
     </div>

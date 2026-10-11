@@ -3,6 +3,7 @@ import { Download, ExternalLink, FileText, Maximize2 } from "lucide-react";
 import { Streamdown } from "streamdown";
 import { useApiBase } from "../base.js";
 import { textDir } from "../dir.js";
+import { t } from "../i18n.js";
 
 const TEXT = /^text\/|^application\/(json|yaml|xml|x-ndjson)$/;
 
@@ -51,10 +52,10 @@ export function MediaView({ media, caption }) {
       <figcaption className="flex items-center gap-2 text-xs text-muted-foreground">
         {caption ? <span dir="auto" className="min-w-0 truncate">{caption}</span> : null}
         <span className="ltr min-w-0 truncate font-mono">{name} · {type} · {formatBytes(media.bytes)}</span>
-        <a href={url} target="_blank" rel="noreferrer" className="ms-auto shrink-0 hover:text-foreground" title="باز کردن">
+        <a href={url} target="_blank" rel="noreferrer" className="ms-auto shrink-0 hover:text-foreground" title={t("باز کردن")}>
           <ExternalLink className="size-3.5" />
         </a>
-        <a href={url} download={name} className="shrink-0 hover:text-foreground" title="دانلود">
+        <a href={url} download={name} className="shrink-0 hover:text-foreground" title={t("دانلود")}>
           <Download className="size-3.5" />
         </a>
       </figcaption>
@@ -71,7 +72,7 @@ function PdfView({ url, name }) {
         type="button"
         onClick={() => setTall(!tall)}
         className="absolute end-2 top-2 rounded-md border bg-card/90 p-1 text-muted-foreground hover:text-foreground"
-        title="بزرگ‌تر"
+        title={t("بزرگ‌تر")}
       >
         <Maximize2 className="size-3.5" />
       </button>
@@ -86,14 +87,14 @@ function TextView({ url, type }) {
     let alive = true;
     fetch(url, { credentials: "same-origin" })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`http ${r.status}`))))
-      .then((t) => alive && setText(t.length > 400_000 ? `${t.slice(0, 400_000)}\n… [بریده شد]` : t))
+      .then((body) => alive && setText(body.length > 400_000 ? `${body.slice(0, 400_000)}\n… ${t("[بریده شد]")}` : body))
       .catch((e) => alive && setError(e.message));
     return () => {
       alive = false;
     };
   }, [url]);
   if (error) return <p className="text-xs text-bad">{error}</p>;
-  if (text === null) return <p className="text-xs text-muted-foreground">در حال بارگذاری…</p>;
+  if (text === null) return <p className="text-xs text-muted-foreground">{t("در حال بارگذاری…")}</p>;
   if (type === "text/markdown") {
     const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
     return (

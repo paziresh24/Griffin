@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Bot, MessageCircle, Search, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
+import { t } from "../i18n.js";
 import { agentMeta } from "../brand.js";
 import { AgentPicker } from "./Controls.jsx";
 
@@ -55,7 +56,7 @@ export function TelegramPage({ onBack }) {
       });
       setSelected(person);
       setPersons((list) => (list || []).map((p) => (p.id === person.id ? person : p)));
-      toast.success(`ایجنت پوشش: ${agentMeta(agent).label}`);
+      toast.success(t("ایجنت پوشش: {agent}", { agent: agentMeta(agent).label }));
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -68,7 +69,7 @@ export function TelegramPage({ onBack }) {
     const { chat } = await api("/api/chats", {
       method: "POST",
       body: {
-        text: `گفتگوی هم‌تیمی با «${selected.display_name || selected.username || selected.external_id}» شروع شد.`,
+        text: t("گفتگوی هم‌تیمی با «{name}» شروع شد.", { name: selected.display_name || selected.username || selected.external_id }),
         mode: "agent",
         agent: personAgent,
       },
@@ -83,10 +84,10 @@ export function TelegramPage({ onBack }) {
     <div className="scrollbar-thin h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-5xl px-4 pb-10 pt-4 sm:px-6">
         <div className="mb-4 flex items-center gap-2">
-          <button type="button" onClick={onBack} className="rounded-full p-2 hover:bg-muted" aria-label="بازگشت">
-            <ArrowRight className="size-4" />
+          <button type="button" onClick={onBack} className="rounded-full p-2 hover:bg-muted" aria-label={t("بازگشت")}>
+            <ArrowRight className="size-4 rtl-mirror" />
           </button>
-          <h1 className="text-lg font-semibold">هم‌تیمی‌ها</h1>
+          <h1 className="text-lg font-semibold">{t("هم‌تیمی‌ها")}</h1>
           <button
             type="button"
             onClick={() => {
@@ -94,14 +95,14 @@ export function TelegramPage({ onBack }) {
             }}
             className="ms-auto flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs"
           >
-            <Settings2 className="size-3.5" /> اتصال تلگرام
+            <Settings2 className="size-3.5" /> {t("اتصال تلگرام")}
           </button>
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          اینجا فقط پروفایل و گفتگوی هم‌تیمی‌هاست. برای هر نفر می‌توانی بگویی `/agent` با کدام ایجنت باز شود.
+          {t("اینجا فقط پروفایل و گفتگوی هم‌تیمی‌هاست. برای هر نفر می‌توانی بگویی `/agent` با کدام ایجنت باز شود.")}
         </p>
         {!persons ? (
-          <div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground">در حال بارگذاری…</div>
+          <div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground">{t("در حال بارگذاری…")}</div>
         ) : (
           <div className="grid gap-4 md:grid-cols-[20rem_1fr]">
             <section className="rounded-2xl border bg-card p-3">
@@ -110,7 +111,7 @@ export function TelegramPage({ onBack }) {
                 <input
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="جستجوی هم‌تیمی…"
+                  placeholder={t("جستجوی هم‌تیمی…")}
                   className="w-full bg-transparent py-2 text-sm outline-none"
                 />
               </label>
@@ -133,7 +134,7 @@ export function TelegramPage({ onBack }) {
               </ul>
               {!filtered.length ? (
                 <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-                  هنوز پروفایل هم‌تیمی نیست. بعد از `/agent` در یک گفتگوی تلگرام اینجا ظاهر می‌شود.
+                  {t("هنوز پروفایل هم‌تیمی نیست. بعد از `/agent` در یک گفتگوی تلگرام اینجا ظاهر می‌شود.")}
                 </p>
               ) : null}
               <button
@@ -142,7 +143,7 @@ export function TelegramPage({ onBack }) {
                 disabled={!selected}
                 className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2 text-sm font-medium text-primary-foreground disabled:opacity-40"
               >
-                <Bot className="size-4" /> افزودن گفتگوی هم‌تیمی
+                <Bot className="size-4" /> {t("افزودن گفتگوی هم‌تیمی")}
               </button>
             </section>
             <section className="rounded-2xl border bg-card p-4">
@@ -154,10 +155,10 @@ export function TelegramPage({ onBack }) {
                     {selected.username ? ` · @${selected.username}` : ""}
                   </p>
                   <div className="mt-4">
-                    <span className="mb-1.5 block text-xs text-muted-foreground">ایجنت پوشش `/agent`</span>
+                    <span className="mb-1.5 block text-xs text-muted-foreground">{t("ایجنت پوشش `/agent`")}</span>
                     <AgentPicker agent={personAgent} onChange={setPersonAgent} locked={saving} className="w-full max-w-sm" />
                     <p className="mt-1.5 text-[11px] leading-5 text-muted-foreground">
-                      از `/agent` بعدی در چت این هم‌تیمی با همین ایجنت باز می‌شود. پیش‌فرض: پلتفرم‌بان.
+                      {t("از `/agent` بعدی در چت این هم‌تیمی با همین ایجنت باز می‌شود. پیش‌فرض: پلتفرم‌بان.")}
                     </p>
                   </div>
                   <div className="mt-4 space-y-2">
@@ -174,7 +175,7 @@ export function TelegramPage({ onBack }) {
                     ))}
                     {!chats.length ? (
                       <p className="py-10 text-center text-sm text-muted-foreground">
-                        هنوز گفتگویی برای این هم‌تیمی نیست — با دکمهٔ «افزودن گفتگوی هم‌تیمی» بساز.
+                        {t("هنوز گفتگویی برای این هم‌تیمی نیست — با دکمهٔ «افزودن گفتگوی هم‌تیمی» بساز.")}
                       </p>
                     ) : null}
                   </div>
@@ -182,7 +183,7 @@ export function TelegramPage({ onBack }) {
               ) : (
                 <div className="flex min-h-80 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
                   <MessageCircle className="size-6" />
-                  یک هم‌تیمی را از فهرست انتخاب کن.
+                  {t("یک هم‌تیمی را از فهرست انتخاب کن.")}
                 </div>
               )}
             </section>
