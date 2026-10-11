@@ -29,7 +29,6 @@
  "کدام ایجنت اجرا کند": "Agent that runs it",
  "تریگر": "Trigger",
  "هر چند وقت": "Interval",
- "ساعت تهران. «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.": "Tehran time. “Every 30 minutes” lands on :00 and :30.",
  "جواب کجا برود": "Where the answer goes",
  "هنوز گفتگوی وصل‌شده‌ای نداری. اول در «اتصال‌ها» ربات را با کد وصل کن.": "No connected chats yet. First pair a bot with its code under “Connections”.",
  "ارسال": "Send",
@@ -42,5 +41,6 @@
  "ساختن جاب": "Create job",
  "هنوز جابی نداری — مثلاً «هر دوشنبه صبح خلاصهٔ هفته را برایم بفرست»": "No jobs yet — for example, “every Monday morning, send me a summary of the week”",
  "خلاصهٔ هفتگی": "Weekly summary",
- "کارهای هفتهٔ گذشته را در پنج خط خلاصه کن و آنچه هنوز باز مانده را جدا بگو.": "Summarize last week's work in five lines and list what is still open separately."
+ "کارهای هفتهٔ گذشته را در پنج خط خلاصه کن و آنچه هنوز باز مانده را جدا بگو.": "Summarize last week's work in five lines and list what is still open separately.",
+ "به وقت سرور (GRIFFIN_TZ). «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.": "Server time (GRIFFIN_TZ). “Every 30 minutes” lands on :00 and :30."
 }

@@ -110,11 +110,11 @@ test("bot: wrong token rejected; strangers ignored; pairing; message → run →
     bot.push(msg(555, "سلام"));
     bot.push(msg(555, "/start WRONGCODE"));
     await until(() => bot.sent().length === 1);
-    assert.match(bot.sent()[0].body.text, /خصوصی/);
+    assert.match(bot.sent()[0].body.text, /private/);
     assert.equal(store.listChats({ archived: false }).length, 0, "stranger created nothing");
 
     bot.push(msg(777, `/start ${added.pairingCode}`));
-    await until(() => bot.sent().some((c) => /وصل شد/.test(c.body.text || "")));
+    await until(() => bot.sent().some((c) => /connected to Griffin/.test(c.body.text || "")));
     assert.deepEqual(integrations.list()[0].paired, [{ id: "777", name: "سارا" }]);
     assert.equal(integrations.list()[0].pairingCode, null, "code is single-use");
 
@@ -182,7 +182,7 @@ test("bot: ask_owner becomes buttons; tapping one answers the waiting agent; /ne
 
     const first = store.linkedChat(added.id, "42");
     bot.push(msg(42, "/new"));
-    await until(() => bot.sent().some((c) => /تازه شروع شد/.test(c.body.text || "")));
+    await until(() => bot.sent().some((c) => /New chat started/.test(c.body.text || "")));
     assert.equal(store.linkedChat(added.id, "42"), null);
     assert.ok(store.getChat(first), "old chat kept");
   } finally {

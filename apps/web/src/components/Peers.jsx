@@ -308,7 +308,7 @@ function IssuedToken({ token, onClose }) {
         <span className="min-w-0 flex-1 truncate">{command}</span>
         <button type="button" onClick={() => copy(command)} className="rounded p-1 hover:bg-muted" aria-label={t("کپی دستور")}><Copy className="size-3.5" /></button>
       </div>
-      <p className="mt-2 text-muted-foreground">{t("بهتر است توکن را در Infisical پروژهٔ همان همکار بگذاری، نه در پیام.")}</p>
+      <p className="mt-2 text-muted-foreground">{t("توکن را در مدیر رمزهای همان همکار بگذار، نه در پیام.")}</p>
     </div>
   );
 }
