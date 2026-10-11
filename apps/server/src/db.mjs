@@ -217,7 +217,7 @@ const now = () => new Date().toISOString();
 // Bounded MCP call log: enough to debug a peer's client, never a growing archive.
 const PEER_CALLS_KEEP = 5_000;
 
-export function openStore(file) {
+export function openStore(file, { seedProvider } = {}) {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   db.exec(SCHEMA);
@@ -921,9 +921,9 @@ export function openStore(file) {
 
     // --- agent profiles (provider + enabled tools; source of truth after seed) ---
 
-    seedAgentProfiles() {
+    seedAgentProfiles({ provider } = {}) {
       let inserted = 0;
-      for (const row of seedProfilesFromRegistry()) {
+      for (const row of seedProfilesFromRegistry({ provider })) {
         const existing = store.getAgentProfile(row.id);
         if (existing) {
           // New caller rows from the registry are added; anything the owner edited stays.
@@ -1050,7 +1050,7 @@ export function openStore(file) {
     },
   };
 
-  store.seedAgentProfiles();
+  store.seedAgentProfiles({ provider: seedProvider });
   return store;
 }
 

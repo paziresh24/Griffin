@@ -42,8 +42,9 @@ docker compose -f deploy/compose.yaml up -d --build
 
 ## Offline npm cache
 
-If the host cannot reach the npm registry reliably, the image installs from a prepared cache. Build it
-on a machine that can, with the same npm version as the `node:24` image:
+By default the image installs packages from the npm registry. If the build host cannot reach it
+reliably, prepare a cache on a machine that can, with the same npm version as the `node:24` image;
+the build uses it offline whenever it is present:
 
 ```bash
 rm -rf .build && mkdir -p .build/src && cp package.json package-lock.json .build/src/

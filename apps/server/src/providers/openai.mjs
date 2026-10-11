@@ -60,8 +60,8 @@ const SUMMARY_RULES =
 
 const SESSION_DIR = ".griffin-openai-sessions";
 const FALLBACK_SYSTEM =
-  "You are Griffin, an operations agent. Facts come from your tools, never from memory. " +
-  "Talk Persian, short, result first.";
+  "You are Griffin, an AI agent. Facts come from your tools, never from memory. " +
+  "Answer in the user's language, short, result first.";
 
 export function createOpenAIProvider({
   apiKey,

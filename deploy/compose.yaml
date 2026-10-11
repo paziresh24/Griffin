@@ -12,7 +12,7 @@ name: griffin
 
 x-build: &build
   context: ..
-  network: host  # apt/apk steps use it; npm installs offline
+  network: host  # apt/apk and npm (unless .build/npm-cache is shipped) use it
 
 x-user: &user "${GRIFFIN_UID:-1000}:${GRIFFIN_GID:-1000}"
 
