@@ -4,87 +4,374 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Griffin — open-source, self-hosted multi-agent AI assistant</title>
-<meta name="description" content="Griffin is an open-source, self-hosted platform for a small team of AI agents: define agents from the UI, give each one tools and permissions, and run them on Claude, Cursor or any OpenAI-compatible model. Telegram, MCP, scheduled jobs. MIT.">
+<meta name="description" content="Griffin is an open-source, self-hosted platform for your own team of AI agents: define agents from the UI, give each one tools and permissions per caller, and run them on Claude, Cursor or any OpenAI-compatible model. Telegram, MCP, scheduled jobs. MIT.">
 <link rel="canonical" href="https://paziresh24.github.io/Griffin/">
 <link rel="alternate" hreflang="en" href="https://paziresh24.github.io/Griffin/">
 <link rel="alternate" hreflang="fa" href="https://paziresh24.github.io/Griffin/fa/">
 <link rel="alternate" hreflang="x-default" href="https://paziresh24.github.io/Griffin/">
 <link rel="icon" href="media/griffin-mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#120c07">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Griffin">
-<meta property="og:title" content="Griffin — open-source, self-hosted multi-agent AI assistant">
-<meta property="og:description" content="Griffin is an open-source, self-hosted platform for a small team of AI agents: define agents from the UI, give each one tools and permissions, and run them on Claude, Cursor or any OpenAI-compatible model. Telegram, MCP, scheduled jobs. MIT.">
+<meta property="og:title" content="Griffin — your own team of AI agents">
+<meta property="og:description" content="Open-source and self-hosted. Agents you define, tools you grant per caller, any model. Telegram, MCP, scheduled jobs. MIT.">
 <meta property="og:url" content="https://paziresh24.github.io/Griffin/">
 <meta property="og:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Griffin — open-source, self-hosted multi-agent AI assistant">
-<meta name="twitter:description" content="Griffin is an open-source, self-hosted platform for a small team of AI agents: define agents from the UI, give each one tools and permissions, and run them on Claude, Cursor or any OpenAI-compatible model. Telegram, MCP, scheduled jobs. MIT.">
+<meta name="twitter:title" content="Griffin — your own team of AI agents">
+<meta name="twitter:description" content="Open-source and self-hosted. Agents you define, tools you grant per caller, any model. MIT.">
 <meta name="twitter:image" content="https://paziresh24.github.io/Griffin/media/social-card.png">
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Griffin", "description": "Open-source, self-hosted multi-agent AI assistant platform: agents defined as data, typed tools, per-caller permissions, delegation, scheduled jobs, Telegram and MCP interfaces.", "url": "https://paziresh24.github.io/Griffin/", "applicationCategory": "DeveloperApplication", "operatingSystem": "Linux, macOS, Windows (Docker)", "license": "https://opensource.org/licenses/MIT", "codeRepository": "https://github.com/paziresh24/Griffin", "programmingLanguage": "JavaScript", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Organization", "name": "Paziresh24", "url": "https://github.com/paziresh24"}}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is Griffin?", "acceptedAnswer": {"@type": "Answer", "text": "Griffin is an open-source, self-hosted platform for a small team of AI agents. You define each agent's instructions, model and tools, and decide who may call which tool; the agents answer from those tools instead of from the model's memory."}}, {"@type": "Question", "name": "What can I use Griffin for?", "acceptedAnswer": {"@type": "Answer", "text": "A personal assistant on Telegram, research and writing helpers, an assistant your colleagues can message, scheduled reports delivered to a chat, an MCP backend that Claude Code or Cursor can delegate long tasks to, or an operations agent connected to your own systems."}}, {"@type": "Question", "name": "Which AI models does Griffin support?", "acceptedAnswer": {"@type": "Answer", "text": "Each agent picks its engine: the Claude Agent SDK, the Cursor SDK, or any OpenAI-compatible API — including local models served behind an OpenAI-compatible endpoint. Different agents can use different models."}}, {"@type": "Question", "name": "How are permissions handled?", "acceptedAnswer": {"@type": "Answer", "text": "Tool access is filtered per caller before tools reach the model: you, another agent, a scheduled job, a colleague on a messenger and an external MCP client each get only the tools granted to them. Irreversible actions wait for your approval and every approval is recorded."}}, {"@type": "Question", "name": "Do I need servers, Kubernetes or a vault to start?", "acceptedAnswer": {"@type": "Answer", "text": "No. A fresh install is Node 24 and SQLite with one agent you can chat with. Tool packs for your own systems switch on only when you configure them."}}, {"@type": "Question", "name": "Is Griffin free and open source?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Griffin is MIT-licensed, runs on your own machine, and has no SaaS control plane or telemetry; you only pay for the model you choose."}}]}</script>
-<link rel="stylesheet" href="style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0f0a06;--bg2:#160f09;--panel:#1b130c;--panel2:#22180f;--line:#33261a;--line2:#463422;
+  --fg:#f6eee6;--muted:#b9a794;--dim:#8a7765;--accent:#f0913f;--accent2:#ffb46b;--teal:#2dd4bf;--green:#34d399;
+  --ok:#34d399;--no:#6b5848;--shadow:0 30px 80px -30px rgba(0,0,0,.7);
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
+  --bg:#fbf6f0;--bg2:#f5ede3;--panel:#fff;--panel2:#fbf5ee;--line:#ecdfd1;--line2:#dfcbb5;
+  --fg:#1d140c;--muted:#6a5644;--dim:#957f6a;--accent:#d9722a;--accent2:#e8873a;--no:#cdbba8;--shadow:0 30px 70px -35px rgba(80,45,10,.35);
+}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit}
+.wrap{max-width:1160px;margin:0 auto;padding:0 20px}
+code,pre{font-family:var(--mono)}
+
+/* nav */
+.top{position:sticky;top:0;z-index:20;backdrop-filter:saturate(1.4) blur(14px);background:color-mix(in srgb,var(--bg) 78%,transparent);border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.top .wrap{display:flex;align-items:center;gap:24px;height:62px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.01em;text-decoration:none;font-size:17px}
+.brand img{width:30px;height:30px;border-radius:8px}
+.links{display:flex;gap:22px;margin-inline-start:auto;font-size:14.5px}
+.links a{color:var(--muted);text-decoration:none}.links a:hover{color:var(--fg)}
+.gh{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line2);border-radius:999px;font-size:14px;font-weight:600;text-decoration:none;background:var(--panel)}
+.gh:hover{border-color:var(--accent)}
+.gh svg{width:16px;height:16px}
+.count{color:var(--muted);font-variant-numeric:tabular-nums;border-inline-start:1px solid var(--line2);padding-inline-start:8px}
+@media (max-width:820px){.links{display:none}.top .gh{margin-inline-start:auto}}
+
+/* hero */
+.hero{position:relative;padding:84px 0 40px}
+.glow{position:absolute;inset:-200px 0 auto 0;height:720px;pointer-events:none;
+  background:radial-gradient(600px 320px at 22% 30%,color-mix(in srgb,var(--accent) 26%,transparent),transparent 70%),
+             radial-gradient(520px 300px at 82% 18%,color-mix(in srgb,var(--teal) 16%,transparent),transparent 70%)}
+.hero .wrap{position:relative;display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,1fr);gap:56px;align-items:center}
+@media (max-width:980px){.hero .wrap{grid-template-columns:minmax(0,1fr);gap:40px}.hero{padding-top:48px}}
+.pill{display:inline-flex;max-width:100%;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;color:var(--muted);border:1px solid var(--line2);border-radius:999px;padding:5px 12px 5px 6px;background:color-mix(in srgb,var(--panel) 70%,transparent);text-decoration:none}
+.pill b{background:var(--accent);color:#1a0f05;border-radius:999px;padding:1px 8px;font-size:12px}
+h1{font-size:clamp(40px,6.2vw,68px);line-height:1.02;letter-spacing:-.035em;margin:20px 0 18px;font-weight:800}
+h1 em{font-style:normal;background:linear-gradient(100deg,var(--accent2),var(--accent) 45%,var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{font-size:clamp(17px,1.6vw,19.5px);color:var(--muted);max-width:560px;margin:0 0 30px}
+.cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:13px 20px;border-radius:12px;font-weight:600;text-decoration:none;font-size:15.5px;border:1px solid var(--line2);background:var(--panel);transition:transform .15s,border-color .15s}
+.btn:hover{transform:translateY(-1px);border-color:var(--accent)}
+.btn.primary{background:linear-gradient(180deg,var(--accent2),var(--accent));border-color:transparent;color:#1a0f05;box-shadow:0 10px 30px -10px color-mix(in srgb,var(--accent) 70%,transparent)}
+.btn svg{width:18px;height:18px}
+.install{margin-top:22px;display:inline-flex;align-items:center;gap:10px;font:14px var(--mono);color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 10px 9px 14px;max-width:100%;overflow:hidden}
+.install span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.install i{color:var(--accent);font-style:normal}
+.copy{border:0;background:var(--panel2);color:var(--muted);border-radius:7px;padding:5px 9px;font:12px Inter,sans-serif;cursor:pointer;flex:none}
+.copy:hover{color:var(--fg)}
+.models{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px;font-size:13px;color:var(--dim)}
+.models span{border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+
+/* demo window */
+.win{background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:var(--shadow);overflow:hidden}
+.bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel2);font-size:13px;color:var(--muted)}
+.dots{display:flex;gap:6px;margin-inline-end:8px}.dots i{width:11px;height:11px;border-radius:50%;background:var(--line2)}
+.bar .live{margin-inline-start:auto;display:flex;align-items:center;gap:6px;font-size:12px}
+.bar .live:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 25%,transparent)}
+.feed{padding:18px;display:flex;flex-direction:column;gap:11px;min-height:470px;font-size:14px}
+.m{opacity:0;transform:translateY(8px);animation:in .45s ease forwards}
+@keyframes in{to{opacity:1;transform:none}}
+.me{align-self:flex-end;max-width:84%;background:linear-gradient(180deg,var(--accent2),var(--accent));color:#1a0f05;padding:10px 14px;border-radius:14px 14px 4px 14px;font-weight:500}
+.ag{display:flex;gap:10px;align-items:flex-start;max-width:94%}
+.av{flex:none;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;color:#10241f}
+.av.g{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#1a0f05}.av.r{background:var(--green)}.av.w{background:var(--teal)}
+.bub{background:var(--panel2);border:1px solid var(--line);padding:9px 12px;border-radius:4px 14px 14px 14px}
+.who{font-size:12px;color:var(--dim);margin-bottom:2px}
+.tool{display:flex;align-items:center;gap:8px;font:12.5px var(--mono);color:var(--muted);border:1px dashed var(--line2);border-radius:9px;padding:6px 10px;margin-top:6px;width:max-content;max-width:100%}
+.tool .ok{color:var(--ok)}
+.ask{border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));background:color-mix(in srgb,var(--accent) 9%,var(--panel2));border-radius:12px;padding:10px 12px}
+.ask .row{display:flex;gap:8px;margin-top:8px}
+.ask .row span{border:1px solid var(--line2);border-radius:8px;padding:4px 12px;font-size:13px}
+.ask .row .yes{background:var(--accent);border-color:var(--accent);color:#1a0f05;font-weight:600;animation:press .5s ease 9.4s both}
+@keyframes press{50%{transform:scale(.94)}}
+.chart{display:flex;align-items:flex-end;gap:5px;height:54px;margin-top:8px}
+.chart i{flex:1;border-radius:4px 4px 1px 1px;background:linear-gradient(180deg,var(--teal),color-mix(in srgb,var(--teal) 40%,transparent));height:var(--h);transform-origin:bottom;animation:grow .6s ease both;animation-delay:inherit}
+@keyframes grow{from{transform:scaleY(0)}}
+.typing{display:inline-flex;gap:4px;padding:2px 0}.typing i{width:6px;height:6px;border-radius:50%;background:var(--dim);animation:blink 1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.m,.chart i,.ask .row .yes{animation:none;opacity:1;transform:none}}
+
+/* sections */
+section{padding:88px 0}
+.eyebrow{font-size:13px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+h2{font-size:clamp(30px,4vw,44px);line-height:1.08;letter-spacing:-.025em;margin:10px 0 14px;font-weight:800}
+.lede{color:var(--muted);font-size:18px;max-width:640px;margin:0}
+.head{margin-bottom:44px}
+
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+@media (max-width:860px){.steps{grid-template-columns:minmax(0,1fr)}}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px}
+.step .n{font:600 13px var(--mono);color:var(--accent)}
+.step h3{margin:8px 0 6px;font-size:19px;letter-spacing:-.01em}
+.step p{margin:0;color:var(--muted);font-size:15px}
+.step pre{margin:14px 0 0;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;color:var(--muted);overflow-x:auto}
+.k{color:var(--accent2)}.s{color:var(--green)}
+
+/* matrix */
+.matrix{background:var(--panel);border:1px solid var(--line);border-radius:18px;overflow:auto}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px}
+th,td{padding:14px 16px;text-align:center;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+th{font-weight:600;color:var(--muted);font-size:13px;background:var(--panel2)}
+td:first-child,th:first-child{text-align:start}
+td:first-child{font-weight:600}
+td:first-child small{display:block;font-weight:400;color:var(--dim);font-size:12.5px}
+.y,.x,.a{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:8px;font-size:14px;font-weight:700}
+.y{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.x{color:var(--no)}
+.a{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;font-size:13.5px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:8px}
+
+/* features */
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+@media (max-width:980px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.grid{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;transition:border-color .2s,transform .2s}
+.card:hover{border-color:var(--line2);transform:translateY(-2px)}
+.ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);margin-bottom:14px}
+.ic svg{width:20px;height:20px}
+.card h3{margin:0 0 6px;font-size:17px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+
+/* interfaces */
+.ifaces{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+@media (max-width:900px){.ifaces{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:520px){.ifaces{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.if{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 14px;text-align:center}
+.if b{display:block;font-size:15px}.if span{font-size:13px;color:var(--dim)}
+
+/* use cases */
+.uses{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+@media (max-width:980px){.uses{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.uses{grid-template-columns:minmax(0,1fr)}}
+.use{display:block;text-decoration:none;background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:20px}
+.use:hover{border-color:var(--accent)}
+.use h3{margin:0 0 6px;font-size:16.5px}.use p{margin:0;color:var(--muted);font-size:14px}
+.use .go{display:inline-block;margin-top:12px;color:var(--accent);font-size:13.5px;font-weight:600}
+
+/* quick start */
+.qs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:40px;align-items:center}
+@media (max-width:900px){.qs{grid-template-columns:minmax(0,1fr)}}
+.term{background:#0b0704;border:1px solid var(--line2);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
+.term pre{margin:0;padding:20px;font-size:13.5px;line-height:1.75;color:#e9dccd;overflow-x:auto}
+.term .c{color:#8a7765}.term .p{color:var(--accent2)}
+.term .bar{background:#140d08;border-color:#2a1e14;color:#8a7765}
+.checks{list-style:none;padding:0;margin:22px 0 0;display:grid;gap:10px;color:var(--muted)}
+.checks li{display:flex;gap:10px}.checks li:before{content:"✓";color:var(--ok);font-weight:700}
+
+/* faq */
+.faq{max-width:820px}
+details{border-bottom:1px solid var(--line);padding:18px 0}
+summary{cursor:pointer;font-weight:600;font-size:17px;list-style:none;display:flex;justify-content:space-between;gap:20px}
+summary::-webkit-details-marker{display:none}
+summary:after{content:"+";color:var(--accent);font-size:22px;line-height:1}
+details[open] summary:after{content:"–"}
+details p{color:var(--muted);margin:10px 0 0}
+
+/* final */
+.final{text-align:center;border:1px solid var(--line2);border-radius:28px;padding:64px 24px;position:relative;overflow:hidden;
+  background:radial-gradient(500px 220px at 50% 0%,color-mix(in srgb,var(--accent) 22%,transparent),transparent 75%),var(--panel)}
+.final h2{margin-top:0}.final .lede{margin:0 auto 28px}.final .cta{justify-content:center}
+footer{padding:44px 0 56px;color:var(--dim);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:16px 28px;align-items:center}
+footer a{color:var(--muted);text-decoration:none}footer a:hover{color:var(--fg)}
+footer .sp{margin-inline-start:auto}
+</style>
 </head>
 <body>
-<main>
-<nav><a href="./">Overview</a> <a href="use-cases.html">Use cases</a> <a href="self-hosted-ai-agent.html">Self-hosted AI agents</a> <a href="telegram-ai-assistant.html">Telegram AI assistant</a> <a href="mcp-server.html">MCP server</a> <a href="agents.html">Docs</a> <a href="fa/">فارسی</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
-<header>
-  <img src="media/griffin-mark.svg" alt="Griffin logo">
-  <h1>Griffin — your own team of AI agents</h1>
+
+<div class="top"><div class="wrap">
+  <a class="brand" href="./"><img src="media/griffin-mark.svg" alt="">Griffin</a>
+  <nav class="links">
+    <a href="#how">How it works</a><a href="#permissions">Permissions</a><a href="use-cases.html">Use cases</a><a href="agents.html">Docs</a><a href="fa/" hreflang="fa">فارسی</a>
+  </nav>
+  <a class="gh" href="https://github.com/paziresh24/Griffin"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Star<span class="count" data-stars hidden></span></a>
+</div></div>
+
+<header class="hero">
+  <div class="glow"></div>
+  <div class="wrap">
+    <div>
+      <a class="pill" href="mcp-server.html"><b>New</b> MCP server for Claude Code →</a>
+      <h1>Your own team of <em>AI agents</em>, on your own box.</h1>
+      <p class="sub">Griffin is an open-source, self-hosted platform for AI agents that work for you. Define each agent, grant it tools, decide who may call it — and talk to them from the web, Telegram, your terminal or another agent.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/paziresh24/Griffin"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Star on GitHub</a>
+        <a class="btn" href="#start">Get started in 2 minutes</a>
+      </div>
+      <div class="install"><span><i>$</i> git clone https://github.com/paziresh24/Griffin.git</span><button class="copy" data-copy="git clone https://github.com/paziresh24/Griffin.git">Copy</button></div>
+      <div class="models"><span>Claude</span><span>Cursor</span><span>OpenAI-compatible</span><span>Local models</span><span>MIT</span></div>
+    </div>
+
+    <div class="win" aria-label="Animated example of Griffin agents working together">
+      <div class="bar"><div class="dots"><i></i><i></i><i></i></div>Griffin · Telegram<span class="live">3 agents</span></div>
+      <div class="feed">
+        <div class="m me" style="animation-delay:.3s">Every Monday, send the team a short summary of last week's customer feedback.</div>
+        <div class="m ag" style="animation-delay:1.3s"><div class="av g">G</div><div class="bub"><div class="who">griffin · orchestrator</div>On it — splitting this between the researcher and the writer.<div class="tool">delegate → researcher, writer</div></div></div>
+        <div class="m ag" style="animation-delay:2.9s"><div class="av r">R</div><div class="bub"><div class="who">researcher</div>Read 42 feedback notes from last week and grouped them into 5 themes.<div class="tool">knowledge_list <span class="ok">✓ 42 notes</span></div></div></div>
+        <div class="m ag" style="animation-delay:4.6s"><div class="av w">W</div><div class="bub"><div class="who">writer</div>Drafted a 6-line summary with the top themes and two quotes.<div class="tool">draft <span class="ok">✓ ready</span></div></div></div>
+        <div class="m ag" style="animation-delay:6.4s"><div class="av g">G</div><div class="ask"><div class="who">griffin asks you</div>Create a job “Weekly feedback” — Mondays 09:00, post to the Team chat?<div class="row"><span class="yes">Approve</span><span>Not now</span></div></div></div>
+        <div class="m ag" style="animation-delay:10.2s"><div class="av g">G</div><div class="bub"><div class="who">griffin</div>Done. The first report is in the Team chat; next run Monday 09:00.<div class="chart" style="animation-delay:10.5s"><i style="--h:38%"></i><i style="--h:62%"></i><i style="--h:48%"></i><i style="--h:84%"></i><i style="--h:70%"></i><i style="--h:56%"></i><i style="--h:92%"></i></div></div></div>
+      </div>
+    </div>
+  </div>
 </header>
-<p class="lead">Griffin is an open-source, self-hosted platform for a small team of AI agents that work for you. You decide what each agent is, which tools it may use and who may call it — and the agents answer from those tools instead of from the model's memory. It runs on your own machine, on Claude, Cursor or any OpenAI-compatible model.</p>
-<div class="btns">
-  <a class="btn primary" href="https://github.com/paziresh24/Griffin">Griffin on GitHub</a>
-  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">Quick start</a>
-</div>
-<figure>
-  <img src="media/chat.png" width="1400" height="900" alt="A Griffin agent answering with a plan, a tool card that shows where the answer came from, and a result card">
-  <figcaption>An agent answering from a typed tool and showing where the answer came from (demo mode).</figcaption>
-</figure>
-<h2>What Griffin does</h2>
-<div class="grid">
-<div class="card"><h3>Agents you define</h3><p>Agents are rows in a table, not code: instructions, model, tools and callers. Create one from the UI, the API or a JSON profile.</p></div>
-<div class="card"><h3>Permissions per caller</h3><p>You, another agent, a scheduled job, a colleague on Telegram or an external MCP client each get exactly the tools you grant — enforced in code, not in the prompt.</p></div>
-<div class="card"><h3>Delegation</h3><p>An orchestrator agent plans, delegates to specialists without blocking, and reports back when subtasks finish.</p></div>
-<div class="card"><h3>Any model</h3><p>Claude, Cursor, or any OpenAI-compatible endpoint including local models — chosen per agent and per chat.</p></div>
-<div class="card"><h3>Telegram, MCP, terminal</h3><p>Telegram and Bale bots, a Telegram account bridge, an MCP endpoint for Claude Code and Cursor, a CLI, a Bearer API — or headless.</p></div>
-<div class="card"><h3>Charts, files and jobs</h3><p>Charts from real data, images, PDFs and Markdown inline, and scheduled jobs that deliver to the chat you already use.</p></div>
-<div class="card"><h3>Approval for what matters</h3><p>Irreversible actions wait for your approval; unattended runs refuse them. Every approval is audited.</p></div>
-<div class="card"><h3>Rehearsal mode</h3><p>Simulation chats run the whole agent tree but record side effects instead of executing them.</p></div>
-<div class="card"><h3>Your own systems, optional</h3><p>A separate broker holds credentials and exposes typed tools for the systems you connect; the model process never sees a secret.</p></div>
-</div>
-<h2>Use cases</h2>
-<ul class="plain">
-<li><a href="use-cases.html">What people use Griffin for</a> — personal assistant, research, writing, team questions, reports, operations</li>
-<li><a href="self-hosted-ai-agent.html">A self-hosted AI agent platform</a> — agents as data, permissions per caller, any model</li>
-<li><a href="telegram-ai-assistant.html">An AI assistant on Telegram</a> — for you and for the people who message you</li>
-<li><a href="mcp-server.html">Griffin as an MCP server</a> — delegate long tasks from Claude Code, Claude Desktop and Cursor</li>
-<li><a href="fa/" hreflang="fa">گریفین به فارسی</a> — ایجنت هوش مصنوعی متن‌باز و خودمیزبان</li>
-</ul>
-<h2>Run it in two minutes</h2>
-<pre><code>git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
+
+<section id="how"><div class="wrap">
+  <div class="head"><div class="eyebrow">How it works</div><h2>Agents are data, not code.</h2><p class="lede">No framework to learn and nothing to deploy when an agent changes. Three steps, all from the UI or the API.</p></div>
+  <div class="steps">
+    <div class="step"><div class="n">01</div><h3>Define an agent</h3><p>An id, a job description, instructions and a model. Import a ready-made profile or write your own.</p>
+<pre>{ <span class="k">"id"</span>: <span class="s">"writer"</span>,
+  <span class="k">"instructions"</span>: <span class="s">"Draft, edit, translate…"</span>,
+  <span class="k">"provider"</span>: <span class="s">"claude"</span> }</pre></div>
+    <div class="step"><div class="n">02</div><h3>Grant tools per caller</h3><p>Decide which tools the agent may use — and, separately, which of them each caller gets: you, another agent, a job, a colleague, an MCP client.</p>
+<pre><span class="k">"callers"</span>: {
+  <span class="k">"owner"</span>:  { <span class="k">"tools"</span>: <span class="s">"*"</span> },
+  <span class="k">"team"</span>:   { <span class="k">"tools"</span>: [<span class="s">"show_media"</span>] } }</pre></div>
+    <div class="step"><div class="n">03</div><h3>Talk from anywhere</h3><p>Web, Telegram, terminal, HTTP API or MCP. Agents delegate to each other, ask you before anything irreversible, and report back.</p>
+<pre><span class="p">$</span> node bin/griffin.mjs <span class="s">"summarise this week"</span>
+<span class="c">› delegating to researcher…</span></pre></div>
+  </div>
+</div></section>
+
+<section id="permissions" style="padding-top:20px"><div class="wrap">
+  <div class="head"><div class="eyebrow">The core idea</div><h2>Who asks decides what's possible.</h2><p class="lede">The same agent gets a different toolbox depending on who is calling. It's enforced where tools are handed to the model — a tool a caller wasn't granted simply doesn't exist for that run. An example policy:</p></div>
+  <div class="matrix"><table>
+    <thead><tr><th>Caller</th><th>Read notes</th><th>Charts &amp; files</th><th>Delegate</th><th>Send Telegram</th><th>Create jobs</th><th>Irreversible action</th></tr></thead>
+    <tbody>
+      <tr><td>You<small>owner, web or Telegram</small></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+      <tr><td>Another agent<small>delegated subtask</small></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="x">—</span></td><td><span class="x">—</span></td><td><span class="a">?</span></td></tr>
+      <tr><td>Colleague<small>messaging on Telegram</small></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="x">—</span></td><td><span class="x">—</span></td><td><span class="a">?</span></td></tr>
+      <tr><td>Scheduled job<small>nobody watching</small></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="x">—</span></td><td><span class="x">—</span></td><td><span class="x">—</span></td></tr>
+      <tr><td>MCP client<small>e.g. Claude Code, own token</small></td><td><span class="y">✓</span></td><td><span class="x">—</span></td><td><span class="y">✓</span></td><td><span class="x">—</span></td><td><span class="x">—</span></td><td><span class="a">?</span></td></tr>
+    </tbody>
+  </table></div>
+  <div class="legend"><span><span class="y">✓</span>granted</span><span><span class="a">?</span>waits for your approval</span><span><span class="x">—</span>not available to this caller</span></div>
+</div></section>
+
+<section style="padding-top:20px"><div class="wrap">
+  <div class="head"><div class="eyebrow">Everything included</div><h2>Built for agents you can trust with real work.</h2></div>
+  <div class="grid">
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="12" cy="20" r="2"/><path d="M6.5 6.5 10 10M17.5 6.5 14 10M12 15v3"/></svg></div><h3>Delegation that doesn't block</h3><p>An orchestrator hands work to specialists and stays free; results come back when subtasks land.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div><h3>Approval for what matters</h3><p>Irreversible actions wait for a button from you. Unattended runs refuse them. Every approval is recorded.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15l3-3 3 3 4-5"/></svg></div><h3>Answers from tools, not memory</h3><p>Agents call typed tools and show where each answer came from. Charts, images, PDFs and files render inline.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><h3>Scheduled jobs</h3><p>A prompt, a schedule and a destination. Daily numbers or a weekly digest, delivered to the chat people already use.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h7"/><circle cx="18" cy="16" r="3"/></svg></div><h3>Any model, per agent</h3><p>Claude Agent SDK, Cursor SDK, or any OpenAI-compatible endpoint — hosted or local. Mix them across agents.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6L5 19a1 1 0 0 0 1 1.5h12A1 1 0 0 0 19 19l-5-10V3"/></svg></div><h3>Rehearsal mode</h3><p>Simulation chats run the whole agent tree but record side effects instead of executing them — with scenario evals.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><h3>Secrets stay out of the model</h3><p>The model process has no shell and no credentials. A separate broker holds them and exposes only named tools.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div><h3>Runs on one small box</h3><p>Node 24 and SQLite, one <code>docker compose up</code>. No SaaS control plane, no telemetry.</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></div><h3>Right-to-left ready</h3><p>The UI is Persian-first and right-to-left aware; code, tools and docs are in English.</p></div>
+  </div>
+</div></section>
+
+<section style="padding-top:20px"><div class="wrap">
+  <div class="head"><div class="eyebrow">Interfaces</div><h2>Meet your agents where you already are.</h2><p class="lede">The core is the product; every interface is just a client of it. Run it with a UI, or fully headless.</p></div>
+  <div class="ifaces">
+    <div class="if"><b>Web</b><span>chats, agents, jobs</span></div>
+    <div class="if"><b>Telegram</b><span>bot or your account</span></div>
+    <div class="if"><b>MCP</b><span>Claude Code, Cursor</span></div>
+    <div class="if"><b>Terminal</b><span>streaming CLI</span></div>
+    <div class="if"><b>HTTP API</b><span>Bearer token</span></div>
+    <div class="if"><b>Jobs</b><span>cron &amp; intervals</span></div>
+  </div>
+</div></section>
+
+<section style="padding-top:20px"><div class="wrap">
+  <div class="head"><div class="eyebrow">Use cases</div><h2>One install, many jobs.</h2></div>
+  <div class="uses">
+    <a class="use" href="telegram-ai-assistant.html"><h3>Personal assistant</h3><p>Reads and sends Telegram messages when you ask, keeps notes, and turns chores into scheduled jobs.</p><span class="go">Telegram assistant →</span></a>
+    <a class="use" href="use-cases.html"><h3>Research &amp; writing</h3><p>Agents that read and compare sources, then draft, edit and translate — without sending anything.</p><span class="go">See use cases →</span></a>
+    <a class="use" href="telegram-ai-assistant.html"><h3>Team assistant</h3><p>Colleagues message it directly; it answers within its limits and asks you before anything irreversible.</p><span class="go">How threads work →</span></a>
+    <a class="use" href="mcp-server.html"><h3>Backend for coding agents</h3><p>Claude Code and Cursor delegate long tasks over MCP and pick up the answer when it lands.</p><span class="go">MCP server →</span></a>
+  </div>
+</div></section>
+
+<section id="start" style="padding-top:20px"><div class="wrap qs">
+  <div>
+    <div class="eyebrow">Quick start</div>
+    <h2>From clone to first chat in two minutes.</h2>
+    <p class="lede">A fresh install is one agent you can talk to. Everything else is something you add when you want it.</p>
+    <ul class="checks"><li>No cluster, vault or YAML to start</li><li>Bring a Claude, Cursor or OpenAI-compatible key</li><li>Or try the scripted demo with no key at all</li></ul>
+  </div>
+  <div class="term">
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div>terminal<button class="copy" style="margin-inline-start:auto" data-copy="git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
 npm ci && npm run build
 mkdir -p data workspace
-echo "sk-ant-…" > data/anthropic.api-key && chmod 600 data/anthropic.api-key
-GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs</code></pre>
-<p>Or <code>docker compose -f deploy/compose.yaml up -d --build</code>. A fresh install is a chat with one agent — no cluster, vault or YAML.</p>
-<h2>Frequently asked questions</h2>
+echo &quot;sk-ant-…&quot; > data/anthropic.api-key && chmod 600 data/anthropic.api-key
+GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs">Copy</button></div>
+<pre><span class="p">$</span> git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
+<span class="p">$</span> npm ci && npm run build
+<span class="p">$</span> mkdir -p data workspace
+<span class="p">$</span> echo "sk-ant-…" > data/anthropic.api-key
+<span class="p">$</span> GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace \
+    PORT=3100 node apps/server/src/index.mjs
+<span class="c"># open http://127.0.0.1:3100 — token in data/owner.token</span>
+
+<span class="c"># or with Docker</span>
+<span class="p">$</span> docker compose -f deploy/compose.yaml up -d --build</pre>
+  </div>
+</div></section>
+
+<section style="padding-top:20px"><div class="wrap">
+  <div class="head"><div class="eyebrow">FAQ</div><h2>Questions, answered.</h2></div>
+  <div class="faq">
 <details><summary>What is Griffin?</summary><p>Griffin is an open-source, self-hosted platform for a small team of AI agents. You define each agent&#x27;s instructions, model and tools, and decide who may call which tool; the agents answer from those tools instead of from the model&#x27;s memory.</p></details>
 <details><summary>What can I use Griffin for?</summary><p>A personal assistant on Telegram, research and writing helpers, an assistant your colleagues can message, scheduled reports delivered to a chat, an MCP backend that Claude Code or Cursor can delegate long tasks to, or an operations agent connected to your own systems.</p></details>
 <details><summary>Which AI models does Griffin support?</summary><p>Each agent picks its engine: the Claude Agent SDK, the Cursor SDK, or any OpenAI-compatible API — including local models served behind an OpenAI-compatible endpoint. Different agents can use different models.</p></details>
 <details><summary>How are permissions handled?</summary><p>Tool access is filtered per caller before tools reach the model: you, another agent, a scheduled job, a colleague on a messenger and an external MCP client each get only the tools granted to them. Irreversible actions wait for your approval and every approval is recorded.</p></details>
 <details><summary>Do I need servers, Kubernetes or a vault to start?</summary><p>No. A fresh install is Node 24 and SQLite with one agent you can chat with. Tool packs for your own systems switch on only when you configure them.</p></details>
 <details><summary>Is Griffin free and open source?</summary><p>Yes. Griffin is MIT-licensed, runs on your own machine, and has no SaaS control plane or telemetry; you only pay for the model you choose.</p></details>
-<h2>Documentation</h2>
-<ul class="plain">
-<li><a href="agents.html">Agents</a> — profiles, tools, callers and quotas</li>
-<li><a href="interfaces.html">Interfaces</a> — web, terminal, HTTP API, MCP, messengers</li>
-<li><a href="architecture.html">Architecture</a> — the app/broker split and the security posture</li>
-<li><a href="configuration.html">Configuration</a> — environment, providers, optional tool packs</li>
-</ul>
+  </div>
+</div></section>
 
-<footer>Griffin is MIT-licensed open source by <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
-</main>
+<section style="padding-top:10px"><div class="wrap">
+  <div class="final">
+    <h2>Build your own team of agents.</h2>
+    <p class="lede">Griffin is free, open source and MIT-licensed. If it's useful to you, a star helps other people find it.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/paziresh24/Griffin"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Star on GitHub<span class="count" data-stars hidden style="border-color:rgba(26,15,5,.3);color:#1a0f05"></span></a>
+      <a class="btn" href="agents.html">Read the docs</a>
+    </div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <a class="brand" href="./"><img src="media/griffin-mark.svg" alt="">Griffin</a>
+  <a href="use-cases.html">Use cases</a><a href="self-hosted-ai-agent.html">Self-hosted AI agents</a><a href="telegram-ai-assistant.html">Telegram AI assistant</a><a href="mcp-server.html">MCP server</a><a href="agents.html">Docs</a><a href="fa/" hreflang="fa">فارسی</a>
+  <span class="sp">MIT · by <a href="https://github.com/paziresh24">Paziresh24</a></span>
+</div></footer>
+
+<script>
+document.querySelectorAll("[data-copy]").forEach(b=>b.addEventListener("click",()=>{navigator.clipboard?.writeText(b.dataset.copy).then(()=>{const t=b.textContent;b.textContent="Copied";setTimeout(()=>b.textContent=t,1400)})}));
+fetch("https://api.github.com/repos/paziresh24/Griffin").then(r=>r.ok?r.json():null).then(d=>{
+  if(!d||!(d.stargazers_count>=0))return;
+  const n=d.stargazers_count,txt=n>=1000?(n/1000).toFixed(n>=10000?0:1)+"k":String(n);
+  document.querySelectorAll("[data-stars]").forEach(e=>{e.textContent=txt;e.hidden=false});
+}).catch(()=>{});
+</script>
 </body>
 </html>

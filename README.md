@@ -1,6 +1,11 @@
 <img src="docs/media/griffin-mark.svg" width="76" alt="">
 
-# Griffin — self-hosted multi-agent AI assistant
+# Griffin — your own team of AI agents
+
+[![GitHub stars](https://img.shields.io/github/stars/paziresh24/Griffin?style=flat&color=f0913f)](https://github.com/paziresh24/Griffin/stargazers)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2dd4bf)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/paziresh24/Griffin?color=34d399)](https://github.com/paziresh24/Griffin/releases)
+[![Website](https://img.shields.io/badge/website-paziresh24.github.io%2FGriffin-f0913f)](https://paziresh24.github.io/Griffin/)
 
 **A self-hosted shell for a small team of AI agents that work for you.** You make the agents — what
 each one is, what it may touch, who may ask it — and they answer from typed tools instead of from
