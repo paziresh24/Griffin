@@ -1,5 +1,6 @@
 import { streamSSE } from "hono/streaming";
 import { MCP_TOOLS } from "./mcp-tools.mjs";
+import { PERSONA } from "./persona.mjs";
 
 // Stateless MCP server (streamable HTTP, JSON responses) for external agents such as Claude Code:
 //   claude mcp add --transport http griffin https://griffin.example.com/mcp \
@@ -75,7 +76,9 @@ export function createMcpHandler({ tasks, version = "dev", record = () => {}, lo
           serverInfo: { name: "griffin", version },
           instructions:
             "Griffin runs long operational tasks. griffin_send starts one and returns quickly; poll griffin_wait until the task ends. " +
-            "A task in state working is alive — do not treat it as failed.",
+            "A task in state working is alive — do not treat it as failed. Progress items of kind \"status\" arrive at least " +
+            "every 5 minutes with elapsed time and the latest finding; relay them to your human instead of saying nothing." +
+            (PERSONA.latin === "Griffin" ? "" : ` Griffin is the platform; the assistant on this server is called ${PERSONA.latin} (${PERSONA.name}). Its tools keep the griffin_* names.`),
         });
       }
       case "ping":

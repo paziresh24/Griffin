@@ -365,3 +365,158 @@ test("messages queued during a run go in as one merged turn", async () => {
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("plan limit: the run is retried once on the fallback provider with the same message", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-limit-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let limited = true;
+  const sdk = {
+    async create() {
+      return {
+        agentId: `a-${sends.length}`,
+        async send(message) {
+          sends.push(message);
+          const hit = limited;
+          limited = false;
+          return { id: "r", supports: () => true, async cancel() {}, wait: async () => (hit ? { status: "error", error: { message: "You've hit your limit", code: "plan_limit" } } : { status: "finished" }) };
+        },
+      };
+    },
+    async resume() {
+      return this.create();
+    },
+  };
+  const calls = [];
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {}, onPlanLimit: (chat) => (calls.push(chat.id), true) });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => store.listRuns?.(chat.id)?.length === 2 || sends.length === 2);
+    await until(() => !store.runningRuns().length);
+    assert.deepEqual(sends.map((m) => (typeof m === "string" ? m : m.text)), ["سلام", "سلام"]);
+    assert.equal(calls.length, 1);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 2026-10-10: a colleague thread died on every message — Claude resumes lazily, so a session it no
+// longer has fails at send ("No conversation found"). The runner retries once on a fresh session.
+test("a session lost at send time is retried once on a fresh one", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-gone-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const made = [];
+  const agent = (agentId) => ({
+    agentId,
+    async send(message) {
+      sends.push(agentId);
+      const gone = agentId === "stale";
+      return { id: "r", supports: () => true, async cancel() {}, wait: async () => (gone ? { status: "error", error: { message: "No conversation found with session ID: stale", code: "agent_not_found" } } : { status: "finished" }) };
+    },
+  });
+  const sdk = {
+    async create() { made.push("new"); return agent("fresh"); },
+    async resume(id) { return agent(id); },
+  };
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {} });
+  try {
+    const chat = store.createChat({ title: "t" });
+    store.setAgentId(chat.id, "stale");
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => sends.length === 2);
+    await until(() => !store.runningRuns().length);
+    assert.deepEqual(sends, ["stale", "fresh"]);
+    assert.equal(store.getChat(chat.id).agent_id, "fresh");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 2026-10-11: a colleague thread routed GLM → Claude kept its agent_id; the runner returned the cached
+// GLM agent and Z.ai answered "Unknown Model" for "opus". A cached agent belongs to one provider.
+test("a chat whose provider changed does not reuse the other provider's cached agent", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-switch-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const engine = (id) => ({
+    id,
+    async create() { return { agentId: "same", async send() { sends.push(id); return { id: "r", supports: () => true, async cancel() {}, wait: async () => ({ status: "finished" }) }; } }; },
+    async resume() { return this.create(); },
+  });
+  const engines = { openai: engine("openai"), claude: engine("claude") };
+  let current = "openai";
+  const runner = createRunner({ store, providerFor: () => engines[current], agentOptions: () => ({}), log: {} });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "a", images: [] });
+    await until(() => !store.runningRuns().length && sends.length === 1);
+    current = "claude";
+    await runner.send(chat.id, { text: "b", images: [] });
+    await until(() => !store.runningRuns().length && sends.length === 2);
+    assert.deepEqual(sends, ["openai", "claude"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("kept messages: a run that fails before anything reached the owner keeps the message; FIFO, retry, delete", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-kept-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sent = [];
+  let failing = true;
+  const sdk = {
+    async create() {
+      return {
+        agentId: "a1",
+        async send(message, options) {
+          sent.push(typeof message === "string" ? message : message.text);
+          return {
+            id: `sdk-${sent.length}`,
+            supports: () => true,
+            async cancel() {},
+            async wait() {
+              if (failing) return { status: "error", error: { message: "429 rate limit" } };
+              await options.onDelta?.({ update: { type: "text-delta", text: "ok" } });
+              return { status: "finished" };
+            },
+          };
+        },
+        close() {},
+      };
+    },
+  };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {}, info() {} } });
+  const chat = store.createChat({ title: "t" });
+  const finished = () => store.eventsAfter(chat.id).filter((e) => e.type === "run.finished");
+  const kept = () => store.getKv(`kept:${chat.id}`) || [];
+
+  await runner.send(chat.id, { text: "اول" });
+  await until(() => finished().length === 1 && !runner.isActive(chat.id));
+  assert.equal(finished()[0].data.undelivered, true);
+  assert.deepEqual(kept().map((k) => k.message), ["اول"]);
+
+  // A newer message does not jump it: the kept one is retried first, both stay kept on failure.
+  await runner.send(chat.id, { text: "دوم" });
+  await until(() => finished().length === 2 && !runner.isActive(chat.id));
+  assert.deepEqual(sent, ["اول", "اول"]);
+  assert.deepEqual(kept().map((k) => [k.message, k.fails]), [["اول", 1], ["دوم", 0]]);
+
+  // «ارسال دوباره» gets through: the head is delivered and the next kept message follows by itself.
+  failing = false;
+  runner.retry(chat.id);
+  await until(() => finished().length === 4 && !runner.isActive(chat.id));
+  assert.deepEqual(sent.slice(2), ["اول", "دوم"]);
+  assert.deepEqual(kept(), []);
+
+  // «حذف» drops a kept message by id without sending it.
+  failing = true;
+  await runner.send(chat.id, { text: "سوم" });
+  await until(() => finished().length === 5 && !runner.isActive(chat.id));
+  assert.equal(runner.dropKept(chat.id, kept()[0].id), true);
+  assert.deepEqual(kept(), []);
+});

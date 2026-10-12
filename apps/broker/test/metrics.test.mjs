@@ -16,7 +16,7 @@ test("durations and automatic steps", () => {
 });
 
 test("axis domains: near zero keeps 0, far offsets zoom in, flat lines get room", () => {
-  // p24core memory on prod, 24h (2026-09-14): ~2 .. 12.3 GiB. Domains are computed in display units.
+  // api-core memory on prod, 24h (2026-09-14): ~2 .. 12.3 GiB. Domains are computed in display units.
   assert.deepEqual(niceDomain(2, 12.3), [0, 14]);
   // a gauge hovering 900..1000 must not be flattened against a 0 baseline
   assert.deepEqual(niceDomain(900, 1000), [880, 1020]);
@@ -27,15 +27,15 @@ test("axis domains: near zero keeps 0, far offsets zoom in, flat lines get room"
 
 test("series names use the labels that matter", () => {
   assert.equal(seriesName({}), "total");
-  assert.equal(seriesName({ pod: "p24core-a" }), "p24core-a");
+  assert.equal(seriesName({ pod: "api-core-a" }), "api-core-a");
   assert.equal(seriesName({ __name__: "up", job: "x", instance: "y" }), "job=x,instance=y");
 });
 
 test("range query goes through the kube API proxy and falls back to kubectl get --raw", async () => {
   const calls = [];
   const body = { status: "success", data: { resultType: "matrix", result: [
-    { metric: { pod: "p24core-a" }, values: [[1000, "1073741824"], [1300, "2147483648"]] },
-    { metric: { pod: "p24core-b" }, values: [[1000, "536870912"], [1300, "NaN"]] },
+    { metric: { pod: "api-core-a" }, values: [[1000, "1073741824"], [1300, "2147483648"]] },
+    { metric: { pod: "api-core-b" }, values: [[1000, "536870912"], [1300, "NaN"]] },
   ] } };
   const kube = {
     publicRequest: async (cluster, path) => { calls.push(["api", cluster, path]); throw new Error("gateway auth rejected http_302"); },
@@ -46,7 +46,7 @@ test("range query goes through the kube API proxy and falls back to kubectl get 
     },
   };
   const metrics = createMetrics({ kube, now: () => 86_400_000 });
-  const result = await metrics.query({ cluster: "prod", promql: 'sum by (pod) (x{pod=~"p24core-.*"})', range: "24h" });
+  const result = await metrics.query({ cluster: "prod", promql: 'sum by (pod) (x{pod=~"api-core-.*"})', range: "24h" });
   const [, , apiPath] = calls[0];
   assert.ok(apiPath.startsWith(`${PROMETHEUS_PATH}/query_range?`));
   const params = new URL(`http://x${apiPath}`).searchParams;
@@ -57,7 +57,7 @@ test("range query goes through the kube API proxy and falls back to kubectl get 
   const summary = summarizeQuery(result, { maxSeries: 1 });
   assert.equal(summary.seriesTotal, 2);
   assert.equal(summary.truncatedSeries, true);
-  assert.equal(summary.series[0].name, "p24core-a");
+  assert.equal(summary.series[0].name, "api-core-a");
   assert.equal(summary.overall.max, 2 * GiB);
   assert.equal(summary.points, 3, "NaN is not counted");
   assert.deepEqual(summary.suggestedDomain, [0, 2.5e9], "raw units in the agent summary");

@@ -1,6 +1,7 @@
 import { finalText } from "@griffin/timeline";
 import { CALLER_LABELS } from "../agents/registry.mjs";
 import { DEFAULT_TZ } from "../jobs/cron.mjs";
+import { CALL_RE, PERSONA, SIGNATURE_RE } from "../persona.mjs";
 
 // Turning a finished run into messenger messages.
 
@@ -12,6 +13,7 @@ const TOOL_STATUS = {
   kube_get: "خواندن کلاستر",
   kube_logs: "خواندن لاگ",
   kube_df: "فضای دیسک",
+  kube_exec: "اجرای دستور در پاد",
   kube_secret: "خواندن Secret",
   metrics_query: "کوئری متریک",
   pg_query: "کوئری دیتابیس",
@@ -27,13 +29,24 @@ const TOOL_STATUS = {
   s3_get: "دانلود S3",
   mikrotik_print: "خواندن میکروتیک",
   mikrotik_ping: "پینگ میکروتیک",
-  debug_exec: "دستور روی debug",
+  debug_exec: "اجرای دستور",
+  delegate: "شروع بررسی",
+  subtasks: "پیگیری کار",
+  knowledge_list: "خواندن یادداشت‌ها",
+  infisical_get: "خواندن تنظیمات",
+  infisical_list: "خواندن تنظیمات",
+  infisical_upsert: "ثبت تنظیمات",
+  gitlab_mr: "مرج‌ریکوئست",
+  gitlab_pipeline: "پایپ‌لاین",
+  gitlab_propose: "ساخت مرج‌ریکوئست",
+  gitlab_commits: "تاریخچهٔ کد",
   ask_owner: "منتظر تأیید Owner",
   ask_agent: "پرسش از ایجنت دیگر",
   end_agent: "بستن جلسه",
   visualize: "رسم نمودار",
   show_media: "آماده‌سازی فایل",
   telegram_read: "خواندن تلگرام",
+  telegram_media: "دیدن تصویر تلگرام",
   telegram_send: "ارسال تلگرام",
   telegram_dialogs: "فهرست گفتگوها",
   dns_lookup: "DNS",
@@ -69,7 +82,12 @@ export function liveStatusLine(event) {
       const clipped = task.length > 80 ? `${task.slice(0, 80)}…` : task;
       return clipped ? `${who} در حال انجام ${clipped}…` : `${who} در حال انجام درخواست…`;
     }
-    const label = TOOL_STATUS[name] || name;
+    // The question itself is delivered as its own message; a status line naming the tool
+    // («⏳ ask_requester») reached a colleague's chat on 2026-10-06. Unknown tools get a plain
+    // line, never their raw name.
+    if (name === "ask_requester") return null;
+    const label = TOOL_STATUS[name] || "در حال کار…";
+    if (!TOOL_STATUS[name]) return label;
     const hint = [a.cluster, a.namespace, a.pod, a.kind, a.path, a.query, a.chat].filter(Boolean).slice(0, 2).join(" · ");
     return hint ? `${label}: ${hint}` : label;
   }
@@ -135,11 +153,19 @@ export function chunk(text, limit = 3900) {
 }
 
 // Footer on every messenger deliver so peers can tell agent messages from the owner's own words.
-export const AGENT_FOOTER = "— گریفین";
+export const AGENT_FOOTER = `— ${PERSONA.name}`;
+// A sign-off ends its line or is followed by a note «(…)»; «— Griffin پلتفرم ماست» is a sentence.
+const SIGNED = new RegExp(`^([\\s\\S]*?—\\s*${SIGNATURE_RE})(?=[ \\t]*(?:\\n|$|\\())`, "u");
+// An old-name sign-off out of habit becomes the current one.
+const OLD_NAME_TAIL = new RegExp(`—\\s*(?:ایجنت\\s*)?(?:${CALL_RE})\\s*$`, "u");
+const ENDS_SIGNED = new RegExp(`—\\s*${SIGNATURE_RE}\\s*$`, "u");
 
 export function withAgentFooter(text) {
-  const body = String(text ?? "").replace(/\s+$/u, "");
-  if (/—\s*(ایجنت\s*)?گریفین\s*$/u.test(body)) return body || AGENT_FOOTER;
+  // Whatever the model writes after its own signature is a note to itself (a «(… only the owner
+  // knows)» aside reached a colleague, 2026-10-07) — it never goes out.
+  const signed = String(text ?? "").match(SIGNED);
+  const body = (signed ? signed[1] : String(text ?? "")).replace(/\s+$/u, "");
+  if (ENDS_SIGNED.test(body)) return body.replace(OLD_NAME_TAIL, AGENT_FOOTER);
   if (!body) return AGENT_FOOTER;
   return `${body}\n\n${AGENT_FOOTER}`;
 }

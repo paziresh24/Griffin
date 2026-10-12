@@ -4,6 +4,7 @@ import { ApiBase } from "./base.js";
 import { GriffinRuntime } from "./runtime.jsx";
 import { Thread } from "./components/Thread.jsx";
 import { t } from "./i18n.js";
+import { BRAND } from "./brand.js";
 
 export function shareToken(hash = window.location.hash) {
   return hash.match(/^#\/s\/([A-Za-z0-9_-]{32})$/)?.[1] || null;
@@ -30,7 +31,7 @@ export function PublicChat({ token }) {
         const body = await response.json();
         if (!alive) return;
         setState({ chat: body.chat, timeline: body.timeline });
-        document.title = `${body.chat.title} · ${t("گریفین")}`;
+        document.title = `${body.chat.title} · ${BRAND.name}`;
         const running = body.timeline.messages.some((m) => m.role === "assistant" && m.status === "running");
         if (running) timer = setTimeout(load, 4000);
       } catch (error) {

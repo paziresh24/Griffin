@@ -87,3 +87,33 @@ test("reviewed notes are injected into rules; unreviewed and expired are not", a
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// The owner's own notes as a playbook — index in the rules, full note on demand.
+test("playbook: one-line index in the rules, full note via knowledge_list {file}, secrets never served", async () => {
+  const { installRules } = await import("../src/prompt.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-pb-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const root = path.join(dir, "kn");
+  const ws = path.join(dir, "ws");
+  fs.mkdirSync(path.join(root, "playbook"), { recursive: true });
+  fs.mkdirSync(ws, { recursive: true });
+  const note = (desc, body) => `---\nname: x\ndescription: ${desc}\n---\n${body}`;
+  fs.writeFileSync(path.join(root, "playbook", "billing-api-route.md"), note("Billing API 504 fixed at the gateway", "full body of the billing route note"));
+  fs.writeFileSync(path.join(root, "playbook", "leaky.md"), note("has a token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.aaaaaaaaaa"));
+  fs.writeFileSync(path.join(root, "playbook", "MEMORY.md"), "- index");
+
+  const text = fs.readFileSync(installRules(ws, { agent: "griffin", knowledgeRoot: root }), "utf8");
+  assert.match(text, /Playbook/);
+  assert.match(text, /billing-api-route\.md — Billing API 504 fixed at the gateway/);
+  assert.ok(!text.includes("full body of the billing") && !text.includes("leaky.md") && !text.includes("MEMORY.md"));
+
+  const knowledge = createKnowledge({ store, root, git: false });
+  const tools = knowledge.tool(store.createChat({ title: "t", agent: "griffin" }).id);
+  const read = await tools.knowledge_list.execute({ file: "billing-api-route.md" });
+  assert.match(read.content[0].text, /full body of the billing route note/);
+  assert.equal((await tools.knowledge_list.execute({ file: "leaky.md" })).isError, true);
+  assert.equal((await tools.knowledge_list.execute({ file: "../../db.sqlite" })).isError, true);
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

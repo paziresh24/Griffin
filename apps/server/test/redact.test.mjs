@@ -87,3 +87,10 @@ test("arvan apikey+uuid literals are masked wherever they appear, separator or n
   // and in free text (asks, approval questions) through maskText
   assert.doesNotMatch(maskText(`کلید توکنش این بود: apikeyc9fb923a-5f28-5095-a068-087d5629af4f`), /apikeyc9fb/);
 });
+
+test("a secret value seen in a result is masked when the model later types it", () => {
+  const token = "OzTCyg7lT3qz99xoUdSwXXXXXXXXXXXX";
+  redactResult("infisical_get", { name: "T", value: token });
+  const out = redactArgs("debug_exec", { command: `echo -n '${token}' | sha256sum` });
+  assert.equal(out.command, "echo -n '***' | sha256sum");
+});

@@ -12,7 +12,8 @@
 //   tool.updated   { callId, name, args }
 //   tool.done      { callId, name, args, result }
 //   usage          { inputTokens, outputTokens, ... }
-//   run.finished   { status, error? }        finished | error | cancelled
+//   run.started    { retry? }                 a «ارسال دوباره» of a kept message
+//   run.finished   { status, error?, undelivered? }  finished | error | cancelled; undelivered = message kept for retry
 
 export function emptyTimeline() {
   return { messages: [], lastEventId: 0 };
@@ -48,6 +49,7 @@ function reduceMessages(messages, event) {
         status: "running",
         phase: "connecting",
         model: data.model || null,
+        ...(data.retry ? { retry: true } : {}),
         parts: [],
         usage: null,
         error: null,
@@ -98,12 +100,14 @@ function reduceRun(run, event, data) {
     case "tool.done":
       return upsertTool({ ...run, phase: "working" }, event.type, data);
     case "usage":
-      return { ...run, usage: data };
+      // One event per model request; every request bills its full prompt, so the run's cost is the sum.
+      return { ...run, usage: addUsage(run.usage, data) };
     case "run.finished":
       return {
         ...run,
         status: data.status || "finished",
         error: data.error || null,
+        ...(data.undelivered ? { undelivered: true } : {}),
         phase: null,
         parts: run.parts.map((part) => closePart(part, data.status)),
         endedAt: event.at,
@@ -111,6 +115,20 @@ function reduceRun(run, event, data) {
     default:
       return run;
   }
+}
+
+function addUsage(prev, data) {
+  const n = (v) => Number(v) || 0;
+  const input = n(data?.prompt_tokens ?? data?.inputTokens ?? data?.input_tokens);
+  const output = n(data?.completion_tokens ?? data?.outputTokens ?? data?.output_tokens);
+  const cached = n(data?.prompt_tokens_details?.cached_tokens ?? data?.cacheReadTokens ?? data?.cache_read_input_tokens);
+  return {
+    input: n(prev?.input) + input,
+    output: n(prev?.output) + output,
+    cached: n(prev?.cached) + cached,
+    requests: n(prev?.requests) + 1,
+    context: input || n(prev?.context),
+  };
 }
 
 function appendDelta(run, type, text) {

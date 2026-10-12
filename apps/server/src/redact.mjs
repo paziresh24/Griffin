@@ -37,11 +37,27 @@ const SECRET_FIELDS = {
 
 const MAX_DEPTH = 8;
 
+// Secret values already seen in a tool result. Once the model read an app token with
+// infisical_get (masked in the log) and then typed the raw value into a debug_exec command, which no
+// shape-based pattern caught. Every value masked by key/field is remembered and masked anywhere later.
+// ponytail: process-wide, oldest dropped past 2000, empties on restart.
+const seenSecrets = new Set();
+const MIN_SEEN = 12;
+
+function remember(value) {
+  const text = String(value);
+  if (text.length < MIN_SEEN) return;
+  seenSecrets.add(text);
+  if (seenSecrets.size > 2000) seenSecrets.delete(seenSecrets.values().next().value);
+}
+
 // Free-text masking only for tools whose args/results are known to embed credentials verbatim.
 const LITERAL_TOOLS = new Set(["debug_exec", "pg_query", "infisical_get", "infisical_upsert"]);
 
 function maskString(value, { literals = false } = {}) {
-  let out = value.replace(PEM_PRIVATE, MASK).replace(JWT, MASK).replace(TOKEN_LITERAL, MASK).replace(ARVAN_TOKEN, MASK);
+  let out = value;
+  for (const secret of seenSecrets) if (out.includes(secret)) out = out.split(secret).join(MASK);
+  out = out.replace(PEM_PRIVATE, MASK).replace(JWT, MASK).replace(TOKEN_LITERAL, MASK).replace(ARVAN_TOKEN, MASK);
   if (literals) out = out.replace(LITERAL_SECRET, `$1${MASK}`);
   return out.replace(SQL_PASSWORD, (_m, prefix) => `${prefix}'${MASK}'`);
 }
@@ -49,7 +65,10 @@ function maskString(value, { literals = false } = {}) {
 // Strings that are themselves JSON objects (broker results embed JSON in text) are masked from
 // the inside so key-based masking still catches them.
 function walk(value, { literals = false, fields = null, under = false } = {}, depth = 0) {
-  if (under && (typeof value === "string" || typeof value === "number")) return MASK;
+  if (under && (typeof value === "string" || typeof value === "number")) {
+    remember(value);
+    return MASK;
+  }
   if (depth > MAX_DEPTH) return value;
   if (typeof value === "string") {
     const trimmed = value.trimStart();
@@ -71,7 +90,9 @@ function walk(value, { literals = false, fields = null, under = false } = {}, de
     const scalar = typeof item === "string" || typeof item === "number";
     // The result wrapper carries its payload as JSON text under "value" too: open it, don't mask it.
     const embedded = typeof item === "string" && /^\s*[[{]/.test(item);
-    out[key] = scalar && (SECRET_KEY.test(key) || (fields?.keys?.has(key) && !embedded))
+    const secret = scalar && (SECRET_KEY.test(key) || (fields?.keys?.has(key) && !embedded));
+    if (secret) remember(item);
+    out[key] = secret
       ? MASK
       : walk(item, { literals, fields, under: under || Boolean(fields?.under?.has(key)) }, depth + 1);
   }

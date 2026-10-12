@@ -292,6 +292,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
         const body = await c.req.json().catch(() => ({}));
         if (!store.getPeerUser(c.req.param("id"))) return c.json({ error: "not found" }, 404);
         if (body.enabled !== undefined) store.setPeerUserEnabled(c.req.param("id"), Boolean(body.enabled));
+        if (body.trustInPod !== undefined) store.setKv(`peertrust:${c.req.param("id")}`, { inPod: Boolean(body.trustInPod) });
         return c.json({ user: store.getPeerUser(c.req.param("id")) });
       });
       app.post("/api/peers/:id/clients", async (c) => {

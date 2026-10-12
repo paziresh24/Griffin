@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { AlarmClock, ArrowRight, CalendarClock, Check, ChevronDown, Clock, Loader2, MessageSquare, Play, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
-import { agentMeta } from "../brand.js";
+import { BRAND, agentMeta } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
 import { AgentPicker } from "./Controls.jsx";
 
@@ -53,7 +53,7 @@ export function JobsPage({ onBack }) {
           </button>
         </div>
         <p className="mb-5 text-sm leading-6 text-muted-foreground">
-          {t("کارهایی که گریفین خودش زمان‌بندی می‌کند. هر جاب یک دستور + یک ایجنت است؛ در گفتگوی جدا اجرا می‌شود و جواب — با نمودار و فایل — به پیام‌رسان‌هایی که انتخاب کردی می‌رود.")}
+          {t("کارهایی که {name} خودش زمان‌بندی می‌کند. هر جاب یک دستور + یک ایجنت است؛ در گفتگوی جدا اجرا می‌شود و جواب — با نمودار و فایل — به پیام‌رسان‌هایی که انتخاب کردی می‌رود.", { name: BRAND.name })}
         </p>
 
         {!data ? (

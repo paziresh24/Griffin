@@ -10,6 +10,9 @@ const HOST = "https://napi.arvancloud.ir/cdn/4.0";
 const DOMAIN = /^[a-z0-9.-]{3,253}$/;
 const URL_RE = /^https?:\/\/[^\s]{1,2000}$/i;
 const BIND_MAX = 64 * 1024;
+// Page-rule settings copied from a sibling by arvan_page_rule_create (everything but identity/url/seq).
+const PAGE_RULE_COPY = ["url_type", "load_balancer", "edge_compute_id", "cache_level", "waf_status", "fw_status", "acceleration", "slink_status", "status"];
+const pageRuleSummary = (r) => ({ id: r.id, seq: r.seq, url: r.url, url_type: r.url_type, load_balancer: r.load_balancer ?? null, cache_level: r.cache_level, waf: r.waf_status, firewall: r.fw_status, status: r.status });
 
 export function createArvanTools({ vault, fetchImpl = fetch }) {
   async function authHeader() {
@@ -70,6 +73,17 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
     const domain = String(value || "").trim().toLowerCase();
     if (!DOMAIN.test(domain)) throw new ToolInputError("domain must match ^[a-z0-9.-]{3,253}$");
     return domain;
+  }
+
+  async function allPageRules(domain) {
+    const out = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const { body } = await request(`/domains/${encodeURIComponent(domain)}/page-rules`, { params: { page, per_page: 100 } });
+      const items = Array.isArray(body?.data) ? body.data : [];
+      out.push(...items);
+      if (!items.length || page >= Number(body?.meta?.last_page || page)) break;
+    }
+    return out;
   }
 
   // Arvan wraps payloads as { data: … } or { data: { data: … } }; unwrap common shapes.
@@ -189,7 +203,8 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
     },
 
     arvan_cache_settings: {
-      description: "Caching settings for an ArvanCloud CDN domain (read-only).",
+      description:
+        "Caching settings for an ArvanCloud CDN domain (read-only). cache_developer_mode=true means the cache is OFF for the WHOLE domain (everything BYPASS, all traffic to origin) — it is not 'respect origin Cache-Control'; that is cache_ignore_cc=false on one page rule.",
       inputSchema: {
         type: "object",
         properties: { domain: { type: "string", pattern: DOMAIN.source } },
@@ -222,7 +237,7 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
 
     arvan_dns_create: {
       description:
-        "Create ONE new DNS record (A or CNAME) on an ArvanCloud domain. Create-only: refuses if a record with the same name and type already exists; never edits or deletes. Copy ttl/cloud from a sibling record that already points at the right place.",
+        "Create ONE new DNS record (A or CNAME) on an ArvanCloud domain. Create-only: refuses if a record with the same name and type already exists; never edits or deletes. Copy ttl/cloud from a sibling record. For a proxied CNAME, host_header rewrites the Host the origin sees — serving one hostname's traffic to an origin that expects another is often this one record, no other layer to touch.",
       inputSchema: {
         type: "object",
         properties: {
@@ -232,6 +247,7 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
           value: { type: "string", maxLength: 253, description: "IPv4 for A, hostname for CNAME" },
           ttl: { type: "integer", minimum: 120, maximum: 86400 },
           cloud: { type: "boolean", description: "proxy through Arvan CDN" },
+          host_header: { type: "string", pattern: "^[a-z0-9.-]{3,253}$", description: "CNAME only: Host header the origin receives (default 'source' = keep the requested hostname)" },
         },
         required: ["domain", "name", "type", "value"],
         additionalProperties: false,
@@ -243,6 +259,8 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
         const value = String(args.value).trim();
         if (type === "a" && !/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) throw new ToolInputError("A record value must be an IPv4 address");
         if (type === "cname" && !/^[a-z0-9.-]{3,253}$/i.test(value)) throw new ToolInputError("CNAME value must be a hostname");
+        const hostHeader = type === "cname" ? String(args.host_header || "source").toLowerCase() : undefined;
+        if (hostHeader && !/^(source|[a-z0-9.-]{3,253})$/.test(hostHeader)) throw new ToolInputError("host_header must be 'source' or a hostname");
         const { body: listBody } = await request(`/domains/${encodeURIComponent(domain)}/dns-records`);
         const existing = (Array.isArray(dataOf(listBody)) ? dataOf(listBody) : []).filter((r) => String(r.name || "").toLowerCase() === name);
         if (existing.some((r) => String(r.type).toLowerCase() === type || (type === "cname" || String(r.type).toLowerCase() === "cname"))) {
@@ -251,13 +269,13 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
         const json = {
           type,
           name,
-          value: type === "a" ? [{ ip: value, port: null, weight: 100, country: "" }] : { host: value, host_header: "source" },
+          value: type === "a" ? [{ ip: value, port: null, weight: 100, country: "" }] : { host: value, host_header: hostHeader || "source" },
           ttl: Number(args.ttl) || 120,
           cloud: Boolean(args.cloud),
         };
         const { body } = await request(`/domains/${encodeURIComponent(domain)}/dns-records`, { method: "POST", json });
         const r = dataOf(body) || {};
-        return { domain, created: { id: r.id || null, type: r.type || type, name: r.name || name, value: recordValue(r) || value, ttl: r.ttl ?? json.ttl, cloud: r.cloud ?? json.cloud }, source: "arvan-api" };
+        return { domain, created: { id: r.id || null, type: r.type || type, name: r.name || name, value: recordValue(r) || value, ttl: r.ttl ?? json.ttl, cloud: r.cloud ?? json.cloud, ...(hostHeader && hostHeader !== "source" ? { host_header: hostHeader } : {}) }, source: "arvan-api" };
       },
     },
 
@@ -298,6 +316,69 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
         if (!id) throw new ToolInputError("record has no id in the API response — refusing to guess");
         await request(`/domains/${encodeURIComponent(domain)}/dns-records/${encodeURIComponent(id)}`, { method: "DELETE" });
         return { domain, deleted: { id, type: target.type, name: target.name, value: recordValue(target) }, source: "arvan-api" };
+      },
+    },
+
+    arvan_page_rules: {
+      description:
+        "List page rules of an ArvanCloud domain (read-only): id, seq, url pattern, load_balancer (origin), cache_level, waf/firewall, status. Filter with `search` (substring of the url or load balancer, e.g. \"api\"). Use it before arvan_page_rule_create to pick the sibling rule to copy.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string", pattern: DOMAIN.source },
+          search: { type: "string", maxLength: 200 },
+        },
+        required: ["domain"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const domain = requireDomain(args.domain);
+        const rules = await allPageRules(domain);
+        const needle = String(args.search || "").toLowerCase();
+        const shown = rules
+          .filter((r) => !needle || `${r.url} ${r.load_balancer || ""}`.toLowerCase().includes(needle))
+          .map(pageRuleSummary);
+        return { domain, total: rules.length, shown: shown.length, rules: shown.slice(0, 300), source: "arvan-api" };
+      },
+    },
+
+    arvan_page_rule_create: {
+      description:
+        "Create ONE page rule on an ArvanCloud domain by copying every setting (origin load_balancer, cache_level, WAF/firewall, acceleration, status) from an existing sibling rule (copy_from = its id from arvan_page_rules) and changing only the url pattern. Create-only: refuses if a rule with the same url exists; never edits or deletes. seq defaults to the highest existing seq + 1 (a later rule); pass seq to place it before a broader rule that would otherwise shadow it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string", pattern: DOMAIN.source },
+          url: { type: "string", maxLength: 500, description: "full pattern, e.g. https://api.example.com/orders/v1/search*" },
+          copy_from: { type: "string", pattern: "^[0-9a-f-]{36}$", description: "id of the sibling rule whose settings to copy" },
+          seq: { type: "integer", minimum: 1, maximum: 100000 },
+        },
+        required: ["domain", "url", "copy_from"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const domain = requireDomain(args.domain);
+        const url = String(args.url || "").trim();
+        let host;
+        try {
+          host = new URL(url.replace(/\*/g, "x")).hostname.toLowerCase();
+        } catch {
+          throw new ToolInputError("url must be a full https://host/path pattern");
+        }
+        if (!/^https?:\/\//i.test(url) || (host !== domain && !host.endsWith(`.${domain}`))) {
+          throw new ToolInputError(`url must be on ${domain} (got host ${host})`);
+        }
+        const rules = await allPageRules(domain);
+        if (rules.some((r) => String(r.url).toLowerCase() === url.toLowerCase())) {
+          throw new ToolInputError(`a page rule for ${url} already exists — create-only tool, nothing changed`);
+        }
+        const source = rules.find((r) => r.id === args.copy_from);
+        if (!source) throw new ToolInputError(`no page rule ${args.copy_from} on ${domain} — pick copy_from from arvan_page_rules`);
+        const seq = Number(args.seq) || Math.max(0, ...rules.map((r) => Number(r.seq) || 0)) + 1;
+        const json = { url, seq };
+        for (const key of PAGE_RULE_COPY) if (source[key] != null && source[key] !== "") json[key] = source[key]; // Arvan 422s on a null edge_compute_id
+        const { body } = await request(`/domains/${encodeURIComponent(domain)}/page-rules`, { method: "POST", json });
+        return { domain, created: pageRuleSummary(dataOf(body) || { ...json }), copiedFrom: pageRuleSummary(source), source: "arvan-api" };
       },
     },
 

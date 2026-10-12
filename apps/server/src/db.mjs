@@ -240,6 +240,10 @@ export function openStore(file, { seedProvider } = {}) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "sim")) {
     db.exec("ALTER TABLE chats ADD COLUMN sim INTEGER NOT NULL DEFAULT 0");
   }
+  // Simulation chats (sim.mjs): real runs, side effects recorded instead of executed; not listed.
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "sim")) {
+    db.exec("ALTER TABLE chats ADD COLUMN sim INTEGER NOT NULL DEFAULT 0");
+  }
   // Peer-call child chats (ask_agent): hidden from the sidebar; ask_owner routes to the root.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "parent_chat_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN parent_chat_id TEXT");
@@ -256,6 +260,20 @@ export function openStore(file, { seedProvider } = {}) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "provider")) {
     db.exec("ALTER TABLE chats ADD COLUMN provider TEXT NOT NULL DEFAULT 'cursor'");
   }
+  // Side chats: an owner's aside next to a chat, seeded with that chat's
+  // conversation. Not a child (no ask routing, no cancel cascade) and never in the main list.
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "side_of")) {
+    db.exec("ALTER TABLE chats ADD COLUMN side_of TEXT");
+  }
+  // Per-chat repo: the git clone under the repos root a chat works in, and its own
+  // worktree (worktrees.mjs) once the first run made it.
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "repo")) {
+    db.exec("ALTER TABLE chats ADD COLUMN repo TEXT");
+    db.exec("ALTER TABLE chats ADD COLUMN worktree_path TEXT");
+  }
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "effort")) {
+    db.exec("ALTER TABLE chats ADD COLUMN effort TEXT");
+  }
   // Which agent persona runs a scheduled job (immutable per run chat; editable on the job).
   if (!db.prepare("PRAGMA table_info(jobs)").all().some((c) => c.name === "agent")) {
     db.exec("ALTER TABLE jobs ADD COLUMN agent TEXT NOT NULL DEFAULT 'platform'");
@@ -267,14 +285,14 @@ export function openStore(file, { seedProvider } = {}) {
 
   const q = {
     insertChat: db.prepare(
-      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @at, @at)",
+      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, side_of, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @sideOf, @at, @at)",
     ),
     getChat: db.prepare("SELECT * FROM chats WHERE id = ?"),
     listChats: db.prepare(`
       SELECT c.*, r.status AS run_status, r.started_at AS run_started_at
       FROM chats c
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
+      WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
       ORDER BY c.pinned DESC, c.updated_at DESC
       LIMIT 500`),
     // Every top-level chat for the sidebar, tagged with where it came from so each tab lists its
@@ -297,7 +315,7 @@ export function openStore(file, { seedProvider } = {}) {
       LEFT JOIN persons p ON p.id = c.person_id
       LEFT JOIN peer_users pu ON c.caller = 'peer:' || pu.id
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.parent_chat_id IS NULL AND c.sim = 0
+      WHERE c.archived = @archived AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0
       ORDER BY c.pinned DESC, c.updated_at DESC
       LIMIT 800`),
     listChildChats: db.prepare("SELECT id FROM chats WHERE parent_chat_id = ?"),
@@ -355,6 +373,7 @@ export function openStore(file, { seedProvider } = {}) {
       personId = null,
       provider = "cursor",
       sim = false,
+      sideOf = null,
     }) {
       const chat = {
         id: randomUUID(),
@@ -369,11 +388,12 @@ export function openStore(file, { seedProvider } = {}) {
         personId: personId || null,
         provider: normalizeProvider(provider),
         sim: sim ? 1 : 0,
+        sideOf: sideOf || null,
         at: now(),
       };
       q.insertChat.run(chat);
       // Peer children stay out of the sidebar (same idea as job chats).
-      if (!chat.parentChatId && !chat.sim) bus.emit("chats", { type: "created", chatId: chat.id });
+      if (!chat.parentChatId && !chat.sim && !chat.sideOf) bus.emit("chats", { type: "created", chatId: chat.id });
       return store.getChat(chat.id);
     },
 
@@ -390,6 +410,19 @@ export function openStore(file, { seedProvider } = {}) {
       return chatId;
     },
 
+    // Chats on a repo (worktrees.mjs sweep): id and whether archived.
+    listRepoChats() {
+      return db.prepare("SELECT id, archived FROM chats WHERE repo IS NOT NULL").all().map((row) => ({ ...row }));
+    },
+
+    // Side chats of a chat, newest first, with their latest run status.
+    listSideChats(chatId) {
+      return db
+        .prepare(`SELECT c.*, r.status AS run_status FROM chats c LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1) WHERE c.side_of = ? ORDER BY c.created_at DESC LIMIT 100`)
+        .all(String(chatId))
+        .map((row) => ({ ...row }));
+    },
+
     listChildChatIds(parentChatId) {
       return q.listChildChats.all(parentChatId).map((row) => row.id);
     },
@@ -400,6 +433,7 @@ export function openStore(file, { seedProvider } = {}) {
     // Everything that hangs off a chat, for job retention and job deletion.
     deleteChat(id) {
       for (const childId of store.listChildChatIds(id)) store.deleteChat(childId);
+      for (const side of store.listSideChats(id)) store.deleteChat(side.id);
       for (const sql of [
         "DELETE FROM integration_links WHERE chat_id = ?",
         "DELETE FROM shares WHERE chat_id = ?",
@@ -435,7 +469,7 @@ export function openStore(file, { seedProvider } = {}) {
     updateChat(id, patch) {
       const current = store.getChat(id);
       if (!current) return null;
-      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider" };
+      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider", effort: "effort", repo: "repo", worktreePath: "worktree_path" };
       const sets = [];
       const values = [];
       for (const [key, column] of Object.entries(allowed)) {
@@ -488,6 +522,46 @@ export function openStore(file, { seedProvider } = {}) {
       return ids;
     },
 
+    // Rewind: drop this event and everything after it, and detach the model session so the next run
+    // starts clean (the openai provider reseeds prior context from the remaining events). The events
+    // table is the source of truth, so truncating it is the rewind.
+    rewindChat(chatId, fromEventId) {
+      const chat = store.getChat(chatId);
+      if (!chat) return null;
+      db.prepare("DELETE FROM events WHERE chat_id = ? AND id >= ?").run(chatId, Number(fromEventId));
+      db.prepare("UPDATE chats SET agent_id = NULL WHERE id = ?").run(chatId);
+      // Anything folded from the dropped rows is stale now (timeline-cache.mjs).
+      bus.emit("events.rewritten", chatId);
+      bus.emit("chats", { type: "updated", chatId });
+      return store.getChat(chatId);
+    },
+
+    // Prior conversation as plain role/content turns, for reseeding a fresh session after a rewind
+    // or an agent switch. Owner/user messages and the agent's delivered text only — no tool noise.
+    priorTurns(chatId, { limit = 40 } = {}) {
+      const turns = [];
+      let current = null;
+      for (const event of store.allEvents(chatId)) {
+        if (event.type === "user") {
+          const text = String(event.data?.text || "").trim();
+          if (text) turns.push({ role: "user", content: text });
+          current = null;
+        } else if (event.type === "text") {
+          const delta = String(event.data?.text || "");
+          if (!delta) continue;
+          if (!current || current.role !== "assistant" || current.runId !== event.runId) {
+            current = { role: "assistant", content: "", runId: event.runId };
+            turns.push(current);
+          }
+          current.content += delta;
+        }
+      }
+      return turns
+        .map(({ role, content }) => ({ role, content: content.trim() }))
+        .filter((t) => t.content)
+        .slice(-limit);
+    },
+
     appendEvent(chatId, runId, type, data = {}) {
       const at = now();
       const info = q.insertEvent.run(chatId, runId, type, JSON.stringify(data), at);
@@ -501,9 +575,9 @@ export function openStore(file, { seedProvider } = {}) {
       return q.eventsAfter.all(chatId, afterId, limit).map(rowToEvent);
     },
 
-    // All events of a chat, in pages, for folding into a timeline server-side.
-    *allEvents(chatId) {
-      let after = 0;
+    // All events of a chat (after an id), in pages.
+    *allEvents(chatId, afterId = 0) {
+      let after = afterId;
       for (;;) {
         const rows = q.eventsAfter.all(chatId, after, 5000);
         for (const row of rows) yield rowToEvent(row);
@@ -525,6 +599,7 @@ export function openStore(file, { seedProvider } = {}) {
           changed += 1;
         }
       }
+      if (changed) bus.emit("events.rewritten");
       return changed;
     },
 
@@ -658,6 +733,20 @@ export function openStore(file, { seedProvider } = {}) {
       ).run(now(), chatId, String(caller), String(tool), clipJson(args), String(decision), approver, detail == null ? null : clipJson(detail));
     },
 
+    // Token totals of every model request since `since` (ISO), from the usage events.
+    usageSince(since) {
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS requests,
+             COALESCE(SUM(COALESCE(json_extract(data,'$.prompt_tokens'), json_extract(data,'$.inputTokens'), json_extract(data,'$.input_tokens'), 0)), 0) AS input,
+             COALESCE(SUM(COALESCE(json_extract(data,'$.completion_tokens'), json_extract(data,'$.outputTokens'), json_extract(data,'$.output_tokens'), 0)), 0) AS output,
+             COALESCE(SUM(COALESCE(json_extract(data,'$.prompt_tokens_details.cached_tokens'), json_extract(data,'$.cacheReadTokens'), 0)), 0) AS cached
+           FROM events WHERE type = 'usage' AND at >= ?`,
+        )
+        .get(String(since));
+      return { requests: Number(row.requests), input: Number(row.input), output: Number(row.output), cached: Number(row.cached) };
+    },
+
     listApprovals({ limit = 100 } = {}) {
       return db.prepare("SELECT * FROM approvals ORDER BY id DESC LIMIT ?").all(limit);
     },
@@ -669,6 +758,10 @@ export function openStore(file, { seedProvider } = {}) {
 
     setKv(key, value) {
       q.setKv.run(key, JSON.stringify(value));
+    },
+
+    deleteKv(key) {
+      db.prepare("DELETE FROM kv WHERE key = ?").run(key);
     },
 
     // Charts keep their data inside the spec (Vega-Lite "datasets"), so a chart renders the

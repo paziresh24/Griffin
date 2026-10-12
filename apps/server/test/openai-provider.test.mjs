@@ -263,6 +263,33 @@ describe("openai-compatible provider", () => {
     assert.equal(toolsSent.find((t) => t.function.name === "echo").function.parameters.properties.text.type, "string");
   });
 
+  it("a steered message joins the run at the next round, and a finished run refuses it", async () => {
+    const cwd = tempWorkspace();
+    let turn = 0;
+    let release;
+    const slow = {
+      echo: { ...TOOLS.echo, execute: () => new Promise((resolve) => (release = () => resolve({ ok: true, text: "hey" }))) },
+    };
+    mock.on((req, res) => {
+      if (req.url !== "/v1/chat/completions") return { status: 404 };
+      turn += 1;
+      if (turn === 1) sse(res, toolCallChunks("call-s", "echo", '{"text":"hey"}'));
+      else sse(res, textChunks("ok"));
+      return { raw: true };
+    });
+    const agent = providerFor(baseUrl).create({ cwd, customTools: slow });
+    const run = await agent.send("start", { onDelta: () => {} });
+    while (!release) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(await run.steer("also check the replica"), "complete_delivered");
+    release();
+    const result = await run.wait();
+    assert.equal(result.status, "finished");
+    const roles = mock.requests.at(-1).body.messages.map((m) => m.role);
+    assert.deepEqual(roles, ["system", "user", "assistant", "tool", "user"]);
+    assert.match(JSON.stringify(mock.requests.at(-1).body.messages.at(-1).content), /also check the replica/);
+    assert.equal(await run.steer("too late"), "revert_to_followup");
+  });
+
   it("reports a failing tool as an error result and continues", async () => {
     const cwd = tempWorkspace();
     let turn = 0;
@@ -306,6 +333,15 @@ describe("openai-compatible provider", () => {
     assert.equal(result.status, "error");
     assert.match(result.error.message, /context too long/);
     assert.match(result.error.message, /Trim the history/);
+  });
+
+  it("flags a saturated Z.ai window (model-access error) as plan_limit for the two-way fallback", async () => {
+    const cwd = tempWorkspace();
+    mock.on(() => ({ status: 400, body: { error: { message: "There's an issue with the selected model (glm-5.3-flash). It may not exist or you may not have access to it." } } }));
+    const provider = providerFor(baseUrl);
+    const { result } = await runSend(provider.create({ cwd }), "go");
+    assert.equal(result.status, "error");
+    assert.equal(result.error.code, "plan_limit", "runner falls back to the other provider on this");
   });
 
   it("maps reasoning deltas to thinking events", async () => {

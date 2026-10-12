@@ -1,0 +1,19 @@
+{
+  "ترمینال": "Terminal",
+  "فایل‌ها": "Files",
+  "مرورگر وب": "Web browser",
+  "بازگشت": "Back",
+  "میز کار": "Workbench",
+  "sandbox — بدون دسترسی به کلاستر": "sandbox — no cluster access",
+  "sandbox پیکربندی نشده است": "The sandbox is not configured",
+  "میز کار روی میزبان sandbox کارگزار ابزارها اجرا می‌شود. کارگزار و سرویس sandbox را راه بینداز (راهنمای استقرار) و دوباره باز کن.": "The workbench runs on the tool broker's sandbox host. Start the broker and the sandbox service (see the deployment guide) and open this page again.",
+  "ترمینال sandbox. یک دستور بنویس و Enter بزن.": "Sandbox terminal. Type a command and press Enter.",
+  "خطا": "Error",
+  "دستور…": "Command…",
+  "خالی": "Empty",
+  "(خالی یا دودویی)": "(empty or binary)",
+  "یک فایل را انتخاب کن": "Pick a file",
+  "آدرس باید با http(s) شروع شود": "The address must start with http(s)",
+  "برو": "Go",
+  "آدرسی را از طریق sandbox باز کن": "Open an address through the sandbox"
+}

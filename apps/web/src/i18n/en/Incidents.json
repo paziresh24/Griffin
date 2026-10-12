@@ -13,7 +13,7 @@
  "سیگنال انسانی (پیام همکاران)": "Human signals (teammate messages)",
  "آلارم‌ها": "Alerts",
  "کدام مورد عمدی است؟ خالی = کل حادثه": "Which item is intentional? Leave empty for the whole incident",
- "چرا عمدی است؟ (گریفین دیگر برای این هشدار بیدار نمی‌شود)": "Why is it intentional? (Griffin will no longer wake up for this alert)",
+ "چرا عمدی است؟ ({name} دیگر برای این هشدار بیدار نمی‌شود)": "Why is it intentional? ({name} will no longer wake up for this alert)",
  "برداشته شد": "Removed",
  "ثبت شد: عمدی": "Marked as intentional",
  "برداشتن «عمدی»": "Remove “intentional”",
@@ -38,5 +38,5 @@
  "عمدی: {list}": "Intentional: {list}",
  "کل حادثه": "whole incident",
  "؛ ": "; ",
- "آلارم‌های سیستم‌هایی که وصل کرده‌ای بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. گریفین در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.": "Alerts from the systems you connected are grouped into incidents without an LLM; work messages from colleagues count as a “human signal”. Griffin triages them in the ops room and records the result here — currently in shadow mode, without messaging anyone."
+ "آلارم‌های سیستم‌هایی که وصل کرده‌ای بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. {name} در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.": "Alerts from the systems you connected are grouped into incidents without an LLM; work messages from colleagues count as a “human signal”. {name} triages them in the ops room and records the result here — currently in shadow mode, without messaging anyone."
 }

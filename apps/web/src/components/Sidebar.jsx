@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import {
-  AlarmClock, Radar, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
+  AlarmClock, Radar, TerminalSquare, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
   Filter, FolderTree, LogOut, MessageCircle, MoreHorizontal, Pencil, Pin, PinOff, Search,
   Settings2, Users, X,
 } from "lucide-react";
@@ -39,6 +39,7 @@ const SECTIONS = {
   telegram: { page: "telegram", label: t("رشته‌های تلگرام") },
   peer: { page: "peers", label: t("کارهای همتاها") },
   ops: { page: "incidents", label: t("اتاق‌های عملیات") },
+  workbench: { page: "workbench", label: t("میز کار") },
   job: { page: "jobs", label: t("اجراهای جاب") },
 };
 const sectionOfPage = (page) => Object.keys(SECTIONS).find((k) => SECTIONS[k].page === page && page) || null;
@@ -159,6 +160,7 @@ export function Sidebar({ chats, archived, activeId, activeSource = null, page =
         <NavButton active={section === "job"} icon={AlarmClock} label={t("جاب")} onClick={() => { window.location.hash = "/jobs"; onClose?.(); }} />
         <NavButton active={section === "ops"} icon={Radar} label={t("حادثه‌ها")} onClick={() => { window.location.hash = "/incidents"; onClose?.(); }} />
         <NavButton active={section === "peer"} icon={Users} label={t("همتاها")} onClick={() => { window.location.hash = "/peers"; onClose?.(); }} />
+        <NavButton active={section === "workbench"} icon={TerminalSquare} label={t("میز کار")} onClick={() => { window.location.hash = "/workbench"; onClose?.(); }} />
       </div>
 
       <div className="my-4 flex items-center justify-center" aria-hidden>

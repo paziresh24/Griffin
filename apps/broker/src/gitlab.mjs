@@ -404,7 +404,7 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
     },
 
     gitlab_pipeline: {
-      description: "Read a GitLab pipeline: status and each job (stage, status, failure_reason), with the log tail of failed jobs.",
+      description: "Read a GitLab pipeline: status and each job (stage, status, failure_reason), with the log tail of failed jobs. Without id: the project's recent pipelines (id, ref, status, time) — use that to find the one to read.",
       inputSchema: {
         type: "object",
         properties: {
@@ -414,11 +414,22 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
           retryFailed: { type: "boolean", description: "retry the failed jobs (safe for runner/system failures; do not use to paper over real test failures)" },
           playJob: { type: "string", maxLength: 200, description: "start this manual job by name (e.g. runner:publish-images)" },
         },
-        required: ["project", "id"],
+        required: ["project"],
         additionalProperties: false,
       },
       async execute(args) {
         const project = projectRef(args.project);
+        // No id used to become /pipelines/NaN, and the agent fell back to curl with someone
+        // else's token from the secret store just to list pipelines (2026-10-06).
+        if (args.id == null) {
+          if (args.playJob || args.retryFailed) throw new ToolInputError("id is required to play or retry");
+          const { body: list } = await api(`/projects/${project}/pipelines`, { params: { per_page: 20, order_by: "id", sort: "desc" } });
+          return {
+            project: args.project,
+            pipelines: (list || []).map((p) => ({ id: p.id, ref: p.ref, status: p.status, sha: String(p.sha || "").slice(0, 8), createdAt: p.created_at, updatedAt: p.updated_at })),
+            source: "gitlab api",
+          };
+        }
         const id = Number(args.id);
         if (args.playJob) {
           if (!canMutate()) throw new ToolInputError("GitLab changes are not enabled for this caller");

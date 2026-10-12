@@ -25,17 +25,25 @@ to your own systems — on Claude, Cursor or any OpenAI-compatible model, includ
 
 ## Two minutes to your own
 
-**With Docker** — one line, no clone:
+**With Docker** — one line, no clone, no key needed up front:
 
 ```bash
-docker run -d --name griffin -p 3100:3100 -v griffin-data:/data \
-  -e ANTHROPIC_API_KEY=sk-ant-… ghcr.io/paziresh24/griffin:latest
+docker run -d --name griffin --restart unless-stopped -p 3100:3100 -v griffin-data:/data \
+  ghcr.io/paziresh24/griffin:latest
 docker exec griffin cat /data/owner.token   # the token you log in with
 ```
 
-Use `-e OPENAI_API_KEY=…` (plus `-e GRIFFIN_OPENAI_BASE_URL=…` for a local or other OpenAI-compatible
-server) or `-e CURSOR_API_KEY=…` instead; the first agent uses whichever key you give it. No key yet?
-`-e GRIFFIN_DEMO=1` runs a scripted demo.
+Open `http://127.0.0.1:3100`, log in, and the **setup wizard** walks you through it: pick an engine
+(Claude subscription token from `claude setup-token`, Anthropic API key, OpenAI, OpenRouter, a local
+Ollama, any OpenAI-compatible endpoint, or Cursor), paste the key, and it is tested with a real call
+on the spot — a rejected key, a region block, a network problem or an empty balance each say so in
+plain words. Then name your assistant and, if you like, connect a Telegram or Bale bot.
+
+Prefer env? `-e ANTHROPIC_API_KEY=…` (an `sk-ant-oat…` subscription token works too),
+`-e OPENAI_API_KEY=…` with `-e GRIFFIN_OPENAI_BASE_URL=…`, or `-e CURSOR_API_KEY=…`. Behind a
+firewall or in a blocked region, set an outgoing proxy in the wizard (or `-e GRIFFIN_PROXY=http://host:port`).
+For Ollama on the same machine add `--add-host=host.docker.internal:host-gateway`.
+No key yet? `-e GRIFFIN_DEMO=1` runs a scripted demo.
 
 **From source:**
 
@@ -49,7 +57,7 @@ GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src
 ```
 
 Open `http://127.0.0.1:3100`, log in with the token at `data/owner.token`, and start talking to the
-agent that is already there. No cluster, no vault, no YAML: a fresh install is a chat with one
+agent that is already there (no key file? the setup wizard opens first). No cluster, no vault, no YAML: a fresh install is a chat with one
 agent, and everything else is something you add when you want it.
 
 Or stay in the terminal:
@@ -64,6 +72,18 @@ node bin/griffin.mjs agents                                   # who exists, what
 
 To look around before wiring anything up, `GRIFFIN_DEMO=1 GRIFFIN_AUTH=off …` replaces the model
 with a scripted stand-in — the screenshots on this page are that demo.
+
+## It checks and repairs itself
+
+**Settings → Health** runs a live check: every engine gets a real call (and the reason it fails),
+agents sitting on an engine that does not answer, recent runs that failed or came back empty, stuck
+runs, messenger connections, disk space and the last server errors — each with a one-click fix and
+the wizard that sets it right. Every 15 minutes the same check repairs what is safe on its own: an
+agent whose engine rejects its key or is region-blocked moves to an engine that answers, and moves
+back once its own engine heals; stuck runs are stopped. The assistant has the same check as tools
+(`self_check`, `self_fix`), so "it does not work" is something you can ask it about.
+`GRIFFIN_SELF_HEAL=off` keeps the report and turns the automatic part off;
+`node bin/griffin.mjs doctor` prints the report in a terminal.
 
 ## Make an agent
 

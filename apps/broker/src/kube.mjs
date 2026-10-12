@@ -9,6 +9,8 @@ import { shellQuote } from "./ssh.mjs";
 //     "prod": { "api": "https://k8s.example.com",
 //               "emergency": { "host": "203.0.113.10", "port": 22, "user": "root", "kubectl": "kubectl" } }
 //   }
+// An emergency entry may name its own vault key ("keySlug"); a dedicated unprivileged node user with
+// its own key is better than root with the owner's.
 export const DEFAULT_CLUSTERS = {};
 
 export const K8S_NAME = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;

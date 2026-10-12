@@ -6,6 +6,7 @@ import path from "node:path";
 import { createAsks, ASK_TOOL } from "../src/asks.mjs";
 import { openStore } from "../src/db.mjs";
 import { createIntegrations } from "../src/integrations/manager.mjs";
+import { coverageOwnerNote } from "../src/integrations/coverage.mjs";
 import { answerStamp, chunk, liveStatusLine, markdownToPlain, markdownToTelegramHtml, withAgentFooter } from "../src/integrations/format.mjs";
 import { createRunner } from "../src/runner.mjs";
 import { seedExampleAgents } from "./fixture-agents.mjs";
@@ -42,7 +43,7 @@ function fakeBotApi() {
   return { fetchImpl, calls, push, sent: () => calls.filter((c) => /^send/.test(c.method)) };
 }
 
-function setup() {
+function setup({ pendingWork } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-int-"));
   const store = openStore(path.join(dir, "db.sqlite"));
   seedExampleAgents(store);
@@ -84,7 +85,7 @@ function setup() {
     },
   };
   const runner = createRunner({ store, sdk, log: {}, onCancel: (c) => asks.cancel(c), agentOptions: (chat) => ({ local: { customTools: { [ASK_TOOL]: asks.tool(chat.id) } } }) });
-  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, log: {} });
+  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, pendingWork, log: {} });
   integrationsHolder.current = integrations;
   const cleanup = async () => {
     integrations.stopAll();
@@ -273,9 +274,12 @@ test("formatting", () => {
     "platform در حال انجام فضای آزاد دیسک ۱…",
   );
   assert.equal(liveStatusLine({ type: "text.delta" }), null);
+  assert.equal(liveStatusLine({ type: "tool.started", data: { name: "ask_requester" } }), null, "the question is its own message");
+  assert.equal(liveStatusLine({ type: "tool.started", data: { name: "some_internal_tool", args: { cluster: "c1" } } }), "در حال کار…", "never a raw tool name");
   assert.match(withAgentFooter("سلام"), /سلام\n\n— گریفین$/);
   assert.equal(withAgentFooter(withAgentFooter("سلام")), withAgentFooter("سلام"));
   assert.equal(withAgentFooter("سلام\n\n— گریفین"), "سلام\n\n— گریفین");
+  assert.equal(withAgentFooter("سلام\n\n— گریفین (یادداشت داخلی)"), "سلام\n\n— گریفین");
 });
 
 test("telegram account: live status edits one line then deletes before final", async () => {
@@ -709,8 +713,11 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
     sendMessage: async () => ({ id: 900 }), editMessage: async () => {}, deleteMessages: async () => {},
     getEntity: async () => ({ firstName: "Karimi", username: "skarimi" }),
     getDialogs: async () => [], getMessages: async () => [], disconnect: async () => {},
+    invoke: async (req) => { reactions.push([Number(req.msgId), req.reaction[0].emoticon]); },
   };
-  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
+  const reactions = [];
+  const Api = { messages: { SendReaction: function (o) { Object.assign(this, o); } }, ReactionEmoji: function (o) { Object.assign(this, o); } };
+  const load = async () => ({ TelegramClient: function () { return fakeClient; }, Api, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
   const covered = new Map();
   const received = [];
   const classified = [];
@@ -726,7 +733,9 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
     classifyThread: async (args) => { classified.push(args); return { start: /خرابه|درست کن/.test(args.message), topic: "پوش با توکن", reason: "request" }; },
     startCoverage: async (_id, peer, meta) => { covered.set(String(peer), meta); return meta; },
     endCoverage: async (_id, peer) => { covered.delete(String(peer)); return null; },
+    handOver: async (_id, peer) => { handedOver.push(String(peer)); return true; },
   };
+  const handedOver = [];
   const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
   await channel.start();
   const dm = (id, text, out = false) => handler({ message: { out, chatId: 272188041n, peerId: { userId: 272188041n }, id, message: text } });
@@ -744,13 +753,33 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
   const before = classified.length;
   await dm(3, "اشتباه نمیکنه؟");
   assert.equal(classified.length, before, "inside a thread nothing is re-classified");
+  // 2026-10-07: the colleague (and the owner) see Griffin picked it up — 👀, then 👍 when answered.
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(reactions.at(-1), [3, "👀"]);
+  await channel.deliver("272188041", { text: "دارم بررسی می‌کنم", done: false });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(reactions.at(-1), [3, "👀"], "a holding line while subtasks run is not done");
+  await channel.deliver("272188041", { text: "بررسی شد" });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(reactions.at(-1), [3, "👍"]);
   assert.match(received.at(-1)[2].text, /^«سارا کریمی»: /);
   assert.match(received.at(-1)[2].text, /اشتباه نمیکنه؟$/);
 
+  // 2026-10-06: the owner answering himself takes the thread over — Griffin's run and subtasks stop
+  // and the colleague's next messages do not wake it, unless they call «گریفین».
+  const fed = received.length;
   await dm(4, "من خودم چکش کردم، توکنش مال کریمیه", true);
-  assert.equal(covered.has("272188041"), true, "the owner typing does not close the thread or cancel its work");
-  assert.match(received.at(-1)[2].text, /در تلگرام به سارا کریمی»: /, "the owner's message reaches the thread as context");
-  covered.delete("272188041");
+  assert.equal(covered.has("272188041"), true, "the owner typing does not close the thread");
+  assert.deepEqual(handedOver, ["272188041"], "Griffin's work on it is stopped");
+  assert.equal(received.length, fed, "and nothing is fed to Griffin");
+  await dm(43, "مرسی، الان چک می‌کنم");
+  assert.equal(received.length, fed, "the colleague's reply to the owner does not wake Griffin");
+  await dm(44, "گریفین لاگش رو هم بیار");
+  assert.equal(received.length, fed + 1, "a direct «گریفین» still reaches it");
+  await dm(45, "بله، بهتون کمک میکنه", true);
+  assert.match(received.at(-1)[2].text, /در تلگرام به سارا کریمی»: بله/, "the owner handing work to Griffin reaches the thread");
+  assert.equal(handedOver.length, 1, "and is not a takeover");
+  covered.delete("272188041"); // Griffin closed it with end_agent
 
   const asked = classified.length;
   await dm(41, "سرور خرابه درست کن");
@@ -828,4 +857,124 @@ test("a colleague on the team roster is marked team on first contact", async () 
   } finally {
     await cleanup();
   }
+});
+
+test("unwrapBrackets strips a reply wrapped whole in [ … ] and nothing else", async () => {
+  const { unwrapBrackets } = await import("../src/integrations/manager.mjs");
+  assert.equal(unwrapBrackets("[چیزی باز نیست. — گریفین]"), "چیزی باز نیست. — گریفین");
+  assert.equal(unwrapBrackets("[NO_REPLY]"), "[NO_REPLY]");
+  assert.equal(unwrapBrackets("[a] و [b]"), "[a] و [b]");
+  assert.equal(unwrapBrackets("متن عادی"), "متن عادی");
+});
+
+// 2026-10-06: cancelling a stale run in a colleague's bot chat sent it «⏹ متوقف شد — گریفین».
+test("a cancelled run says nothing to a colleague; the owner still sees it stopped", async () => {
+  const { store, bot, integrations, cleanup } = setup();
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "555:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    store.updateIntegration(added.id, { settings: { pairedChats: ["777"], pairedNames: { 777: "Owner" }, username: "owner_bot" } });
+    const run = (chat, status) => {
+      const runId = store.startRun(chat.id);
+      store.appendEvent(chat.id, runId, "run.started", {});
+      store.appendEvent(chat.id, runId, "text", { text: "نیمه‌کاره" });
+      store.finishRun(chat.id, runId, status, null);
+      store.appendEvent(chat.id, runId, "run.finished", { status });
+    };
+    const peer = store.createChat({ title: "peer", caller: "peer:sara-karimi", agent: "griffin" });
+    store.linkChat(added.id, "35131033", peer.id);
+    const mine = store.createChat({ title: "mine", caller: "owner", agent: "griffin" });
+    store.linkChat(added.id, "777", mine.id);
+    run(peer, "cancelled");
+    run(mine, "cancelled");
+    await until(() => bot.sent().some((c) => String(c.body.chat_id) === "777" && /متوقف/.test(c.body.text || "")));
+    assert.equal(bot.sent().some((c) => String(c.body.chat_id) === "35131033" && c.body.text), false);
+  } finally {
+    await cleanup();
+  }
+});
+
+// 2026-10-06: «handed it to the specialist…» reached a colleague's bot — a subtask-report wake with work still open
+// says nothing in a peer agent's chat either, not only in a colleague thread.
+test("an internal wake (subtask report, owner note) with open subtasks says nothing to the colleague", async () => {
+  const { store, bot, integrations, cleanup } = setup({ pendingWork: () => 1 });
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "555:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    // 2026-10-08: the owner's web note in a colleague thread is the same kind of internal wake.
+    const cases = [
+      ["peer:sara-karimi", "35131033", "[گزارش خودکار زیرکارها] یکی تمام شد"],
+      ["team", "4242", coverageOwnerNote("رضا", "ادامه بده")],
+    ];
+    for (const [caller, external, trigger] of cases) {
+      const peer = store.createChat({ title: "peer", caller, agent: "griffin" });
+      store.linkChat(added.id, external, peer.id);
+      const runId = store.startRun(peer.id);
+      store.appendEvent(peer.id, null, "user", { text: trigger });
+      store.appendEvent(peer.id, runId, "run.started", {});
+      store.appendEvent(peer.id, runId, "text", { text: "سپردم به متخصص، خبر میدم" });
+      store.finishRun(peer.id, runId, "finished", null);
+      store.appendEvent(peer.id, runId, "run.finished", { status: "finished" });
+    }
+    await new Promise((r) => setTimeout(r, 100));
+    // The ⏳ status line is expected in a colleague thread; the answer is not.
+    for (const [, external] of cases) assert.equal(bot.sent().some((c) => String(c.body.chat_id) === external && c.body.text && !/^⏳/.test(c.body.text)), false, external);
+  } finally {
+    await cleanup();
+  }
+});
+
+// 2026-10-07 (owner): one message that keeps showing what Griffin is doing, deleted for the final
+// answer — including the ~20 minutes a delegated subtask runs after the /agent run itself ended.
+test("a subtask's progress updates the colleague chat's status line; a peer agent's chat gets none", async () => {
+  const { store, bot, integrations, cleanup } = setup();
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "555:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    const root = store.createChat({ title: "/agent · x", caller: "team", agent: "griffin" });
+    store.linkChat(added.id, "111", root.id);
+    const child = store.createChat({ title: "sub", caller: "griffin", agent: "platform", parentChatId: root.id });
+    store.appendEvent(child.id, "r", "run.started", {});
+    await until(() => bot.sent().some((c) => String(c.body.chat_id) === "111" && /^⏳/.test(c.body.text || "")));
+
+    const peer = store.createChat({ title: "peer", caller: "peer:x", agent: "griffin" });
+    store.linkChat(added.id, "222", peer.id);
+    const peerChild = store.createChat({ title: "sub", caller: "griffin", agent: "platform", parentChatId: peer.id });
+    store.appendEvent(peerChild.id, "r", "run.started", {});
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(bot.sent().some((c) => String(c.body.chat_id) === "222"), false);
+  } finally {
+    await cleanup();
+  }
+});
+
+// 2026-10-08 (a colleague's chat): a status still being sent when the answer went out, and a failed
+// edit that sent a fresh line, left four «⏳» messages behind.
+test("telegram account: no status line survives the answer, even when racing or an edit fails", async () => {
+  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
+  const live = new Set();
+  let nextId = 900;
+  let editFails = false;
+  const fakeClient = {
+    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
+    addEventHandler: () => {},
+    sendMessage: async (_to, { message }) => { await new Promise((r) => setTimeout(r, 30)); const id = ++nextId; live.add(`${id}:${message.slice(0, 1)}`); return { id }; },
+    editMessage: async () => { if (editFails) throw new Error("MESSAGE_ID_INVALID"); },
+    deleteMessages: async (_to, ids) => { for (const id of ids) for (const k of [...live]) if (k.startsWith(`${id}:`)) live.delete(k); },
+    getEntity: async (x) => x, getDialogs: async () => [], getMessages: async () => [], disconnect: async () => {},
+  };
+  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
+  const bridge = { receive: async () => {}, answer: async () => false, answerOwnerAsk: async () => false, isCovered: () => false, coverageName: () => null, startCoverage: async () => ({}), endCoverage: async () => null };
+  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
+  await channel.start();
+  const statuses = () => [...live].filter((k) => k.endsWith(":⏳")).length;
+
+  channel.deliver("55", { status: "منتظر تأیید Owner" }); // not awaited — the manager fires these
+  await channel.deliver("55", { text: "سلام، دارم انجام می‌دهم" });
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(statuses(), 0, "a status in flight is deleted with the answer");
+
+  await channel.deliver("55", { status: "خواندن تنظیمات" });
+  editFails = true;
+  await channel.deliver("55", { status: "اجرای دستور" });
+  assert.equal(statuses(), 2, "a failed edit sends a fresh line");
+  await channel.deliver("55", { text: "تمام شد" });
+  assert.equal(statuses(), 0, "both lines go with the final answer");
 });

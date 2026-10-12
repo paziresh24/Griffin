@@ -286,6 +286,22 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
               }}
             />
           </label>
+          <label className="block text-xs text-muted-foreground">
+            {t("میزان فکر پیش‌فرض")}
+            <select
+              className={`${input} mt-1`}
+              value={agent.effort || ""}
+              disabled={busy}
+              onChange={(e) => onPatch({ effort: e.target.value })}
+            >
+              <option value="">{t("خودکار (پیش‌فرض موتور)")}</option>
+              <option value="low">{t("کم — سریع و ارزان")}</option>
+              <option value="medium">{t("متوسط")}</option>
+              <option value="high">{t("زیاد")}</option>
+              <option value="xhigh">{t("خیلی زیاد (فقط Claude)")}</option>
+              <option value="max">{t("حداکثر (فقط Claude)")}</option>
+            </select>
+          </label>
         </section>
 
         <section className="mb-6 space-y-3 rounded-2xl border bg-card p-4">

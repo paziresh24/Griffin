@@ -99,11 +99,14 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
     const given = String(args.projectId || cfg.projectId || "");
     if (!given) throw new ToolInputError("projectId is required (no default in infisical__universal-auth)");
     if (UUID.test(given)) return given;
-    if (!projectsByName) {
+    // Refresh on a miss: a project created after the first lookup (infisical_create_project) was
+    // "unknown" to infisical_upsert for the rest of the broker's life.
+    let id = projectsByName?.get(given.toLowerCase());
+    if (!id) {
       const body = await call(cfg, "GET", "/api/v1/workspace");
       projectsByName = new Map((body.workspaces || []).map((w) => [String(w.name || "").toLowerCase(), w.id || w._id]));
+      id = projectsByName.get(given.toLowerCase());
     }
-    const id = projectsByName.get(given.toLowerCase());
     if (id) return id;
     // Not a name we know: pass it through (it may still be a valid id) but say what the names are,
     // because "Project with ID '<name>' not found" on its own sends the agent hunting.
@@ -131,7 +134,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
   const envArg = { type: "string", description: "environment slug (default prod)" };
   const pathArg = { type: "string", description: "folder path, e.g. /billing (default /)" };
 
-  return {
+  const tools = {
     infisical_projects: {
       description: "List the Infisical projects (workspaces) this identity can see, with their ids. Use it to find the projectId for the other Infisical tools.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -525,4 +528,132 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
       },
     },
   };
+
+  // A colleague's own agent reads its project with a machine identity of its own.
+  // The pieces — identity, Universal Auth, project membership, a client secret — had no tool, so once
+  // the model went for Infisical's instance-admin secret and its database instead (and
+  // leaked the bootstrap password into chat events). This does the whole thing with the broker's own
+  // identity; the client secret goes straight into the project and never reaches the model.
+  tools.infisical_machine_identity = {
+    description:
+      "Give a person's agent its own read-only Infisical machine identity: creates the identity (or reuses one with that name), enables Universal Auth, makes it a member of the person's project, mints a client secret and stores INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET in that project (prod, /). Optionally adds the person (memberEmail) to the project. Verifies by logging in as the new identity. The secret value is never returned. Use this instead of touching Infisical's admin account or database.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "identity name, kebab-case, e.g. jane-doe-agents-ro" },
+        projectId: { type: "string", description: "the person's project (name or id)" },
+        role: { type: "string", enum: ["viewer", "member"], description: "project role for the identity (default viewer)" },
+        memberEmail: { type: "string", description: "also add this person (by email) to the project as viewer" },
+        rotate: { type: "boolean", description: "mint a new client secret even if the project already has one" },
+      },
+      required: ["name", "projectId"],
+      additionalProperties: false,
+    },
+    async execute(args) {
+      const cfg = await config();
+      const name = String(args.name || "").trim();
+      if (!PROJECT_NAME.test(name)) throw new ToolInputError("invalid identity name: lowercase letters, digits and dashes");
+      const workspaceId = await project(cfg, args);
+      const role = args.role === "member" ? "member" : "viewer";
+      const workspaces = (await call(cfg, "GET", "/api/v1/workspace")).workspaces || [];
+      const orgId = workspaces.find((w) => (w.id || w._id) === workspaceId)?.orgId || workspaces[0]?.orgId;
+      if (!orgId) throw new Error("could not find the organization id");
+      const steps = [];
+
+      const memberships = await call(cfg, "GET", `/api/v2/organizations/${orgId}/identity-memberships`, { query: { limit: 1000 } });
+      let identityId = (memberships.identityMemberships || []).find((m) => m.identity?.name === name)?.identity?.id;
+      if (identityId) steps.push("identity: exists");
+      else {
+        const created = await call(cfg, "POST", "/api/v1/identities", { body: { name, organizationId: orgId, role: "no-access" } });
+        identityId = created.identity?.id;
+        if (!identityId) throw new Error("Infisical created no identity id");
+        steps.push("identity: created");
+      }
+
+      let clientId;
+      try {
+        clientId = (await call(cfg, "GET", `/api/v1/auth/universal-auth/identities/${identityId}`)).identityUniversalAuth?.clientId;
+        steps.push("universal-auth: exists");
+      } catch (error) {
+        if (error.status !== 404 && error.status !== 400) throw error;
+        const anyIp = [{ ipAddress: "0.0.0.0/0" }, { ipAddress: "::/0" }];
+        const ua = await call(cfg, "POST", `/api/v1/auth/universal-auth/identities/${identityId}`, {
+          body: { accessTokenTTL: 2592000, accessTokenMaxTTL: 2592000, accessTokenNumUsesLimit: 0, accessTokenTrustedIps: anyIp, clientSecretTrustedIps: anyIp },
+        });
+        clientId = ua.identityUniversalAuth?.clientId;
+        steps.push("universal-auth: enabled");
+      }
+      if (!clientId) throw new Error("no Universal Auth clientId for the identity");
+
+      try {
+        await call(cfg, "POST", `/api/v2/workspace/${workspaceId}/identity-memberships/${identityId}`, { body: { role } });
+        steps.push(`project membership: ${role}`);
+      } catch (error) {
+        if (!/already|exists/i.test(error.message)) throw error;
+        steps.push("project membership: exists");
+      }
+
+      if (args.memberEmail) {
+        try {
+          await call(cfg, "POST", `/api/v2/workspace/${workspaceId}/memberships`, { body: { emails: [String(args.memberEmail)], roleSlugs: ["viewer"] } });
+          steps.push(`person ${args.memberEmail}: viewer`);
+        } catch (error) {
+          steps.push(`person ${args.memberEmail}: ${/already|exists/i.test(error.message) ? "already a member" : error.message}`);
+        }
+      }
+
+      const read = (n) =>
+        call(cfg, "GET", `/api/v3/secrets/raw/${n}`, { query: { workspaceId, environment: "prod", secretPath: "/" } }).then((b) => b.secret?.secretValue ?? null, () => null);
+      // Reuse a stored secret only if it belongs to this identity (a stale CLIENT_ID from an earlier
+      // attempt paired with a fresh secret failed exactly this way once).
+      let secret = !args.rotate && (await read("INFISICAL_CLIENT_ID")) === clientId ? await read("INFISICAL_CLIENT_SECRET") : null;
+      if (!secret) {
+        const minted = await call(cfg, "POST", `/api/v1/auth/universal-auth/identities/${identityId}/client-secrets`, {
+          body: { description: `griffin ${new Date().toISOString().slice(0, 10)}`, ttl: 0, numUsesLimit: 0 },
+        });
+        secret = minted.clientSecret;
+        if (!secret) throw new Error("Infisical minted no client secret");
+        await tools.infisical_upsert.execute({ name: "INFISICAL_CLIENT_ID", value: clientId, projectId: workspaceId });
+        await tools.infisical_upsert.execute({ name: "INFISICAL_CLIENT_SECRET", value: secret, projectId: workspaceId });
+        steps.push("client secret: minted and stored");
+      } else steps.push("client secret: already stored");
+
+      // Proof, not hope: log in as the new identity and list the project.
+      let verified = false;
+      let secretsVisible = null;
+      let verifyError = null;
+      try {
+        const login = await fetchImpl(`${cfg.host}/api/v1/auth/universal-auth/login`, {
+          method: "POST",
+          headers: { "content-type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ clientId, clientSecret: secret }),
+          signal: AbortSignal.timeout(20_000),
+        }).then((r) => r.json());
+        const list = await fetchImpl(`${cfg.host}/api/v3/secrets/raw?workspaceId=${workspaceId}&environment=prod&secretPath=%2F`, {
+          headers: { Authorization: `Bearer ${login.accessToken}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(20_000),
+        });
+        const body = await list.json().catch(() => ({}));
+        verified = list.ok;
+        secretsVisible = (body.secrets || []).length;
+        if (!list.ok) verifyError = `http_${list.status}${body.message ? `: ${body.message}` : ""}`;
+      } catch (error) {
+        verifyError = error.message;
+      }
+      return {
+        identity: name,
+        identityId,
+        project: workspaceId,
+        steps,
+        stored: ["INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"].map((k) => `prod:/${k}`),
+        verified,
+        ...(secretsVisible !== null ? { secretsVisible } : {}),
+        ...(verifyError ? { verifyError } : {}),
+        note: "The client secret lives only in that project; the agent's owner sets it as env on their own host.",
+        source: `infisical ${new URL(cfg.host).host}`,
+      };
+    },
+  };
+
+  return tools;
 }

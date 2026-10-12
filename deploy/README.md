@@ -5,14 +5,15 @@ that is the point.
 
 ```bash
 docker compose -f deploy/compose.yaml up -d --build                     # the app: chat + agents
-COMPOSE_PROFILES=tools docker compose -f deploy/compose.yaml up -d      # + infrastructure tools
+COMPOSE_PROFILES=tools docker compose -f deploy/compose.yaml up -d      # + infrastructure tools + sandbox
 COMPOSE_PROFILES=tools,infra docker compose -f deploy/compose.yaml up -d # + its own vault and proxy
 ```
 
 | service | holds | talks to |
 |---|---|---|
 | `app` | the model API key, SQLite, the owner token | the model provider, and the broker if there is one |
-| `broker` (profile `tools`) | the vault token (age-encrypted) and the age identity; every credential is read per call | the vault on loopback, cluster APIs, emergency SSH paths, shell hosts |
+| `broker` (profile `tools`) | the vault token (age-encrypted) and the age identity; every credential is read per call | the vault on loopback, cluster APIs, emergency SSH paths, shell hosts, GitLab (clone/fetch/push of chat repos) |
+| `sandbox` (profile `tools`) | nothing: no credentials, no kubeconfig; its own SSH key for the broker | the LAN and the internet through the host's NAT, not the host's loopback |
 
 The app alone is a complete install. The agent has no shell tool; live operations go through the
 broker's typed tools, and those only exist once `config/site.json` describes something.
@@ -27,11 +28,26 @@ broker's typed tools, and those only exist once `config/site.json` describes som
   config/       site.json (from config/site.example.json), ssh_known_hosts
   vault/        OpenBao raft + state (state/machine.token.age, state/unseal.b64.age)
   keys/         identity.age  (the age identity that decrypts the vault token)
+  sandbox/      keys/ (generated on first start) and root/ (the sandbox's persistent /root)
   xray/         optional egress proxy (see xray/README.md)
 ```
 
 Only `data/` and `workspace/` are needed for the default install; compose defaults them to `./data`
-and `./workspace` next to the compose file.
+and `./workspace` next to the compose file. With the `tools` profile, create `workspace/repos/_wt`
+first and own it by `GRIFFIN_UID` — otherwise Docker creates the bind-mount paths as root and the
+broker cannot clone into them:
+
+```bash
+mkdir -p /srv/griffin/workspace/repos/_wt && chown -R 1000:1000 /srv/griffin/workspace
+```
+
+## Repos and the sandbox
+
+Each chat can pick a repo under `workspace/repos`; its first run gets its own worktree and branch
+(`griffin/<id>`). The app has no git credentials: `git_clone` / `git_fetch` / `git_push` run in the
+broker with the vault's `gitlab__token` against `gitlab.url` from the site config, and push only a
+chat's own branch, never `--force`. The `sandbox` service is `debug_exec`'s default host — a
+throwaway shell for builds, tests and scratch commands that sees the worktrees at the same path.
 
 Copy `deploy/env.example` to `deploy/.env` and set the paths, port and public URL. `.env` is never in
 git. Then:

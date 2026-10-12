@@ -3,6 +3,7 @@ import { Switch } from "radix-ui";
 import { ArrowRight, Check, Copy, KeyRound, Loader2, Plus, ShieldAlert, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
+import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
 
 // External agents (MCP now, A2A later): who they are, their device tokens, what they may use,
@@ -70,7 +71,7 @@ export function PeersPage({ onBack }) {
           </button>
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با گریفین کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.").split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
+          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با {name} کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.", { name: BRAND.name }).split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
         </p>
 
         {adding ? <NewPeer onDone={() => { setAdding(false); load(); }} /> : null}
@@ -180,6 +181,8 @@ function PeerCard({ user, catalog, onChange }) {
       <div className="space-y-2">
         {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} onChange={onChange} />)}
       </div>
+
+      <StatusLink userId={user.id} />
 
       <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("کارهای اخیر")}</h3>
       {tasks === null ? (
@@ -372,5 +375,28 @@ function QuotaRow({ userId, quota, catalog, onChange }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+// The colleague's own scoreboard link (#/ps/<token>): their requests, outcome and duration, no content.
+function StatusLink({ userId }) {
+  const [busy, setBusy] = useState(false);
+  const make = async () => {
+    setBusy(true);
+    try {
+      const r = await api(`/api/peers/${userId}/status-link`, { method: "POST" });
+      const url = `${window.location.origin}/${r.path}`;
+      await navigator.clipboard.writeText(url).catch(() => {});
+      toast.success(t("لینک صفحهٔ وضعیت کپی شد"), { description: url });
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" onClick={make} disabled={busy} className="press mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-60">
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Copy className="size-3.5" />} {t("لینک صفحهٔ وضعیتِ همکار")}
+    </button>
   );
 }

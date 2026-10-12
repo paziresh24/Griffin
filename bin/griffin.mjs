@@ -11,6 +11,7 @@ import readline from "node:readline";
 //   griffin agents new <id> --instructions … make one
 //   griffin jobs / jobs run <id>            scheduled work
 //   griffin health                          what this install can reach
+//   griffin doctor [fix <id> | heal]        live self-check, and its fixes
 //
 // It talks to a running Griffin over HTTP with the owner token, which it finds by itself:
 // GRIFFIN_TOKEN, or <data dir>/owner.token when it runs on the same machine.
@@ -30,6 +31,7 @@ function usage(code = 0) {
   griffin agents [new <id>]           list agents, or create one
   griffin jobs [run <id>]             list scheduled jobs, or run one now
   griffin health                      providers, broker, tools
+  griffin doctor [fix <id> | heal]    live check of engines, agents, runs; apply a fix
   griffin chats                       recent chats
 
 Options
@@ -255,6 +257,22 @@ async function health(options) {
   process.stdout.write(`${paint(DIM, `${body.activeRuns} active run(s)`)}\n`);
 }
 
+async function doctor(options, rest) {
+  if (rest[0] === "fix" && rest[1]) {
+    const r = await call(options, "POST", "/api/doctor/fix", { id: rest[1] });
+    return process.stdout.write(`${r.done || JSON.stringify(r)}\n`);
+  }
+  const body = await call(options, rest[0] === "heal" ? "POST" : "GET", rest[0] === "heal" ? "/api/doctor/heal" : "/api/doctor");
+  if (options.json) return process.stdout.write(`${JSON.stringify(body, null, 2)}\n`);
+  const fill = (text, vars = {}) => String(text).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+  const mark = { ok: "✓", warn: "!", error: "✗" };
+  for (const c of body.checks || []) {
+    process.stdout.write(`${mark[c.level] || "·"} ${fill(c.title, c.vars)}${c.detail ? paint(DIM, ` — ${String(c.detail).slice(0, 160)}`) : ""}\n`);
+    if (c.fix && !c.fix.manual) process.stdout.write(paint(DIM, `    griffin doctor fix ${c.fix.id}\n`));
+  }
+  for (const done of body.applied || []) process.stdout.write(`fixed: ${done}\n`);
+}
+
 const { options, rest } = parseArgs(process.argv.slice(2));
 const command = rest[0];
 
@@ -263,6 +281,7 @@ try {
   else if (command === "jobs") await jobs(options, rest.slice(1));
   else if (command === "chats") await chats(options);
   else if (command === "health") await health(options);
+  else if (command === "doctor") await doctor(options, rest.slice(1));
   else if (options.interactive) await interactive(options);
   else if (rest.length) await ask(options, rest.join(" "));
   else usage(1);

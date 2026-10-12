@@ -24,6 +24,8 @@ FROM deps AS prod-deps
 RUN npm prune --omit=dev --offline --no-audit --no-fund
 
 FROM node:24-bookworm-slim AS app
+# git: per-chat worktrees and the repo_* file/git tools (apps/server/src/worktrees.mjs, repo-tools.mjs).
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules
@@ -55,7 +57,8 @@ CMD ["node", "apps/server/src/index.mjs"]
 FROM node:24-alpine AS broker
 # python3 + the two crypto libs are for the vendored Winbox client (apps/broker/vendor/winbox),
 # used for routers whose RouterOS API is off: their console is reached over Winbox itself.
-RUN apk add --no-cache age openssh-client python3 py3-pycryptodome py3-ecdsa
+# git: clone/fetch/push of the repos chats work on (apps/broker/src/repos.mjs).
+RUN apk add --no-cache age openssh-client python3 py3-pycryptodome py3-ecdsa git
 WORKDIR /app
 COPY apps/broker/src apps/broker/src
 COPY apps/broker/vendor apps/broker/vendor

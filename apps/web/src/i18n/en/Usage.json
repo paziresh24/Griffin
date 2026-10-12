@@ -1,0 +1,12 @@
+{
+  "{n} روز": "{n} days",
+  "{h} ساعت و {m} دقیقه": "{h} h {m} min",
+  "{n} دقیقه": "{n} min",
+  "مصرف": "Usage",
+  "سهمیهٔ پلن": "Plan quota",
+  "ریست تا {time}": "Resets in {time}",
+  "پروایدر فعلی سهمیهٔ پلن گزارش نمی‌دهد.": "The current provider does not report a plan quota.",
+  "مصرف خود {name}": "{name}'s own usage",
+  "۵ ساعت اخیر": "Last 5 hours",
+  "۷ روز اخیر": "Last 7 days"
+}

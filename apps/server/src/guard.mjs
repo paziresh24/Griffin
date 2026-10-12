@@ -1,5 +1,6 @@
 import { ASK_TOOL } from "./asks.mjs";
 import { maskText, redactArgs } from "./redact.mjs";
+import { PERSONA } from "./persona.mjs";
 
 // Code-level gate for irreversible tool calls. Applies to every run whose chain is not rooted
 // in the owner (teammate coverage, scheduler, ops room, and — later — external peers): the
@@ -15,12 +16,108 @@ const DESTRUCTIVE_SQL =
 const DESTRUCTIVE_SHELL =
   /\b(rm\s+(-[a-zA-Z]*\s+)*\/(\s|$)|mkfs(\.|$)|wipefs|dd\s+.*\bof=\/dev\/|shutdown\b|reboot\b|poweroff\b|init\s+[06]\b|>\s*\/dev\/sd)/i;
 
+// Lateral movement / credential hunting from a shell host: trying keys on other hosts, port sweeps,
+// replaying cached auth or forging an auth-proxy header. A delegated read-only check once swept a
+// whole /24, tried root keys on every host and spoofed the proxy's user header for 20 minutes
+// instead of reporting the blocker.
+// ponytail: regex heuristic, not a sandbox — the real fence is the tool quota.
+const CREDENTIAL_HUNT =
+  /(\bssh\b[^\n]*\s-i\s|\/dev\/tcp\/\$|\bnmap\b|\bmasscan\b|x-authentik|authentik_proxy|\.kube\/cache|\.ssh\/(m\/)?id_|ping\s+-c\s*1[^\n]*\{1\.\.254\}|seq\s+1\s+254)/i;
+
+// A write straight to a CDN control plane from a shell (raw key + curl) skips the tool fence. Once,
+// with no write tool on the CDN agent, a raw PATCH switched developer mode on for a whole domain
+// after the owner had approved «respect origin headers» — the cache was off for two hours. The
+// approval shows the exact call so the owner sees what will actually change.
+// ponytail: regex heuristic over curl/httpie/requests, not a sandbox.
+const CONTROL_PLANE = /\b(napi\.arvancloud\.ir|api\.nsin\.ir)\b/i;
+const WRITE_VERB = /(-X\s*|--request[\s=]+|\bhttp\s+|requests\.|method\s*[=:]\s*["']?)(PUT|PATCH|POST|DELETE)\b/i;
+
+// A git push or a forge API write from the shell skips the gitlab_mr/git_push fence the same way.
+// A subtask once read an admin token from the secret store and pushed a partial clone to main:
+// the commit dropped every file of a shared GitOps repository and the CD tool deleted what it
+// described.
+// ponytail: regex heuristic over git/curl, not a sandbox.
+const GIT_PUSH = /\bgit\b[^\n;|&]*\spush\b[^\n;|&]*/i;
+const FORGE_API_WRITE = /(\/api\/v4\/|api\.github\.com\/)\S*/i;
+
+export function gitWrite(command) {
+  const cmd = String(command || "");
+  const push = cmd.match(GIT_PUSH);
+  if (push) return `push به گیت: ${push[0].trim().slice(0, 200)}`;
+  const api = cmd.match(FORGE_API_WRITE);
+  const verb = cmd.match(WRITE_VERB);
+  if (api && verb) return `تغییر مستقیم API گیت: ${verb[2].toUpperCase()} ${api[0].slice(0, 160)}`;
+  return null;
+}
+
+// A forge (GitLab/GitHub) API or push token is for the owner's own sessions. A chain rooted in a
+// teammate, a peer, the scheduler or the ops room never needs one — the broker's git tools carry
+// their own. After one admin token name was blocked, a peer chain read three OTHER forge tokens
+// from the secret store — so the block matches the family of names, not one.
+// ponytail: name heuristic; the push itself is still caught by gitWrite (+ the review gate).
+const OWNER_ROOT_TOKEN = /git(lab|hub)[-_ ]?(superuser|admin|root|push|pat|api[-_ ]?token|token)|\bGIT(LAB|HUB)_TOKEN\b/i;
+
+export function controlPlaneWrite(command) {
+  const cmd = String(command || "");
+  const host = cmd.match(CONTROL_PLANE);
+  if (!host) return null;
+  const verb = cmd.match(WRITE_VERB);
+  const data = cmd.match(/(?:-d|--data(?:-raw|-binary)?|--json)[\s=]+('[^']*'|"(?:[^"\\]|\\.)*"|\S+)/);
+  if (!verb && !data) return null;
+  const method = verb ? verb[2].toUpperCase() : "POST";
+  const path = (cmd.match(new RegExp(`${host[1].replace(/\./g, "\\.")}(/[^\\s"'?]*)`, "i")) || [])[1] || "";
+  const body = data ? maskText(data[1].replace(/^['"]|['"]$/g, "")).slice(0, 300) : "";
+  return { host: host[1].toLowerCase(), method, path, body };
+}
+
+export function isCredentialHunt(command) {
+  return CREDENTIAL_HUNT.test(String(command || ""));
+}
+
 export function isDestructiveSql(sql) {
   return DESTRUCTIVE_SQL.test(String(sql || ""));
 }
 
 export function isDestructiveShell(command) {
   return DESTRUCTIVE_SHELL.test(String(command || ""));
+}
+
+// The secret manager's own admin plane (Infisical's instance-admin secret, bootstrap password, its
+// database) is a back door around the tool fence. An owner-rooted chat with no tool for machine
+// identities once read the instance-admin secret, dumped the bootstrap password and ran ~25 guessed
+// queries on the secret manager's database — leaking admin credentials into chat events. Blocked for every caller, owner too:
+// the supported path is infisical_machine_identity / infisical_* or reporting the gap.
+// ponytail: name/regex heuristic, not a sandbox.
+const SECRET_ADMIN_SHELL = /infisical-(instance-admin|db|secrets)\b|\bADMIN_PASSWORD\b|\binfisical\b[^\n]*\b(psql|pg_dump)\b/i;
+const BACKDOOR_REASON =
+  "این مسیر پنل/دیتابیسِ ادمینِ Infisical است و بسته است. identity، عضویت پروژه و client secret را با infisical_machine_identity بساز؛ اگر کاری با ابزارها شدنی نیست، همین مانع را دقیق به درخواست‌کننده بگو.";
+
+export function secretAdminBackdoor(name, args = {}) {
+  const a = args || {};
+  if (name === "pg_query" && (/infisical/i.test(String(a.name || "")) || String(a.database || "").toLowerCase() === "infisical")) return BACKDOOR_REASON;
+  if ((name === "kube_secret" || name === "kube_exec" || name === "kube_copy_secret") && (String(a.namespace || "").toLowerCase() === "infisical" || /instance-admin|bootstrap/i.test(String(a.name || "")))) return BACKDOOR_REASON;
+  if ((name === "debug_exec" || name === "ssh_exec") && SECRET_ADMIN_SHELL.test(String(a.command || a.cmd || ""))) return BACKDOOR_REASON;
+  return null;
+}
+
+// Applied to every run, whatever the caller (see secretAdminBackdoor).
+export function fenceBackdoors(tools, { chatId, store = null, caller = "?" } = {}) {
+  const out = { ...tools };
+  for (const name of Object.keys(out)) {
+    const tool = out[name];
+    if (!tool?.execute) continue;
+    const inner = tool.execute.bind(tool);
+    out[name] = {
+      ...tool,
+      async execute(args) {
+        const reason = secretAdminBackdoor(name, args);
+        if (!reason) return inner(args);
+        store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "blocked", detail: reason });
+        return refused(reason);
+      },
+    };
+  }
+  return out;
 }
 
 // Changes to shared infrastructure that cannot be taken back by the agent itself.
@@ -30,10 +127,13 @@ const NEEDS_APPROVAL = new Map([
   ["mikrotik_set_enabled", "روشن/خاموش کردن قاعدهٔ روتر"],
   ["mikrotik_remove", "حذف قاعدهٔ روتر"],
   ["infisical_upsert", "نوشتن/بازنویسی secret در Infisical"],
+  ["infisical_machine_identity", "ساخت machine identity و client secret در Infisical"],
   ["kube_copy_secret", "کپی secret بین کلاسترها"],
+  ["kube_exec", "اجرای دستور داخل پاد"],
   ["cnpg_retry_bootstrap", "حذف Jobهای bootstrap دیتابیس"],
   ["arvan_dns_create", "ساخت رکورد DNS آروان"],
   ["arvan_dns_delete", "حذف رکورد DNS آروان"],
+  ["arvan_page_rule_create", "ساخت page rule آروان"],
   ["vcenter_vm_create", "ساخت ماشین مجازی روی vCenter"],
   ["nsin_dns_create", "ساخت رکورد DNS انسین"],
   ["nsin_dns_update", "تغییر رکورد DNS انسین"],
@@ -44,14 +144,40 @@ const NEEDS_APPROVAL = new Map([
   ["jobs_delete", "حذف جاب"],
 ]);
 
+const ROOT_TOKEN_REASON =
+  "توکن گیت (GitLab/GitHub) مالِ خودِ Owner است و در این زنجیره خوانده/استفاده نمی‌شود (هیچ توکن دیگری هم جایگزینش نیست). برای تغییر ریپو از MR (gitlab_propose) استفاده کن یا مانع را به درخواست‌کننده بگو.";
+
 // -> null (free) | { block: reason } | { approve: reason }
 export function classify(name, args = {}) {
+  if ((name === "infisical_get" || name === "infisical_list") && OWNER_ROOT_TOKEN.test(`${args?.path || ""} ${args?.name || ""} ${args?.search || ""}`)) {
+    return { block: ROOT_TOKEN_REASON };
+  }
   if (name === "pg_query") {
     if (isDestructiveSql(args?.sql)) return { block: "SQL مخرب (DROP/TRUNCATE/DELETE بدون شرط/GRANT …) اجازه ندارد" };
     return args?.write ? { approve: "اجرای SQL نوشتنی" } : null;
   }
   if (name === "debug_exec") {
-    return isDestructiveShell(args?.command || args?.cmd) ? { block: "دستور مخرب (rm ریشه، mkfs، reboot …) اجازه ندارد" } : null;
+    const command = args?.command || args?.cmd;
+    if (isDestructiveShell(command)) return { block: "دستور مخرب (rm ریشه، mkfs، reboot …) اجازه ندارد" };
+    if (isCredentialHunt(command)) return { block: "اسکن شبکه / امتحان کلید SSH / گشتن دنبال کریدنشیال اجازه ندارد — مانع را دقیق گزارش کن (برای داخل پاد: kube_exec)" };
+    if (OWNER_ROOT_TOKEN.test(String(command || ""))) return { block: ROOT_TOKEN_REASON };
+    const git = gitWrite(command);
+    if (git) return { approve: git };
+    const write = controlPlaneWrite(command);
+    if (write) {
+      const who = write.host.includes("arvan") ? "آروان" : "انسین";
+      return { approve: `تغییر مستقیم API ${who} با کلید خام: ${write.method} ${write.path}${write.body ? ` — ${write.body}` : ""}` };
+    }
+    // The sandbox is disposable; any other configured host is a real server.
+    if (args?.host && args.host !== "sandbox") return { approve: `اجرای دستور روی میزبان «${args.host}»` };
+    return null;
+  }
+  if (name === "ssh_exec") {
+    const command = args?.command || "";
+    if (isDestructiveShell(command)) return { block: "دستور مخرب (rm ریشه، mkfs، reboot …) اجازه ندارد" };
+    if (isCredentialHunt(command)) return { block: "اسکن شبکه / امتحان کلید SSH / گشتن دنبال کریدنشیال اجازه ندارد" };
+    if (OWNER_ROOT_TOKEN.test(command)) return { block: ROOT_TOKEN_REASON };
+    return { approve: `اجرای دستور با SSH روی ${args?.user ? args.user + "@" : ""}${args?.host || "?"}` };
   }
   if (name === "gitlab_mr") return args?.action === "merge" ? { approve: "merge کردن MR" } : null;
   if (name === "arvan_cache_purge") {
@@ -106,7 +232,7 @@ const NEG_ANYWHERE = /نکن|نزن|نشه|نمی ?خوام|نمی ?خواهم|�
 // answer «مرج کن», «تأیید — مرج شود», «دوباره تأیید می‌کنم» and none of those matched the literal
 // yes-list (2026-09-29: one merge approval was therefore re-asked seven times). An answer that is
 // itself a question blesses nothing.
-function consentOf(conf) {
+export function consentOf(conf) {
   if (typeof conf === "string") conf = { answered: true, answer: conf };
   // Only a real answer can consent: an unanswered or cancelled question (answered:false) is never
   // a yes, whatever stringifying its payload happens to produce.
@@ -188,6 +314,16 @@ function peerRooted(store, chatId) {
   }
 }
 
+function peerTrust(store, chatId) {
+  try {
+    const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
+    const caller = String(root?.caller || "");
+    return caller.startsWith("peer:") ? store?.getKv?.(`peertrust:${caller.slice(5)}`) || null : null;
+  } catch {
+    return null;
+  }
+}
+
 // Only yes/no-shaped questions bless: several substantive options are a clarification, and an
 // unrelated "بله" to one of those must never approve the next guarded call.
 function approvalShaped(options) {
@@ -241,7 +377,16 @@ function scopeOf(name, args) {
   if (name === "kube_exec") return { cluster: a.cluster, namespace: a.namespace };
   if (name === "infisical_upsert") return { projectId: a.projectId, environment: a.environment, path: a.path };
   if (name === "pg_query" && a.write) return { cluster: a.cluster, namespace: a.namespace, name: a.name, database: a.database };
+  // Page rules under one host + first path segment are one change to the owner; the agent tried
+  // several source rules to copy from and each one used to be a new question.
+  // ponytail: the source rule is not part of the scope; key on its load_balancer if a path ever mixes origins.
+  if (name === "arvan_page_rule_create") return { domain: a.domain, prefix: pageRulePrefix(a.url) };
   return null;
+}
+
+function pageRulePrefix(url) {
+  const m = /^https?:\/\/([^/]+)\/([^/*?]*)/i.exec(String(url || ""));
+  return m ? `${m[1].toLowerCase()}/${m[2]}` : String(url || "");
 }
 
 function scopeLabel(name, args) {
@@ -249,6 +394,7 @@ function scopeLabel(name, args) {
   if (name === "kube_exec") return `هر دستوری داخل پادهای namespace «${a.namespace}» (کلاستر ${a.cluster})`;
   if (name === "infisical_upsert") return `نوشتن secret در Infisical پروژهٔ «${a.projectId}»، ${a.environment || "prod"}، مسیر ${a.path || "/"}`;
   if (name === "pg_query") return `SQL نوشتنی روی دیتابیس ${a.database || "postgres"} در ${a.name} (namespace «${a.namespace}»، ${a.cluster})`;
+  if (name === "arvan_page_rule_create") return `ساخت page rule آروان زیر ${pageRulePrefix(a.url)}… با کپی تنظیمات ruleهای موجود همین مسیر`;
   return "";
 }
 
@@ -288,7 +434,7 @@ const INTENT_SCHEMA = {
 };
 
 function mayAsk(name, extra) {
-  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "mikrotik_exec", "debug_exec", "arvan_cache_purge"].includes(name) || Boolean(extra?.has(name));
+  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "mikrotik_exec", "debug_exec", "ssh_exec", "arvan_cache_purge"].includes(name) || Boolean(extra?.has(name));
 }
 
 function withIntent(schema) {
@@ -305,7 +451,7 @@ export function plainIntent(text) {
 
 // Plain labels for tools gated only on some paths (teammate coverage) — «صدا زدن «telegram_send»»
 // meant nothing to the owner.
-const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: "نوشتن یادداشت در دانش گریفین", arvan_cache_purge: "پاک کردن کش آروان" };
+const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: `نوشتن یادداشت در دانش ${PERSONA.name}`, arvan_cache_purge: "پاک کردن کش آروان" };
 
 // What the action touches, in a few readable words — never a credential.
 function actionDetail(name, args) {
@@ -461,6 +607,15 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
         }
         // A method card only makes sense for the requester's own namespace/project; for someone
         // else's they have no access, and the card just sent the agent asking around (2026-10-06).
+        // A colleague the owner trusts with in-pod reads (peertrust:<user>, set from PATCH
+        // /api/peers/:id {trustInPod}) does not wait on the owner for kube_exec — the owner was the
+        // bottleneck (three asks in one request). And every colleague runs kube_exec on their OWN
+        // namespace without asking: their own kubeconfig already grants pods/exec there.
+        if (name === "kube_exec" && peerRooted(store, chatId) && (peerTrust(store, chatId)?.inPod || !foreignTarget(store, chatId, args))) {
+          const own = !foreignTarget(store, chatId, args);
+          store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "trusted", detail: own ? "پادِ namespaceِ خودِ همکار" : "همکارِ مورد اعتماد Owner برای اجرای داخل پاد" });
+          return inner(args);
+        }
         const viaPeer = PEER_CARD && peerRooted(store, chatId) && !foreignTarget(store, chatId, args);
         if (viaPeer) {
           const cardAt = peerCards.get(key);

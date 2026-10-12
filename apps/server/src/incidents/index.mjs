@@ -112,7 +112,7 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
     triage: db.prepare("UPDATE incidents SET triage_json = @triage, triaged_at = @at, updated_at = @at WHERE id = @id"),
     log: db.prepare("INSERT INTO incident_log (incident_id, kind, data, at) VALUES (?, ?, ?, ?)"),
     list: db.prepare("SELECT * FROM incidents WHERE (@status = 'all' OR status = @status) ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, CASE severity WHEN 'critical' THEN 0 ELSE 1 END, last_seen DESC LIMIT @limit"),
-    // What a truncated list leaves out: an agent shown 30 of 133 (all Yazd warnings, newest first)
+    // What a truncated list leaves out: an agent shown 30 of 133 (all warnings from one cluster, newest first)
     // reported a login outage that was a standby cluster's scaled-down Authentik (2026-09-25).
     summary: db.prepare("SELECT cluster, severity, COUNT(*) AS n FROM incidents WHERE (@status = 'all' OR status = @status) GROUP BY cluster, severity"),
     logs: db.prepare("SELECT kind, data, at FROM incident_log WHERE incident_id = ? ORDER BY id DESC LIMIT ?"),

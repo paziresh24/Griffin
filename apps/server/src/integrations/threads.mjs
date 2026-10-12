@@ -1,4 +1,6 @@
 import { OWNER_NAME } from "../owner.mjs";
+import { CALL_WORD } from "../persona.mjs";
+
 // Threads in the owner's 1:1 Telegram chats with teammates (owner 2026-09-24).
 //
 // A chat is either idle or locked to one Griffin thread (the existing coverage lock). While idle,
@@ -9,11 +11,19 @@ import { OWNER_NAME } from "../owner.mjs";
 // (write «گریفین»), which works for the teammate and for their assistant alike.
 // Groups never open threads on their own; they stay manual (/agent).
 
-const REOPEN = /^\s*(?:\/griffin\b|@?griffin\b|گریفین|گریف\b)/i;
+const REOPEN = new RegExp(`^\\s*(?:\\/griffin\\b|@?${CALL_WORD})`, "iu");
 
 /** The teammate (or their assistant) calling Griffin back into a closed chat. */
 export function wantsGriffin(text) {
   return REOPEN.test(String(text || ""));
+}
+
+// The owner's own line in a colleague thread hands the work to Griffin only when it says so
+// («گریفین …», «بهتون کمک می‌کنه»); anything else («الان», an answer, a question) is the owner
+// taking the conversation himself.
+const HANDS_TO_GRIFFIN = new RegExp(`${CALL_WORD}|کمک\\S*\\s*می[\\u200c\\s]?کن`, "iu");
+export function handsToGriffin(text) {
+  return HANDS_TO_GRIFFIN.test(String(text || ""));
 }
 
 // Jev (TypeSafe System One) answers typed questions about a state with calibrated confidence, the
@@ -48,9 +58,50 @@ const JEV_QUESTIONS = {
 /**
  * Ask Jev whether the newest message opens a thread. Fails closed: any error means "no thread".
  */
-export async function classifyThread({ history = [], message, from }, { apiKey, url = JEV_URL, fetchImpl = fetch, timeoutMs = 20_000 } = {}) {
+const topicOf = (text) => text.replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ");
+
+// A small LLM we control, used when Jev is unavailable so one external outage never silences every
+// teammate reply (2026-10-12: TypeSafe started returning HTTP 451 and every teammate DM was skipped
+// — a colleague's messages went unanswered). `ask` is a plain text->text completion (GLM); returns a
+// decision or null so the caller can fall through to "no thread".
+export async function classifyWithLLM({ history = [], message, from }, ask) {
   const text = String(message || "").trim();
-  if (!apiKey || !text) return { start: false, reason: "jev not configured" };
+  if (!ask || !text) return null;
+  const prompt = `You decide if a Telegram message to ${OWNER_NAME} should open a task for ${OWNER_NAME}'s AI agent.
+OPEN it for a request, question, problem report, access request or task to act on now.
+Do NOT open for greetings, thanks, acknowledgements ("ممنون", "حله", "اوکی"), jokes, small talk, or scheduling chatter.
+Sender: ${from === "owner" ? `${OWNER_NAME} (the owner)` : "a teammate"}.
+Recent chat (old→new):
+${history.filter(Boolean).slice(-10).join("\n").slice(-2000)}
+Newest message:
+${text.slice(0, 2000)}
+Reply with ONLY JSON: {"open": true|false, "kind": "request|question|problem|thanks|social|unclear"}`;
+  try {
+    const raw = await ask(prompt);
+    const json = String(raw || "").match(/\{[\s\S]*\}/)?.[0];
+    const v = JSON.parse(json);
+    const kind = String(v.kind || "unclear");
+    const start = v.open === true && !CLOSED_KINDS.has(kind);
+    return { start, topic: start ? topicOf(text) : "", reason: `glm open=${v.open} kind=${kind}` };
+  } catch (error) {
+    return { start: false, reason: `glm classify error: ${String(error.message).slice(0, 80)}` };
+  }
+}
+
+/**
+ * Ask Jev whether the newest message opens a thread. On any Jev failure, fall back to `fallbackAsk`
+ * (a GLM completion) so a classifier outage does not silence teammates. If neither works, fails
+ * closed ("no thread").
+ */
+export async function classifyThread({ history = [], message, from }, { apiKey, url = JEV_URL, fetchImpl = fetch, timeoutMs = 20_000, fallbackAsk = null } = {}) {
+  const text = String(message || "").trim();
+  if (!text) return { start: false, reason: "empty" };
+  const fallback = async (why) => {
+    if (!fallbackAsk) return { start: false, reason: why };
+    const r = await classifyWithLLM({ history, message, from }, fallbackAsk);
+    return r ? { ...r, reason: `${why} → ${r.reason}` } : { start: false, reason: why };
+  };
+  if (!apiKey) return fallback("jev not configured");
   const state = {
     sender: from === "owner" ? "owner" : "teammate",
     chat_history: history.filter(Boolean).slice(-15).join("\n"),
@@ -63,15 +114,15 @@ export async function classifyThread({ history = [], message, from }, { apiKey, 
       body: JSON.stringify({ state, model: "jev-latest", questions: JEV_QUESTIONS }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) return { start: false, reason: `jev http ${response.status}` };
+    if (!response.ok) return fallback(`jev http ${response.status}`);
     const { answers } = await response.json();
     const open = Number(answers?.open?.noul);
     const kind = answers?.kind?.choice || "unclear";
     const reason = `jev open=${Number.isFinite(open) ? open.toFixed(2) : "?"} kind=${kind}(${Number(answers?.kind?.confidence || 0).toFixed(2)})`;
     const start = open >= OPEN_AT && !CLOSED_KINDS.has(kind);
-    return { start, topic: start ? text.replace(/\s+/g, " ").split(" ").slice(0, 6).join(" ") : "", reason };
+    return { start, topic: start ? topicOf(text) : "", reason };
   } catch (error) {
-    return { start: false, reason: `jev error: ${error.message}` };
+    return fallback(`jev error: ${String(error.message).slice(0, 80)}`);
   }
 }
 

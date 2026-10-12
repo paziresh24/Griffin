@@ -18,5 +18,17 @@
   "مدلی پیدا نشد": "No models found",
   "بهترین مدل به‌صورت خودکار انتخاب می‌شود": "The best model is picked automatically",
   "تم تیره": "Dark theme",
-  "تم روشن": "Light theme"
+  "تم روشن": "Light theme",
+  "پیش‌فرض ایجنت": "Agent default",
+  "پیش‌فرض ایجنت یا موتور": "Agent or engine default",
+  "کم": "Low",
+  "سریع و ارزان": "Fast and cheap",
+  "متوسط": "Medium",
+  "زیاد": "High",
+  "خیلی زیاد": "Extra high",
+  "فقط Claude": "Claude only",
+  "حداکثر": "Max",
+  "فقط Claude؛ پرمصرف": "Claude only; uses a lot",
+  "میزان فکر: {name}": "Thinking effort: {name}",
+  "میزان فکر کردن مدل": "How hard the model thinks"
 }

@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
-// Reads items from the capsule-local OpenBao. The machine token is age-encrypted on disk;
+// Reads items from the host-local OpenBao. The machine token is age-encrypted on disk;
 // only the broker container has the identity and the encrypted token mounted.
 export function createVault({
   url = "http://127.0.0.1:18200",

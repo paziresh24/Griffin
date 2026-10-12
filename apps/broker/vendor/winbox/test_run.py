@@ -8,9 +8,9 @@ sys.modules["winbox_terminal_client"] = types.SimpleNamespace(WinboxTerminalClie
 import run  # noqa: E402
 
 cmd = "/ip route print where dst-address=172.16.103.0/24 or dst-address=172.16.106.0/24"
-raw = cmd[:50] + "\r\n" + cmd[50:] + "Yazd] > " + cmd + "\r\nFlags: A - ACTIVE\r\n0 As 172.16.103.0/24\r\n[u@SepehrYazd] > "
+raw = cmd[:50] + "\r\n" + cmd[50:] + "Edge] > " + cmd + "\r\nFlags: A - ACTIVE\r\n0 As 172.16.103.0/24\r\n[u@MainEdge] > "
 assert run.clean(raw, cmd) == "Flags: A - ACTIVE\n0 As 172.16.103.0/24"  # wrapped echo is cut
-live = cmd[:48] + " \n" + cmd[48:] + cmd + "\nFlags: A - ACTIVE\n0 As 172.16.103.0/24"  # seen on .46
+live = cmd[:48] + " \n" + cmd[48:] + cmd + "\nFlags: A - ACTIVE\n0 As 172.16.103.0/24"  # seen live
 assert run.clean(live, cmd) == "Flags: A - ACTIVE\n0 As 172.16.103.0/24"
 assert run.clean("/ppp/active/print\r\n0 name=x\r\n[u@Y] > ", "/ppp/active/print") == "0 name=x"
 

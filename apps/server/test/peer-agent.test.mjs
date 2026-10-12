@@ -4,7 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
-import { RATE_MAX, derivePeerUserId, isAgentSigned, isNoReply, looksAssistantSigned, peerAgentConfig, peerAgentPrompt, takeRate } from "../src/integrations/peer-agent.mjs";
+import { OWNER_NAME } from "../src/owner.mjs";
+import { PERSONA } from "../src/persona.mjs";
+import { RATE_MAX, chatHistoryBlock, derivePeerUserId, isAgentSigned, isNoReply, looksAssistantSigned, peerAgentConfig, peerAgentPrompt, takeRate } from "../src/integrations/peer-agent.mjs";
 
 test("signature matches the colleague's assistant, not the colleague", () => {
   assert.ok(isAgentSigned("سلام سارا ...\n\n— فرستادهٔ دستیارِ خودکار"));
@@ -84,4 +86,21 @@ test("bindPeerAgentPerson registers the peer, grants the default quota and persi
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("chatHistoryBlock shows what was said outside this Griffin chat, minus the message being answered", () => {
+  const block = chatHistoryBlock([
+    { direction: "out", text: "لطفاً خانم کریمی را به n8n دعوت کنید" },
+    { direction: "in", text: "قبوله، فقط بگو چه سطح دسترسی" },
+  ], { label: "ربات همکار" });
+  assert.ok(block.includes(`${OWNER_NAME}/${PERSONA.name}: لطفاً خانم کریمی را به n8n دعوت کنید`));
+  assert.doesNotMatch(block, /چه سطح دسترسی/, "the newest message is the one being answered, not history");
+  assert.equal(chatHistoryBlock([{ direction: "in", text: "only" }]), "");
+  const p = peerAgentPrompt({ label: "x", userId: "y", text: "z", history: block });
+  assert.ok(p.startsWith(block));
+  assert.match(p, /سؤال را به خودش برنگردان/);
+  assert.match(p, /فقط به آخرین پیام/);
+  // 2026-10-07: the answer («فقط مشاهده») sat past a 300-char cut, so a settled question looked open.
+  const long = chatHistoryBlock([{ direction: "out", text: `${"ت".repeat(400)} فقط با دسترسی مشاهده` }, { direction: "in", text: "۱. حل شد" }]);
+  assert.match(long, /فقط با دسترسی مشاهده/);
 });

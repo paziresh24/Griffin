@@ -15,7 +15,7 @@ const COLLEAGUE_VPN =
   "رنج 172.16.104.0/24 (که آی‌پی 172.16.104.106 توشه) اصلاً توی جدول مسیریابی نیست. یعنی سیستم تو مشکلی نداره، برای این رنج اصلاً مسیری به وی‌پی‌ان تعریف نشده و ترافیکش از مسیر عادی اینترنت می‌ره، نه از تونل شرکت.\n" +
   "این تنظیم سمت سرور وی‌پی‌ان (چیزی که بهت push می‌کنه) است، نه چیزی که خودت درستش کنی. باید به تیم زیرساخت بگی رنج 172.16.104.0/24 رو هم به لیست شبکه‌های مجاز وی‌پی‌ان اضافه کنن.";
 
-const INTERNAL = /سکان‌بان|آروان‌بان|انسین‌بان|زیرایجنت|زیرکار|delegate|ask_agent|subtask/i;
+const INTERNAL = /زیرایجنت|زیرکار|delegate|ask_agent|subtask/i;
 const colleague = (text) => `«علی رضایی»: ${text}`;
 
 // A check returns null when it passes, or a short reason when it fails.
@@ -82,8 +82,9 @@ export const SCENARIOS = [
     id: "wrap-up",
     caller: "team",
     message: colleague("مرسی حله، دمت گرم"),
-    why: "جمع‌بندی همکار: یک خط + «گریفین» + end_agent",
-    checks: [finished, called("end_agent"), has(/گریفین/), maxMessages(1), within(90)],
+    // No «next time write گریفین» line since autoThreads (2026-10-08): threads open by themselves.
+    why: "جمع‌بندی همکار: یک خط + end_agent",
+    checks: [finished, called("end_agent"), maxMessages(1), within(90)],
   },
   {
     id: "owner-typed-no-reply",

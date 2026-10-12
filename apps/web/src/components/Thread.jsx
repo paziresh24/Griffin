@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useAuiState,
+  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAuiState,
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { motion } from "motion/react";
 import {
-  ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, ImagePlus, ListTodo, Square, X,
+  ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, ImagePlus, ListTodo, Loader2, Mic, Pencil, Quote, RotateCcw, Square, Trash2, X,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
 import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
 import { textDir } from "../dir.js";
-import { AgentGlyph, ModeToggle, ModelPicker } from "./Controls.jsx";
+import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
-import { num, t, isRtl } from "../i18n.js";
+import { locale, num, t, isRtl } from "../i18n.js";
+import { toast } from "sonner";
+import { api, reloadTimeline } from "../api.js";
+import { RESTORE_EVENT, useRuntimeChat } from "../runtime.jsx";
+import { quotePreview, quoteStore } from "../quotes.js";
+import { SelectionActions } from "./SelectionActions.jsx";
+import { submitMode, useTouchPrimary } from "../touch.js";
+import { loadDraft, saveDraft } from "../draft.js";
+import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
+
+const ChatContext = createContext({ chatId: null, readOnly: false });
 
 const plugins = { code };
 
@@ -29,12 +39,18 @@ export function Thread({
   onSuggestion,
   mode = "agent",
   model = "",
+  chatId = null,
   onModeChange,
   onModelChange,
+  effort = "",
+  onEffortChange,
+  composerTop = null,
 }) {
   return (
+    <ChatContext.Provider value={{ chatId, readOnly }}>
     <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
       {header}
+      {readOnly ? null : <SelectionActions />}
       <ThreadBody
         runInfo={runInfo}
         readOnly={readOnly}
@@ -47,15 +63,19 @@ export function Thread({
         model={model}
         onModeChange={onModeChange}
         onModelChange={onModelChange}
+        effort={effort}
+        onEffortChange={onEffortChange}
+        composerTop={composerTop}
       />
     </ThreadPrimitive.Root>
+    </ChatContext.Provider>
   );
 }
 
-function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange }) {
+function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop }) {
   // New chat: composer centered with suggestions under it. Ongoing chat: docked composer.
   const showHero = fresh && !readOnly;
-  const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange };
+  const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange, effort, onEffortChange, top: composerTop };
 
   return (
     <ThreadPrimitive.Viewport className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -87,7 +107,7 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   );
 }
 
-function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange }) {
+function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, top }) {
   const meta = agentMeta(agent);
   const suggestions = useMemo(
     () => pickSuggestions(agent, { count: 4, recentTitles, salt: String(recentTitles[0] || "") }),
@@ -120,6 +140,9 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
           agent={agent}
           onModeChange={onModeChange}
           onModelChange={onModelChange}
+          effort={effort}
+          onEffortChange={onEffortChange}
+          top={top}
         />
       </motion.div>
       <motion.div variants={fadeUp} className="flex w-full flex-wrap justify-center gap-2">
@@ -155,7 +178,9 @@ function chatDir(value) {
 }
 
 function UserMessage() {
+  const { chatId, readOnly } = useContext(ChatContext);
   const custom = useAuiState((s) => s.message.metadata?.custom);
+  const messageId = useAuiState((s) => s.message.id);
   const text = useAuiState((s) => {
     const parts = s.message.content || s.message.parts || [];
     if (typeof parts === "string") return parts;
@@ -163,10 +188,60 @@ function UserMessage() {
   });
   const dir = chatDir(text);
   const label = custom?.intent === "queue" ? t("در صف؛ بعد از کار فعلی اجرا می‌شود") : custom?.intent === "steer" ? t("وسط کار به ایجنت رسید") : null;
+  // message.id is `u<eventId>`; rewind truncates the chat back to this event.
+  const eventId = typeof messageId === "string" && messageId.startsWith("u") ? Number(messageId.slice(1)) : null;
+  const canEdit = chatId && eventId && !readOnly;
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const act = async (body) => {
+    setBusy(true);
+    try {
+      await api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, ...body } });
+      setEditing(null);
+      reloadTimeline();
+    } catch (error) {
+      toast.error(error.message || t("خطا"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing != null) {
+    return (
+      <MessagePrimitive.Root className="group my-3 flex w-full flex-col items-stretch">
+        <div className="chat-text w-full rounded-2xl border bg-accent/40 p-2" dir={chatDir(editing)}>
+          <textarea
+            autoFocus
+            rows={Math.min(8, Math.max(2, editing.split("\n").length))}
+            value={editing}
+            onChange={(e) => setEditing(e.target.value)}
+            className="w-full resize-y bg-transparent px-2 py-1 leading-7 outline-none"
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) act({ text: editing }); if (e.key === "Escape") setEditing(null); }}
+          />
+          <div className="mt-1 flex items-center gap-2 px-1">
+            <button type="button" disabled={busy || !editing.trim()} onClick={() => act({ text: editing })} className="press inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60">
+              {busy ? <Square className="size-3 animate-pulse" /> : <ArrowUp className="size-3" />} {t("ارسال دوباره")}
+            </button>
+            <button type="button" onClick={() => setEditing(null)} className="press rounded-lg px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted">{t("انصراف")}</button>
+          </div>
+        </div>
+      </MessagePrimitive.Root>
+    );
+  }
+
   return (
     <MessagePrimitive.Root className="group my-3 flex flex-col items-start">
-      <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7" dir={dir}>
-        <MessagePrimitive.Parts />
+      <div className="flex items-start gap-1.5">
+        <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7" dir={dir}>
+          <MessagePrimitive.Parts />
+        </div>
+        {canEdit ? (
+          <div className="mt-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            <button type="button" title={t("ویرایش و ارسال دوباره")} onClick={() => setEditing(text)} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="size-3.5" /></button>
+            <button type="button" title={t("برگشت به اینجا (حذف ادامه)")} onClick={() => { if (confirm(t("گفتگو از اینجا به بعد پاک شود؟"))) act({}); }} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3.5" /></button>
+          </div>
+        ) : null}
       </div>
       {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
@@ -196,7 +271,34 @@ function AssistantMessage() {
         ),
       )}
       <RunFooter run={run} />
+      <KeptActions />
     </MessagePrimitive.Root>
+  );
+}
+
+// Under a run that failed before anything reached the owner: the message is kept on the server.
+function KeptActions() {
+  const custom = useAuiState((s) => s.message.metadata?.custom);
+  const [busy, setBusy] = useState(false);
+  if (!custom?.onRetry) return null;
+  const act = async (fn) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+      <span>{t("این پیام به ایجنت نرسید و نگه داشته شد.")}</span>
+      <button type="button" disabled={busy} onClick={() => act(custom.onRetry)} className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 hover:bg-muted disabled:opacity-50">
+        <RotateCcw className="size-3" /> {t("ارسال دوباره")}
+      </button>
+      <button type="button" disabled={busy} onClick={() => act(custom.onDelete)} className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 hover:bg-muted disabled:opacity-50">
+        <Trash2 className="size-3" /> {t("حذف")}
+      </button>
+    </div>
   );
 }
 
@@ -234,6 +336,12 @@ function Reasoning({ text, status }) {
   );
 }
 
+function compactTokens(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return String(n);
+}
+
 function RunFooter({ run }) {
   if (!run) return null;
   const copyable = run.status !== "running";
@@ -254,7 +362,7 @@ function RunFooter({ run }) {
         </span>
       ) : null}
 
-      {done && (answeredAt || seconds || model) ? (
+      {done && (answeredAt || seconds || model || run.usage) ? (
         <div className="flex items-center gap-1.5 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] text-muted-foreground">
           {answeredAt || seconds ? (
             <span
@@ -272,6 +380,17 @@ function RunFooter({ run }) {
             <span className="max-w-40 truncate font-medium text-foreground/70" title={model} dir="ltr">
               {model}
             </span>
+          ) : null}
+          {run.usage ? (
+            <>
+              <span className="text-border">·</span>
+              <span
+                dir="ltr"
+                title={t("ورودی {input} (کش {cached}) · خروجی {output} · {requests} درخواست · کانتکست {context}", { input: num(run.usage.input), cached: num(run.usage.cached), output: num(run.usage.output), requests: num(run.usage.requests), context: num(run.usage.context) })}
+              >
+                {compactTokens(run.usage.input + run.usage.output)} tok
+              </span>
+            </>
           ) : null}
         </div>
       ) : null}
@@ -308,32 +427,220 @@ function RunPhase({ phase }) {
   );
 }
 
-function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", agent = "griffin", onModeChange, onModelChange }) {
+function browserStorage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+// Voice dictation: one tap records, the next stops; the clip goes to
+// /api/transcribe and the text joins what is in the box. It never sends the message. Hidden where
+// the browser cannot record (no microphone API, or a page not served over https).
+let sttConfigured = null; // null = not asked yet
+function DictateButton({ value, setText, focus, size }) {
+  const [state, setState] = useState("idle"); // idle | recording | working
+  const [elapsed, setElapsed] = useState(0);
+  const latest = useRef(value);
+  latest.current = value;
+  const session = useRef(null); // { recorder, stream, timer }
+  const starting = useRef(false); // between the tap and the microphone answering
+  const mounted = useRef(true);
+  const supported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder === "function";
+  useEffect(() => {
+    if (sttConfigured == null) api("/api/stt").then((s) => (sttConfigured = Boolean(s.configured)), () => {});
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const s = session.current;
+      if (!s) return;
+      clearInterval(s.timer);
+      s.recorder.onstop = null;
+      try {
+        s.recorder.stop();
+      } catch {
+        /* already stopped */
+      }
+      s.stream.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+  if (!supported) return null;
+
+  const finish = async (chunks, mime) => {
+    if (!mounted.current) return;
+    const recorded = new Blob(chunks, { type: mime || chunks[0]?.type || "audio/webm" });
+    if (!recorded.size) return setState("idle");
+    setState("working");
+    try {
+      const blob = await toWav(recorded);
+      const res = await fetch("/api/transcribe", { method: "POST", credentials: "same-origin", headers: { "content-type": blob.type }, body: blob });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `http ${res.status}`);
+      if (!mounted.current) return;
+      if (body.text) setText(joinDictation(latest.current, body.text));
+      else toast(t("چیزی شنیده نشد."));
+      focus?.();
+    } catch (error) {
+      toast.error(t("تبدیل گفتار به متن انجام نشد: {error}", { error: t(error.message) }));
+    } finally {
+      if (mounted.current) setState("idle");
+    }
+  };
+  const stop = () => {
+    const s = session.current;
+    if (!s) return;
+    clearInterval(s.timer);
+    try {
+      s.recorder.stop();
+    } catch {
+      /* already stopped */
+    }
+  };
+  const start = async () => {
+    if (sttConfigured === false) {
+      sttConfigured = null; // asked again on the next tap
+      api("/api/stt").then((s) => (sttConfigured = Boolean(s.configured)), () => {});
+      return toast(t("تبدیل گفتار به متن هنوز راه نیفتاده (کلید OpenRouter در stt.api-key روی سرور نیست)."));
+    }
+    // One recording at a time: a second tap while the browser asks for the microphone must not
+    // open a second stream that nothing would ever close.
+    if (starting.current || session.current) return undefined;
+    starting.current = true;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      starting.current = false;
+      return toast.error(t("به میکروفون دسترسی داده نشد."));
+    }
+    starting.current = false;
+    if (!mounted.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      return undefined;
+    }
+    const mime = pickAudioMime((m) => window.MediaRecorder.isTypeSupported?.(m));
+    const recorder = new window.MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks = [];
+    recorder.ondataavailable = (event) => event.data?.size && chunks.push(event.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      session.current = null;
+      finish(chunks, recorder.mimeType || mime);
+    };
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      const ms = Date.now() - startedAt;
+      setElapsed(ms);
+      if (ms >= MAX_RECORD_MS) stop();
+    }, 500);
+    session.current = { recorder, stream, timer };
+    setElapsed(0);
+    setState("recording");
+    recorder.start();
+  };
+  const btn = "mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted";
+  if (state === "working") {
+    return <span className={btn} title={t("در حال تبدیل گفتار به متن")} aria-live="polite"><Loader2 className={`${size} animate-spin`} /></span>;
+  }
+  if (state === "recording") {
+    return (
+      <button type="button" onClick={stop} className="mb-1 flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 text-xs" title={t("پایان ضبط و نوشتن متن")} aria-label={t("پایان ضبط")}>
+        <span className="size-2 animate-pulse rounded-full bg-red-500" aria-hidden /> {recordClock(elapsed, locale)}
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={start} className={btn} title={t("گفتن به‌جای نوشتن")} aria-label={t("ضبط صدا برای نوشتن پیام")}>
+      <Mic className={size} />
+    </button>
+  );
+}
+
+function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", agent = "griffin", onModeChange, onModelChange, effort, onEffortChange, top = null }) {
   const running = useAuiState((s) => s.thread.isRunning);
   const hero = variant === "hero";
+  const touch = useTouchPrimary();
+  const inputRef = useRef(null);
+  const { value: composerText, setText } = unstable_useComposerInput();
+  // What was being typed in this chat comes back after a reload or a look at another chat
+  // (draft.js). The composer is mounted once per chat, so this runs once per chat.
+  const { boxId: chatId, sendQuotes } = useRuntimeChat();
+  const boxText = useRef(composerText);
+  boxText.current = composerText;
+  // A message that did not reach the server returns to this box, above what was typed since.
+  useEffect(() => {
+    const onRestore = (event) => {
+      const detail = event.detail || {};
+      if (detail.handled || detail.chatId !== chatId || !detail.text) return;
+      detail.handled = true;
+      setText([detail.text, boxText.current].filter((t) => t?.trim()).join("\n"));
+    };
+    window.addEventListener(RESTORE_EVENT, onRestore);
+    return () => window.removeEventListener(RESTORE_EVENT, onRestore);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+  // Quotes added with «به گفتگو» wait folded above the input and join the message when it is sent.
+  const quotes = useSyncExternalStore(quoteStore.subscribe, () => quoteStore.get(chatId));
+  const quotesOnly = quotes.length > 0 && !composerText.trim();
+  const draftSkip = useRef(true);
+  useEffect(() => {
+    const draft = loadDraft(browserStorage(), chatId);
+    if (draft && !composerText) setText(draft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    // The first pass sees the still-empty box: it must not erase the draft being restored.
+    if (draftSkip.current) {
+      draftSkip.current = false;
+      return;
+    }
+    saveDraft(browserStorage(), chatId, composerText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerText]);
   return (
-    <ComposerPrimitive.Root className="rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
+    <>
+    {top}
+    <ComposerPrimitive.Root className="composer-box rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
+      {quotes.length ? (
+        <div className="flex flex-col gap-1 px-2 pt-2">
+          {quotes.map((q) => (
+            <div key={q.id} className="flex items-start gap-1.5 rounded-lg bg-muted/60 px-2 py-1 text-xs">
+              <Quote className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1" dir="auto" title={q.text}>
+                <span className="line-clamp-1 text-muted-foreground">{quotePreview(q.text)}</span>
+                {q.note ? <span className="line-clamp-1">{q.note}</span> : null}
+              </span>
+              <button type="button" onClick={() => quoteStore.remove(chatId, q.id)} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted" aria-label={t("برداشتن نقل‌قول")}>
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
         <ComposerPrimitive.AddAttachment className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")}>
           <ImagePlus className={hero ? "size-4" : "size-5"} />
         </ComposerPrimitive.AddAttachment>
+        <DictateButton value={composerText} setText={setText} focus={() => inputRef.current?.focus()} size={hero ? "size-4" : "size-5"} />
         <ComposerPrimitive.Input
+          ref={inputRef}
           rows={1}
           autoFocus
           dir={isRtl ? "rtl" : "auto"}
-          submitMode="enter"
-          unstable_insertNewlineOnTouchEnter
+          submitMode={submitMode(touch)}
           placeholder={running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agent} بپرس…", { agent: agentLabel })}
           className={`scrollbar-thin min-w-0 flex-1 resize-none bg-transparent px-1 text-start outline-none placeholder:text-muted-foreground ${
             hero
               ? "max-h-12 min-h-10 py-2 text-sm leading-6"
-              : "max-h-48 min-h-10 py-2 leading-7"
+              : "max-h-[45vh] min-h-10 py-2 leading-7"
           }`}
         />
         <div className="mb-0.5 flex shrink-0 items-center gap-1">
           {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} icons /> : null}
           {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} icons /> : null}
+          {onEffortChange ? <EffortPicker effort={effort} model={model} agent={agent} onChange={onEffortChange} /> : null}
           {running ? (
             <ComposerPrimitive.Cancel className="flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
               {hero ? (
@@ -342,6 +649,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
                 <Square className="size-3.5 fill-current" />
               )}
             </ComposerPrimitive.Cancel>
+          ) : quotesOnly ? (
+            <button type="button" onClick={sendQuotes} className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground" title={t("ارسال نقل‌قول‌ها")}>
+              <ArrowUp className="size-5" />
+            </button>
           ) : (
             <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-30" title={t("ارسال")}>
               <ArrowUp className="size-5" />
@@ -356,6 +667,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
         </div>
       ) : null}
     </ComposerPrimitive.Root>
+    </>
   );
 }
 

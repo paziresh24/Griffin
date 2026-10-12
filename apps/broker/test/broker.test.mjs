@@ -8,7 +8,7 @@ import { gzipSync } from "node:zlib";
 import { createKube } from "../src/kube.mjs";
 import { TEST_SITE } from "./fixture-site.mjs";
 import { createBrokerServer } from "../src/server.mjs";
-import { createTools, parseDf } from "../src/tools.mjs";
+import { createTools, parseDf, summarize } from "../src/tools.mjs";
 
 const vault = { item: async (slug) => (slug === "kube__token" ? "static-bearer" : "secret") };
 
@@ -109,6 +109,45 @@ test("kube_df runs exec over the emergency path and parses df", async () => {
   assert.deepEqual(parseDf(wrapped), [
     { filesystem: "/dev/mapper/topolvm--vg-b18a93e6", size: "904.5G", used: "895.9G", available: "8.6G", usePercent: "99%", mount: "/data0" },
   ]);
+});
+
+test("kube_exec quotes the command as one sh -c argument; deployments list env sources", async () => {
+  const { tools, sshCalls } = setup();
+  await tools.kube_exec.execute({ cluster: "prod", namespace: "ns", pod: "app-1", command: "echo -n \"$T\" | sha256sum; id" });
+  assert.equal(sshCalls[0].command, `kubectl 'exec' '-n' 'ns' 'app-1' '--' 'sh' '-c' 'echo -n "$T" | sha256sum; id' | gzip -c`);
+  const deploy = summarize("deployments", {
+    metadata: { name: "d" },
+    spec: { template: { spec: { containers: [{ image: "i", envFrom: [{ secretRef: { name: "s1" } }, { configMapRef: { name: "c1" } }], env: [{ name: "X", valueFrom: { secretKeyRef: { name: "s2", key: "k" } } }] }] } } },
+  });
+  assert.deepEqual(deploy.envSources, { secrets: ["s1"], configMaps: ["c1"], keyRefs: ["X <- secret s2/k"] });
+});
+
+test("debug_exec defaults to the sandbox when one is configured; other hosts only by name; ssh_exec is opt-in", async () => {
+  const sshCalls = [];
+  const sshRun = async (target, command) => (sshCalls.push({ target, command }), { stdout: "up", stderr: "" });
+  const prev = process.env.GRIFFIN_SANDBOX_KEY;
+  process.env.GRIFFIN_SANDBOX_KEY = "/sandbox-keys/client";
+  try {
+    const site = { ...TEST_SITE, ssh: { user: "ops-ro", keySlug: "ssh__ro" }, tools: { ssh: true } };
+    const tools = createTools({ site, kube: createKube({ vault, sshRun, clusters: TEST_SITE.clusters }), vault, sshRun });
+    const out = await tools.debug_exec.execute({ command: "uptime" });
+    assert.equal(out.host, "sandbox");
+    assert.equal(out.source, "sandbox");
+    assert.equal(sshCalls[0].target.host, "127.0.0.1");
+    assert.equal(sshCalls[0].target.keyFile, "/sandbox-keys/client");
+    assert.equal(sshCalls[0].target.loopback, true);
+    await tools.debug_exec.execute({ host: "debug", command: "uptime" });
+    assert.equal(sshCalls[1].target.host, "203.0.113.40");
+    const ssh = await tools.ssh_exec.execute({ host: "app.example.com", command: "df -h" });
+    assert.equal(ssh.user, "ops-ro");
+    assert.deepEqual([sshCalls[2].target.keySlug, sshCalls[2].target.tofu], ["ssh__ro", true]);
+  } finally {
+    if (prev === undefined) delete process.env.GRIFFIN_SANDBOX_KEY;
+    else process.env.GRIFFIN_SANDBOX_KEY = prev;
+  }
+  const plain = createTools({ site: TEST_SITE, kube: {}, vault, sshRun });
+  assert.ok(!("ssh_exec" in plain), "ssh_exec is opt-in");
+  assert.deepEqual(plain.debug_exec.inputSchema.properties.host.enum, ["debug"]);
 });
 
 test("broker HTTP API on a unix socket", async () => {
@@ -236,7 +275,7 @@ test("unsealer only acts when the vault is initialized and sealed", async () => 
 test("kube_copy_secret copies data server-side, returns only key names, refuses to overwrite", async () => {
   const { createTools } = await import("../src/tools.mjs");
   const writes = [];
-  const secrets = { "prod/baft-db-replication": { type: "kubernetes.io/tls", data: { "tls.crt": "Y3J0", "tls.key": "a2V5" } } };
+  const secrets = { "prod/shop-db-replication": { type: "kubernetes.io/tls", data: { "tls.crt": "Y3J0", "tls.key": "a2V5" } } };
   const kube = {
     publicRequest: async (cluster, path) => {
       const name = path.split("/").pop();
@@ -249,13 +288,13 @@ test("kube_copy_secret copies data server-side, returns only key names, refuses 
     },
   };
   const tools = createTools({ site: TEST_SITE, kube, vault: { item: async () => "x" }, sshRun: async () => ({}) });
-  const out = await tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "baft-db-replication", targetName: "baft-db-primary-replication-creds" });
+  const out = await tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "shop-db-replication", targetName: "shop-db-primary-replication-creds" });
   assert.equal(out.action, "created");
   assert.deepEqual(out.keys, ["tls.crt", "tls.key"]);
   assert.ok(!JSON.stringify(out).includes("a2V5"), "values never returned");
   assert.equal(writes[0].method, "POST");
   assert.equal(writes[0].body.type, "kubernetes.io/tls");
-  await assert.rejects(tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "baft-db-replication", targetName: "baft-db-primary-replication-creds" }), /already exists/);
+  await assert.rejects(tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "shop-db-replication", targetName: "shop-db-primary-replication-creds" }), /already exists/);
 });
 
 test("kube_copy_secret can rewrite a hostname token in every value", async () => {
@@ -264,17 +303,17 @@ test("kube_copy_secret can rewrite a hostname token in every value", async () =>
   const written = {};
   const kube = {
     publicRequest: async (cluster, path) => {
-      if (cluster === "prod") return { body: { type: "kubernetes.io/basic-auth", data: { host: b64("baft-db-rw"), uri: b64("postgresql://u:p@baft-db-rw.team-c:5432/baft"), other: b64("baft-db-rw-x") } } };
+      if (cluster === "prod") return { body: { type: "kubernetes.io/basic-auth", data: { host: b64("shop-db-rw"), uri: b64("postgresql://u:p@shop-db-rw.team-c:5432/shop"), other: b64("shop-db-rw-x") } } };
       return written[path.split("/").pop()] ? { body: { metadata: { resourceVersion: "1" } } } : { notFound: true };
     },
     publicWrite: async (cluster, path, opts) => { written[opts.body.metadata.name] = opts.body; },
   };
   const tools = createTools({ site: TEST_SITE, kube, vault: { item: async () => "x" }, sshRun: async () => ({}) });
-  const out = await tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "baft-db-app", targetName: "baft-db-app2", rewriteHost: { from: "baft-db-rw", to: "baft-db-primary-rw" } });
-  const dec = (k) => Buffer.from(written["baft-db-app2"].data[k], "base64").toString();
-  assert.equal(dec("host"), "baft-db-primary-rw");
-  assert.equal(dec("uri"), "postgresql://u:p@baft-db-primary-rw.team-c:5432/baft");
-  assert.equal(dec("other"), "baft-db-rw-x", "only whole host tokens");
+  const out = await tools.kube_copy_secret.execute({ fromCluster: "prod", toCluster: "dr", namespace: "team-c", name: "shop-db-app", targetName: "shop-db-app2", rewriteHost: { from: "shop-db-rw", to: "shop-db-primary-rw" } });
+  const dec = (k) => Buffer.from(written["shop-db-app2"].data[k], "base64").toString();
+  assert.equal(dec("host"), "shop-db-primary-rw");
+  assert.equal(dec("uri"), "postgresql://u:p@shop-db-primary-rw.team-c:5432/shop");
+  assert.equal(dec("other"), "shop-db-rw-x", "only whole host tokens");
   assert.deepEqual(out.rewritten, ["host", "uri"]);
 });
 
@@ -283,9 +322,9 @@ test("cnpg_retry_bootstrap deletes only failed, inactive jobs of that cluster", 
   const deleted = [];
   const kube = {
     publicRequest: async (c, path) => {
-      assert.match(path, /labelSelector=cnpg\.io%2Fcluster%3Dbaft-db-replica/);
+      assert.match(path, /labelSelector=cnpg\.io%2Fcluster%3Dshop-db-replica/);
       return { body: { items: [
-        { metadata: { name: "baft-db-replica-1-pgbasebackup" }, status: { failed: 7 } },
+        { metadata: { name: "shop-db-replica-1-pgbasebackup" }, status: { failed: 7 } },
         { metadata: { name: "ok-job" }, status: { succeeded: 1 } },
         { metadata: { name: "running-job" }, status: { active: 1, failed: 1 } },
       ] } };
@@ -293,8 +332,8 @@ test("cnpg_retry_bootstrap deletes only failed, inactive jobs of that cluster", 
     publicWrite: async (c, path, opts) => { assert.equal(opts.method, "DELETE"); deleted.push(path.split("/").pop()); },
   };
   const tools = createTools({ site: TEST_SITE, kube, vault: { item: async () => "x" }, sshRun: async () => ({}) });
-  const out = await tools.cnpg_retry_bootstrap.execute({ cluster: "dr", namespace: "team-c", name: "baft-db-replica" });
-  assert.deepEqual(deleted, ["baft-db-replica-1-pgbasebackup"]);
+  const out = await tools.cnpg_retry_bootstrap.execute({ cluster: "dr", namespace: "team-c", name: "shop-db-replica" });
+  assert.deepEqual(deleted, ["shop-db-replica-1-pgbasebackup"]);
   assert.deepEqual(out.deletedJobs, deleted);
 });
 
@@ -320,6 +359,7 @@ test("tool packs follow the site config: nothing configured, nothing but credent
   });
   assert.ok(Object.keys(some).includes("kube_status"));
   assert.ok(Object.keys(some).includes("gitlab_version"));
+  assert.ok(Object.keys(some).includes("git_clone"), "repos ride on the gitlab config");
   assert.ok(!Object.keys(some).includes("mikrotik_print"));
   assert.ok(!Object.keys(some).includes("debug_exec"), "no shell host, no shell tool");
   assert.ok(!Object.keys(some).includes("arvan_domains"), "vendor packs are opt-in");

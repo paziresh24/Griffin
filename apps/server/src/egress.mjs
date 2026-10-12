@@ -101,16 +101,23 @@ function normalizeArgs(args) {
 }
 
 export function installCursorEgress(proxyUrl, { log = console } = {}) {
-  if (!proxyUrl || tls.connect.__griffinEgress) return false;
+  if (!proxyUrl) return false;
   const proxy = new URL(proxyUrl);
+  // Installed already: only the proxy changes (the setup wizard sets it at runtime).
+  if (tls.connect.__griffinEgress) {
+    tls.connect.__proxy = proxy;
+    log.info?.(`[egress] Cursor/Anthropic TLS via ${proxy.host}`);
+    return true;
+  }
   const original = tls.connect;
   const patched = function connect(...args) {
     const { options, callback, host, port } = normalizeArgs(args);
     if (options.socket || !isAgentHost(host)) return original.apply(this, args);
-    const socket = connectTunnel(proxy, host, port);
+    const socket = connectTunnel(patched.__proxy, host, port);
     return original.call(this, { ...options, host, port, servername: options.servername || host, socket }, callback);
   };
   patched.__griffinEgress = true;
+  patched.__proxy = proxy;
   tls.connect = patched;
   log.info?.(`[egress] Cursor/Anthropic TLS via ${proxy.host}`);
   return true;

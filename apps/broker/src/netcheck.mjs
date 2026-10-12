@@ -4,6 +4,11 @@ import https from "node:https";
 import tls from "node:tls";
 import { ToolInputError } from "./kube.mjs";
 
+// In a simulation the model guessed a few subdomains, read NXDOMAIN as «records deleted from the CDN»,
+// and the CDN agent queued three DNS creates — none of those names ever existed.
+const NO_NAME_NOTE =
+  "No such name. That only proves this name does not resolve — not that it was deleted or that anything is down. Before calling it an outage, show it existed (the site's own links, the gitops ingress hosts, monitoring).";
+
 // Shell-free network diagnostics. Used by the edge/CDN agent to prove what the edge and
 // origin actually answer, without giving the model a shell.
 // http_check uses node:http(s) (not fetch) so Host and TLS servername can be overridden:
@@ -15,6 +20,7 @@ const HEADER_KEEP = new Set([
   "server", "x-cache", "age", "cache-control", "expires", "etag",
   "content-type", "content-length", "location", "via", "x-request-id",
   "cf-cache-status", "x-arvan-cache",
+  "x-served-by", // which cluster/origin answered — a cutover cannot be verified without it
 ]);
 const DNS_TYPES = new Set(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SOA"]);
 
@@ -69,6 +75,7 @@ export function createNetTools({
               resolver: args.resolver ? String(args.resolver) : "system",
               records: [],
               error: code === "ENOTFOUND" || /NXDOMAIN/i.test(String(error?.message)) ? "NXDOMAIN" : String(code || error.message),
+              note: NO_NAME_NOTE,
               ms: Date.now() - started,
               source: "dns",
             };
@@ -150,6 +157,7 @@ export function createNetTools({
           redirects,
           ...(wantBody && last.bodySnippet !== undefined ? { bodySnippet: last.bodySnippet } : {}),
           ...(last.error ? { error: last.error } : {}),
+          ...(last.error === "ENOTFOUND" ? { note: NO_NAME_NOTE } : {}),
           source: "http",
         };
       },

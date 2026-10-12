@@ -930,7 +930,7 @@ describe("scenario matrix: owner-answer bridge (no double ask)", () => {
   it("nag guard: a similar owner question just answered is refused with the previous answer, a different one passes", async () => {
     const { asks } = wired();
     const parse = (result) => JSON.parse(result.content[0].text);
-    const first = asks.tool("b1").execute({ question: "MR شمارهٔ ۹۶۶ platform-gitops برای finmodel مرج شود؟", options: [{ label: "بله" }, { label: "نه" }] });
+    const first = asks.tool("b1").execute({ question: "MR شمارهٔ ۹۶۶ infra برای finmodel مرج شود؟", options: [{ label: "بله" }, { label: "نه" }] });
     await new Promise((r) => setTimeout(r, 20));
     asks.answer("b1", { answer: "مرج کن", selected: [] });
     assert.equal(parse(await first).answered, true);

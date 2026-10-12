@@ -5,6 +5,12 @@ const GRIFFIN_MCP = /^mcp__griffin__/;
 
 export function createClaudeEventBridge() {
   const blocks = new Map(); // index -> { kind, callId, name, partial }
+  // callId -> { name, args }: a tool_result carries neither, and a completion named "tool" hid
+  // end_agent from finalText — text written after it reached the colleague (2026-10-08).
+  const calls = new Map();
+  const remember = (callId, name, args) => {
+    calls.set(callId, { name, args });
+  };
   let thinkingStartedAt = null;
 
   function flushThinkingDone() {
@@ -45,6 +51,7 @@ export function createClaudeEventBridge() {
       const callId = block.id || `tool-${index}`;
       const name = shortToolName(block.name);
       blocks.set(index, { kind: "tool", callId, name, partial: "" });
+      remember(callId, name, block.input && typeof block.input === "object" ? block.input : {});
       return [{
         type: "tool-call-started",
         callId,
@@ -67,6 +74,7 @@ export function createClaudeEventBridge() {
       state.partial = `${state.partial || ""}${delta.partial_json || ""}`;
       const args = tryParsePartial(state.partial);
       if (!args) return [];
+      remember(state.callId, state.name, args);
       return [{
         type: "partial-tool-call",
         callId: state.callId,
@@ -91,6 +99,7 @@ export function createClaudeEventBridge() {
         continue;
       }
       if (block.type === "tool_use") {
+        remember(block.id, shortToolName(block.name), block.input || {});
         out.push({
           type: "tool-call-started",
           callId: block.id,
@@ -106,6 +115,7 @@ export function createClaudeEventBridge() {
     for (const block of message?.content || []) {
       if (block.type !== "tool_result") continue;
       const callId = block.tool_use_id || block.toolUseId;
+      const call = calls.get(callId);
       out.push({
         type: "tool-call-completed",
         callId,
@@ -113,8 +123,8 @@ export function createClaudeEventBridge() {
           type: "mcp",
           args: {
             providerIdentifier: "custom-user-tools",
-            toolName: "tool",
-            args: null,
+            toolName: call?.name || "tool",
+            args: call?.args ?? null,
           },
           result: normalizeToolResult(block),
         },

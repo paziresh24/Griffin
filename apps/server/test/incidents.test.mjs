@@ -321,3 +321,18 @@ test("the list puts critical first and says how much it left out", async () => {
   assert.equal(s.total, 3);
   assert.deepEqual(s.byCluster, { "prod-b": { warning: 2 }, "prod-a": { critical: 1 } });
 });
+
+test("ops room critical mode: warnings and the backlog never run; a new critical does", async () => {
+  const t = setup();
+  const sent = [];
+  const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, ...msg }) };
+  const room = createOpsRoom({ store: t.store, runner, incidents: t.incidents, mode: "critical", log: { error() {} } });
+  t.set({ clusters: ok("asia"), alerts: [alert(), watchdog("asia")] });
+  room.push(await t.intake.poll(), { bootstrap: true });
+  assert.equal(room.pendingCount(), 0);
+  t.set({ clusters: ok("asia"), alerts: [alert(), alert({ alertname: "DiskFailingCritical", severity: "critical", labels: {} }), watchdog("asia")] });
+  room.push(await t.intake.poll());
+  assert.equal(room.pendingCount(), 1);
+  await room.flush();
+  assert.match(sent[0].text, /حالت critical/);
+});
