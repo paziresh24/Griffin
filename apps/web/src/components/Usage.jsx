@@ -1,8 +1,8 @@
 import { Gauge } from "lucide-react";
-import { Popover } from "radix-ui";
+import { useState } from "react";
 import { usePolling } from "../api.js";
 import { BRAND } from "../brand.js";
-import { isRtl, num, t } from "../i18n.js";
+import { num, t } from "../i18n.js";
 
 const fa = (n) => num(Number(n || 0));
 const pct = (n) => num(Number(n || 0) / 100, { style: "percent" });
@@ -30,23 +30,26 @@ function percentOf(w) {
   return null;
 }
 
-// Header pill: the provider plan windows (5-hour / weekly) at a glance, details on click.
+// "Token usage" in the sidebar's settings menu (it left the chat header): the provider
+// plan windows (5-hour / weekly) at a glance, details unfold in place on click (a popover inside the
+// menu would close with it).
 export function UsageBadge() {
+  const [open, setOpen] = useState(false);
   const data = usePolling("/api/usage", 60_000);
   const windows = (data?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id })));
   const worst = windows.reduce((max, w) => Math.max(max, percentOf(w) ?? 0), 0);
   const tone = worst >= 90 ? "text-bad" : worst >= 70 ? "text-warn" : "text-muted-foreground";
+  const summary = windows.length ? windows.map((w) => `${t(w.label)} ${pct(percentOf(w) ?? 0)}`).join(" · ") : data ? tokens(data.local?.last5h?.input + data.local?.last5h?.output) + " tok/5h" : "…";
 
   return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button type="button" className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] hover:bg-muted ${tone}`} title={t("مصرف")}>
-          <Gauge className="size-3.5" />
-          {windows.length ? windows.map((w) => `${t(w.label)} ${pct(percentOf(w) ?? 0)}`).join(" · ") : data ? tokens(data.local?.last5h?.input + data.local?.last5h?.output) + " tok/5h" : "…"}
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="end" sideOffset={6} className="z-50 w-80 rounded-xl border bg-background p-3 text-xs shadow-lg" dir={isRtl ? "rtl" : "ltr"}>
+    <div>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm hover:bg-muted ${open ? "bg-muted" : ""}`}>
+        <Gauge className="size-4 text-muted-foreground" />
+        <span className="flex-1 text-start">{t("مصرف توکن")}</span>
+        <span className={`text-[11px] ${tone}`}>{summary}</span>
+      </button>
+      {open ? (
+        <div className="px-2.5 py-2 text-xs">
           <div className="mb-2 font-medium">{t("سهمیهٔ پلن")}</div>
           {windows.length ? (
             windows.map((w, i) => {
@@ -78,8 +81,8 @@ export function UsageBadge() {
               </span>
             </div>
           ))}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </div>
+      ) : null}
+    </div>
   );
 }

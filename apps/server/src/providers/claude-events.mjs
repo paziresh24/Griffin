@@ -12,6 +12,8 @@ export function createClaudeEventBridge() {
     calls.set(callId, { name, args });
   };
   let thinkingStartedAt = null;
+  // The newest conversation entry (assistant/user message uuid): where a fork of this turn ends.
+  let lastChainUuid = null;
 
   function flushThinkingDone() {
     if (thinkingStartedAt == null) return [];
@@ -136,12 +138,19 @@ export function createClaudeEventBridge() {
   function onResult(message) {
     const out = [];
     if (message.usage) out.push({ type: "turn-ended", usage: message.usage });
+    // «ادامه در گفتگوی تازه از اینجا» forks the session up to this entry (SDK forkSession).
+    if (lastChainUuid) out.push({ type: "checkpoint", lastMessageId: lastChainUuid, sessionId: message.session_id || null });
+    // Fast mode as Claude Code reports it at every result ("on", "off", "cooldown").
+    if (typeof message.fast_mode_state === "string") {
+      out.push({ type: "fast-mode", state: message.fast_mode_state, reason: message.fast_mode_disabled_reason || null });
+    }
     return out;
   }
 
   return {
     consume(message) {
       if (!message) return [];
+      if ((message.type === "assistant" || message.type === "user") && message.uuid) lastChainUuid = message.uuid;
       if (message.type === "stream_event") return onStreamEvent(message.event);
       if (message.type === "assistant") return onAssistantMessage(message.message || message);
       if (message.type === "user") return onUserMessage(message.message || message);

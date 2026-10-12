@@ -1,0 +1,6 @@
+{
+  "این مرورگر از Service Worker پشتیبانی نمی‌کند": "This browser does not support service workers",
+  "این مرورگر از Web Push پشتیبانی نمی‌کند": "This browser does not support Web Push",
+  "این مرورگر از اعلان پشتیبانی نمی‌کند": "This browser does not support notifications",
+  "اعلان‌ها فقط روی HTTPS کار می‌کنند (نه آدرس LAN)": "Notifications only work over HTTPS (not on a LAN address)"
+}

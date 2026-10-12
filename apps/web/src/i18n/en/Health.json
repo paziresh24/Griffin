@@ -26,5 +26,22 @@
   "قطع": "Down",
   "همین حالا": "just now",
   "{n} دقیقه پیش": "{n} min ago",
-  "{n} ساعت پیش": "{n} h ago"
+  "{n} ساعت پیش": "{n} h ago",
+  "سرور": "Server",
+  "سرور (به‌روز نمی‌شود)": "Server (not updating)",
+  "پردازنده": "CPU",
+  "{n} هسته": "{n} cores",
+  "بار {load}": "load {load}",
+  "حافظه": "Memory",
+  "{used} از {total} · خود {name} {rss}": "{used} of {total} · {name} itself {rss}",
+  "دیسک": "Disk",
+  "{free} آزاد از {total}": "{free} free of {total}",
+  "روشن از": "Up since",
+  "سرور {name}: {started} · خود ماشین: {uptime}": "{name} server: {started} · machine: {uptime}",
+  "{n} گیگ": "{n} GiB",
+  "{n} روز": "{n} d",
+  "{n} ساعت": "{n} h",
+  "{n} دقیقه": "{n} min",
+  " و ": " ",
+  "کمتر از یک دقیقه": "less than a minute"
 }

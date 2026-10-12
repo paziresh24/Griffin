@@ -1,15 +1,18 @@
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   AssistantRuntimeProvider,
   SimpleImageAttachmentAdapter,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { api, navigate } from "./api.js";
+import { api, catchUpTimeline, navigate } from "./api.js";
+import { createSender, mergeOutbox, newClientId, outbox } from "./outbox.js";
+import { holdReload } from "./new-version.js";
 import { unwrapResult } from "./result.js";
 import { t } from "./i18n.js";
 import { loadDraft, saveDraft } from "./draft.js";
 import { quoteStore, withQuotes } from "./quotes.js";
 import { retryableRunId } from "./side.js";
+import { collectChapters } from "./chat-tools.js";
 
 export { unwrapResult };
 
@@ -19,7 +22,7 @@ const imageAdapter = new SimpleImageAttachmentAdapter();
 // waiting quotes alone (an empty box cannot be submitted through the composer itself), and the
 // kept message's retry/delete.
 // boxId keys the composer's draft and quotes (the chat; null = a new chat).
-const RuntimeChat = createContext({ chatId: null, boxId: null, sendQuotes: () => {} });
+const RuntimeChat = createContext({ chatId: null, boxId: null, sendQuotes: () => {}, settings: {}, chapters: [] });
 export const useRuntimeChat = () => useContext(RuntimeChat);
 
 // A message that did not reach the server goes back to the composer of its chat.
@@ -44,10 +47,48 @@ function returnToBox(chatId, text) {
   if (!detail.handled) saveDraft(browserStorage(), chatId, [text, loadDraft(browserStorage(), chatId)].filter(Boolean).join("\n"));
 }
 
+// Where a refused send is reported: that chat's runtime on screen (the text waits as its draft).
+const errorHandlers = new Map(); // chatId -> onError
+
+// One sender for the page: a message keeps its state (outbox.js) after the owner moves to another
+// chat and back. Each message carries a client id, so "send again" never stores it twice.
+const sender = createSender({
+  outbox,
+  post: (entry) => api(`/api/chats/${entry.chatId}/messages`, { method: "POST", body: { ...entry.payload, intent: entry.intent, clientId: entry.clientId } }),
+  catchUp: catchUpTimeline,
+  settle: (entry, outcome, error) => {
+    for (const id of entry.quoteIds) quotesInFlight.delete(id);
+    // Only the quotes as they were sent leave the box; one edited meanwhile waits for the next message.
+    if (outcome === "sent") quoteStore.removeSent(entry.chatId, entry.quotes || []);
+    else returnToBox(entry.chatId, entry.typed);
+    if (outcome === "refused") errorHandlers.get(entry.chatId)?.(error);
+  },
+});
+export const retrySend = (clientId) => sender.retry(clientId);
+// A message on its way or not delivered holds a new version's reload off (a reload would lose it).
+let releaseReload = null;
+outbox.subscribe(() => {
+  if (outbox.unsent() && !releaseReload) releaseReload = holdReload();
+  else if (!outbox.unsent() && releaseReload) releaseReload = (releaseReload(), null);
+});
+export const editSend = (clientId) => sender.edit(clientId);
+
 // Bridges our event timeline (source of truth on the server) to assistant-ui.
 // kept: the chat's kept message ids (oldest first) — "delete" removes the oldest.
 export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError, children }) {
-  const messages = timeline.messages;
+  const waiting = useSyncExternalStore(outbox.subscribe, () => outbox.forChat(chatId), () => outbox.forChat(chatId));
+  // The owner's messages still on their way show after the thread, each with its state.
+  const messages = useMemo(() => mergeOutbox(timeline.messages, chatId ? waiting : []), [timeline.messages, waiting, chatId]);
+  useEffect(() => {
+    if (chatId) sender.landed(chatId, timeline.messages);
+  }, [chatId, timeline.messages, waiting]);
+  useEffect(() => {
+    if (!chatId || !onError) return undefined;
+    errorHandlers.set(chatId, onError);
+    return () => {
+      if (errorHandlers.get(chatId) === onError) errorHandlers.delete(chatId);
+    };
+  }, [chatId, onError]);
   // A queued user message can sit after the running assistant message.
   const lastRun = messages.findLast((m) => m.role === "assistant");
   const isRunning = lastRun?.status === "running";
@@ -63,29 +104,36 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       for (const q of quotes) quotesInFlight.add(q.id);
       const payload = quotes.length ? { ...typed, text: withQuotes(quotes, typed.typed) } : typed;
       delete payload.typed;
+      if (chatId) {
+        // Shown at once with its state; the quotes stay in flight until it is delivered or taken back.
+        const text = payload.text || "";
+        await sender.submit({ chatId, clientId: newClientId(), text, typed: typed.typed, images: payload.images?.length || 0, intent, payload, quoteIds: quotes.map((q) => q.id), quotes });
+        return;
+      }
+      // A reload mid-send could create the chat and still put the text back in the box.
+      const releaseNew = holdReload();
       try {
-        if (!chatId) {
-          const { chat } = await api("/api/chats", {
-            method: "POST",
-            body: {
-              ...payload,
-              mode: settings.mode,
-              model: settings.model,
-              effort: settings.effort || undefined,
-              agent: settings.agent || "griffin",
-              ...(settings.repo != null ? { repo: settings.repo } : {}),
-            },
-          });
-          navigate(chat.id);
-        } else {
-          await api(`/api/chats/${chatId}/messages`, { method: "POST", body: { ...payload, intent } });
-        }
-        quoteStore.remove(boxId, quotes.map((q) => q.id));
+        const { chat } = await api("/api/chats", {
+          method: "POST",
+          body: {
+            ...payload,
+            mode: settings.mode,
+            model: settings.model,
+            effort: settings.effort || undefined,
+            agent: settings.agent || "griffin",
+            ...(settings.repo != null ? { repo: settings.repo } : {}),
+            // «+» on a group's heading: the chat starts in that group.
+            ...(settings.groupId ? { groupId: settings.groupId } : {}),
+          },
+        });
+        navigate(chat.id);
+        quoteStore.removeSent(boxId, quotes);
       } catch (error) {
         // No connection or a refusal: the text returns to the box (the quotes never left it).
         returnToBox(boxId, typed.typed);
         onError(error);
       } finally {
+        releaseNew();
         for (const q of quotes) quotesInFlight.delete(q.id);
       }
     };
@@ -118,11 +166,14 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       adapters: { attachments: imageAdapter },
       unstable_capabilities: { copy: true },
     };
-  }, [chatId, boxId, messages, isRunning, retryId, keptId, settings.mode, settings.model, settings.agent, settings.repo, onError]);
+  }, [chatId, boxId, messages, isRunning, retryId, keptId, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
 
   const runtime = useExternalStoreRuntime(adapter);
   const sendQuotes = adapter.sendQuotes;
-  const runtimeChat = useMemo(() => ({ chatId, boxId, sendQuotes }), [chatId, boxId, sendQuotes]);
+  // settings: what a new chat would start with (the composer's "later" keeps it with the note).
+  // The thread's chapter list (chat_chapter) for the floating table of contents.
+  const chapters = useMemo(() => collectChapters(messages), [messages]);
+  const runtimeChat = useMemo(() => ({ chatId, boxId, sendQuotes, settings, chapters }), [chatId, boxId, sendQuotes, settings, chapters]);
   return (
     <RuntimeChat.Provider value={runtimeChat}>
       <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
@@ -154,7 +205,7 @@ function convertMessage(message) {
       role: "user",
       content: [{ type: "text", text: message.text }],
       createdAt: message.at ? new Date(message.at) : undefined,
-      metadata: { custom: { intent: message.intent || null, images: message.images || 0 } },
+      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, clientId: message.clientId || null, sendState: message.sendState || null } },
     };
   }
   return {
@@ -162,7 +213,8 @@ function convertMessage(message) {
     role: "assistant",
     createdAt: message.startedAt ? new Date(message.startedAt) : undefined,
     status: messageStatus(message),
-    content: message.parts.map((part) => {
+    // Suggestion cards and chapter dividers are drawn from metadata.custom.run, not by assistant-ui.
+    content: message.parts.filter((part) => ["text", "reasoning", "tool"].includes(part.type)).map((part) => {
       if (part.type === "tool") {
         const { result, isError } = unwrapResult(part);
         return {

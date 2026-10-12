@@ -1,0 +1,12 @@
+{
+  "این گفتگو الان در حال کار است. بعد از تمام شدنِ کار دوباره امتحان کنید.": "This conversation is working right now. Try again once it has finished.",
+  "گفتگو با همین پیام‌ها روی {to} ادامه پیدا می‌کند و ایجنت در پیام بعدی می‌فهمد که ریپو عوض شده است.": "The conversation continues on {to} with the same messages, and the agent learns in the next message that the repo changed.",
+  "همان نسخه‌ای که این گفتگو قبلاً در {to} داشت، با همهٔ تغییراتش، برمی‌گردد.": "The copy this conversation had in {to} before comes back, with all its changes.",
+  "در {from} کاری روی دیسک نمانده که کنار گذاشته شود.": "Nothing on disk in {from} needs to be set aside.",
+  "{n} فایل تغییرکرده یا تازه در {from} هست. پاک نمی‌شوند و دست‌نخورده کنار گذاشته می‌شوند.": "{n} changed or new files are in {from}. They are not deleted; they are set aside untouched.",
+  "{from} تغییر ذخیره‌نشده‌ای ندارد و دست‌نخورده کنار گذاشته می‌شود.": "{from} has no unsaved changes and is set aside untouched.",
+  "کامیت‌هایی که هنوز push نشده‌اند هم همان‌جا می‌مانند.": "Commits not pushed yet stay there too.",
+  "اگر بعداً به {from} برگردید، همین نسخه دوباره باز می‌شود.": "If you come back to {from} later, this same copy opens again.",
+  "ریپو عوض نشد: {message}": "The repo was not changed: {message}",
+  "خطای ناشناخته": "Unknown error"
+}

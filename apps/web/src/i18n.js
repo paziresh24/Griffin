@@ -5,6 +5,7 @@
 const STORAGE_KEY = "griffin.lang";
 
 function initialLang() {
+  if (typeof document === "undefined") return "fa"; // node tests: Persian keys, no Vite glob
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === "fa" || saved === "en") return saved;

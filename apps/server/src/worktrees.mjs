@@ -85,6 +85,9 @@ const lastFetch = new Map(); // repoDir -> time of the last successful fetch
 // Worktree creations in flight, by worktree dir: a second call for the same chat, or an archive
 // of that chat, waits for it instead of racing it.
 const creating = new Map(); // dir -> promise
+// Folder switches in flight, by the chat's first worktree dir: a run asking for the folder and an
+// archive wait for it (switchChatWorktree).
+const switching = new Map(); // dir -> promise
 
 export function shortId(chatId) {
   return String(chatId || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "chat";
@@ -365,6 +368,16 @@ export async function ensureChatWorktree({
       throw new WorktreeError(`could not check the chat's worktree ${slot.dir}: ${problem.unknown} — nothing was changed`);
     }
     if (!problem) return settle(slot.dir);
+    if (problem === "missing") {
+      // The chat comes back to a repo it was moved away from (folder switch), or a switch was cut
+      // half-way: the tree it set aside in this repo returns whole, uncommitted files and all.
+      const back = chatSlots(reposRoot, chatId).find((s) => !existsSync(s.dir) && existsSync(path.join(parkedDir(s.dir, repo), ".git")));
+      if (back) {
+        await gitRetryingLock(["worktree", "move", parkedDir(back.dir, repo), back.dir], repoDir, execFn, 0, lockRetryDelayMs);
+        onNote?.(`chat ${chatId}: took back its ${repo} tree from ${parkedDir(back.dir, repo)}`);
+        return settle(back.dir);
+      }
+    }
     let from = null; // the branch the new slot starts from (null: the default branch at origin)
     if (problem === "missing") {
       // The chat's current tree is gone from disk. A tree the chat already had (a stored path, or
@@ -433,10 +446,110 @@ export async function ensureChatWorktree({
   return work;
 }
 
-// Resolves once no creation of this chat's worktree is in flight (whatever its outcome).
+// Resolves once no creation or folder switch of this chat's worktree is in flight (whatever its
+// outcome).
 export async function worktreeCreationSettled(reposRoot, chatId) {
-  const pending = creating.get(worktreeDir(reposRoot, chatId));
-  if (pending) await pending.catch(() => {});
+  const dir = worktreeDir(reposRoot, chatId);
+  for (const map of [switching, creating]) {
+    const pending = map.get(dir);
+    if (pending) await pending.catch(() => {});
+  }
+}
+
+// Where a chat's tree of one repo waits while the chat works in another (folder switch): beside
+// the chat its own folder, named after the repo. Never swept (SWEEP_NAME does not match
+// it) and never removed by a switch; the chat takes it back when it returns to that repo, and an
+// archive cleans it under the same nothing-to-lose rule as the chat's own trees.
+export const parkedDir = (slotPath, repo) => `${slotPath}-in-${repo}`;
+
+// The chat's set-aside trees on disk: [{ dir, repo, slot }].
+export function parkedTrees(reposRoot, chatId, { readdirSync = fs.readdirSync } = {}) {
+  let names = [];
+  try {
+    names = readdirSync(path.join(reposRoot, "_wt"));
+  } catch {
+    return [];
+  }
+  return chatSlots(reposRoot, chatId).flatMap((slot) => {
+    const prefix = `${path.basename(slot.dir)}-in-`;
+    return names
+      .filter((name) => name.startsWith(prefix) && isValidRepoName(reposRoot, name.slice(prefix.length)))
+      .map((name) => ({ dir: path.join(reposRoot, "_wt", name), repo: name.slice(prefix.length), slot }));
+  });
+}
+
+async function headBranch(dir, execFn, gitTimeoutMs) {
+  try {
+    const head = await git(["rev-parse", "--abbrev-ref", "HEAD"], dir, execFn, gitTimeoutMs);
+    return head && head !== "HEAD" ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+// What leaving the chat's current tree behind means, for the owner's confirmation before a switch:
+// how many paths are modified or untracked, whether its branch has commits no remote has, and
+// whether the target repo gives back a tree the chat set aside there earlier.
+export async function chatTreeState({ reposRoot, repo, toRepo, chatId, currentDir = null, execFn = defaultExecFn, existsSync = fs.existsSync, gitTimeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const slot = currentWorktree(reposRoot, chatId, { existsSync, currentDir });
+  const present = existsSync(path.join(slot.dir, ".git"));
+  let changed = 0;
+  let unpushed = false;
+  if (present) {
+    const out = await git(["status", "--porcelain", "--untracked-files=normal"], slot.dir, execFn, gitTimeoutMs);
+    changed = out.split("\n").filter(Boolean).length;
+    unpushed = await hasUnpushedCommits({ reposRoot, repo, chatId, branch: slot.branch, execFn, gitTimeoutMs });
+  }
+  const returning = chatSlots(reposRoot, chatId).some((s) => existsSync(path.join(parkedDir(s.dir, toRepo), ".git")));
+  return { from: repo, to: toRepo, present, changed, unpushed, returning, parked: present ? parkedDir(slot.dir, repo) : null };
+}
+
+// Moves a chat off its repo without losing anything: its current tree is set aside whole (`git
+// worktree move`, uncommitted files and all) and the folder is left free, so the chat's next run
+// makes the new repo's tree in the same place (ensureChatWorktree), or takes back the one it set
+// aside there earlier. The only git step is the move: when it fails nothing has changed.
+// `canMove` is asked once the folder is held (false: a run came alive — nothing moves);
+// `onSwitched` runs while it is still held, so a run waiting for the folder sees the new repo.
+export async function switchChatWorktree({
+  reposRoot,
+  chatId,
+  fromRepo,
+  currentDir = null,
+  canMove = () => true,
+  onSwitched = () => {},
+  execFn = defaultExecFn,
+  existsSync = fs.existsSync,
+  lockRetryDelayMs = LOCK_RETRY_DELAY_MS,
+} = {}) {
+  const first = worktreeDir(reposRoot, chatId);
+  await worktreeCreationSettled(reposRoot, chatId);
+  if (creating.has(first) || switching.has(first)) throw new WorktreeError("the chat's folder is being set up right now — nothing was changed", { code: "WORKTREE_BUSY" });
+  // Synchronous up to the first await: no run can start between canMove() and the marker below.
+  const work = (async () => {
+    if (!canMove()) throw new WorktreeError("busy", { code: "WORKTREE_BUSY" });
+    const slot = currentWorktree(reposRoot, chatId, { existsSync, currentDir });
+    // An earlier tree left in the chat's other slot would be taken for the new repo's tree.
+    const other = chatSlots(reposRoot, chatId).find((s) => s.n !== slot.n && existsSync(s.dir));
+    if (other) throw new WorktreeError(`${other.dir} (an earlier tree of this chat) is still there — nothing was changed`);
+    let parked = null;
+    if (existsSync(slot.dir)) {
+      if (!existsSync(path.join(slot.dir, ".git"))) throw new WorktreeError(`${slot.dir} exists but is not a git tree — nothing was changed`);
+      parked = parkedDir(slot.dir, fromRepo);
+      // `git worktree move` onto an existing folder would move INTO it.
+      if (existsSync(parked)) throw new WorktreeError(`${parked} already exists — nothing was changed`);
+      const fromDir = path.join(reposRoot, fromRepo);
+      // No timeout: a killed move leaves a half-moved worktree record.
+      await withRepoLock(fromDir, () => gitRetryingLock(["worktree", "move", slot.dir, parked], fromDir, execFn, 0, lockRetryDelayMs));
+    }
+    await onSwitched({ parked });
+    return { parked };
+  })();
+  switching.set(first, work);
+  const clear = () => {
+    if (switching.get(first) === work) switching.delete(first);
+  };
+  work.then(clear, clear);
+  return work;
 }
 
 // Folders whose ignored content is regenerated by an install or a build; a *.pyc file anywhere.
@@ -494,6 +607,19 @@ export async function cleanupChatWorktree(opts) {
   for (const slot of chatSlots(opts.reposRoot, opts.chatId)) {
     const outcome = await cleanupWorktreeSlot({ ...opts, slot });
     if (outcome) trees.push(outcome);
+  }
+  // Trees set aside in other repos by a folder switch: same rule. Only on the chat's own branch —
+  // a tree the agent moved onto any other branch (the owner's main, say) is kept.
+  const execFn = opts.execFn || defaultExecFn;
+  const gitTimeoutMs = opts.gitTimeoutMs || GIT_TIMEOUT_MS;
+  for (const { dir, repo, slot } of parkedTrees(opts.reposRoot, opts.chatId)) {
+    if (!(opts.existsSync || fs.existsSync)(path.join(dir, ".git"))) continue;
+    const branch = await headBranch(dir, execFn, gitTimeoutMs);
+    if (branch !== slot.branch) {
+      trees.push({ dir, branch, action: "kept", reason: branch ? `on ${branch}, not the chat's own branch` : "not on a branch" });
+      continue;
+    }
+    trees.push(await cleanupWorktreeSlot({ ...opts, repo, slot: { dir, branch } }));
   }
   const kept = trees.filter((t) => t.action !== "removed");
   return {

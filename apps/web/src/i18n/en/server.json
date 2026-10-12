@@ -70,5 +70,7 @@
  "راهنمای «خودت انجام بده» برای ایجنت همکاران ({user} = شناسهٔ همکار)": "“Do it yourself” guide for teammates' agents ({user} = teammate id)",
  "تبدیل صدا به متن: آدرس سرویس": "Speech to text: service URL",
  "تبدیل صدا به متن: مدل": "Speech to text: model",
- "تبدیل صدا به متن: زبان": "Speech to text: language"
+ "تبدیل صدا به متن: زبان": "Speech to text: language",
+ "ادامهٔ خودکار گفتگو بعد از بازشدن سقف مصرف (حداکثر سه بار پشت هم؛ هر پیام شما لغوش می‌کند؛ پیش‌فرض روشن)": "Continue the chat automatically once the usage limit resets (at most three times in a row; any message from you cancels it; on by default)",
+ "پیشنهاد پیام بعدی در کادر (فقط Claude؛ Tab برای پذیرفتن؛ هر پیشنهاد کمی از سهم مصرف می‌برد؛ پیش‌فرض روشن)": "Suggest the next message in the composer (Claude only; Tab accepts; each suggestion uses a little of the usage quota; on by default)"
 }

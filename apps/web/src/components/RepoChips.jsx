@@ -1,14 +1,29 @@
 import { useState } from "react";
 import { Popover } from "radix-ui";
 import { Command } from "cmdk";
-import { Check, Folder, FolderGit2, GitBranch, Loader2, Plus, Server } from "lucide-react";
+import { Check, Folder, FolderGit2, FolderInput, GitBranch, Loader2, Plus, Server } from "lucide-react";
 import { toast } from "sonner";
 import { api, usePolling } from "../api.js";
+import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-switch.js";
 import { t } from "../i18n.js";
 
 // The row above the composer: where the chat runs, the repo it works on (picked
 // before the first message; then fixed), its own branch and its worktree. Each chip does something:
-// the repo opens the picker (or copies the name once fixed), branch and worktree copy themselves.
+// the repo opens the picker, branch and worktree copy themselves. Once the chat has its worktree,
+// picking another repo moves the chat there after a confirmation (the old tree is set aside whole).
+
+// "Change repo" on a chat that already works in its own worktree.
+async function switchFolder(chatId, repo) {
+  try {
+    const preview = await api(`/api/chats/${chatId}/folder?repo=${encodeURIComponent(repo)}`);
+    if (preview.busy) return toast.error(FOLDER_BUSY);
+    if (!window.confirm(`${t("این گفتگو به {repo} برود؟", { repo })}\n\n${folderSwitchLines(preview).join("\n")}`)) return;
+    await api(`/api/chats/${chatId}/folder`, { method: "POST", body: { repo } });
+    toast.success(t("گفتگو به {repo} رفت", { repo }));
+  } catch (error) {
+    toast.error(folderSwitchError(error));
+  }
+}
 
 async function copyText(value) {
   try {
@@ -45,7 +60,8 @@ function CopyChip({ icon, value, label, title }) {
   );
 }
 
-export function RepoChips({ repo: chosen = null, locked = false, branch = null, worktreePath = null, onRepoChange }) {
+// `group`: { name, onClear } — the owner's group a new chat from a group's "+" goes into (× drops it).
+export function RepoChips({ chatId = null, repo: chosen = null, locked = false, branch = null, worktreePath = null, onRepoChange, group = null }) {
   // A new chat with no choice yet starts on the server's default repo (GRIFFIN_DEFAULT_REPO, if set).
   const repos = usePolling("/api/repos", 5 * 60_000);
   const repo = chosen ?? (locked ? "" : repos?.default || "");
@@ -54,7 +70,9 @@ export function RepoChips({ repo: chosen = null, locked = false, branch = null, 
       <span className={chip} title={t("اجرا روی سرور گریفین؛ build و تست در sandbox همان سرور")}>
         <Server /> <span>{t("سرور گریفین")}</span>
       </span>
-      {locked || !onRepoChange ? (
+      {locked && chatId && repo ? (
+        <RepoPicker repo={repo} moving onChange={(next) => next && next !== repo && switchFolder(chatId, next)} />
+      ) : locked || !onRepoChange ? (
         repo ? <CopyChip icon={<Folder />} value={repo} label={repo} title={t("ریپوی این گفتگو: {repo} (کپی)", { repo })} /> : null
       ) : (
         <RepoPicker repo={repo} onChange={onRepoChange} />
@@ -69,11 +87,17 @@ export function RepoChips({ repo: chosen = null, locked = false, branch = null, 
           </span>
         )
       ) : null}
+      {group ? (
+        <span className={chip} title={t("این گفتگو در این گروه ساخته می‌شود")}>
+          <FolderInput /> <span className="truncate" dir="auto">{group.name}</span>
+          <button type="button" onClick={group.onClear} className="-me-1 rounded-full px-1 hover:text-foreground" aria-label={t("بیرون از گروه بساز")}>×</button>
+        </span>
+      ) : null}
     </div>
   );
 }
 
-function RepoPicker({ repo, onChange }) {
+function RepoPicker({ repo, onChange, moving = false }) {
   const [refresh, setRefresh] = useState(0);
   const data = usePolling(`/api/repos?r=${refresh}`, 5 * 60_000);
   const repos = data?.repos || [];
@@ -102,7 +126,7 @@ function RepoPicker({ repo, onChange }) {
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <button type="button" className={`${chip} data-[state=open]:text-foreground`} title={t("ریپوی این گفتگو (فقط تا قبل از اولین پیام)")}>
+        <button type="button" className={`${chip} data-[state=open]:text-foreground`} title={moving ? t("ریپوی این گفتگو (انتخاب ریپوی دیگر = بردن گفتگو به آن، بعد از تأیید)") : t("ریپوی این گفتگو")}>
           <Folder /> <span className="ltr truncate">{repo || t("بدون ریپو")}</span>
         </button>
       </Popover.Trigger>
@@ -111,10 +135,12 @@ function RepoPicker({ repo, onChange }) {
           <Command loop className="flex flex-col">
             <Command.Input value={query} onValueChange={setQuery} autoFocus placeholder={t("جستجو، یا group/name برای کلون…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
             <Command.List className="scrollbar-thin max-h-72 overflow-y-auto p-1">
-              <Command.Item value="__none" onSelect={() => pick("")} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
-                <span className="flex-1">{t("بدون ریپو")}</span>
-                {!repo ? <Check className="size-3.5" /> : null}
-              </Command.Item>
+              {moving ? null : (
+                <Command.Item value="__none" onSelect={() => pick("")} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
+                  <span className="flex-1">{t("بدون ریپو")}</span>
+                  {!repo ? <Check className="size-3.5" /> : null}
+                </Command.Item>
+              )}
               {repos.map((name) => (
                 <Command.Item key={name} value={name} onSelect={() => pick(name)} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
                   <Folder className="size-3.5 text-muted-foreground" />

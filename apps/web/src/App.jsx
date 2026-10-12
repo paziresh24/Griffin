@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { ChevronDown, ListChecks, Menu, Network, Square, WifiOff } from "lucide-react";
 import { Popover } from "radix-ui";
-import { api, navigate, useChats, usePageRoute, useRoute, useTimeline } from "./api.js";
+import { api, navigate, useChats, usePageRoute, useRoute, useTelegramPerson, useTimeline } from "./api.js";
 import { connectionNotice } from "./timeline-memo.js";
+import { onNewVersion, reloadNow } from "./new-version.js";
+import { lastRun } from "@griffin/timeline";
+import { tabTitle } from "./tab-title.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
 import { num, t, isRtl } from "./i18n.js";
@@ -18,9 +21,9 @@ import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { AgentGlyph, ThemeToggle } from "./components/Controls.jsx";
 import { ShareButton } from "./components/Share.jsx";
-import { UsageBadge } from "./components/Usage.jsx";
 import { Toaster, toast } from "sonner";
 import { Thread } from "./components/Thread.jsx";
+import { ChatRecord } from "./components/ComposerAssist.jsx";
 import { ChatChildrenContext } from "./components/Tool.jsx";
 import { SideChatButton, SidePanel } from "./components/SideChat.jsx";
 import { RepoChips } from "./components/RepoChips.jsx";
@@ -29,12 +32,29 @@ import { emptySide, sideReducer } from "./side.js";
 export default function App() {
   const chatId = useRoute();
   const page = usePageRoute();
-  const { chats, archived } = useChats();
-  const { timeline, connection } = useTimeline(chatId);
+  const telegramPerson = useTelegramPerson();
+  const { chats, archived, groups } = useChats();
+  const { timeline, connection, reconnect } = useTimeline(chatId);
   const notice = connectionNotice(connection);
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
   const [fetchedChat, setFetchedChat] = useState(null);
   const chat = listed || (fetchedChat?.id === chatId ? fetchedChat : null);
+
+  // A new version after an update: a notice that stays until the owner reloads (a hidden tab
+  // reloads by itself — new-version.js).
+  useEffect(
+    () =>
+      onNewVersion(() =>
+        toast(t("نسخهٔ تازهٔ {name} آماده است.", { name: BRAND.name }), {
+          id: "new-version",
+          duration: Infinity,
+          dismissible: false,
+          description: t("با بارگذاری دوباره آن را می‌گیرید؛ پیش‌نویس پیام‌ها می‌ماند."),
+          action: { label: t("بارگذاری دوباره"), onClick: reloadNow },
+        }),
+      ),
+    [],
+  );
 
   useEffect(() => {
     if (!chatId || listed) {
@@ -69,6 +89,7 @@ export default function App() {
     effort: readSetting(STORAGE.effort, ""),
     agent: readSetting(STORAGE.agent, "griffin"),
     repo: null, // null = the server's default repo; "" = none
+    groupId: "", // the owner's group a chat from a group's «+» goes into; that one new chat only
   }));
 
   // First run (no engine key, wizard never finished): open the setup wizard once.
@@ -93,7 +114,7 @@ export default function App() {
         agent: chat.agent || draft.agent || "griffin",
         repo: chat.repo || "",
       }
-    : draft;
+    : { ...draft, groupId: groups.some((g) => g.id === draft.groupId) ? draft.groupId : "" };
   useEffect(() => {
     applyAgentTheme(settings.agent);
   }, [settings.agent]);
@@ -117,12 +138,30 @@ export default function App() {
   }, [settings.agent, chat]);
 
   const running = chats.some((c) => c.runStatus === "running");
+  // The tab names the open chat or page (and settings section), brand last (tab-title.js).
+  const [settingsSection, setSettingsSection] = useState("");
+  const chatTitle = chat ? chat.title || "" : null; // null: the chat's record has not loaded yet
   useEffect(() => {
-    document.title = running ? `● ${BRAND.name}` : BRAND.name;
-  }, [running]);
+    document.title = tabTitle({ page, section: page === "settings" ? settingsSection : "", chatId, chat: chatTitle == null ? null : { title: chatTitle }, running });
+  }, [page, settingsSection, chatId, chatTitle, running]);
+  // The login form replaces the app on a 401: the tab must not keep the last chat's name.
+  useEffect(() => () => {
+    document.title = BRAND.name;
+  }, []);
+
+  // The sidebar's "new" (no group) and a group heading's "+" (that group). The group is for the new
+  // chat on screen: opening a chat or another page (jobs, settings…) lets it go.
+  const newChatIn = useCallback((groupId) => {
+    setDraft((d) => ({ ...d, groupId: groupId || "" }));
+    navigate(null);
+  }, []);
+  useEffect(() => {
+    if (chatId || page) setDraft((d) => (d.groupId ? { ...d, groupId: "" } : d));
+  }, [chatId, page]);
+  const draftGroup = chat ? null : groups.find((g) => g.id === settings.groupId) || null;
 
   const updateSettings = async (patch) => {
-    // The repo: on an open chat until its worktree exists (the server refuses after), else the next chat's.
+    // The repo: on an open chat until its worktree exists (after that RepoChips moves it with /folder), else the next chat's.
     if (patch.repo != null) {
       if (chat) await api(`/api/chats/${chat.id}`, { method: "PATCH", body: { repo: patch.repo } }).catch(setError);
       else setDraft((d) => ({ ...d, repo: patch.repo }));
@@ -196,6 +235,7 @@ export default function App() {
           model: draft.model,
           effort: draft.effort || undefined,
           agent: draft.agent || "griffin",
+          ...(settings.groupId ? { groupId: settings.groupId } : {}),
         },
       });
       navigate(created.id);
@@ -211,15 +251,18 @@ export default function App() {
       {page === "setup" ? (
         <SetupPage key={setupFlowFromHash()} flow={setupFlowFromHash() || "first"} onClose={() => navigate(null)} />
       ) : page === "settings" ? (
-        <SettingsPage onBack={() => navigate(null)} />
+        <SettingsPage onBack={() => navigate(null)} onSection={setSettingsSection} />
       ) : (
         <>
           <div className="hidden w-80 shrink-0 border-e md:block">
             <Sidebar
               chats={chats}
               archived={archived}
+              groups={groups}
+              onNewChat={newChatIn}
               activeId={chatId}
               activeSource={activeSource}
+                  activePersonId={telegramPerson || chat?.personId || null}
               page={page}
               agent={settings.agent}
               onAgentChange={selectAgent}
@@ -233,8 +276,11 @@ export default function App() {
                 <Sidebar
                   chats={chats}
                   archived={archived}
+                  groups={groups}
+                  onNewChat={newChatIn}
                   activeId={chatId}
                   activeSource={activeSource}
+                  activePersonId={telegramPerson || chat?.personId || null}
                   page={page}
                   agent={settings.agent}
                   onAgentChange={selectAgent}
@@ -246,14 +292,25 @@ export default function App() {
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
-            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramPage onBack={() => navigate(null)} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
+            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramPage personId={telegramPerson} onBack={() => navigate(null)} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
               <ChatChildrenContext.Provider value={chat?.children || []}>
+              <ChatRecord.Provider value={chat}>
               <Thread
                 header={
                   <header className="flex items-center gap-2 border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
                     <button type="button" onClick={() => setDrawer(true)} className="rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
                       <Menu className="size-5" />
                     </button>
+                    {chat?.personId && chat.caller === "team" && !chat.parentChatId ? (
+                      <button
+                        type="button"
+                        onClick={() => { window.location.hash = `/telegram/${chat.personId}`; }}
+                        className="shrink-0 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                        dir="auto"
+                      >
+                        ← {chat.ownerLabel || t("چت مادر")}
+                      </button>
+                    ) : null}
                     {chat?.parentChatId ? (
                       <button
                         type="button"
@@ -265,8 +322,10 @@ export default function App() {
                     ) : null}
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
                     {chatId && notice ? (
-                      <span className={`flex items-center gap-1 text-xs ${notice.tone === "warn" ? "text-warn" : "text-muted-foreground"}`} title={connection}>
-                        {notice.tone === "warn" ? <WifiOff className="size-3.5" /> : null} {t(notice.text)}
+                      <span className={`flex min-w-0 items-center gap-1 text-xs ${notice.tone === "warn" ? "text-warn" : notice.tone === "ok" ? "text-ok" : "text-muted-foreground"}`} title={t(notice.text)} role="status">
+                        {notice.tone === "warn" ? <WifiOff className="size-3.5 shrink-0" /> : null}
+                        <span className={notice.action ? "hidden truncate sm:inline" : "truncate"}>{t(notice.text)}</span>
+                        {notice.action ? <button type="button" onClick={reconnect} className="press shrink-0 rounded-md px-1.5 py-0.5 underline hover:bg-muted">{t(notice.action)}</button> : null}
                       </span>
                     ) : null}
                     {chat?.caller && chat.caller !== "owner" ? (
@@ -280,7 +339,6 @@ export default function App() {
                         <Square className="size-3.5" /> {t("توقف")}
                       </button>
                     ) : null}
-                    <UsageBadge />
                     <ShareButton chatId={chatId} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
                   </header>
@@ -302,15 +360,18 @@ export default function App() {
                 composerTop={
                   chat && (chat.caller || "owner") !== "owner" ? null : (
                     <RepoChips
+                      chatId={chat?.id || null}
                       repo={settings.repo}
                       locked={Boolean(chat?.worktreePath)}
                       branch={chat?.branch || null}
                       worktreePath={chat?.worktreePath || null}
                       onRepoChange={(repo) => updateSettings({ repo })}
+                      group={draftGroup ? { name: draftGroup.name, onClear: () => setDraft((d) => ({ ...d, groupId: "" })) } : null}
                     />
                   )
                 }
               />
+              </ChatRecord.Provider>
               </ChatChildrenContext.Provider>
             </GriffinRuntime>}
           </main>
@@ -337,17 +398,14 @@ export default function App() {
 function TodoProgress({ timeline }) {
   const [open, setOpen] = useState(false);
   const todos = useMemo(() => {
-    for (let i = timeline.messages.length - 1; i >= 0; i -= 1) {
-      const message = timeline.messages[i];
-      if (message.role !== "assistant") continue;
-      if (message.status !== "running") return null;
-      for (let j = message.parts.length - 1; j >= 0; j -= 1) {
-        const part = message.parts[j];
-        if (part.type === "tool" && part.name === "updateTodos") {
-          return unwrapResult(part).result?.todos || part.args?.todos || null;
-        }
+    // The whole run: a steered message splits it, and the list may sit in an earlier piece.
+    const message = lastRun(timeline.messages);
+    if (!message || message.status !== "running") return null;
+    for (let j = message.parts.length - 1; j >= 0; j -= 1) {
+      const part = message.parts[j];
+      if (part.type === "tool" && part.name === "updateTodos") {
+        return unwrapResult(part).result?.todos || part.args?.todos || null;
       }
-      return null;
     }
     return null;
   }, [timeline]);

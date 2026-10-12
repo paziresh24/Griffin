@@ -171,7 +171,7 @@ test("MCP over HTTP: initialize, tools/list, tools/call, auth required", async (
   assert.equal(init.result.protocolVersion, "2025-06-18");
   assert.equal((await call({ jsonrpc: "2.0", method: "notifications/initialized" })).status, 202);
   const list = await (await call({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
-  assert.deepEqual(list.result.tools.map((t) => t.name), ["griffin_send", "griffin_wait", "griffin_reply", "griffin_cancel", "griffin_tasks"]);
+  assert.deepEqual(list.result.tools.map((t) => t.name), ["griffin_send", "griffin_wait", "griffin_reply", "griffin_cancel", "griffin_limits", "griffin_tasks"]);
   const sent = await (await call({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "griffin_send", arguments: { message: "ping", waitSec: 2 } } })).json();
   assert.equal(sent.result.structuredContent.state, "completed");
   assert.equal(sent.result.structuredContent.answer, "pong");

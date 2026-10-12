@@ -21,6 +21,7 @@ const EVERY_PRESETS = ["5m", "15m", "30m", "1h", "3h", "6h", "12h", "1d"];
 
 const STATUS = {
   running: ["bg-primary animate-pulse", t("در حال اجرا")],
+  held: ["bg-warn animate-pulse", t("منتظر برگشت موتور — بعدش یک بار اجرا می‌شود")],
   finished: ["bg-ok", t("موفق")],
   error: ["bg-bad", t("خطا")],
   cancelled: ["bg-warn", t("متوقف")],
@@ -123,7 +124,7 @@ function JobCard({ job, targets, onChange, onEdit }) {
     call(`/api/jobs/${job.id}`, "DELETE");
   };
 
-  const [color, label] = STATUS[job.running ? "running" : job.lastRun?.status] || ["bg-muted-foreground/50", t("هنوز اجرا نشده")];
+  const [color, label] = STATUS[job.running ? "running" : job.held ? "held" : job.lastRun?.status] || ["bg-muted-foreground/50", t("هنوز اجرا نشده")];
   const names = (job.delivery?.targets || []).map((t) => targets.find((x) => x.integrationId === t.integrationId && x.chat === t.chat)?.name || t.chat);
   const who = agentMeta(job.agent || "platform");
 

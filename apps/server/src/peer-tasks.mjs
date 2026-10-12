@@ -1,12 +1,17 @@
 import crypto from "node:crypto";
 import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
-import { normalizeProvider } from "./providers/ids.mjs";
+import { MAX_OPEN_TASKS_PER_PEER, allowsChatModel, budgetState, overBudget, overBudgetText, peerSettings } from "./peer-limits.mjs";
+import { normalizeProvider, splitModel } from "./providers/ids.mjs";
 import { genv } from "./env.mjs";
 
 // Tasks for external agents (A2A lifecycle over Griffin chats). A context is a chat owned by one
 // peer user; a task is one request in it. Nothing here blocks until the work is done: send
 // returns within waitSec with whatever state the task reached, and wait long-polls for change.
 // What the peer sees is filtered: the agent's text, tool names (no args/results), questions.
+// Each colleague × agent has default/allowed models and token caps (peer-limits.mjs). Usage lands
+// when a run ends, so the caps are checked before every request and answer, and a colleague may
+// keep only a few requests open at once; a request over a cap is not run and the colleague gets the
+// owner's text for it. A run the AI provider could not finish returns the owner's "unavailable" text.
 
 export const TERMINAL = new Set(["completed", "failed", "canceled", "rejected"]);
 const MAX_TEXT = 20_000;
@@ -18,6 +23,8 @@ const QUESTION_TTL_MS = 30 * 60_000;
 // failing the task would throw away work they are about to approve.
 const OWNER_QUESTION_TTL_MS = 6 * 60 * 60_000;
 const PROGRESS_CAP = 40;
+// Expiries this module decides itself; any other failure reason is the run's own error.
+const OWN_FAILURES = new Set(["stale: no activity", "no answer to the question in time", "the owner did not approve in time"]);
 // Commitment to colleagues: a request never runs silent for long. Every 5
 // minutes without an answer the requester gets a status line built from facts (elapsed, what is
 // running, last finding), and the model is told to write the blocker if it is stuck.
@@ -73,6 +80,35 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
   function ownChat(peer, contextId) {
     const chat = store.getChat(contextId);
     return chat && chat.caller === peer.caller ? chat : null;
+  }
+
+  const agentOf = (chat) => chat?.agent || "griffin";
+  const noticeKey = (taskId) => `peer-task-notice:${taskId}`;
+  const settingsFor = (caller, agent) => peerSettings(store.getAgentProfile(agent), caller);
+  const overFor = (caller, agent, settings) => overBudget(store, settings, { caller, agent, now: now() });
+  // The over-cap text is fixed when the task is stopped, never recomputed on a later read.
+  function rejectForBudget(task, state, settings, over) {
+    store.setKv(noticeKey(task.id), { text: overBudgetText(settings, over), limit: over });
+    store.setTaskState(task.id, state, `budget:${over.window}`);
+  }
+  // Requests of this colleague on this agent that have not ended (follow-ups in older contexts
+  // too). A task whose chat the owner deleted can never end, so it does not count.
+  const openCount = (peer, agent) =>
+    store.openTasks().filter((t) => {
+      if (t.user_id !== peer.userId) return false;
+      const chat = store.getChat(t.chat_id);
+      return chat && agentOf(chat) === agent && !TERMINAL.has(snapshot(t).state);
+    }).length;
+  const tooMany = (open) => ({ error: `too many open requests: ${open} still open on this agent — wait for one to finish (griffin_wait) before starting another`, openTasks: open });
+
+  // The text the colleague gets instead of the agent's answer, or null: the owner's over-cap text
+  // for a budget stop, the owner's "unavailable" text for a run that failed or could not start.
+  function noticeFor(task, state, reason) {
+    if (!TERMINAL.has(state) || state === "completed" || state === "canceled") return null;
+    if (/^budget:/.test(String(reason || ""))) return store.getKv(noticeKey(task.id));
+    if (OWN_FAILURES.has(reason)) return null;
+    const settings = settingsFor(task.caller, agentOf(store.getChat(task.chat_id)));
+    return settings ? { text: settings.messages.unavailable } : null;
   }
 
   function lastQuestion(events) {
@@ -132,6 +168,8 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
     else if (end) ({ state, reason } = end);
     else state = started ? "working" : "submitted";
     if (task.state !== state && !TERMINAL.has(task.state)) store.setTaskState(task.id, state, reason);
+    const notice = noticeFor(task, state, reason);
+    const text = answer.trim().slice(-MAX_TEXT);
     return {
       taskId: task.id,
       contextId: task.chat_id,
@@ -144,7 +182,9 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
       ...(state === "auth-required"
         ? { waitingFor: "owner", note: "این کار تأیید Owner لازم دارد؛ سؤال برایش رفته. منتظر بمان — griffin_reply اینجا کار نمی‌کند." }
         : {}),
-      ...(TERMINAL.has(state) ? { answer: answer.trim().slice(-MAX_TEXT) } : {}),
+      ...(TERMINAL.has(state) ? { answer: notice ? notice.text : text } : {}),
+      ...(notice && text ? { partialAnswer: text } : {}),
+      ...(notice?.limit ? { limit: notice.limit } : {}),
     };
   }
 
@@ -253,7 +293,7 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
     checkpoint,
 
     async send(peer, args = {}) {
-      const { contextId = null, agent = "griffin", messageId = null, waitSec = 10 } = args;
+      const { contextId = null, agent = "griffin", model = null, messageId = null, waitSec = 10 } = args;
       // Clients that build the call by hand often name the field something else; take it, and
       // when there is nothing to take say what arrived instead of a bare "message is required".
       const field = MESSAGE_FIELDS.find((k) => typeof args[k] === "string" && args[k].trim());
@@ -267,23 +307,47 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
         const existing = store.taskByMessage(peer.userId, messageId);
         if (existing) return { duplicate: true, ...snapshot(existing) };
       }
+      // A model the colleague asks for is pinned on the chat ("account:model"), within its allowed list.
+      const wanted = model == null || model === "" ? null : String(model).trim();
+      if (wanted && !splitModel(wanted)) return { error: `unknown model: ${wanted} (use account:model)` };
+      const refuseModel = (settings) => ({ error: `model not allowed: ${wanted}`, allowedModels: settings.models });
       let chat;
+      let settings;
       if (contextId) {
         chat = ownChat(peer, contextId);
         if (!chat) return { error: "unknown contextId" };
+        settings = settingsFor(peer.caller, agentOf(chat));
+        if (!settings) return { error: `agent not available to you: ${agentOf(chat)}` };
         const open = store.listTasks(peer.userId, { chatId: chat.id, limit: 1 })[0];
         if (runner.isActive(chat.id) || (open && !TERMINAL.has(snapshot(open).state))) {
           return { error: "context busy: a task is still running here — use griffin_wait/griffin_reply, or send without contextId to start a parallel context", taskId: open?.id || null };
         }
+        const running = openCount(peer, agentOf(chat));
+        if (running >= MAX_OPEN_TASKS_PER_PEER) return tooMany(running);
+        // The owner may have narrowed the allowed models since this context started.
+        if (wanted && !allowsChatModel(settings, wanted)) return refuseModel(settings);
+        const next = wanted || (allowsChatModel(settings, chat.model) ? chat.model : settings.model);
+        if ((next || null) !== (chat.model || null)) {
+          const profile = store.getAgentProfile(agentOf(chat));
+          chat = store.updateChat(chat.id, { model: next || null, provider: normalizeProvider(splitModel(next)?.provider || profile?.provider) });
+        }
       } else {
         const profile = store.getAgentProfile(agent);
-        if (!profile || !profile.meta?.callers?.[peer.caller]) return { error: `agent not available to you: ${agent}` };
+        settings = peerSettings(profile, peer.caller);
+        if (!profile || !settings) return { error: `agent not available to you: ${agent}` };
+        if (wanted && !allowsChatModel(settings, wanted)) return refuseModel(settings);
+        const open = openCount(peer, agent);
+        if (open >= MAX_OPEN_TASKS_PER_PEER) return tooMany(open);
+        // Over a cap: nothing is created, so a colleague cannot fill the owner's records by retrying.
+        const over = overFor(peer.caller, agent, settings);
+        if (over) return { state: "rejected", reason: `budget:${over.window}`, answer: overBudgetText(settings, over), limit: over };
+        const pin = wanted || settings.model;
         chat = store.createChat({
           title: `${peer.label || peer.userId}: ${text.length > 60 ? `${text.slice(0, 60).replace(/\s+\S*$/, "")}…` : text}`,
-          model: profile.model || null,
+          model: pin || profile.model || null,
           agent,
           caller: peer.caller,
-          provider: normalizeProvider(profile.provider),
+          provider: normalizeProvider(splitModel(pin)?.provider || profile.provider),
         });
       }
       const task = store.createTask({
@@ -306,6 +370,11 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
           minutes: TERMINAL.has(t.state) ? Math.round((Date.parse(t.updated_at) - Date.parse(t.created_at)) / 60_000) : null,
           title: String(store.getChat(t.chat_id)?.title || "").replace(/^[^:]*:\s*/, "").slice(0, 90),
         }));
+      const over = contextId ? overFor(peer.caller, agentOf(chat), settings) : null;
+      if (over) {
+        rejectForBudget(task, "rejected", settings, over);
+        return snapshot(store.getTask(task.id));
+      }
       try {
         await runner.send(chat.id, { text: peerRequestMessage({ label: peer.label || peer.userId, userId: peer.userId, text, recent }), images: [] });
       } catch (error) {
@@ -339,6 +408,15 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
       if (snap.state !== "input-required") return { error: `task is ${snap.state}, not waiting for input`, ...snap };
       const text = String(answer || "").trim();
       if (!text) return { error: "answer is required" };
+      // An answer resumes the run: over a cap, the task stops here instead.
+      const settings = settingsFor(peer.caller, agentOf(store.getChat(task.chat_id)));
+      const over = settings && overFor(peer.caller, agentOf(store.getChat(task.chat_id)), settings);
+      if (over) {
+        rejectForBudget(task, "failed", settings, over);
+        await cancelChildren(task.chat_id);
+        await runner.cancel(task.chat_id).catch(() => {});
+        return snapshot(store.getTask(task.id));
+      }
       // Settles once; a second client answering the same question gets a no-op.
       const delivered = asks.answer(task.chat_id, { answer: text, selected: [text], by: "requester" });
       if (!delivered) return { error: "question already answered", ...snapshot(task) };
@@ -353,6 +431,18 @@ export function createPeerTasks({ store, runner, asks, cancelChildren = async ()
         await runner.cancel(task.chat_id).catch(() => {});
       }
       return waitFor(task, { waitSec: 5 });
+    },
+
+    limits(peer, { agent = "griffin" } = {}) {
+      const settings = settingsFor(peer.caller, agent);
+      if (!settings) return { error: `agent not available to you: ${agent}` };
+      return {
+        agent,
+        defaultModel: settings.model || null,
+        allowedModels: settings.models,
+        maxOpenRequests: MAX_OPEN_TASKS_PER_PEER,
+        budget: budgetState(store, settings, { caller: peer.caller, agent, now: now() }),
+      };
     },
 
     list(peer, { contextId = null } = {}) {

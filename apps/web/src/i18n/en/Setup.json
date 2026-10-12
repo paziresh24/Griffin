@@ -54,7 +54,7 @@
   "فعلاً نه": "Not now",
   "رد شدن": "Skip",
   "اتصال یک ایجنت دیگر": "Connect another agent",
-  "برای Claude Code یا هر کلاینت MCP یک توکن جدا می‌سازد. دسترسی‌اش پیش‌فرض فقط‌خواندنی است و از صفحهٔ «همتاها» قابل تغییر و ابطال است.": "Creates a separate token for Claude Code or any MCP client. Its access is read-only by default and can be changed or revoked on the Peers page.",
+  "برای Claude Code یا هر کلاینت MCP یک توکن جدا می‌سازد. دسترسی‌اش پیش‌فرض فقط‌خواندنی است و از صفحهٔ «ایجنت‌های همکاران» قابل تغییر و ابطال است.": "Creates a separate token for Claude Code or any MCP client. Its access is read-only by default and can be changed or revoked on the Colleague agents page.",
   "این توکن فقط همین یک بار نشان داده می‌شود.": "This token is shown only this once.",
   "کپی شد": "Copied",
   "کپی": "Copy",

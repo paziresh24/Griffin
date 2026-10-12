@@ -190,10 +190,13 @@ export function createRepoChatTools({ dir, repo, branch, push }) {
 }
 
 // What the agent is told when a chat works on a repo.
-export function repoRules({ repo, branch, dir }) {
+export function repoRules({ repo, branch, dir, moved = null }) {
+  const switched = moved
+    ? `\nThe owner moved this chat from the repo «${moved.from}» to «${repo}»${moved.at ? ` (${moved.at.slice(0, 16)}Z)` : ""}: earlier turns about files, branches or commits refer to «${moved.from}»${moved.parked ? `, whose tree is set aside untouched at ${moved.parked} — not yours to change now` : ""}.`
+    : "";
   return `## Repository of this chat
 This chat works on the repo «${repo}» in its own git worktree ${dir} on branch ${branch} (nothing else touches it).
 Read and change files with repo_list / repo_read / repo_search / repo_edit / repo_write; commit with repo_git; push with repo_push (only this branch — the answer has the merge-request link).
 Run builds and tests in the sandbox, which sees the same path: debug_exec {host:"sandbox", command:"cd ${dir} && …"}.
-Never push to or change the default branch; say what you changed and give the branch / MR link.`;
+Never push to or change the default branch; say what you changed and give the branch / MR link.${switched}`;
 }

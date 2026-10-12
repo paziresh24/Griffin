@@ -35,7 +35,7 @@ const TASK_STATE = {
 const DECISION = {
   approved: ["text-ok", t("تأیید شد")],
   denied: ["text-bad", t("تأیید نشد")],
-  refused: ["text-warn", t("رد (مسیر همتا)")],
+  refused: ["text-warn", t("رد (مسیر ایجنت همکار)")],
   blocked: ["text-bad", t("مسدود (مخرب)")],
 };
 
@@ -65,13 +65,13 @@ export function PeersPage({ onBack }) {
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
             <ArrowRight className="size-4 rtl-mirror" />
           </button>
-          <h1 className="text-lg font-semibold">{t("همتاها")}</h1>
+          <h1 className="text-lg font-semibold">{t("ایجنت‌های همکاران")}</h1>
           <button type="button" onClick={() => setAdding((v) => !v)} className="press ms-auto flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:shadow">
-            <Plus className="size-4" /> {t("همتای جدید")}
+            <Plus className="size-4" /> {t("ایجنت همکار جدید")}
           </button>
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با {name} کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.", { name: BRAND.name }).split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
+          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با {name} کار می‌کنند. هویت هر ایجنت همکار یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.", { name: BRAND.name }).split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
         </p>
 
         {adding ? <NewPeer onDone={() => { setAdding(false); load(); }} /> : null}
@@ -80,10 +80,10 @@ export function PeersPage({ onBack }) {
           <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
         ) : users.length ? (
           <div className="space-y-4">
-            {users.map((user) => <PeerCard key={user.id} user={user} catalog={catalog} onChange={load} />)}
+            {users.map((user) => <PeerCard key={user.id} user={user} catalog={catalog} defaults={data?.defaultMessages || {}} onChange={load} />)}
           </div>
         ) : (
-          <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{t("هنوز همتایی تعریف نشده.")}</p>
+          <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{t("هنوز ایجنتی از همکاران تعریف نشده.")}</p>
         )}
 
         <h2 className="mb-2 mt-8 flex items-center gap-1.5 text-sm font-semibold"><ShieldAlert className="size-4" /> {t("کارهای برگشت‌ناپذیر (ممیزی)")}</h2>
@@ -118,7 +118,7 @@ function NewPeer({ onDone }) {
     setBusy(true);
     try {
       await api("/api/peers", { method: "POST", body: form });
-      toast.success(t("همتا ساخته شد؛ سهمیهٔ پیش‌فرضِ فقط‌خواندنی گرفت."));
+      toast.success(t("ایجنت همکار ساخته شد؛ سهمیهٔ پیش‌فرضِ فقط‌خواندنی گرفت."));
       onDone();
     } catch (e) {
       toast.error(e.message);
@@ -135,7 +135,7 @@ function NewPeer({ onDone }) {
   );
 }
 
-function PeerCard({ user, catalog, onChange }) {
+function PeerCard({ user, catalog, defaults, onChange }) {
   const [tasks, setTasks] = useState(null);
   const [calls, setCalls] = useState(null);
   const [issued, setIssued] = useState(null);
@@ -177,9 +177,9 @@ function PeerCard({ user, catalog, onChange }) {
       </div>
       {issued ? <IssuedToken token={issued} onClose={() => setIssued(null)} /> : <NewClient userId={user.id} onIssued={(t) => { setIssued(t); onChange(); }} />}
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("سهمیهٔ ابزار (به ازای هر ایجنت)")}</h3>
+      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("سهمیه و سقف (به ازای هر ایجنت؛ حداکثر ۲ درخواست باز)")}</h3>
       <div className="space-y-2">
-        {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} onChange={onChange} />)}
+        {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} defaults={defaults} onChange={onChange} />)}
       </div>
 
       <StatusLink userId={user.id} />
@@ -316,15 +316,39 @@ function IssuedToken({ token, onClose }) {
   );
 }
 
-function QuotaRow({ userId, quota, catalog, onChange }) {
+// The editable limits of one agent for a colleague, as form strings (empty cap = no cap).
+const limitsForm = (q) => ({
+  model: q.model || "",
+  models: (q.models || []).join(", "),
+  hourly: q.budget?.hourly ?? "",
+  daily: q.budget?.daily ?? "",
+  overBudget: q.messages?.overBudget || "",
+  unavailable: q.messages?.unavailable || "",
+});
+const capText = (used, limit) => (limit == null ? t("{used} (بی‌سقف)", { used: num(used || 0) }) : t("{used} از {limit}", { used: num(used || 0), limit: num(limit) }));
+
+function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
   const [editing, setEditing] = useState(false);
   const [tools, setTools] = useState(quota.tools || []);
   const [pick, setPick] = useState("");
+  const [limits, setLimits] = useState(() => limitsForm(quota));
   useEffect(() => setTools(quota.tools || []), [quota.tools]);
+  useEffect(() => setLimits(limitsForm(quota)), [quota]);
+  const field = (key) => ({ value: limits[key], onChange: (e) => setLimits({ ...limits, [key]: e.target.value }) });
 
   const save = async () => {
     try {
-      await api(`/api/peers/${userId}/quota`, { method: "PUT", body: { agent: quota.agent, tools } });
+      const body = { agent: quota.agent, tools };
+      // Limits only on an agent the colleague keeps (an empty tool list closes the agent).
+      if (tools.length) {
+        Object.assign(body, {
+          model: limits.model.trim() || null,
+          models: limits.models.split(/[\s,،]+/).filter(Boolean), // i18n-ignore (Persian comma)
+          budget: { hourly: String(limits.hourly).trim() || null, daily: String(limits.daily).trim() || null },
+          messages: { overBudget: limits.overBudget, unavailable: limits.unavailable },
+        });
+      }
+      await api(`/api/peers/${userId}/quota`, { method: "PUT", body });
       setEditing(false);
       onChange();
     } catch (e) {
@@ -345,7 +369,7 @@ function QuotaRow({ userId, quota, catalog, onChange }) {
         {editing ? (
           <span className="ms-auto flex gap-1">
             <button type="button" onClick={save} className="press flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-primary-foreground"><Check className="size-3.5" /> {t("ذخیره")}</button>
-            <button type="button" onClick={() => { setTools(quota.tools || []); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">{t("انصراف")}</button>
+            <button type="button" onClick={() => { setTools(quota.tools || []); setLimits(limitsForm(quota)); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">{t("انصراف")}</button>
           </span>
         ) : (
           <button type="button" onClick={() => setEditing(true)} className="press ms-auto rounded-full px-2.5 py-0.5 text-primary hover:bg-muted">{t("ویرایش")}</button>
@@ -372,6 +396,41 @@ function QuotaRow({ userId, quota, catalog, onChange }) {
             {catalog.filter((n) => !tools.includes(n)).map((n) => <option key={n} value={n} />)}
           </datalist>
           <button type="button" onClick={add} className="press rounded-lg border px-3 text-xs hover:bg-muted">{t("افزودن")}</button>
+        </div>
+      ) : null}
+      {quota.tools?.length && !editing ? (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {t("مدل:")} <span className="ltr font-mono">{quota.model || t("پیش‌فرض ایجنت")}</span>
+          {quota.models?.length ? <> · {t("مجاز:")} <span className="ltr font-mono">{quota.models.join(", ")}</span></> : null}
+          {" · "}{t("یک ساعت: {hour} · ۲۴ ساعت: {day} توکن", { hour: capText(quota.usage?.hourly, quota.budget?.hourly), day: capText(quota.usage?.daily, quota.budget?.daily) })}
+        </p>
+      ) : null}
+      {editing && tools.length ? (
+        <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-muted-foreground">{t("مدل پیش‌فرض (account:model، خالی = پیش‌فرض ایجنت)")}</span>
+            <input {...field("model")} placeholder="claude:sonnet" className={`ltr ${input} py-1 font-mono text-xs`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">{t("مدل‌های مجاز (با کاما؛ خالی = موتورهای خود ایجنت)")}</span>
+            <input {...field("models")} placeholder="claude:sonnet, openai" className={`ltr ${input} py-1 font-mono text-xs`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">{t("سقف توکن در یک ساعت (خالی = بی‌سقف)")}</span>
+            <input {...field("hourly")} inputMode="numeric" className={`ltr ${input} py-1 font-mono text-xs`} />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground">{t("سقف توکن در ۲۴ ساعت (خالی = بی‌سقف)")}</span>
+            <input {...field("daily")} inputMode="numeric" className={`ltr ${input} py-1 font-mono text-xs`} />
+          </label>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-muted-foreground">{t("متن سقف پر (جاها: {slots})", { slots: "{window} {used} {limit} {retryAt}" })}</span>
+            <textarea {...field("overBudget")} rows={2} placeholder={defaults.overBudget} className={`${input} py-1 text-xs`} />
+          </label>
+          <label className="space-y-1 sm:col-span-2">
+            <span className="text-muted-foreground">{t("متن در دسترس نبودن سرویس")}</span>
+            <textarea {...field("unavailable")} rows={2} placeholder={defaults.unavailable} className={`${input} py-1 text-xs`} />
+          </label>
         </div>
       ) : null}
     </div>

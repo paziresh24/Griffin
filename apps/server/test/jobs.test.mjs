@@ -52,7 +52,7 @@ function setup({ answer = "مصرف مموری گیت‌لب ۳٫۲ گیگ اس�
         delivered.push({ chatId, targets, meta });
         return targets.map((t) => ({ ...t, ok: true }));
       },
-      log: { error() {} },
+      log: { error() {}, warn() {}, info() {} },
       tickMs: 10_000,
       ...(timeoutMs ? { timeoutFor: () => timeoutMs } : {}),
       ...extra,
@@ -96,7 +96,7 @@ test("a due job runs the agent in its own chat and delivers the answer", async (
 
   // Make it due and tick the scheduler.
   store.updateJob(job.id, { nextAt: new Date(Date.now() - 1000).toISOString() });
-  jobs.tick();
+  await jobs.tick();
   await waitFor(() => store.lastJobRun(job.id)?.status === "finished");
 
   const run = store.lastJobRun(job.id);
@@ -146,7 +146,7 @@ test("manual runs work, overlapping runs are skipped, and only the newest runs a
   assert.equal(runs.length, 2, "older runs are pruned");
   assert.equal(store.db.prepare("SELECT count(*) AS n FROM chats").get().n, 2, "pruned runs take their chats with them");
 
-  jobs.tick();
+  await jobs.tick();
   assert.equal(store.listJobRuns(job.id, 10).length, 2, "a manual job is not started by the scheduler");
 });
 
@@ -216,11 +216,42 @@ test("a job overdue while the app was down fires once as a catch-up on boot", as
   clock = new Date("2026-09-29T09:00:00Z");
   const second = makeJobs({ now: () => clock });
   second.start();
-  second.tick();
+  await second.tick();
   await waitFor(() => store.lastJobRun(job.id)?.status === "finished");
   assert.equal(store.lastJobRun(job.id).trigger, "schedule");
   assert.equal(store.getJob(job.id).nextAt, "2026-09-30T09:00:00.000Z", "the next fire is one interval after the catch-up");
   second.stop();
+});
+
+test("while the job's engine is unreachable a due job stays overdue; when it answers it catches up once", async () => {
+  let online = false;
+  const asked = [];
+  const { store, makeJobs, delivered } = setup();
+  const jobs = makeJobs({ canRun: async (job) => (asked.push(job.id), online) });
+  const job = jobs.create({
+    name: "پشت VPN",
+    prompt: "سلام",
+    triggerType: "schedule",
+    trigger: { every: "1h" },
+    delivery: { targets: [{ integrationId: "i1", chat: "42" }] },
+  });
+  const overdue = new Date(Date.now() - 1_000).toISOString();
+  store.updateJob(job.id, { nextAt: overdue });
+
+  await jobs.tick();
+  await jobs.tick();
+  assert.deepEqual(asked, [job.id, job.id], "canRun gets the job, so the gate can follow its agent's engine");
+  assert.equal(store.lastJobRun(job.id), null, "no run while held — held, not failed");
+  assert.equal(store.getJob(job.id).nextAt, overdue, "nextAt does not move while held");
+  assert.equal(jobs.view(store.getJob(job.id)).held, true, "the job page can show it is waiting");
+
+  online = true;
+  await jobs.tick();
+  await waitFor(() => store.lastJobRun(job.id)?.status === "finished");
+  assert.equal(store.listJobRuns(job.id, 10).length, 1, "one catch-up, not one per missed tick");
+  assert.equal(delivered.length, 1);
+  assert.equal(jobs.view(store.getJob(job.id)).held, false);
+  assert.ok(new Date(store.getJob(job.id).nextAt) > new Date(), "after the catch-up the next slot is in the future");
 });
 
 function waitFor(check, ms = 4000) {

@@ -752,7 +752,8 @@ test("telegram account: teammate DMs open, feed and reopen Griffin threads", asy
 
   const before = classified.length;
   await dm(3, "اشتباه نمیکنه؟");
-  assert.equal(classified.length, before, "inside a thread nothing is re-classified");
+  // 2026-10-12: with a thread open, each message is routed — this thread, another open one, or new.
+  assert.equal(classified.length, before + 1, "inside a thread every message is routed");
   // 2026-10-07: the colleague (and the owner) see Griffin picked it up — 👀, then 👍 when answered.
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(reactions.at(-1), [3, "👀"]);
@@ -850,9 +851,9 @@ test("a colleague on the team roster is marked team on first contact", async () 
   const { store, integrations, cleanup } = setup();
   try {
     const added = await integrations.addBot({ kind: "telegram_bot", token: "666:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
-    store.updateIntegration(added.id, { settings: { teamRoster: ["Mostafa Dehghan P24", "@Mamad3"] } });
-    assert.equal(integrations.bridge.upsertPerson(added.id, "333", { name: "Mohammad", username: "mamad3" }).category, "team", "@username entries match too");
-    assert.equal(integrations.bridge.upsertPerson(added.id, "111", { name: "Mostafa Dehghan P24" }).category, "team");
+    store.updateIntegration(added.id, { settings: { teamRoster: ["Alice Example", "@bob_x"] } });
+    assert.equal(integrations.bridge.upsertPerson(added.id, "333", { name: "Bob", username: "bob_x" }).category, "team", "@username entries match too");
+    assert.equal(integrations.bridge.upsertPerson(added.id, "111", { name: "Alice Example" }).category, "team");
     assert.equal(integrations.bridge.upsertPerson(added.id, "222", { name: "Random Person" }).category, "unclassified");
   } finally {
     await cleanup();

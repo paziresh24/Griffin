@@ -2,7 +2,10 @@
 // Shared by the server (final text, tests) and the web UI (live view).
 //
 // Event: { id, runId, type, data, at }
-//   user           { text }
+//   user           { text, intent?, tracked? }  intent: queue | steer (sent while a run was busy)
+//   user.queue     { userEventId, state }   that queued message started (reached the agent) | dropped
+//   user (cont.)   { clientId? }            with the run's id: steered into that run (or the typed answer to its question)
+//   user.read      {}                        the engine took the steered message(s) into its next request
 //   run.started    { model }
 //   run.phase      { phase, detail? }        connecting | retrying | working
 //   text           { text }                  raw delta, appended verbatim
@@ -11,6 +14,9 @@
 //   tool.started   { callId, name, args }
 //   tool.updated   { callId, name, args }
 //   tool.done      { callId, name, args, result }
+//   chapter        { title, summary? }       a chapter marker (chat_chapter) -> part {type:"chapter"}
+//   chat.suggested { id, title, tldr }       a suggested new chat (chat_suggest) -> part {type:"suggestion"}
+//   chat.suggestion.status { id, status }    that suggestion was started | dismissed
 //   usage          { inputTokens, outputTokens, ... }
 //   run.started    { retry? }                 a «ارسال دوباره» of a kept message
 //   run.finished   { status, error?, undelivered? }  finished | error | cancelled; undelivered = message kept for retry
@@ -34,14 +40,23 @@ export function applyEvent(timeline, event) {
 function reduceMessages(messages, event) {
   const data = event.data || {};
   if (event.type === "user") {
-    return [
-      ...messages,
-      { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, at: event.at },
-    ];
+    // A «در صف» message from before user.queue existed settles by what followed it (see settleLegacy).
+    const behind = messages[findRun(messages, null)]?.runId ?? null;
+    const legacy = data.intent === "queue" && !data.tracked ? { legacyBehind: behind } : {};
+    const user = { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, at: event.at, ...legacy, ...(data.clientId ? { clientId: data.clientId } : {}) };
+    return event.runId ? placeMidRun(messages, user, event) : [...messages, user];
+  }
+  // A queued message reached the agent or was dropped: its «در صف» label follows.
+  if (event.type === "user.queue") {
+    const at = messages.findIndex((m) => m.id === `u${data.userEventId}`);
+    if (at < 0) return messages;
+    const copy = messages.slice();
+    copy[at] = { ...messages[at], queueState: data.state || null };
+    return copy;
   }
   if (event.type === "run.started") {
     return [
-      ...messages,
+      ...settleLegacy(messages, () => true, "started"),
       {
         id: `r${event.runId || event.id}`,
         role: "assistant",
@@ -58,14 +73,45 @@ function reduceMessages(messages, event) {
       },
     ];
   }
+  // A cancel cleared the queue: older «در صف» messages waiting behind that run never ran.
+  if (event.type === "run.finished" && data.status === "cancelled") messages = settleLegacy(messages, (m) => m.legacyBehind === event.runId, "dropped");
+  // A tool call of a piece above the owner's message (a repeated start, its input, its result) stays there.
+  if ((event.type === "tool.started" || event.type === "tool.updated" || event.type === "tool.done") && data.callId) {
+    const owner = findToolPiece(messages, event.runId, data.callId);
+    if (owner >= 0) {
+      const copy = messages.slice();
+      copy[owner] = upsertTool(messages[owner], event.type, data);
+      return copy;
+    }
+  }
+  // The run ended: a tool still running in an earlier piece of it is closed like one in the last.
+  if (event.type === "run.finished" && event.runId) messages = closeEarlierPieces(messages, event.runId, data.status);
+  {
+    // The first new part after the run read the owner's message: the message sits right above it.
+    const at = event.runId ? findRun(messages, event.runId) : -1;
+    if (at >= 0 && messages[at].waiting?.length && messages[at].readable && startsNewPart(messages[at], event, data)) messages = splitAt(messages, at, event);
+  }
+  // A suggestion is started or dismissed long after the run that made it: update its card
+  // wherever it is, not in the latest run.
+  if (event.type === "chat.suggestion.status") return setSuggestionStatus(messages, data.id, data.status);
   const index = findRun(messages, event.runId);
   if (index < 0) return messages;
   const run = messages[index];
-  const updated = reduceRun(run, event, data);
+  let updated = reduceRun(run, event, data);
+  // A tool round ended after the message: the model's next request carries it (a typed answer to
+  // an ask card is that card's result; a steered message joins at the round boundary).
+  if (event.type === "tool.done" && updated.waiting?.length && !updated.readable && betweenRounds(updated)) updated = { ...updated, readable: true };
   if (updated === run) return messages;
   const copy = messages.slice();
   copy[index] = updated;
   return copy;
+}
+
+// Older «در صف» messages (no user.queue events): the next turn that started ran them, unless the
+// turn they waited behind was cancelled first. Only unsettled ones change.
+function settleLegacy(messages, match, state) {
+  if (!messages.some((m) => "legacyBehind" in m && !m.queueState && match(m))) return messages;
+  return messages.map((m) => ("legacyBehind" in m && !m.queueState && match(m) ? { ...m, queueState: state } : m));
 }
 
 function findRun(messages, runId) {
@@ -77,8 +123,98 @@ function findRun(messages, runId) {
   return -1;
 }
 
+// The owner's message reached a working run (steered into it, or the typed answer to its ask card).
+// The model reads it at its next request, so it waits at the bottom (run.waiting) until the run
+// has read it (run.readable: the engine said so with user.read, or a tool round ended after it)
+// and then starts a new part; the run splits there: the piece so far ends (continued: true, no
+// footer), the message follows it, and the rest of the run is a new piece of the same run. Before,
+// every later event folded into the run above and the message sat under the final answer.
+function placeMidRun(messages, user, event) {
+  const index = findRun(messages, event.runId);
+  const run = index >= 0 ? messages[index] : null;
+  if (!run || run.status !== "running") return [...messages, user];
+  // Nothing shown yet: all the run does comes after the message.
+  if (!run.parts.length) return [...messages.slice(0, index), user, ...messages.slice(index)];
+  const copy = [...messages, user];
+  copy[index] = { ...run, waiting: [...(run.waiting || []), user.id] };
+  return copy;
+}
+
+// The model's last response ended in tool calls that have all come back.
+function betweenRounds(run) {
+  return run.parts.at(-1)?.type === "tool" && !run.parts.some((part) => part.type === "tool" && part.status === "running");
+}
+
+// Readable means the next request is under way, so anything new comes from it.
+function startsNewPart(run, event, data) {
+  if (event.type === "text" || event.type === "thinking") return Boolean(data.text);
+  if (event.type === "tool.started") return Boolean(data.callId) && !run.parts.some((part) => part.type === "tool" && part.callId === data.callId);
+  return false;
+}
+
+function splitAt(messages, index, event) {
+  const run = messages[index];
+  const ids = new Set(run.waiting);
+  const moved = messages.filter((m) => ids.has(m.id));
+  const rest = messages.filter((m) => !ids.has(m.id));
+  const at = rest.indexOf(run);
+  const upper = {
+    ...run,
+    waiting: null,
+    readable: false,
+    status: "finished",
+    continued: true,
+    phase: null,
+    endedAt: event.at,
+    parts: run.parts.map((part) => (part.type === "reasoning" && !part.done ? { ...part, done: true } : part)),
+  };
+  // The new piece keeps the run's start and usage so far, so its footer shows the whole run.
+  const piece = { ...run, id: `r${run.runId}~${event.id}`, waiting: null, readable: false, parts: [], endedAt: null };
+  return [...rest.slice(0, at), upper, ...moved, piece, ...rest.slice(at + 1)];
+}
+
+// One run as a single message again (its pieces' parts in order, the last piece's state and
+// usage), for readers of a run's result: a messenger delivery, the title, the todo bar.
+export function wholeRun(messages, runId) {
+  const pieces = (messages || []).filter((m) => m.role === "assistant" && m.runId === runId);
+  if (!pieces.length) return null;
+  const last = pieces.at(-1);
+  return pieces.length === 1 ? last : { ...last, id: pieces[0].id, startedAt: pieces[0].startedAt, parts: pieces.flatMap((m) => m.parts) };
+}
+
+// The chat's latest run, whole.
+export function lastRun(messages) {
+  const last = (messages || []).findLast((m) => m.role === "assistant");
+  return last ? (last.runId ? wholeRun(messages, last.runId) : last) : null;
+}
+
+function findToolPiece(messages, runId, callId) {
+  if (!runId) return -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant" || message.runId !== runId) continue;
+    const has = message.parts.some((part) => part.type === "tool" && part.callId === callId);
+    if (has) return message.continued ? i : -1; // in the last piece: the usual path handles it
+  }
+  return -1;
+}
+
+function closeEarlierPieces(messages, runId, status) {
+  let copy = messages;
+  messages.forEach((message, i) => {
+    if (message.role !== "assistant" || message.runId !== runId || !message.continued) return;
+    const parts = message.parts.map((part) => closePart(part, status));
+    if (parts.every((part, j) => part === message.parts[j])) return;
+    if (copy === messages) copy = messages.slice();
+    copy[i] = { ...message, parts };
+  });
+  return copy;
+}
+
 function reduceRun(run, event, data) {
   switch (event.type) {
+    case "user.read":
+      return run.waiting?.length && !run.readable ? { ...run, readable: true } : run;
     case "run.phase":
       return { ...run, phase: data.phase, phaseDetail: data.detail || null };
     case "text":
@@ -99,12 +235,21 @@ function reduceRun(run, event, data) {
     case "tool.updated":
     case "tool.done":
       return upsertTool({ ...run, phase: "working" }, event.type, data);
+    case "chapter":
+      if (!data.title) return run;
+      return { ...run, parts: [...run.parts, { type: "chapter", title: String(data.title), summary: data.summary ? String(data.summary) : null }] };
+    case "chat.suggested":
+      if (!data.id) return run;
+      return { ...run, parts: [...run.parts, { type: "suggestion", id: data.id, title: data.title || "", tldr: data.tldr || "", status: data.status || "open" }] };
     case "usage":
       // One event per model request; every request bills its full prompt, so the run's cost is the sum.
       return { ...run, usage: addUsage(run.usage, data) };
     case "run.finished":
       return {
         ...run,
+        // A message the run never read stays after it, where it was written.
+        waiting: null,
+        readable: false,
         status: data.status || "finished",
         error: data.error || null,
         ...(data.undelivered ? { undelivered: true } : {}),
@@ -115,6 +260,22 @@ function reduceRun(run, event, data) {
     default:
       return run;
   }
+}
+
+function setSuggestionStatus(messages, id, status) {
+  if (!id || !status) return messages;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const at = message.parts.findIndex((part) => part.type === "suggestion" && part.id === id);
+    if (at < 0) continue;
+    const parts = message.parts.slice();
+    parts[at] = { ...parts[at], status };
+    const copy = messages.slice();
+    copy[i] = { ...message, parts };
+    return copy;
+  }
+  return messages;
 }
 
 function addUsage(prev, data) {

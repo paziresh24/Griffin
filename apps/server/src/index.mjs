@@ -1,4 +1,4 @@
-import { installCursorEgress } from "./egress.mjs";
+import { egressDown, installCursorEgress } from "./egress.mjs";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -8,20 +8,22 @@ import { createApp } from "./app.mjs";
 import { createDualServer, loadTls } from "./listen.mjs";
 import { ASK_REQUESTER_TOOL, ASK_TOOL, createAsks } from "./asks.mjs";
 import { ASK_AGENT_TOOL, DELEGATE_TOOL, SUBTASKS_TOOL, createPeers } from "./peers.mjs";
-import { createKnowledge, listAgentNotes, setNoteReviewed } from "./knowledge.mjs";
+import { createKnowledge, listAgentNotes, playbookIndex, reviewedRunbooks, setNoteReviewed } from "./knowledge.mjs";
 import { createVisualizer, VISUALIZE_TOOL } from "./charts.mjs";
 import { createShowMedia, SHOW_MEDIA_TOOL } from "./media.mjs";
 import { createAuth } from "./auth.mjs";
 import { openStore } from "./db.mjs";
 import { genv, resolveDbPath } from "./env.mjs";
 import { buildRules, installRules } from "./prompt.mjs";
+import { buildManifest, recordManifest } from "./manifest.mjs";
 import { simulateTools } from "./sim.mjs";
-import { createRunner } from "./runner.mjs";
+import { createRunner, keptList } from "./runner.mjs";
+import { archiveIdleChats } from "./idle-archive.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler } from "./titles.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
 import { STT_DEFAULTS, sttRoutes } from "./stt.mjs";
-import { cleanupChatWorktree, currentWorktree, ensureChatWorktree, isValidRepoName, listRepos, shortId, sweepChatWorktrees } from "./worktrees.mjs";
+import { chatTreeState, cleanupChatWorktree, currentWorktree, ensureChatWorktree, isValidRepoName, listRepos, parkedTrees, shortId, sweepChatWorktrees, switchChatWorktree, worktreeCreationSettled } from "./worktrees.mjs";
 import { createRepoChatTools, repoRules } from "./repo-tools.mjs";
 import { createIntegrations, integrationRoutes } from "./integrations/manager.mjs";
 import { classifyThread } from "./integrations/threads.mjs";
@@ -32,10 +34,12 @@ import { createAccountTools, parseProxy } from "./integrations/telegram-account.
 import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
 import { fenceBackdoors, guardTools, noteOwnerAnswer } from "./guard.mjs";
 import { reviewChanges } from "./review.mjs";
-import { RELATED_TOOL, channelOf, createRelatedTool, openWorkFor, relatedRules } from "./related.mjs";
+import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHop, openWorkFor, relatedRules, thirdPartyKey } from "./related.mjs";
+import { createChatTools } from "./chat-tools.mjs";
 import { claudeOneShot } from "./providers/claude.mjs";
 import { createVerifier } from "./verify.mjs";
-import { createPeerAuth, isPeerCaller, PEER_INVITE_TOOL, PEER_CONNECTION_TOOL, peerConnectionTool } from "./peer-auth.mjs";
+import { allowsModel, peerSettings } from "./peer-limits.mjs";
+import { createPeerAuth, isPeerCaller, PEER_CONNECTION_TOOL, PEER_INVITE_TOOL, peerConnectionTool } from "./peer-auth.mjs";
 import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
 import { brokerRequest, createToolSource } from "./tools.mjs";
@@ -64,6 +68,9 @@ import { createConfig } from "./config.mjs";
 import { createClaudeSignin } from "./claude-signin.mjs";
 import { createDoctor, hookConsoleErrors } from "./doctor.mjs";
 import { PERSONA, PERSONA_FILE } from "./persona.mjs";
+import { profileRoutes } from "./profile.mjs";
+import { createHostStats } from "./host-stats.mjs";
+import { createPush } from "./push.mjs";
 
 const env = process.env;
 // Must run before the SDK opens any connection.
@@ -369,6 +376,18 @@ function modelCandidates(chat) {
   if (kindOf(own) === PROVIDER_OPENAI) add(PROVIDER_CLAUDE, genv("FALLBACK_CLAUDE_MODEL", "haiku"));
   else add(PROVIDER_OPENAI, null);
   for (const a of accounts()) add(a.id, null);
+  // A colleague's chain (peer:*) runs only on the models the owner allowed it on this agent
+  // (Peers page): the allowed entries are candidates themselves, and nothing else is.
+  const rootCaller = chat?.parent_chat_id ? rootCallerOf(store, chat) : chat?.caller;
+  const allowed = isPeerCaller(rootCaller) ? peerSettings(profile, rootCaller)?.models || [] : [];
+  if (allowed.length) {
+    for (const entry of allowed) {
+      const split = splitModel(entry);
+      if (split) add(split.provider, split.model);
+      else add(entry, null);
+    }
+    return list.filter((c) => allowsModel(allowed, c.provider, c.model));
+  }
   return list;
 }
 const usableAccount = (id) => accountEnabled(id) && !isLimited(id) && (Boolean(providerKey(id)) || demo);
@@ -400,6 +419,16 @@ const runner = createRunner({
     console.error(`[${limited}] plan limit until ${new Date(until).toISOString()} — chat ${chat?.id} moves to ${next}`);
     return next !== limited;
   },
+  // No engine took the run over: it continues by itself once the first of its engines is usable
+  // again (onPlanLimit stored each one's reset, or an hour when the engine did not say).
+  limitResetAt: (chat) => {
+    const times = modelCandidates(chat)
+      .filter((c) => accountEnabled(c.provider) && (Boolean(providerKey(c.provider)) || demo))
+      .map((c) => limitedUntil(c.provider));
+    return times.length ? Math.min(...times) || Date.now() : null;
+  },
+  autoContinue: () => genv("AUTO_CONTINUE", "on") !== "off",
+  promptSuggestions: () => genv("PROMPT_SUGGESTIONS", "on") !== "off",
   onCancel: (chatId) => {
     const leftover = asks.cancel(chatId);
     peersHolder.current?.cancelChildren(chatId);
@@ -448,15 +477,19 @@ const runner = createRunner({
       ...createIncidentTools({ incidents }),
       ...settingsTools,
       ...doctor.tools,
+      // A colleague's own conversation may tell an owner chat something (its quota decides).
+      ...(isPeerCaller(caller) ? createPeerChatTools({ store, runner, chat }) : {}),
     };
     Object.assign(customTools, createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id) }));
 
     const cwd = agentCwd(WORKSPACE, agent);
     const peers = store.listAgentProfiles().filter((p) => p.id !== agent);
-    let filtered = filterToolsByProfile(customTools, profile, { caller });
     const rootCaller = chat.parent_chat_id ? rootCallerOf(store, chat) : caller;
     const rootChatId = store.rootChatId(chat.id);
     const unattended = ["scheduler", "ops"].includes(rootCaller) || Boolean(store.getChat(rootChatId)?.job_id);
+    // Suggest a chat / mark a chapter (chat-tools.mjs): only in chats the owner is reading.
+    if (rootCaller === "owner" && !unattended) Object.assign(customTools, createChatTools({ store, chatId: chat.id, isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo) }));
+    let filtered = filterToolsByProfile(customTools, profile, { caller });
     // Irreversible calls in any chain not rooted in the owner need the owner's yes (in code). The
     // question reaches them in Telegram wherever the chain started, so a peer chain asks too
     // instead of refusing outright.
@@ -485,9 +518,13 @@ const runner = createRunner({
     if (genv("DEMO") !== "1") filtered = reviewChanges(filtered, { chatId: chat.id, store, asks, reviewers: changeReviewers() });
 
 
-    // A chat on a repo (a side chat: its main chat's) works in that chat's own worktree, made on
-    // the first run; any engine gets the file/git tools for it.
-    const repoChat = chat.side_of ? store.getChat(chat.side_of) || chat : chat;
+    // A chat on a repo (a side chat or a fork: its main chat's) works in that chat's own worktree,
+    // made on the first run; any engine gets the file/git tools for it. A fork must: Claude Code
+    // keeps the forked session by working folder. A folder switch in flight finishes first, and the
+    // chat is read after it (its repo may have moved).
+    const mainId = chat.side_of || store.getKv(`fork-of:${chat.id}`);
+    await worktreeCreationSettled(REPOS_ROOT, mainId || chat.id);
+    const repoChat = mainId ? store.getChat(mainId) || chat : store.getChat(chat.id) || chat;
     let repoContext = null;
     if (repoChat.repo && isValidRepoName(REPOS_ROOT, repoChat.repo)) {
       const dir = await ensureChatWorktree({
@@ -499,7 +536,8 @@ const runner = createRunner({
         fetchRepo: brokerEnabled() ? (repo) => callBrokerTool("git_fetch", { repo }, 130_000) : null,
         onNote: (note) => store.appendEvent(chat.id, null, "note", { text: note }),
       });
-      repoContext = { repo: repoChat.repo, dir, branch: currentWorktree(REPOS_ROOT, repoChat.id, { currentDir: dir }).branch };
+      const moved = store.getKv(`repomove:${repoChat.id}`);
+      repoContext = { repo: repoChat.repo, dir, branch: currentWorktree(REPOS_ROOT, repoChat.id, { currentDir: dir }).branch, moved: moved?.to === repoChat.repo ? moved : null };
       Object.assign(filtered, createRepoChatTools({ ...repoContext, push: (args) => callBrokerTool("git_push", args, 200_000) }));
     }
 
@@ -509,27 +547,54 @@ const runner = createRunner({
       ? openWorkFor(store, chat, { isOpen: (id) => runner.isActive(id) || (peersHolder.current?.pendingDelegates(id) || 0) > 0 || asks.isWaiting(id) })
       : [];
     if (relatedOpen.length) filtered[RELATED_TOOL] = createRelatedTool({ store, runner, chat, open: relatedOpen });
+    // A chat holding a colleague's text (chat_send) passes nothing on until the owner writes again.
+    filtered = lastHop(filtered, { store, chatId: chat.id });
 
     // Outermost: a simulation tree records side effects instead of running them (no approval
     // question reaches the owner either — sim wraps the guard).
     if (store.getChat(rootChatId)?.sim) filtered = simulateTools(filtered);
 
     // Rules are built from the tools this run really has (after caller filtering and guards).
-    const ruleOptions = { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered) };
+    const ruleOptions = { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))) };
     installRules(cwd, ruleOptions);
+    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat));
+    const seedMessages = chat.agent_id ? null : seedTurns(chat);
+    // «چرا؟»: what this session starts with, kept on the chat (manifest.mjs). Never fails the run.
+    try {
+      recordManifest(store, chat.id, buildManifest({
+        route: runModel(chat),
+        agent,
+        caller,
+        rootCaller,
+        mode: chat.mode,
+        tools: Object.keys(filtered),
+        rules,
+        knowledge: reviewedRunbooks(KNOWLEDGE_ROOT, agent),
+        playbook: playbookIndex(KNOWLEDGE_ROOT).length,
+        repo: repoContext?.repo || null,
+        seeded: seedMessages?.length || 0,
+        guards: {
+          approval: rootCaller !== "owner" && caller !== COVERAGE_CALLER ? (unattended ? "refuse" : "ask") : caller === COVERAGE_CALLER ? "team" : null,
+          review: genv("DEMO") !== "1",
+          sim: Boolean(store.getChat(rootChatId)?.sim),
+        },
+      }, (text) => store.putBlob(text)));
+    } catch (error) {
+      console.error(`[manifest] chat ${chat.id}: ${error.message}`);
+    }
 
     return {
       // Engines with their own file tools (Claude, Cursor) work in the worktree; the agent's own
       // folder keeps its state (openai sessions) and rules files.
       cwd: repoContext?.dir || cwd,
       stateDir: cwd,
-      rules: (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)),
+      rules,
       model: { id: runModel(chat).model },
       customTools: filtered,
       settingSources: ["project"],
       // After a rewind (or agent switch) the session is detached; reseed prior context so the model
       // does not lose the conversation it can still see in the transcript. Providers ignore it on resume.
-      seedMessages: chat.agent_id ? null : seedTurns(chat),
+      seedMessages,
       // A final answer that promises more work is only legitimate while a delegated subtask will
       // wake this chat again (openai provider continues the run otherwise).
       pendingWork: () => peersHolder.current?.pendingDelegates(chat.id) || 0,
@@ -556,7 +621,7 @@ const cleaning = new Set();
 store.bus.on("chats", (change) => {
   if (change?.type !== "updated" || cleaning.has(change.chatId)) return;
   const chat = store.getChat(change.chatId);
-  if (!chat?.archived || !chat.repo || !chat.worktree_path) return;
+  if (!chat?.archived || !chat.repo || !(chat.worktree_path || parkedTrees(REPOS_ROOT, chat.id).length)) return;
   cleaning.add(chat.id);
   cleanupChatWorktree({ reposRoot: REPOS_ROOT, repo: chat.repo, chatId: chat.id })
     .then((result) => {
@@ -566,6 +631,55 @@ store.bus.on("chats", (change) => {
     .catch((error) => console.error(`[worktree] cleanup ${chat.id}: ${error.message}`))
     .finally(() => cleaning.delete(chat.id));
 });
+// Owner chats on a worktree that sat idle for CHAT_IDLE_DAYS (default 3; 0 = off) go to the archive
+// every 6 hours, which gives their worktree back when nothing would be lost (the listener above).
+const CHAT_IDLE_MS = Number(genv("CHAT_IDLE_DAYS", "3")) * 86_400_000;
+const sweepIdleChats = () => {
+  try {
+    const archived = archiveIdleChats({
+      store,
+      idleMs: CHAT_IDLE_MS,
+      isBusy: (id) => runner.isActive(id) || asks.isWaiting(id) || keptList(store, id).length > 0 || (peersHolder.current?.pendingDelegates(id) || 0) > 0,
+    });
+    if (archived.length) console.log(`[chats] archived ${archived.length} idle chat(s): ${archived.join(", ")}`);
+  } catch (error) {
+    console.error(`[chats] idle archive: ${error.message}`);
+  }
+};
+if (CHAT_IDLE_MS > 0) {
+  setTimeout(sweepIdleChats, 10 * 60_000).unref();
+  setInterval(sweepIdleChats, 6 * 60 * 60_000).unref();
+}
+
+// Moving an open chat to another repo (app.mjs /folder): its tree is set aside whole, the next run
+// makes (or takes back) the new repo's tree. Never while the chat or one of its side chats runs.
+const folderBusy = (chat) => runner.isActive(chat.id) || store.listSideChats(chat.id).some((side) => runner.isActive(side.id));
+const folderSwitch = {
+  preview: async (chat, repo) => ({
+    ...(await chatTreeState({ reposRoot: REPOS_ROOT, repo: chat.repo, toRepo: repo, chatId: chat.id, currentDir: chat.worktree_path || null })),
+    busy: folderBusy(chat),
+  }),
+  apply: async (chat, repo) => {
+    try {
+      return await switchChatWorktree({
+        reposRoot: REPOS_ROOT,
+        chatId: chat.id,
+        fromRepo: chat.repo,
+        currentDir: chat.worktree_path || null,
+        canMove: () => !folderBusy(chat),
+        onSwitched: ({ parked }) => {
+          store.updateChat(chat.id, { repo, worktreePath: null });
+          store.setKv(`repomove:${chat.id}`, { from: chat.repo, to: repo, parked, at: new Date().toISOString() });
+          store.appendEvent(chat.id, null, "note", { text: `گفتگو از ${chat.repo} به ${repo} رفت${parked ? `؛ کار قبلی دست‌نخورده در ${parked} ماند` : ""}.` });
+        },
+      });
+    } catch (error) {
+      if (error?.code === "WORKTREE_BUSY") return { error: "busy" };
+      console.error(`[worktree] folder switch ${chat.id}: ${error.message}`);
+      return { error: error.message };
+    }
+  },
+};
 {
   const states = new Map(store.listRepoChats().map((row) => [shortId(row.id), row.archived ? "archived" : "active"]));
   sweepChatWorktrees({ reposRoot: REPOS_ROOT, chatState: (id8) => states.get(id8) || "deleted" })
@@ -691,11 +805,24 @@ if (genv("DEMO") !== "1" && genv("SELF_HEAL") !== "off") {
   setInterval(heal, 15 * 60_000).unref();
 }
 
+// Web Push to the owner's phone (Settings → اعلان‌ها): a finished turn, a question, a background report.
+const push = createPush({ store, dataDir: DATA, timelines, subject: genv("PUSH_SUBJECT", "") || genv("PUBLIC_URL", "") || "mailto:owner@griffin.local" });
+if (!demo) push.attach();
+
 // Scheduled work: each job runs the agent in its own hidden chat and delivers the answer.
+// A due job whose engine (the account its agent would route to now) gets no answer at all — a dead
+// proxy, egress cut — is held overdue and fires once when the engine answers again.
 const jobs = createJobs({
   store,
   runner,
   deliver: (chatId, targets, meta) => integrations.deliverChat(chatId, targets, meta),
+  canRun: async (job) => {
+    if (demo) return true;
+    const { provider } = routeModel({ agent: job.agent, caller: "scheduler", model: job.model });
+    const engine = providers[provider];
+    if (!engine) return true;
+    return !egressDown(await engine.health().catch((error) => ({ ok: false, error: String(error?.message || error) })));
+  },
 });
 jobs.start();
 
@@ -785,6 +912,7 @@ const app = createApp({
   runner,
   timelines,
   isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo),
+  folderSwitch,
   defaultRepo: () => (isValidRepoName(REPOS_ROOT, DEFAULT_REPO) ? DEFAULT_REPO : null),
   asks,
   models,
@@ -793,6 +921,12 @@ const app = createApp({
     ? undefined
     : createAuth({ dataDir: DATA, store, secureCookie: genv("SECURE_COOKIE") === "1" }),
   version: genv("VERSION", "dev"),
+  // A timed note («بعداً») that ran — or did not — is one line on the owner's Telegram.
+  onNoteRun: (note, { chat, error }) =>
+    integrations.notifyOwner(
+      error ? `⏰ یادداشتِ زمان‌دار اجرا نشد (${String(error).slice(0, 120)}): ${note.text.slice(0, 80)}` : `⏰ یادداشتِ زمان‌دار اجرا شد: ${note.text.slice(0, 80)}`,
+      chat?.id || note.chatId,
+    ),
   extraRoutes: (api) => {
     // A chat's repo picker: the clones under REPOS_ROOT; a new one is cloned by the broker.
     api.get("/api/repos", (c) => c.json({ repos: listRepos(REPOS_ROOT), root: REPOS_ROOT, default: isValidRepoName(REPOS_ROOT, DEFAULT_REPO) ? DEFAULT_REPO : null }));
@@ -1009,6 +1143,10 @@ const app = createApp({
       setTimeout(() => process.kill(process.pid, "SIGTERM"), 300).unref();
       return c.json({ ok: true });
     });
+    push.routes(api);
+    // Live CPU/RAM/disk/load, this process's RSS and start time — Settings → وضعیت polls it.
+    const hostStats = createHostStats();
+    api.get("/api/host", async (c) => c.json(await hostStats()));
     // Doctor (self-check / self-repair) and the setup wizard (apps/web Setup.jsx).
     api.get("/api/doctor", async (c) => c.json(await doctor.report()));
     api.get("/api/doctor/engine/:id", async (c) => {
@@ -1306,6 +1444,7 @@ const app = createApp({
       return c.json({ incident: incidentView(row), log: incidents.logs(row.id, 100) });
     });
     integrationRoutes(api, integrations);
+    profileRoutes(api, { store, telegramProfile: () => integrations.accountProfile() });
     jobRoutes(api, jobs, { targets: () => integrations.targets() });
   },
 });
@@ -1328,6 +1467,11 @@ if (serveWeb) {
   app.get("/", (c) => c.json({ griffin: "headless", ui: false, api: "/api", mcp: "/mcp" }));
 }
 
+// Notes («بعداً») whose time has come: checked every 20 s, each run once (claimed first). They
+// live in the store, so a restart only delays a due note to the first tick after it.
+const notesTimer = setInterval(() => app.notes.runDue().catch((error) => console.error(`[notes] runDue: ${error.message}`)), 20_000);
+notesTimer.unref();
+
 const tls = loadTls(genv("TLS_DIR", path.join(DATA, "tls")));
 const server = createDualServer(getRequestListener(app.fetch), { tls });
 server.listen(PORT, HOST, () =>
@@ -1343,6 +1487,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     Promise.resolve()
       .then(async () => {
         jobs.stop();
+        clearInterval(notesTimer);
         intake.stop();
         integrations.stopAll();
         // Give Cursor a chance to drop "active run" before the process dies; otherwise

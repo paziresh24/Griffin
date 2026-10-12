@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eventsFromUpdate } from "./updates.mjs";
+import { maskText } from "./redact.mjs";
 
 // Kept messages: the owner's message whose run ended in an error before anything
 // reached them (no text, no tool) is kept in the store's kv, oldest first, until a retry gets
@@ -14,6 +15,57 @@ export function keptList(store, chatId) {
 }
 // What the thread shows: ids only, oldest first (a delete names one by id, never by position).
 export const keptIds = (store, chatId) => keptList(store, chatId).map((k) => k.id);
+
+// Restart resume: what a chat was doing survives the process. runq:<chat> holds the
+// turn in flight (its own message text and the «در صف» events it carries) and the messages queued
+// behind it; resume:pending lists, oldest first, the chats to pick up after the next boot — the
+// ones our own graceful stop cut (a deploy) and the ones a crash left `running`.
+const runqKey = (chatId) => `runq:${chatId}`;
+const RESUME_KEY = "resume:pending";
+const resumesKey = (chatId) => `resumes:${chatId}`;
+// ponytail: continues per chat per hour, so a turn that kills the process cannot restart-loop it;
+// any new message to the chat resets the count.
+const MAX_RESUMES = 3;
+const RESUME_GAP_MS = 15_000;
+
+// Continue after the plan limit resets: a run the limit stopped, with no other engine to move to, continues by itself a minute
+// after the reset time — at most MAX_LIMIT_RESUMES tries in a row. Kept in the store's kv so a
+// restart does not forget the wait; any message of the owner or a Stop ends it.
+export const MAX_LIMIT_RESUMES = 3;
+const LIMIT_RESUME_SLACK_MS = 60_000;
+// A reset further away than this (a weekly limit) is not waited for: days later is a surprise.
+const LIMIT_RESUME_MAX_WAIT_MS = 6 * 60 * 60_000;
+const LIMIT_RESUME_KEY = "limit-resume";
+export const LIMIT_RESUME_TEXT = "(خودکار) سقف مصرف باز شد. از همان‌جا که کار ماند ادامه بده.";
+const clock = (ms) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ms));
+
+// The composer's «/» list (Claude Code's commands and skills): name, description, argument hint.
+export const COMMANDS_KEY = "slash-commands";
+export function publicCommands(list) {
+  if (!Array.isArray(list)) return null;
+  return list
+    .filter((c) => c && typeof c.name === "string" && c.name)
+    .slice(0, 500)
+    .map((c) => ({
+      name: c.name.slice(0, 100),
+      description: String(c.description || "").replace(/\s+/g, " ").trim().slice(0, 300),
+      argumentHint: String(c.argumentHint || "").slice(0, 100),
+      ...(Array.isArray(c.aliases) && c.aliases.length ? { aliases: c.aliases.filter((a) => typeof a === "string").slice(0, 10) } : {}),
+    }));
+}
+
+// The suggested next message shown in the composer (Claude's prompt suggestions): one short line.
+export const MAX_SUGGESTION_CHARS = 300;
+const FAST_KEY = (chatId) => `fast:${chatId}`;
+export const fastWanted = (store, chatId) => store.getKv?.(FAST_KEY(chatId)) === true;
+export const setFastWanted = (store, chatId, on) => (on ? store.setKv(FAST_KEY(chatId), true) : store.deleteKv(FAST_KEY(chatId)));
+
+// A chat the owner types into in the app: not a job's, a delegated subtask, a side chat, a
+// colleague's thread or a chat linked to a messenger.
+export function ownerTyped(store, chat) {
+  if (!chat || (chat.caller || "owner") !== "owner" || chat.job_id || chat.parent_chat_id || chat.side_of || chat.person_id) return false;
+  return !store.linksForChat?.(chat.id)?.length;
+}
 
 export class BusyError extends Error {
   constructor() {
@@ -51,31 +103,166 @@ export function createRunner({
   onFinished = () => {},
   // onPlanLimit(chat, error) -> true when the chat should be retried once on another provider.
   onPlanLimit = () => false,
+  // limitResetAt(chat, error) -> ms when the chat can run again after a plan limit, or null.
+  limitResetAt = (chat, error) => error?.resetsAt || null,
+  // Settings switches (config.mjs): continue after the limit resets; Claude's next-message suggestions.
+  autoContinue = () => true,
+  promptSuggestions = () => true,
   // When true, a plain "send" while busy is downgraded to queue (used while ask_agent blocks).
   isSoftBusy = () => false,
   // When true, the run is deliberately parked (waiting for an answer to an open question), so
   // silence is expected and sweepStale must leave it alone.
   isBlocked = () => false,
+  // Pause between two chats resumed after a boot (one at a time, not a burst on the engines).
+  resumeGapMs = RESUME_GAP_MS,
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
   // Keyed by provider + agentId: a chat whose routing moved engines (GLM → Claude for a colleague
   // thread) kept its old agent_id and got the cached GLM agent — Z.ai then 404'd "opus" (2026-10-11).
   const agents = new Map(); // `${provider.id}:${agentId}` -> SDKAgent
-  const pendingResume = []; // chats whose in-flight run died with the process
+  let stopping = false; // shutdown() began: nothing new starts, cut turns are recorded for the next boot
+
+  // A «در صف» message reached the agent (started) or will never run (dropped): its label follows
+  // it, live and after a reload (the timeline folds user.queue onto that message).
+  const markQueued = (chatId, ids, state) => {
+    for (const userEventId of ids || []) store.appendEvent(chatId, null, "user.queue", { userEventId, state });
+  };
+  const messagesOf = (items) => items.map((item) => item.message);
+  const idsOf = (items) => items.flatMap((item) => (item.id ? [item.id] : []));
+
+  const runq = {
+    get: (chatId) => store.getKv?.(runqKey(chatId)) || { turn: null, queue: [] },
+    save: (chatId, turn, queue) => (turn || queue.length ? store.setKv?.(runqKey(chatId), { turn, queue }) : store.deleteKv?.(runqKey(chatId))),
+  };
+  const persist = (chatId, entry) => runq.save(chatId, entry.turn, entry.queue);
+  const pending = {
+    list: () => store.getKv?.(RESUME_KEY) || [],
+    write: (list) => (list.length ? store.setKv?.(RESUME_KEY, list) : store.deleteKv?.(RESUME_KEY)),
+    has: (chatId) => pending.list().some((item) => item.chatId === chatId),
+    // cont: the cut turn itself continues (else only its queue is delivered); a later cut keeps it.
+    add: (chatId, cont) => {
+      const list = pending.list();
+      const item = list.find((i) => i.chatId === chatId);
+      if (item) item.cont ||= cont;
+      else list.push({ chatId, cont });
+      pending.write(list);
+    },
+    remove: (chatId) => {
+      const list = pending.list();
+      const rest = list.filter((item) => item.chatId !== chatId);
+      if (rest.length !== list.length) pending.write(rest);
+      return rest.length !== list.length;
+    },
+  };
+  // A new message moves a chat on: a continue still waiting after a restart is stale, and the
+  // messages that were queued behind the cut turn are handed back to go first, in order.
+  const takeWaiting = (chatId) => {
+    pending.remove(chatId);
+    const { queue } = runq.get(chatId);
+    runq.save(chatId, null, []);
+    return queue;
+  };
+  const suggestions = new Map(); // chatId -> Claude's guess at the owner's next message, until the next run
+  const fastStates = new Map(); // chatId -> { state, reason }: fast mode as Claude Code last reported it
+  const limitTries = new Map(); // chatId -> automatic continues in a row, while one of them runs
+  const autoSending = new Set(); // chats whose run in the making is the automatic continue
 
   const kept = {
     list: (chatId) => keptList(store, chatId),
     save: (chatId, list) => (list.length ? store.setKv(keptKey(chatId), list) : store.deleteKv(keptKey(chatId))),
-    push: (chatId, message) => kept.save(chatId, [...kept.list(chatId), { id: `k${randomUUID().replace(/-/g, "").slice(0, 12)}`, message, fails: 0 }]),
+    // ids: the «در صف» events this message carries, so their labels follow it.
+    push: (chatId, message, ids = []) =>
+      kept.save(chatId, [...kept.list(chatId), { id: `k${randomUUID().replace(/-/g, "").slice(0, 12)}`, message, fails: 0, ...(ids.length ? { ids } : {}) }]),
     // The oldest kept message still retried on its own, or -1.
     next: (chatId) => kept.list(chatId).findIndex((k) => k.fails < MAX_KEPT_RETRIES),
     update: (chatId, id, fn) => kept.save(chatId, kept.list(chatId).flatMap((k) => (k.id === id ? fn(k) : [k]))),
   };
   const startKept = (chatId, index) => {
     const item = kept.list(chatId)[index];
-    return item ? startRun(chatId, item.message, [], { keptId: item.id }) : null;
+    return item ? startRun(chatId, item.message, [], { keptId: item.id, ids: item.ids || [] }) : null;
   };
+
+  const live = (chatId) => store.bus?.emit("chats", { type: "live", chatId });
+  const limitResumes = () => store.getKv?.(LIMIT_RESUME_KEY) || {};
+  function clearLimitResume(chatId) {
+    const all = limitResumes();
+    if (!(chatId in all)) return;
+    delete all[chatId];
+    if (Object.keys(all).length) store.setKv(LIMIT_RESUME_KEY, all);
+    else store.deleteKv(LIMIT_RESUME_KEY);
+    live(chatId);
+  }
+
+  // A run ended on the plan limit and no other engine took it over: wait for the reset, if known.
+  function planLimitResume(chatId, error, emit) {
+    const tries = limitTries.get(chatId) || 0;
+    limitTries.delete(chatId);
+    const chat = store.getChat(chatId);
+    if (!ownerTyped(store, chat) || chat.archived || !autoContinue()) return;
+    const resetsAt = Math.max(Number(limitResetAt(chat, error)) || 0, Date.now());
+    if (!limitResetAt(chat, error) || resetsAt - Date.now() > LIMIT_RESUME_MAX_WAIT_MS) return;
+    if (tries >= MAX_LIMIT_RESUMES) {
+      emit("note", { text: `سقف مصرف ${MAX_LIMIT_RESUMES} بار پشت هم دوباره پر شد؛ دیگر خودکار ادامه نمی‌دهد. هر وقت خواستید پیام بدهید.` });
+      return;
+    }
+    const at = resetsAt + LIMIT_RESUME_SLACK_MS;
+    store.setKv(LIMIT_RESUME_KEY, { ...limitResumes(), [chatId]: { at, tries } });
+    emit("note", { text: `سقف مصرف پر شد. حدود ساعت ${clock(at)} خودکار ادامه می‌دهد؛ برای لغو، هر پیامی بفرستید.` });
+    live(chatId);
+  }
+
+  async function sweepLimitResumes(now = Date.now()) {
+    const resumed = [];
+    for (const [chatId, item] of Object.entries(limitResumes())) {
+      if (!(Number(item?.at) <= now) || active.has(chatId)) continue;
+      clearLimitResume(chatId);
+      const chat = store.getChat(chatId);
+      if (!ownerTyped(store, chat) || chat.archived || !autoContinue()) continue;
+      limitTries.set(chatId, (Number(item.tries) || 0) + 1);
+      autoSending.add(chatId);
+      try {
+        // A message that never reached the agent goes again as itself; otherwise «continue».
+        if (kept.next(chatId) >= 0) startKept(chatId, kept.next(chatId));
+        else await api.send(chatId, { text: LIMIT_RESUME_TEXT });
+        resumed.push(chatId);
+        log.info?.(`[runner] chat ${chatId}: continued after the plan limit reset`);
+      } catch (error) {
+        limitTries.delete(chatId);
+        log.error?.(`[runner] chat ${chatId}: continue after limit reset failed: ${error?.message || error}`);
+      } finally {
+        autoSending.delete(chatId);
+      }
+    }
+    return resumed;
+  }
+
+  // Kept in memory only (never in the timeline): a guess about the owner, not something anyone said.
+  // One that arrives while a run is going belongs to an older turn and is dropped.
+  function noteSuggestion(chatId, raw) {
+    if (active.has(chatId) || !promptSuggestions()) return;
+    const text = maskText(String(raw || "")).replace(/\s+/g, " ").trim();
+    if (!text || text.length > MAX_SUGGESTION_CHARS) return;
+    suggestions.set(chatId, text);
+    live(chatId);
+  }
+
+  // Claude-only extras for a chat the owner types into: the «/» list, the suggestion, fast mode.
+  function ownerExtras(chat) {
+    if (!ownerTyped(store, chat)) return {};
+    return {
+      // The «/» list follows the repo (project skills differ); the repo-less key is the latest one.
+      onCommands: (list) => {
+        const next = publicCommands(list);
+        if (!next) return;
+        for (const key of [`${COMMANDS_KEY}:${chat.repo || ""}`, COMMANDS_KEY]) {
+          if (JSON.stringify(next) !== JSON.stringify(store.getKv(key) || null)) store.setKv(key, next);
+        }
+      },
+      ...(promptSuggestions() ? { onSuggestion: (text) => noteSuggestion(chat.id, text) } : {}),
+      ...(fastWanted(store, chat.id) ? { fast: true } : {}),
+    };
+  }
 
   const sdkFor = (chat) => (providerFor ? providerFor(chat) : sdk);
   const agentKey = (chat, id) => `${sdkFor(chat)?.id || ""}:${id}`;
@@ -87,14 +274,8 @@ export function createRunner({
       error: "به‌خاطر ری‌استارت سرور قطع شد — در حال ازسرگیری",
     });
     store.finishRun(run.chat_id, run.id, "cancelled", "به‌خاطر ری‌استارت سرور قطع شد — در حال ازسرگیری");
-    // Materialized Cursor-task transcripts are read-only; don't spawn a new agent run for them.
-    if (chat && chat.caller !== "task") {
-      pendingResume.push({
-        chatId: chat.id,
-        agentId: chat.agent_id || null,
-        lastUser: lastUserPrompt(store, chat.id),
-      });
-    }
+    // A crash left it running: it continues after this boot like a turn our own stop cut.
+    if (chat) pending.add(chat.id, true);
   }
 
   async function withRetry(fn) {
@@ -186,6 +367,7 @@ export function createRunner({
     };
     let status = "error";
     let error = null;
+    let cont = false;
     try {
       const chat = store.getChat(chatId);
       emit("run.phase", { phase: "connecting" });
@@ -194,9 +376,19 @@ export function createRunner({
         ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}),
         ...(label.effort ? { effort: label.effort } : {}),
         mode: chat.mode === "plan" ? "plan" : "agent",
+        // Claude only: other engines' SDKs get no options they do not know.
+        ...(sdkFor(chat)?.kind === "claude" ? ownerExtras(chat) : {}),
         onDelta: ({ update }) => {
+          if (update?.type === "fast-mode") {
+            const before = fastStates.get(chatId);
+            fastStates.set(chatId, { state: update.state, reason: update.reason || null });
+            if (before?.state !== update.state || before?.reason !== (update.reason || null)) live(chatId);
+          }
           for (const event of eventsFromUpdate(update)) {
-            if (!QUIET_EVENTS.has(event.type)) entry.produced = true;
+            if (!QUIET_EVENTS.has(event.type) && !entry.produced) {
+              entry.produced = true;
+              reached(chatId, entry);
+            }
             emit(event.type, event.data);
           }
         },
@@ -207,8 +399,10 @@ export function createRunner({
       const result = await run.wait();
       status = normalizeStatus(result.status, entry.cancelRequested);
       if (status === "error") error = result.error?.message || "run failed";
-      if (status === "error" && result.error?.code === "plan_limit" && !entry.retried && onPlanLimit(store.getChat(chatId), result.error)) {
-        entry.retryOnFallback = true;
+      if (status === "error" && result.error?.code === "plan_limit") {
+        // Marks this account limited even on the fallback's own retry; moves once at most.
+        if (onPlanLimit(store.getChat(chatId), result.error) && !entry.retried) entry.retryOnFallback = true;
+        else entry.limitError = result.error;
       }
       // A session the provider only discovers is gone at send time: retry once on a fresh one.
       if (status === "error" && result.error?.code === "agent_not_found" && !entry.retried) entry.retryOnFallback = true;
@@ -223,7 +417,17 @@ export function createRunner({
         onCancel(chatId); // releases a question still waiting when the run ends for any reason
         // Nothing reached the owner: keep the message for «ارسال دوباره» (a fallback retry handles itself).
         const keep = status === "error" && !entry.produced && !entry.retryOnFallback;
-        if (keep && !entry.keptId) kept.push(chatId, message);
+        // Cut by our own stop (a deploy), not by the owner: the turn continues after the next boot.
+        cont = Boolean(entry.cut) && status === "cancelled";
+        if (cont) error = "به‌خاطر ری‌استارت سرور قطع شد — بعد از بالا آمدن ادامه می‌دهد";
+        // The queued messages this turn carries: they reached the agent, or a cancel dropped them
+        // before they did. Kept, retried elsewhere, or continued later, they are still waiting.
+        if (!keep && !cont && !entry.retryOnFallback) {
+          if (entry.run) reached(chatId, entry);
+          else markQueued(chatId, entry.turn.ids, "dropped");
+        }
+        runq.save(chatId, cont ? entry.turn : null, entry.queue);
+        if (keep && !entry.keptId) kept.push(chatId, message, entry.turn.ids);
         if (keep && entry.keptId) {
           kept.update(chatId, entry.keptId, (k) => [{ ...k, fails: k.fails + 1 }]);
           if (kept.list(chatId).find((k) => k.id === entry.keptId)?.fails === MAX_KEPT_RETRIES) {
@@ -236,16 +440,29 @@ export function createRunner({
           kept.update(chatId, entry.keptId, () => []);
           entry.keptDelivered = true;
         }
+        if (entry.limitError) planLimitResume(chatId, entry.limitError, emit);
+        else if (!entry.retryOnFallback) limitTries.delete(chatId);
+        // The chat got through: nothing is left to continue.
+        if (status === "finished") clearLimitResume(chatId);
         emit("run.finished", { status, ...(error ? { error } : {}), ...(keep ? { undelivered: true } : {}) });
         store.finishRun(chatId, runId, status, error);
         active.delete(chatId);
       }
     }
     if (entry.forcedDone) return;
+    // Stopping: nothing starts now. A cut turn and what queued behind it wait in runq for the boot.
+    if (stopping) {
+      if (cont || entry.queue.length) pending.add(chatId, cont);
+      return;
+    }
     if (entry.retryOnFallback) {
       // The session handle belongs to the limited provider; the next run starts fresh elsewhere.
       store.setAgentId(chatId, null);
-      const retryId = startRun(chatId, message, entry.queue.splice(0));
+      // An automatic continue that moved engines is still that continue (its try count stays).
+      const carry = limitTries.has(chatId);
+      if (carry) autoSending.add(chatId);
+      const retryId = startRun(chatId, message, entry.queue.splice(0), { ids: entry.turn.ids, turnText: entry.turn.text, fallback: true });
+      if (carry) autoSending.delete(chatId);
       const next = active.get(chatId);
       if (next?.runId === retryId) next.retried = true;
       return;
@@ -256,10 +473,11 @@ export function createRunner({
     const queued = entry.queue.splice(0);
     // While kept messages wait, what queued joins the end of that FIFO instead of jumping it.
     if (kept.next(chatId) >= 0 && queued.length) {
-      kept.push(chatId, mergeQueued(queued));
+      kept.push(chatId, mergeQueued(messagesOf(queued)), idsOf(queued));
+      runq.save(chatId, null, []);
       entry.drainKept = true;
     } else if (queued.length) {
-      startRun(chatId, mergeQueued(queued), []);
+      startRun(chatId, mergeQueued(messagesOf(queued)), [], { ids: idsOf(queued) });
       return;
     }
     // The next kept message goes when this run was a retry that got through (or gave up), or the
@@ -276,13 +494,36 @@ export function createRunner({
     return images.length ? { text, images } : text;
   }
 
-  function startRun(chatId, message, queue = [], { keptId = null } = {}) {
+  // The turn's queued messages reached the agent: their labels say so now, once.
+  function reached(chatId, entry) {
+    if (!entry.turn.ids.length) return;
+    markQueued(chatId, entry.turn.ids, "started");
+    entry.turn.ids = [];
+    if (active.get(chatId) === entry) persist(chatId, entry);
+  }
+
+  // queue: { message, id } each (id: its «در صف» user event). ids: the «در صف» events this turn
+  // carries. turnText: what a continue after a restart quotes (a continue's own message is the
+  // resume prompt, not the request it continues).
+  function startRun(chatId, message, queue = [], { keptId = null, ids = [], turnText = null, fallback = false } = {}) {
     const runId = store.startRun(chatId);
     const chat = store.getChat(chatId);
-    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId };
+    const text = turnText ?? (typeof message === "string" ? message : message?.text || "");
+    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId, turn: { text, ids } };
     active.set(chatId, entry);
+    persist(chatId, entry);
+    if (suggestions.delete(chatId)) live(chatId);
+    if (!autoSending.has(chatId)) limitTries.delete(chatId);
     const label = runLabel(chat);
-    store.appendEvent(chatId, runId, "run.started", { model: label.model, mode: chat.mode, provider: label.provider, ...(keptId ? { retry: true } : {}) });
+    store.appendEvent(chatId, runId, "run.started", {
+      model: label.model,
+      mode: chat.mode,
+      provider: label.provider,
+      ...(label.effort ? { effort: label.effort } : {}),
+      ...(keptId ? { retry: true } : {}),
+      // «چرا؟»: this run is the same message again on another engine after a plan limit.
+      ...(fallback ? { fallback: true } : {}),
+    });
     execute(chatId, entry, message);
     return runId;
   }
@@ -294,23 +535,37 @@ export function createRunner({
 
   const api = {
     // intent: "send" (fails when busy), "queue" (after current run), "steer" (inject into current run)
-    async send(chatId, { text, images = [], intent = "send" }) {
+    // clientId: the page's own id for this message (app.mjs de-duplicates resends by it).
+    async send(chatId, { text, images = [], intent = "send", clientId = null }) {
       const current = active.get(chatId);
       let effective = intent;
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
       const message = toSdkMessage({ text, images });
-      const userData = { text, images: images.length, ...(current ? { intent: effective } : {}) };
+      if (current && stopping) effective = "queue";
+      const userData = { text, images: images.length, ...(current ? { intent: effective } : {}), ...(clientId ? { clientId } : {}) };
+      // tracked: user.queue events settle this «در صف» label (older ones the timeline settles).
+      const queueEvent = () => store.appendEvent(chatId, null, "user", { ...userData, intent: "queue", tracked: true }).id;
+      store.deleteKv?.(resumesKey(chatId));
+      // Stopping with no turn to wait behind: the message waits for the next boot.
+      if (stopping && !current) {
+        const { turn, queue } = runq.get(chatId);
+        runq.save(chatId, turn, [...queue, { message, id: queueEvent() }]);
+        pending.add(chatId, false);
+        return { runId: null, delivered: "queued" };
+      }
+      const carried = current ? [] : takeWaiting(chatId);
       // Kept messages wait for a retry: a new one joins the end of that FIFO, delivered after them.
       if (kept.next(chatId) >= 0) {
-        store.appendEvent(chatId, null, "user", { ...userData, intent: "queue" });
-        kept.push(chatId, message);
+        if (carried.length) kept.push(chatId, mergeQueued(messagesOf(carried)), idsOf(carried));
+        kept.push(chatId, message, [queueEvent()]);
         if (!current) return { runId: startKept(chatId, kept.next(chatId)), delivered: "queued" };
         current.drainKept = true;
         return { runId: current.runId, delivered: "queued" };
       }
       if (!current) {
         store.appendEvent(chatId, null, "user", userData);
-        return { runId: startRun(chatId, message), delivered: "run" };
+        if (!carried.length) return { runId: startRun(chatId, message), delivered: "run" };
+        return { runId: startRun(chatId, mergeQueued([...messagesOf(carried), message]), [], { ids: idsOf(carried) }), delivered: "run" };
       }
       if (effective === "send") throw new BusyError();
       if (effective === "steer" && current.run?.steer) {
@@ -320,19 +575,36 @@ export function createRunner({
           return { runId: current.runId, delivered: "steered" };
         }
       }
-      store.appendEvent(chatId, null, "user", { ...userData, intent: "queue" });
-      current.queue.push(message);
+      current.queue.push({ message, id: queueEvent() });
+      persist(chatId, current);
       return { runId: current.runId, delivered: "queued" };
     },
 
     // user=false is the process shutting down: stop the runs, keep delegated work on record.
     async cancel(chatId, { user = true } = {}) {
       if (user) onUserCancel(chatId); // also when the parent's own turn already ended
+      if (user) clearLimitResume(chatId);
       const entry = active.get(chatId);
-      if (!entry) return { status: "not-active" };
+      if (!entry) {
+        // The owner's Stop on a chat still waiting to resume after a restart: nothing of it runs.
+        if (user && (pending.has(chatId) || runq.get(chatId).queue.length)) {
+          const { turn } = runq.get(chatId);
+          markQueued(chatId, [...(turn?.ids || []), ...idsOf(takeWaiting(chatId))], "dropped");
+          return { status: "cancelled" };
+        }
+        return { status: "not-active" };
+      }
+      // Our own stop cuts the turn to continue after the boot; the owner's Stop — even one during
+      // the stop — ends it for good, with what queued behind it.
+      if (!user && !entry.cancelRequested) entry.cut = true;
+      if (user) {
+        entry.cut = false;
+        pending.remove(chatId);
+        markQueued(chatId, idsOf(entry.queue.splice(0)), "dropped");
+        persist(chatId, entry);
+      }
       entry.cancelRequested = true;
       entry.cancelRequestedAt = Date.now();
-      entry.queue.length = 0;
       onCancel(chatId);
       if (entry.run) await cancelSdkRun(entry.run);
       return { status: "cancelling" };
@@ -345,6 +617,7 @@ export function createRunner({
     async sweepStale({ staleMs = DEFAULT_STALE_MS, forceMs = DEFAULT_FORCE_MS } = {}) {
       const now = Date.now();
       const acted = [];
+      for (const chatId of await sweepLimitResumes(now)) acted.push({ chatId, action: "continued-after-limit" });
       for (const [chatId, entry] of [...active]) {
         if (entry.cancelRequested) {
           if (entry.forcedDone || now - entry.cancelRequestedAt <= forceMs) continue;
@@ -352,6 +625,7 @@ export function createRunner({
           const note = "لغو درخواست شد ولی SDK جواب نداد — محلی بسته شد";
           store.appendEvent(chatId, entry.runId, "run.finished", { status: "cancelled", error: note });
           store.finishRun(chatId, entry.runId, "cancelled", note);
+          runq.save(chatId, null, entry.queue);
           active.delete(chatId);
           onCancel(chatId);
           log.error?.(`[runner] chat ${chatId}: forced local finalize — cancel unconfirmed for ${Math.round((now - entry.cancelRequestedAt) / 1000)}s`);
@@ -398,6 +672,7 @@ export function createRunner({
 
     /** Cancel every in-memory run so Cursor does not keep an "active run" after SIGTERM/recreate. */
     async shutdown({ timeoutMs = 8_000 } = {}) {
+      stopping = true;
       const ids = [...active.keys()];
       await Promise.all(ids.map((id) => this.cancel(id, { user: false }).catch(() => {})));
       const end = Date.now() + timeoutMs;
@@ -419,17 +694,26 @@ export function createRunner({
       return active.has(chatId);
     },
 
+    runIdOf(chatId) {
+      return active.get(chatId)?.runId ?? null;
+    },
+
     // «ارسال دوباره»: the oldest kept message (even one given up on) goes again now.
     retry(chatId) {
       if (active.has(chatId)) throw new BusyError();
       if (!kept.list(chatId).length) return { status: "nothing-kept" };
+      // Messages still waiting from before a restart join the end of the kept FIFO.
+      const carried = takeWaiting(chatId);
+      if (carried.length) kept.push(chatId, mergeQueued(messagesOf(carried)), idsOf(carried));
       return { runId: startKept(chatId, 0), delivered: "retry" };
     },
 
     // «حذف»: drops one kept message by id without sending it.
     dropKept(chatId, id) {
       const before = kept.list(chatId).length;
+      const item = kept.list(chatId).find((k) => k.id === id);
       kept.update(chatId, id, () => []);
+      if (item) markQueued(chatId, item.ids, "dropped");
       return kept.list(chatId).length < before;
     },
 
@@ -456,32 +740,97 @@ export function createRunner({
     activeCount() {
       return active.size;
     },
+
+    // When the chat will continue by itself after the plan limit resets (ms), or null.
+    limitResumeAt(chatId) {
+      return Number(limitResumes()[chatId]?.at) || null;
+    },
+    // The owner's «لغو» or a message of theirs: the chat no longer continues by itself.
+    cancelLimitResume(chatId) {
+      clearLimitResume(chatId);
+      limitTries.delete(chatId);
+    },
+    sweepLimitResumes,
+
+    // The suggested next message for the chat's composer, or null.
+    suggestion(chatId) {
+      return promptSuggestions() ? suggestions.get(chatId) ?? null : null;
+    },
+
+    // Fast mode as Claude Code last reported it for the chat ({ state, reason }), or null.
+    fastState(chatId) {
+      return fastStates.get(chatId) || null;
+    },
+
+    // The engine kind (claude | openai | cursor) the chat's next run goes to.
+    engineOf(chat) {
+      return sdkFor(chat)?.kind || null;
+    },
+
+    // The «/» list for a chat: its repo's, or the latest one known.
+    commandsFor(chat) {
+      return store.getKv(`${COMMANDS_KEY}:${chat?.repo || ""}`) || store.getKv(COMMANDS_KEY) || [];
+    },
+
+    // A copy of a Claude session up to one entry, for a fork; null when the chat's engine cannot.
+    async forkSession(chat, { sessionId, upToMessageId }) {
+      const provider = sdkFor(chat);
+      if (typeof provider?.forkSession !== "function") return null;
+      return provider.forkSession(sessionId, { upToMessageId });
+    },
   };
 
-  // After a crash/recreate: clear stuck provider runs, then continue each orphaned chat.
-  if (pendingResume.length) {
+  // After a boot: each chat our stop or a crash cut continues — one chat every resumeGapMs, oldest
+  // first — and what queued behind its turn follows it in order. An item leaves the stored list
+  // only as its run starts, so a second restart mid-way loses none. A message to the chat in the
+  // meantime made its continue stale (send took the item); the owner's Stop dropped it.
+  async function resumeOne({ chatId, cont }) {
+    const chat = store.getChat(chatId);
+    // Materialized Cursor-task transcripts are read-only; a job run has its own trigger and timeout.
+    if (!chat || chat.caller === "task") return void takeWaiting(chatId);
+    const { turn, queue } = runq.get(chatId);
+    let continuing = cont && !chat.job_id;
+    const count = store.getKv?.(resumesKey(chatId));
+    const fresh = !count || Date.now() - count.at > 60 * 60_000;
+    if (continuing && !fresh && count.n >= MAX_RESUMES) {
+      continuing = false;
+      log.error?.(`[runner] chat ${chatId}: cut ${count.n} times within an hour — not continuing it again`);
+    }
+    const provider = sdkFor(chat);
+    if (continuing && chat.agent_id && typeof provider?.clearStuck === "function") {
+      try {
+        await provider.clearStuck(chat.agent_id, await agentOptions(chat));
+      } catch (error) {
+        log.error?.(`[runner] clearStuck ${chat.agent_id}: ${error?.message || error}`);
+      }
+    }
+    if (stopping || active.has(chatId) || !pending.has(chatId)) return;
+    if (continuing) {
+      const text = turn?.text ?? lastUserPrompt(store, chatId); // no runq: cut by an older build
+      const prompt = resumePrompt(text);
+      store.appendEvent(chatId, null, "user", { text: prompt });
+      store.setKv(resumesKey(chatId), { n: (fresh ? 0 : count.n) + 1, at: Date.now() });
+      startRun(chatId, prompt, queue, { ids: turn?.ids || [], turnText: text ?? prompt });
+      log.info?.(`[runner] resumed chat ${chatId} after restart`);
+    } else if (queue.length && kept.next(chatId) < 0) {
+      startRun(chatId, mergeQueued(messagesOf(queue)), [], { ids: idsOf(queue) });
+    } else if (queue.length) {
+      kept.push(chatId, mergeQueued(messagesOf(queue)), idsOf(queue)); // behind the kept FIFO
+      runq.save(chatId, null, []);
+    } else runq.save(chatId, null, []);
+    pending.remove(chatId);
+  }
+
+  if (pending.list().length) {
     Promise.resolve()
       .then(async () => {
-        const seen = new Set();
-        for (const item of pendingResume) {
-          if (seen.has(item.chatId)) continue;
-          seen.add(item.chatId);
-          const chat = store.getChat(item.chatId);
-          if (!chat) continue;
-          const provider = sdkFor(chat);
-          if (item.agentId && typeof provider?.clearStuck === "function") {
-            try {
-              await provider.clearStuck(item.agentId, await agentOptions(chat));
-            } catch (error) {
-              log.error?.(`[runner] clearStuck ${item.agentId}: ${error?.message || error}`);
-            }
-          }
-          try {
-            await api.send(item.chatId, { text: resumePrompt(item.lastUser) });
-            log.info?.(`[runner] resumed chat ${item.chatId} after restart`);
-          } catch (error) {
-            log.error?.(`[runner] resume after restart failed ${item.chatId}: ${error?.message || error}`);
-          }
+        for (let first = true; !stopping; first = false) {
+          if (!first) await new Promise((resolve) => setTimeout(resolve, resumeGapMs));
+          const item = pending.list()[0];
+          if (!item || stopping) return;
+          await resumeOne(item).catch((error) => log.error?.(`[runner] resume after restart failed ${item.chatId}: ${error?.message || error}`));
+          // Never spin on an item that did not leave the list (e.g. its chat is busy right now).
+          if (!stopping && pending.list()[0]?.chatId === item.chatId) pending.remove(item.chatId);
         }
       })
       .catch((error) => log.error?.(`[runner] resume-after-restart: ${error?.message || error}`));
@@ -516,11 +865,13 @@ function lastUserPrompt(store, chatId) {
   return text;
 }
 
-function resumePrompt(lastUser) {
+// A colleague's message (related.mjs chat_send) is not called the owner's request on a resume.
+export function resumePrompt(lastUser) {
   if (lastUser) {
+    const who = lastUser.startsWith("📥 ") ? "پیام قبلی (از شخص ثالث — نه درخواست Owner) این بود" : "درخواست قبلی Owner این بود";
     return (
       `[ادامه پس از ری‌استارت سرور]\n` +
-      `درخواست قبلی Owner این بود:\n«${lastUser.slice(0, 4000)}»\n\n` +
+      `${who}:\n«${lastUser.slice(0, 4000)}»\n\n` +
       `از جایی که قطع شدی ادامه بده. مراحل و ابزارهایی که قبلاً درست انجام شده را تکرار نکن؛ بقیه را تمام کن و نتیجه بده.`
     );
   }

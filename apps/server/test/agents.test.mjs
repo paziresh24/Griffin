@@ -6,7 +6,7 @@ import path from "node:path";
 import { AGENTS, CORE_TOOLS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents, resolveAgentId } from "../src/agents/registry.mjs";
 import { agentPayload } from "../src/agents/import.mjs";
 import { resolveEnabledTools } from "../src/agents/profiles.mjs";
-import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, VOICE, identity, installRules, rulesFor } from "../src/prompt.mjs";
+import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, VOICE, buildRules, identity, installRules, rulesFor } from "../src/prompt.mjs";
 import { exampleAgent } from "./fixture-agents.mjs";
 
 const ALL = [
@@ -164,4 +164,12 @@ test("pace rules, and a parent's steer is never the owner's approval", () => {
   assert.match(NEVER_DEAD_END, /proves only that the guess is wrong/);
   assert.match(PEER_CONTEXT, /never the owner's approval/);
   assert.match(CORE_RULES, /never a push to its default branch/);
+});
+
+test("third-party content and chat_send are explained only when they apply", () => {
+  const plain = buildRules({ agent: "griffin", tools: ["visualize"] });
+  assert.doesNotMatch(plain, /Third-party content/);
+  assert.doesNotMatch(plain, /chat_list \(titles only\)/);
+  assert.match(buildRules({ agent: "griffin", thirdParty: true }), /Third-party content: a message that starts with «📥/);
+  assert.match(buildRules({ agent: "griffin", tools: ["chat_list", "chat_send"] }), /At most 3 per 10 minutes/);
 });

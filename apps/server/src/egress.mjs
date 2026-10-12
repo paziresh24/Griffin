@@ -122,3 +122,10 @@ export function installCursorEgress(proxyUrl, { log = console } = {}) {
   log.info?.(`[egress] Cursor/Anthropic TLS via ${proxy.host}`);
   return true;
 }
+
+// An engine whose health probe got no HTTP answer at all (timeout, DNS, refused, a dead Xray in
+// front) is unreachable from here. Any HTTP status means the path works, and a missing key or URL
+// ("no … api key") is a setup gap, not egress — neither should hold scheduled work.
+export function egressDown(health) {
+  return !health?.ok && health?.status == null && !/^no /.test(String(health?.error || ""));
+}

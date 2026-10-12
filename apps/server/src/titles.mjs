@@ -1,4 +1,4 @@
-import { finalText, foldEvents } from "@griffin/timeline";
+import { finalText, foldEvents, wholeRun } from "@griffin/timeline";
 
 // Short chat titles like Cursor's sidebar: after a chat's first finished run, a small tool-less agent
 // turns the question and answer into 2-5 words. Titles the owner renamed are never touched.
@@ -21,12 +21,13 @@ export function createTitler({ store, generate, timelines = null, log = console 
     if (!chat) return null;
     const { messages } = timelines ? (await timelines.get(chatId)).timeline : foldEvents(store.allEvents(chatId));
     const firstUser = messages.find((m) => m.role === "user");
-    const runs = messages.filter((m) => m.role === "assistant" && m.status !== "running");
+    // A run split by a message the owner sent mid-run counts once (its last piece).
+    const runs = messages.filter((m) => m.role === "assistant" && m.status !== "running" && !m.continued);
     // only the first finished run, and only while the title is still the auto one (first line of the question)
     if (!firstUser || !runs.length || (!backfill && runs.length !== 1) || chat.title !== autoTitle(firstUser.text)) return null;
     inFlight.add(chatId);
     try {
-      const answer = finalText(runs[0]).slice(0, 1500);
+      const answer = finalText(wholeRun(messages, runs[0].runId) || runs[0]).slice(0, 1500);
       const title = cleanTitle(await generate(`${TITLE_PROMPT}\n\nQuestion:\n${firstUser.text.slice(0, 1500)}\n\nAnswer:\n${answer}`));
       const current = store.getChat(chatId);
       if (!title || current.title !== chat.title) return null;

@@ -140,7 +140,7 @@ The UI speaks English and Persian (right-to-left), picked from your browser and 
 
 Griffin is also an MCP server: Claude Code, Claude Desktop, Cursor or any other MCP client can hand
 it a task and follow it to the end (`griffin_send`, `griffin_wait`, `griffin_reply`,
-`griffin_cancel`, `griffin_tasks`). Each client gets its own scoped token from **#/peers**.
+`griffin_cancel`, `griffin_tasks`, `griffin_limits`). Each client gets its own scoped token from **#/peers**.
 
 ```bash
 # streamable HTTP (Claude Code)

@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MessageSquarePlus, PanelRight } from "lucide-react";
+import { MessageSquarePlus, PanelLeft, PanelRight } from "lucide-react";
 import { SELECTION_QUOTE_MAX, quoteForChat } from "../side.js";
 import { quoteStore } from "../quotes.js";
 import { useRuntimeChat } from "../runtime.jsx";
 import { textDir } from "../dir.js";
 import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
+
+// The side panel sits on the reading end's far side: left in RTL, right in LTR.
+const SideIcon = isRtl ? PanelLeft : PanelRight;
 
 // Reply to part of an answer: select text in an answer and a small toolbar offers
 // «به گفتگو» — a popup shows the selection, the owner writes what they think of it, and it waits
@@ -104,7 +107,7 @@ export function SelectionActions() {
           <>
             <span className="h-4 w-px bg-border" aria-hidden />
             <button type="button" className={button} onClick={addToSide} title={t("با این نقل، چت کناری را شروع کن")}>
-              <PanelRight className="size-3.5" /> {t("به چت کناری")}
+              <SideIcon className="size-3.5" /> {t("به چت کناری")}
             </button>
           </>
         )}

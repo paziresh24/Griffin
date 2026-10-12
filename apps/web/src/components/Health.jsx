@@ -1,6 +1,7 @@
-import { Bot, Cable, Radar, Server, Sparkles } from "lucide-react";
+import { Bot, Cable, Clock, Cpu, HardDrive, MemoryStick, Radar, Server, Sparkles } from "lucide-react";
 import { usePolling } from "../api.js";
-import { num, t } from "../i18n.js";
+import { BRAND } from "../brand.js";
+import { locale, num, t } from "../i18n.js";
 import { Group, Item } from "./SettingsParts.jsx";
 
 const CLUSTER_NAMES = {}; // optional display names per cluster id
@@ -77,6 +78,8 @@ export function StatusSection() {
         ) : null}
       </Group>
 
+      <HostGroup />
+
       {clusters.length ? (
         <Group title={t("کلاسترها")}>
           {clusters.map(([name, c]) => (
@@ -96,6 +99,49 @@ export function StatusSection() {
       ) : null}
     </div>
   );
+}
+
+// The machine Griffin runs on (GET /api/host, from /proc): live while this page is open.
+function HostGroup() {
+  const host = usePolling("/api/host", 5_000);
+  if (!host?.at) return null;
+  const pct = (n) => (n == null ? "—" : `${fa(n)}%`);
+  const tone = (n) => (n == null ? "none" : n >= 90 ? "bad" : n >= 75 ? "warn" : "ok");
+  return (
+    <Group title={host.stale ? t("سرور (به‌روز نمی‌شود)") : t("سرور")}>
+      <Item
+        icon={Cpu}
+        title={t("پردازنده")}
+        subtitle={[host.cpu?.cores ? t("{n} هسته", { n: fa(host.cpu.cores) }) : null, host.load ? t("بار {load}", { load: host.load.map((n) => fa(n)).join(" · ") }) : null].filter(Boolean).join(" · ")}
+        trailing={<Pill state={tone(host.cpu?.percent)}>{pct(host.cpu?.percent)}</Pill>}
+      />
+      <Item
+        icon={MemoryStick}
+        title={t("حافظه")}
+        subtitle={host.memory ? t("{used} از {total} · خود {name} {rss}", { used: gib(host.memory.used), total: gib(host.memory.total), name: BRAND.name, rss: gib(host.process?.rssBytes) }) : null}
+        trailing={<Pill state={tone(host.memory?.percent)}>{pct(host.memory?.percent)}</Pill>}
+      />
+      {host.disk ? (
+        <Item icon={HardDrive} title={t("دیسک")} subtitle={t("{free} آزاد از {total}", { free: gib(host.disk.available), total: gib(host.disk.total) })} trailing={<Pill state={tone(host.disk.percent)}>{pct(host.disk.percent)}</Pill>} />
+      ) : null}
+      <Item
+        icon={Clock}
+        title={t("روشن از")}
+        subtitle={t("سرور {name}: {started} · خود ماشین: {uptime}", { name: BRAND.name, started: host.process?.startedAt ? new Date(host.process.startedAt).toLocaleString(locale) : "—", uptime: uptime(host.uptimeS) })}
+      />
+    </Group>
+  );
+}
+
+const fa = (n) => num(n, { maximumFractionDigits: 2 });
+const gib = (bytes) => (bytes == null ? "—" : t("{n} گیگ", { n: fa(Math.round((bytes / 2 ** 30) * 10) / 10) }));
+
+function uptime(seconds) {
+  if (!Number.isFinite(seconds)) return "—";
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return [d ? t("{n} روز", { n: fa(d) }) : null, h ? t("{n} ساعت", { n: fa(h) }) : null, !d && m ? t("{n} دقیقه", { n: fa(m) }) : null].filter(Boolean).join(t(" و ")) || t("کمتر از یک دقیقه");
 }
 
 function Check({ check }) {

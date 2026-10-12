@@ -38,5 +38,11 @@
   "گفتن به‌جای نوشتن": "Speak instead of typing",
   "ضبط صدا برای نوشتن پیام": "Record your voice to write the message",
   "برداشتن نقل‌قول": "Remove quote",
-  "ارسال نقل‌قول‌ها": "Send the quotes"
+  "ارسال نقل‌قول‌ها": "Send the quotes",
+  "از صف اجرا شد": "Ran from the queue",
+  "از صف کنار رفت؛ اجرا نشد": "Dropped from the queue; not run",
+  "یادداشت فقط متن نگه می‌دارد؛ نقل‌قول را بردارید": "A note holds text only; remove the quote",
+  "اتصال لحظه‌ای قطع شد؛ دوباره وصل می‌شوم — پیام‌هایت محفوظ است": "The connection dropped for a moment; reconnecting — your messages are safe",
+  "تلاش دوباره": "Try again",
+  "وصل شد": "Connected"
 }

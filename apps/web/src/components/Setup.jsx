@@ -310,7 +310,7 @@ function McpStep({ onNext }) {
   return (
     <div className="space-y-4">
       <h2 className="flex items-center gap-2 text-lg font-semibold"><Plug className="size-5" /> {t("اتصال یک ایجنت دیگر")}</h2>
-      <p className="text-sm leading-7 text-muted-foreground">{t("برای Claude Code یا هر کلاینت MCP یک توکن جدا می‌سازد. دسترسی‌اش پیش‌فرض فقط‌خواندنی است و از صفحهٔ «همتاها» قابل تغییر و ابطال است.")}</p>
+      <p className="text-sm leading-7 text-muted-foreground">{t("برای Claude Code یا هر کلاینت MCP یک توکن جدا می‌سازد. دسترسی‌اش پیش‌فرض فقط‌خواندنی است و از صفحهٔ «ایجنت‌های همکاران» قابل تغییر و ابطال است.")}</p>
       {issued ? (
         <div className="space-y-2 rounded-2xl border bg-card p-4">
           <p className="text-xs text-bad">{t("این توکن فقط همین یک بار نشان داده می‌شود.")}</p>

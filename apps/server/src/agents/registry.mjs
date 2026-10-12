@@ -32,6 +32,9 @@ export const CORE_TOOLS = [
   "telegram_media",
   "telegram_send",
   "end_agent",
+  "chat_suggest",
+  "chat_dismiss_suggestion",
+  "chat_chapter",
 ];
 
 /** What an unattended caller (a scheduled job) may use: work, but never ask a human. */

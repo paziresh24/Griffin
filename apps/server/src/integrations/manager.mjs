@@ -1,4 +1,4 @@
-import { foldEvents } from "@griffin/timeline";
+import { foldEvents, lastRun } from "@griffin/timeline";
 import crypto from "node:crypto";
 import { autoTitle } from "../titles.mjs";
 import { BOT_KINDS, createBotApi, createBotChannel, pairingCode } from "./bots.mjs";
@@ -8,7 +8,7 @@ import { chatHistoryBlock, isNoReply, peerAgentPrompt, takeRate, derivePeerUserI
 import { answerStamp, deliverable, liveStatusLine } from "./format.mjs";
 import { OWNER, REQUESTER } from "../asks.mjs";
 import { ownerLabel } from "../guard.mjs";
-import { createAccountChannel, createAccountLogin } from "./telegram-account.mjs";
+import { createAccountChannel, createAccountLogin, watching } from "./telegram-account.mjs";
 import { chartMedia } from "../chart-image.mjs";
 import { normalizeProvider } from "../providers/ids.mjs";
 import { openWorkFor } from "../related.mjs";
@@ -169,6 +169,22 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     store.updateIntegration(id, { settings: { coverage } });
   }
 
+  function personByExternal(key) {
+    return store.listPersons({ source: "telegram" }).find((p) => p.external_id === String(key)) || null;
+  }
+
+  // Threads used to live in settings.coverage (one per peer); carry the open ones over once.
+  for (const integ of store.listIntegrations?.() || []) {
+    const legacy = integ.settings?.coverage || {};
+    if (!Object.keys(legacy).length) continue;
+    for (const [key, entry] of Object.entries(legacy)) {
+      if (entry?.chatId && store.getChat(entry.chatId)) {
+        store.addThreadMember({ chatId: entry.chatId, integrationId: integ.id, externalChat: key, personId: personByExternal(key)?.id || null });
+      }
+    }
+    store.updateIntegration(integ.id, { settings: { coverage: {} } });
+  }
+
   /** Owner's personal Telegram user id (from the connected account). */
   // Nobody is watching a scheduler / ops-room / job chain: no owner question comes out of it.
   function unattendedChat(chat) {
@@ -297,12 +313,18 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       return true;
     },
 
+    // A peer is covered while any thread with them is open (several can be, owner 2026-10-12).
+    // settings.coverage is the pre-threads record, still read for chats that predate thread_links.
     isCovered(id, peer) {
-      return Boolean(coverageMap(id)[String(peer)]);
+      return store.openThreads(id, peer).length > 0 || Boolean(coverageMap(id)[String(peer)]);
+    },
+
+    openThreads(id, peer) {
+      return store.openThreads(id, peer).map((t) => ({ id: t.id, title: t.title }));
     },
 
     coverageName(id, peer) {
-      return coverageMap(id)[String(peer)]?.name || null;
+      return personByExternal(peer)?.display_name || coverageMap(id)[String(peer)]?.name || null;
     },
 
     // Does the newest message in a teammate DM open a thread? (see threads.mjs). No classifier
@@ -315,7 +337,6 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     // fresh: a new thread gets its own chat (reopening with «گریفین» continues the last one).
     async startCoverage(id, peer, { name, username = null, personId = null, fresh = false, title = null } = {}) {
       const key = String(peer);
-      const coverage = coverageMap(id);
       const integration = store.getIntegration(id);
       const profile = personId
         ? store.getPerson(personId)
@@ -323,7 +344,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       const agent = coverageAgent(profile, store);
       let chatId = store.linkedChat(id, key);
       const existing = chatId ? store.getChat(chatId) : null;
-      if (fresh || !existing || existing.caller !== COVERAGE_CALLER || existing.agent !== agent) {
+      if (fresh || !existing || existing.caller !== COVERAGE_CALLER || existing.agent !== agent || existing.archived) {
         const chat = store.createChat({
           title: title || `/agent · ${name || key}`,
           mode: "agent",
@@ -333,30 +354,100 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           personId: profile?.id || personId || null,
         });
         chatId = chat.id;
-        store.linkChat(id, key, chatId);
       }
-      coverage[key] = { name: name || key, username: username || null, chatId, startedAt: new Date().toISOString() };
-      saveCoverage(id, coverage);
-      return coverage[key];
+      store.linkChat(id, key, chatId);
+      store.addThreadMember({ chatId, integrationId: id, externalChat: key, personId: profile?.id || personId || null });
+      return { name: name || key, username: username || null, chatId, fresh, title, startedAt: new Date().toISOString() };
     },
 
+    // /agent off: every open thread with this peer stops for them (a grouped thread goes on for
+    // its other members).
     async endCoverage(id, peer) {
       const key = String(peer);
       const coverage = coverageMap(id);
-      const ended = coverage[key];
-      if (!ended) return null;
-      delete coverage[key];
-      saveCoverage(id, coverage);
-      const chatId = ended.chatId || store.linkedChat(id, key);
-      if (chatId && runner.isActive(chatId)) await runner.cancel(chatId).catch(() => {});
-      return ended;
+      const legacy = coverage[key];
+      if (legacy) {
+        delete coverage[key];
+        saveCoverage(id, coverage);
+      }
+      const open = store.openThreads(id, key);
+      if (!open.length && !legacy) return null;
+      for (const thread of open) {
+        store.closeThread(thread.id, { integrationId: id, externalChat: key });
+        if (runner.isActive(thread.id)) await runner.cancel(thread.id).catch(() => {});
+      }
+      return { name: bridge.coverageName(id, key) || legacy?.name || key, chatId: open[0]?.id || legacy?.chatId || null };
     },
 
-    async receive(id, externalChat, { text, images = [], caller = null, title = null, person = null } = {}) {
+    // A thread is done (end_agent, or closed from the UI): close it for every member and point
+    // each member's chat at their next open thread, if any.
+    async closeThread(chatId, { cancel = false } = {}) {
+      const members = store.threadMembers(chatId);
+      store.closeThread(chatId);
+      for (const m of members) {
+        if (store.linkedChat(m.integration_id, m.external_chat) !== chatId) continue;
+        const next = store.openThreads(m.integration_id, m.external_chat)[0];
+        if (next) store.linkChat(m.integration_id, m.external_chat, next.id);
+      }
+      if (cancel && runner.isActive(chatId)) await runner.cancel(chatId).catch(() => {});
+      return members;
+    },
+
+    // Fold one thread into another: same issue from more than one person (owner 2026-10-12).
+    // Members move over, their chats point at the target, the source closes, and the target hears
+    // who else is waiting on it.
+    async mergeThreads(fromId, intoId) {
+      if (!fromId || !intoId || fromId === intoId) throw new Error("دو رشتهٔ متفاوت لازم است");
+      const from = store.getChat(fromId);
+      const into = store.getChat(intoId);
+      if (!from || !into) throw new Error("رشته پیدا نشد");
+      const moved = store.threadMembers(fromId).filter((m) => !m.closed_at);
+      for (const m of moved) {
+        store.addThreadMember({ chatId: intoId, integrationId: m.integration_id, externalChat: m.external_chat, personId: m.person_id });
+        store.linkChat(m.integration_id, m.external_chat, intoId);
+      }
+      store.closeThread(fromId);
+      if (runner.isActive(fromId)) await runner.cancel(fromId).catch(() => {});
+      store.updateChat(fromId, { archived: true });
+      const names = store.threadMembers(intoId).filter((m) => !m.closed_at).map((m) => m.display_name || m.external_chat);
+      const recent = moved.flatMap((m) => (m.person_id ? store.listPersonMessages(m.person_id, 6).filter((x) => x.direction === "in").map((x) => `«${m.display_name || "همکار"}»: ${String(x.text).slice(0, 400)}`) : []));
+      const note = `[رشتهٔ «${from.title}» با این رشته یکی شد — همان مسئله. حالا این‌ها منتظر همین کارند: ${names.join("، ")}. جواب این رشته به همهٔ آن‌ها می‌رسد.]` +
+        (recent.length ? `\n\n${recent.join("\n")}` : "");
+      await runner.send(intoId, { text: note, images: [], intent: runner.isActive(intoId) ? "queue" : "send" }).catch((error) => log.error?.(`[integrations] merge note: ${error.message}`));
+      return { moved: moved.length, members: names };
+    },
+
+    // The owner puts a person's message into a thread by hand (or starts a new one from it) from
+    // the mother chat. The account channel does the Telegram side (reply target, 👀).
+    async routeMessage(personId, messageId, target) {
+      const person = store.getPerson(personId);
+      const message = person?.history?.find((m) => String(m.id) === String(messageId));
+      if (!person || !message) throw new Error("پیام پیدا نشد");
+      const account = [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account");
+      if (!account) throw new Error("اکانت تلگرام وصل نیست");
+      const [id, channel] = account;
+      return channel.routeByHand(person, message, target === "new" ? null : String(target));
+    },
+
+    personByExternal(key) {
+      return personByExternal(key);
+    },
+    getKv: (key) => store.getKv(key),
+    setKv: (key, value) => store.setKv(key, value),
+    tagPersonMessages: (personId, ids, data) => store.tagPersonMessages(personId, ids, data),
+
+    // chatId: feed this thread (the routing decided), and make it the peer's current one.
+    async receive(id, externalChat, { text, images = [], caller = null, title = null, person = null, chatId: target = null } = {}) {
+      if (target) {
+        store.linkChat(id, externalChat, target);
+        store.addThreadMember({ chatId: target, integrationId: id, externalChat, personId: personByExternal(externalChat)?.id || null });
+      }
       let chatId = store.linkedChat(id, externalChat);
       const existing = chatId ? store.getChat(chatId) : null;
       const profile = person ? store.upsertPerson({ externalId: externalChat, ...person, data: { platform: "telegram", source: "account" } }) : store.listPersons({ source: "telegram" }).find((p) => p.external_id === String(externalChat)) || (person ? store.upsertPerson({ externalId: externalChat, ...person }) : null);
-      if (profile && text) store.addPersonMessage({ personId: profile.id, direction: "in", text, data: { chatId, caller: caller || "owner" } });
+      // A teammate's own message is already in their history (the account channel records it raw);
+      // the framed prompt built from it would only show up twice in the mother chat.
+      if (profile && text && caller !== COVERAGE_CALLER) store.addPersonMessage({ personId: profile.id, direction: "in", text, data: { chatId, caller: caller || "owner" } });
       // A disabled profile is the owner's choice about this person; the person is never told so
       // (it used to reach the colleague as «این پروفایل فعلاً دسترسی فعال ندارد.»). Only the owner hears it.
       if (profile?.access?.enabled === false) {
@@ -504,19 +595,22 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   const handedOver = new Set();
   async function tellOwnerUnanswered(chat, why) {
     if (!chat) return;
+    await notifyOwner(`🔕 «${String(chat.title || "رشتهٔ همکار").slice(0, 80)}» بی‌جواب ماند (${String(why).slice(0, 120)}); به همکار چیزی نرفت.`, chat.id);
+  }
+  // One line from the bot to the owner, with a link to the chat when there is one.
+  async function notifyOwner(text, chatId = null) {
     const bot = preferOwnerBot();
     const ownerId = ownerTelegramId();
-    if (!bot || !ownerId) return;
+    if (!bot || !ownerId) return false;
     ensureBotPaired(bot.id, ownerId);
-    const link = publicUrl ? `\n${publicUrl}/#/c/${chat.id}` : "";
-    await bot.channel.deliver(ownerId, {
-      text: `🔕 «${String(chat.title || "رشتهٔ همکار").slice(0, 80)}» بی‌جواب ماند (${String(why).slice(0, 120)}); به همکار چیزی نرفت.${link}`,
-    });
+    const link = publicUrl && chatId ? `\n${publicUrl}/#/c/${chatId}` : "";
+    await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+    return true;
   }
 
   async function deliverRun(chatId, links, { heading = "" } = {}) {
     const { messages } = timelines ? (await timelines.get(chatId)).timeline : foldEvents(store.allEvents(chatId));
-    const run = messages.findLast((m) => m.role === "assistant");
+    const run = lastRun(messages); // a run split by an owner message mid-run, whole
     if (!run) return [];
     const out = deliverable(run);
     // The model sometimes wraps its whole reply in [ … ] (mimicking the [NO_REPLY] sentinel);
@@ -743,11 +837,12 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           const pending = endAfterRun.get(chatId);
           if (!pending) return;
           endAfterRun.delete(chatId);
-          const ended = await bridge.endCoverage(pending.integrationId, pending.peer);
-          if (!ended) return;
+          const members = await bridge.closeThread(chatId);
+          if (!members.length && !(await bridge.endCoverage(pending.integrationId, pending.peer))) return;
           const channel = channels.get(pending.integrationId);
           const note = pending.note ? ` — ${pending.note}` : "";
-          await channel?.deliver("me", { text: `/agent برای «${ended.name || pending.peer}» تمام شد${note}` }).catch(() => {});
+          const who = members.map((m) => m.display_name).filter(Boolean).join("، ") || bridge.coverageName(pending.integrationId, pending.peer) || pending.peer;
+          await channel?.deliver("me", { text: `رشتهٔ «${store.getChat(chatId)?.title || who}» با «${who}» تمام شد${note}` }).catch(() => {});
         })
         .catch((error) => log.error?.(`[integrations] ${error.message}`));
     }
@@ -817,6 +912,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   return {
     store,
     bridge,
+    notifyOwner,
     channels,
     // Called (via asks.mjs's onSettled hook) the moment a question stops being open — deletes
     // the mirrored Telegram message so only open questions stay visible there.
@@ -913,9 +1009,13 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     },
 
     // gramjs client of the first connected Telegram account, for the agent tools.
-    accountClient() {
-      for (const channel of channels.values()) if (channel.kind === "telegram_account" && channel.client && channel.status.state === "polling") return channel.client;
-      return null;
+    accountClient: () => runningAccount(channels.values())?.client || null,
+
+    // Name and photo of that same account, for the foot of the sidebar (profile.mjs).
+    accountProfile: () => accountProfileOf(channels.values()),
+
+    markAccountSent(id) {
+      for (const channel of channels.values()) if (channel.kind === "telegram_account") channel.markSent?.(id);
     },
 
     markAccountSent(id) {
@@ -927,6 +1027,16 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       store.bus.off("event", onEvent);
     },
   };
+}
+
+// The first connected Telegram account: its client goes to the agent tools, its profile to the sidebar.
+function runningAccount(channels) {
+  for (const channel of channels) if (channel.kind === "telegram_account" && channel.client && channel.status.state === "polling") return channel;
+  return null;
+}
+
+export async function accountProfileOf(channels) {
+  return (await runningAccount(channels)?.profileReady?.()) || null;
 }
 
 // Tools that stop and wait for the owner, as a question a messenger can show.
@@ -961,6 +1071,64 @@ export function integrationRoutes(app, integrations) {
     }));
     return c.json({ chats });
   });
+  // Mother chats: one per person who wrote or has a thread, newest activity first (sidebar).
+  app.get("/api/telegram/mothers", (c) => {
+    const { store } = integrations;
+    const mothers = integrations.bridge.listPersons({ source: "telegram" })
+      .map((p) => {
+        const threads = store.threadsForPerson(p.id);
+        const last = p.history.at(-1) || null;
+        if (!last && !threads.length) return null;
+        const open = threads.filter((t) => !t.closed);
+        return {
+          id: p.id,
+          name: p.display_name,
+          username: p.username || null,
+          category: p.category,
+          // Groups and channels have negative Telegram ids; the chat type is in meta when recorded.
+          group: String(p.external_id).startsWith("-") || ["group", "channel"].includes(p.meta?.chatType),
+          watch: watching(p),
+          pickupEvery: Number(p.access?.pickupEvery) || 0,
+          lastAt: last?.at || p.last_seen_at || null,
+          lastText: last ? String(last.text).slice(0, 120) : "",
+          lastDirection: last?.direction || null,
+          openThreads: open.length,
+          running: open.some((t) => t.run_status === "running"),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
+    return c.json({ mothers });
+  });
+  app.get("/api/telegram/persons/:id/threads", (c) => c.json({
+    threads: integrations.store.threadsForPerson(c.req.param("id")).map((t) => ({
+      id: t.id, title: t.title, updatedAt: t.updated_at, runStatus: t.run_status || null, closed: t.closed,
+      members: t.members.map((m) => ({ personId: m.person_id, name: m.display_name || m.external_chat, closed: Boolean(m.closed_at) })),
+    })),
+  }));
+  app.get("/api/telegram/threads", (c) => c.json({
+    threads: integrations.store.allOpenThreads().map((t) => ({ id: t.id, title: t.title, updatedAt: t.updated_at, members: t.members.filter((m) => !m.closed_at).map((m) => m.display_name || m.external_chat) })),
+  }));
+  app.post("/api/telegram/persons/:id/route", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      return c.json(await integrations.bridge.routeMessage(c.req.param("id"), body.messageId, body.thread || "new"));
+    } catch (error) {
+      return c.json({ error: error.message }, 400);
+    }
+  });
+  app.post("/api/telegram/threads/:id/close", async (c) => {
+    await integrations.bridge.closeThread(c.req.param("id"), { cancel: true });
+    return c.json({ ok: true });
+  });
+  app.post("/api/telegram/threads/:id/merge", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      return c.json(await integrations.bridge.mergeThreads(c.req.param("id"), String(body.into || "")));
+    } catch (error) {
+      return c.json({ error: error.message }, 400);
+    }
+  });
   app.patch("/api/telegram/persons/:id", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const patch = {};
@@ -968,6 +1136,8 @@ export function integrationRoutes(app, integrations) {
     if (typeof body.category === "string") patch.category = body.category.trim().slice(0, 60) || "unclassified";
     if (body.access && typeof body.access === "object" && !Array.isArray(body.access)) {
       const access = { ...body.access };
+      if ("watch" in access && typeof access.watch !== "boolean") delete access.watch;
+      if ("pickupEvery" in access) access.pickupEvery = Math.min(Math.max(Math.round(Number(access.pickupEvery) || 0), 0), 24 * 60);
       if (access.agent !== undefined) {
         const agent = resolveAgentId(access.agent);
         const profile = integrations.store?.getAgentProfile?.(agent) || null;

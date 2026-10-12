@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, History, PanelRight, X } from "lucide-react";
+import { ArrowUp, History, PanelLeft, PanelRight, X } from "lucide-react";
 import { api, useTimeline } from "../api.js";
 import { textDir } from "../dir.js";
 import { sidePaths } from "../side.js";
@@ -7,6 +7,9 @@ import { GriffinRuntime } from "../runtime.jsx";
 import { isRtl, t } from "../i18n.js";
 import { Thread } from "./Thread.jsx";
 import { submitMode, useTouchPrimary } from "../touch.js";
+
+// The side panel sits on the reading end's far side: left in RTL, right in LTR.
+const SideIcon = isRtl ? PanelLeft : PanelRight;
 
 // Side chat: a separate question next to a chat, without adding to it. It starts
 // with that chat's conversation as context (server: seedTurns). A panel beside the thread on a
@@ -22,7 +25,7 @@ export function SideChatButton({ open, onClick }) {
       className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs hover:bg-muted ${open ? "bg-muted text-foreground" : "text-muted-foreground"}`}
       title={t("چت کناری: یک سؤال جدا، بدون به‌هم‌زدن این گفتگو")}
     >
-      <PanelRight className="size-4" />
+      <SideIcon className="size-4" />
       <span className="hidden sm:inline">{t("چت کناری")}</span>
     </button>
   );

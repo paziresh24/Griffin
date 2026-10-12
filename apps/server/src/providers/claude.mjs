@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { query, tool, createSdkMcpServer, forkSession as sdkForkSession } from "@anthropic-ai/claude-agent-sdk";
 import { jsonSchemaToZodShape } from "./json-schema-zod.mjs";
 import { createClaudeEventBridge } from "./claude-events.mjs";
 
@@ -80,15 +80,22 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
       return { provider: PROVIDER_CLAUDE, windows: planWindows(lastLimits.windows), seenAt: lastLimits.at };
     },
     create(options) {
-      return makeAgent(null, options, { apiKey, defaultModel });
+      return makeAgent(null, options, { apiKey, defaultModel, lastLimits });
     },
     resume(sessionId, options) {
-      return makeAgent(sessionId, options, { apiKey, defaultModel });
+      return makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits });
+    },
+    // A copy of a conversation up to one entry (SDK forkSession), written next to the source in
+    // Claude Code's projects folder, so the fork must run in the same folder. Returns the new id.
+    async forkSession(sessionId, { upToMessageId = null } = {}) {
+      const result = await sdkForkSession(sessionId, upToMessageId ? { upToMessageId } : {});
+      if (!result?.sessionId) throw new Error("fork returned no session");
+      return result.sessionId;
     },
   };
 }
 
-function makeAgent(sessionId, options, { apiKey, defaultModel }) {
+function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {} }) {
   // Stable id from the start so runner can persist agent_id before the first stream frame.
   let currentSessionId = sessionId || randomUUID();
   let started = Boolean(sessionId);
@@ -143,13 +150,17 @@ function makeAgent(sessionId, options, { apiKey, defaultModel }) {
       (async () => {
         try {
           if (!apiKey) throw new Error("Anthropic API key missing");
-          for await (const msg of query({
+          const q = query({
             prompt,
             options: {
               abortController: abort,
               cwd: options.cwd,
               model: modelId,
               ...(sendOptions.effort ? { effort: sendOptions.effort } : {}),
+              // Claude Code's guess at the owner's next message, after the result (runner decides who gets one).
+              ...(sendOptions.onSuggestion ? { promptSuggestions: true } : {}),
+              // Fast mode is an SDK opt-in: only a settings value turns it on (billed from extra usage, Opus only).
+              ...(sendOptions.fast ? { settings: { fastMode: true } } : {}),
               ...sessionOpts,
               permissionMode: mode === "plan" ? "plan" : "bypassPermissions",
               includePartialMessages: true,
@@ -165,8 +176,26 @@ function makeAgent(sessionId, options, { apiKey, defaultModel }) {
                 : { settingSources: ["project"] }),
               env: claudeAuthEnv(apiKey),
             },
-          })) {
+          });
+          let commandsAsked = false;
+          for await (const msg of q) {
             if (msg?.session_id) currentSessionId = msg.session_id;
+            // The composer's «/» list: asked once the engine answers, replaced when Claude Code says it changed.
+            if (sendOptions.onCommands) {
+              if (!commandsAsked && typeof q.supportedCommands === "function") {
+                commandsAsked = true;
+                Promise.resolve().then(() => q.supportedCommands()).then(sendOptions.onCommands).catch(() => {});
+              }
+              if (msg?.type === "system" && msg.subtype === "commands_changed") {
+                bestEffort(() => sendOptions.onCommands(msg.commands));
+                continue;
+              }
+            }
+            // Arrives after the result and is no turn of its own: handed over, never streamed.
+            if (msg?.type === "prompt_suggestion") {
+              bestEffort(() => sendOptions.onSuggestion?.(String(msg.suggestion ?? "")));
+              continue;
+            }
             const info = msg?.type === "rate_limit_event" ? msg.rate_limit_info : null;
             if (info?.status === "rejected" && !info.overageInUse) limit = info;
             if (info?.unifiedWindows) Object.assign(lastLimits, { windows: info.unifiedWindows, at: new Date().toISOString() });
@@ -213,6 +242,14 @@ function makeAgent(sessionId, options, { apiKey, defaultModel }) {
       return run;
     },
   };
+}
+
+function bestEffort(fn) {
+  try {
+    fn();
+  } catch {
+    /* the «/» list and the suggestion are best effort */
+  }
 }
 
 // Resume is lazy here, so a session Claude no longer has (chat moved from another engine, or its

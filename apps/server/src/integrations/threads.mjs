@@ -64,7 +64,21 @@ const topicOf = (text) => text.replace(/\s+/g, " ").split(" ").slice(0, 6).join(
 // teammate reply (2026-10-12: TypeSafe started returning HTTP 451 and every teammate DM was skipped
 // — a colleague's messages went unanswered). `ask` is a plain text->text completion (GLM); returns a
 // decision or null so the caller can fall through to "no thread".
-export async function classifyWithLLM({ history = [], message, from }, ask) {
+// Open threads offered to the classifier as t0, t1, … (newest first). A message in a chat with
+// open threads either belongs to one of them or starts a new one.
+const threadList = (threads) => threads.map((t, i) => `t${i}: ${String(t.title || "").replace(/^🧵\s*/, "").slice(0, 160)}`).join("\n");
+
+/** Turn a route answer into a decision. Anything that is not a confident «new» stays in a thread. */
+function routed({ route, open, kind, threads, text, reason }) {
+  const i = /^t(\d+)$/.exec(String(route || ""))?.[1];
+  const hit = i != null ? threads[Number(i)] : null;
+  if (hit) return { start: false, thread: hit.id, topic: "", reason };
+  if (route === "new" && open && !CLOSED_KINDS.has(kind)) return { start: true, thread: null, topic: topicOf(text), reason };
+  // Thanks, «اوکی», a follow-up the classifier could not place: the most recent thread.
+  return { start: false, thread: threads[0].id, topic: "", reason: `${reason} → latest thread` };
+}
+
+export async function classifyWithLLM({ history = [], message, from, threads = [] }, ask) {
   const text = String(message || "").trim();
   if (!ask || !text) return null;
   const prompt = `You decide if a Telegram message to ${OWNER_NAME} should open a task for ${OWNER_NAME}'s AI agent.
@@ -75,14 +89,16 @@ Recent chat (old→new):
 ${history.filter(Boolean).slice(-10).join("\n").slice(-2000)}
 Newest message:
 ${text.slice(0, 2000)}
-Reply with ONLY JSON: {"open": true|false, "kind": "request|question|problem|thanks|social|unclear"}`;
+${threads.length ? `Open threads with this person (newest first):\n${threadList(threads)}\nAlso say which thread the newest message belongs to ("t0", "t1", …) or "new" if it is a different matter.\n` : ""}Reply with ONLY JSON: {"open": true|false, "kind": "request|question|problem|thanks|social|unclear"${threads.length ? ', "route": "t0|t1|…|new"' : ""}}`;
   try {
     const raw = await ask(prompt);
     const json = String(raw || "").match(/\{[\s\S]*\}/)?.[0];
     const v = JSON.parse(json);
     const kind = String(v.kind || "unclear");
+    const reason = `glm open=${v.open} kind=${kind}${threads.length ? ` route=${v.route}` : ""}`;
+    if (threads.length) return routed({ route: v.route, open: v.open === true, kind, threads, text, reason });
     const start = v.open === true && !CLOSED_KINDS.has(kind);
-    return { start, topic: start ? topicOf(text) : "", reason: `glm open=${v.open} kind=${kind}` };
+    return { start, topic: start ? topicOf(text) : "", reason };
   } catch (error) {
     return { start: false, reason: `glm classify error: ${String(error.message).slice(0, 80)}` };
   }
@@ -93,25 +109,37 @@ Reply with ONLY JSON: {"open": true|false, "kind": "request|question|problem|tha
  * (a GLM completion) so a classifier outage does not silence teammates. If neither works, fails
  * closed ("no thread").
  */
-export async function classifyThread({ history = [], message, from }, { apiKey, url = JEV_URL, fetchImpl = fetch, timeoutMs = 20_000, fallbackAsk = null } = {}) {
+export async function classifyThread({ history = [], message, from, threads = [] }, { apiKey, url = JEV_URL, fetchImpl = fetch, timeoutMs = 20_000, fallbackAsk = null } = {}) {
   const text = String(message || "").trim();
-  if (!text) return { start: false, reason: "empty" };
+  if (!text) return { start: false, thread: threads[0]?.id || null, reason: "empty" };
   const fallback = async (why) => {
-    if (!fallbackAsk) return { start: false, reason: why };
-    const r = await classifyWithLLM({ history, message, from }, fallbackAsk);
-    return r ? { ...r, reason: `${why} → ${r.reason}` } : { start: false, reason: why };
+    // A chat with open threads never loses a message to an outage: it goes to the latest one.
+    if (!fallbackAsk) return { start: false, thread: threads[0]?.id || null, reason: why };
+    const r = await classifyWithLLM({ history, message, from, threads }, fallbackAsk);
+    return r ? { ...r, reason: `${why} → ${r.reason}` } : { start: false, thread: threads[0]?.id || null, reason: why };
   };
   if (!apiKey) return fallback("jev not configured");
   const state = {
     sender: from === "owner" ? "owner" : "teammate",
     chat_history: history.filter(Boolean).slice(-15).join("\n"),
     newest_message: text.slice(0, 2000),
+    ...(threads.length ? { open_threads: threadList(threads) } : {}),
   };
+  const questions = threads.length
+    ? {
+        ...JEV_QUESTIONS,
+        route: {
+          type: "choice",
+          instructions: "Which of `open_threads` does `newest_message` continue? `new` only if it is a different matter.",
+          criteria: { ...Object.fromEntries(threads.map((t, i) => [`t${i}`, String(t.title || "").slice(0, 160)])), new: "A different request or problem, not any open thread" },
+        },
+      }
+    : JEV_QUESTIONS;
   try {
     const response = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ state, model: "jev-latest", questions: JEV_QUESTIONS }),
+      body: JSON.stringify({ state, model: "jev-latest", questions }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) return fallback(`jev http ${response.status}`);
@@ -119,6 +147,10 @@ export async function classifyThread({ history = [], message, from }, { apiKey, 
     const open = Number(answers?.open?.noul);
     const kind = answers?.kind?.choice || "unclear";
     const reason = `jev open=${Number.isFinite(open) ? open.toFixed(2) : "?"} kind=${kind}(${Number(answers?.kind?.confidence || 0).toFixed(2)})`;
+    if (threads.length) {
+      const route = answers?.route?.choice;
+      return routed({ route, open: open >= OPEN_AT, kind, threads, text, reason: `${reason} route=${route || "?"}` });
+    }
     const start = open >= OPEN_AT && !CLOSED_KINDS.has(kind);
     return { start, topic: start ? topicOf(text) : "", reason };
   } catch (error) {

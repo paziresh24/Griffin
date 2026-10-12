@@ -75,3 +75,61 @@ test("finalText: the goodbye before end_agent is the answer; chatter after it is
   };
   assert.equal(finalText(message), "خواهش، هر وقت کاری بود بنویس «گریفین»");
 });
+
+test("user.queue settles the queued message it names; others keep no state", () => {
+  const { messages } = foldEvents([
+    { id: 1, type: "user", data: { text: "a", intent: "queue", tracked: true } },
+    { id: 2, type: "user", data: { text: "b", intent: "queue", tracked: true } },
+    { id: 3, runId: "r2", type: "run.started", data: {} },
+    { id: 4, type: "user.queue", data: { userEventId: 1, state: "started" } },
+    { id: 5, type: "user.queue", data: { userEventId: 99, state: "dropped" } },
+  ]);
+  assert.equal(messages[0].queueState, "started");
+  assert.equal(messages[1].queueState, undefined, "a tracked label waits for its own event, not the next run");
+});
+
+test("older «در صف» messages settle by what followed: the next turn ran them, a cancel dropped them", () => {
+  const { messages } = foldEvents([
+    { id: 1, runId: "r1", type: "run.started", data: {} },
+    { id: 2, type: "user", data: { text: "a", intent: "queue" } },
+    { id: 3, runId: "r1", type: "run.finished", data: { status: "finished" } },
+    { id: 4, runId: "r2", type: "run.started", data: {} },
+    { id: 5, type: "user", data: { text: "b", intent: "queue" } },
+    { id: 6, runId: "r2", type: "run.finished", data: { status: "cancelled" } },
+    { id: 7, runId: "r3", type: "run.started", data: {} },
+  ]);
+  const users = messages.filter((m) => m.role === "user");
+  assert.deepEqual(users.map((m) => m.queueState), ["started", "dropped"]);
+});
+
+test("chat.suggested and chapter events fold into suggestion and chapter parts", () => {
+  const t = foldEvents([
+    ev("run.started"),
+    ev("text", { text: "شروع" }),
+    ev("chapter", { title: "کاوش", summary: "خواندن کد" }, null),
+    ev("chat.suggested", { id: "s1", title: "رفع README", tldr: "نشان قدیمی" }, null),
+    ev("chapter", { title: "بی‌خلاصه" }, null),
+    ev("run.finished", { status: "finished" }),
+  ]);
+  assert.deepEqual(t.messages[0].parts.slice(1), [
+    { type: "chapter", title: "کاوش", summary: "خواندن کد" },
+    { type: "suggestion", id: "s1", title: "رفع README", tldr: "نشان قدیمی", status: "open" },
+    { type: "chapter", title: "بی‌خلاصه", summary: null },
+  ]);
+  // The answer is still only the text.
+  assert.equal(finalText(t.messages[0]), "شروع");
+});
+
+test("a suggestion's status change updates its card, in whichever run holds it", () => {
+  const t = foldEvents([
+    ev("run.started", {}, "a"),
+    ev("chat.suggested", { id: "s1", title: "الف", tldr: "خ" }, "a"),
+    ev("run.finished", { status: "finished" }, "a"),
+    ev("run.started", {}, "b"),
+    ev("chat.suggested", { id: "s2", title: "ب", tldr: "خ" }, "b"),
+    ev("run.finished", { status: "finished" }, "b"),
+    ev("chat.suggestion.status", { id: "s1", status: "started" }, null),
+  ]);
+  assert.equal(t.messages[0].parts[0].status, "started");
+  assert.equal(t.messages[1].parts[0].status, "open");
+});

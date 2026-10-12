@@ -172,6 +172,13 @@ body {
   unicode-bidi: embed;
 }
 
+/* A table's fullscreen view is portalled to <body>, outside .sd-block, so it takes the page's
+   RTL; headers (Streamdown pins `text-left`) follow the cells to that side. One alignment for
+   the whole table — a per-cell plaintext bidi would leave ragged columns. */
+[data-streamdown="table-fullscreen"] :is([data-streamdown="table-header-cell"], [data-streamdown="table-cell"]) {
+  text-align: start;
+}
+
 /* Plain chat bubbles (user message) — same force as markdown sheets. */
 .chat-text[dir="rtl"] {
   direction: rtl;

@@ -44,6 +44,9 @@ test("git push / forge API writes from the shell need the owner; forge tokens ar
   assert.ok(classify("infisical_get", { projectId: "owner", path: "/", name: "GITHUB_TOKEN" }).block);
   assert.ok(classify("debug_exec", { command: "infisical secrets get GITLAB_TOKEN --path /ci --plain" }).block);
   assert.equal(classify("infisical_get", { projectId: "alice", path: "/", name: "SMS_TOKEN" }), null);
+  // The server hook's escape hatch is never an agent's — fenced for every caller, owner chats too.
+  assert.ok(secretAdminBackdoor("debug_exec", { command: "git push -o allow-mass-delete origin x:main" }));
+  assert.equal(secretAdminBackdoor("debug_exec", { command: "git status" }), null);
 });
 
 test("full Arvan cache purge needs the owner with the site-death warning; a narrow url purge is free", () => {

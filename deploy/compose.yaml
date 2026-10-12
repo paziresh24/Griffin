@@ -106,6 +106,10 @@ services:
       GRIFFIN_PEER_SELF_SERVE: ${PEER_SELF_SERVE:-}
       # Links in messenger replies (charts, files) point here.
       GRIFFIN_PUBLIC_URL: ${GRIFFIN_PUBLIC_URL:-http://127.0.0.1:3100}
+      # Old public host names: browser GETs get a 301 to PUBLIC_URL; POSTs (MCP, webhooks) still served.
+      GRIFFIN_OLD_HOSTS: ${OLD_HOSTS:-}
+      # Owner chats idle this many days go to the archive (0 = never).
+      GRIFFIN_CHAT_IDLE_DAYS: ${CHAT_IDLE_DAYS:-}
       # Incident ops room: shadow (LLM triage) | record (group + show, no LLM) | off
       GRIFFIN_OPS_MODE: ${OPS_MODE:-record}
       # Telegram account (MTProto over TCP) needs SOCKS, not an HTTP proxy.

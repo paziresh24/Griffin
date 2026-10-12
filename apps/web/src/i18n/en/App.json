@@ -19,5 +19,9 @@
   "و {n} مورد قدیمی‌تر": "and {n} older",
   "بارگذاری…": "Loading…",
   "توقف همهٔ زیرایجنت‌ها": "Stop all subagents",
-  "توقف این زیرایجنت": "Stop this subagent"
+  "توقف این زیرایجنت": "Stop this subagent",
+  "نسخهٔ تازهٔ {name} آماده است.": "A new version of {name} is ready.",
+  "با بارگذاری دوباره آن را می‌گیرید؛ پیش‌نویس پیام‌ها می‌ماند.": "Reload to get it; your message drafts are kept.",
+  "بارگذاری دوباره": "Reload",
+  "چت مادر": "Mother chat"
 }
