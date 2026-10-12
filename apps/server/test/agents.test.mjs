@@ -6,7 +6,7 @@ import path from "node:path";
 import { AGENTS, CORE_TOOLS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents, resolveAgentId } from "../src/agents/registry.mjs";
 import { agentPayload } from "../src/agents/import.mjs";
 import { resolveEnabledTools } from "../src/agents/profiles.mjs";
-import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, installRules, rulesFor } from "../src/prompt.mjs";
+import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, VOICE, identity, installRules, rulesFor } from "../src/prompt.mjs";
 import { exampleAgent } from "./fixture-agents.mjs";
 
 const ALL = [
@@ -150,4 +150,18 @@ test("buildRules: griffin in a colleague thread is not sent to itself and sees o
   assert.match(text, /THIS conversation \(authoritative\): ask_agent, delegate, end_agent\./);
   assert.match(text, /Close the thread \(end_agent\)/, "a colleague thread gets the thread rules");
   assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner" }), /authoritative\): /);
+});
+
+test("only the mother agent is told it is the assistant; other agents are told they are not", () => {
+  assert.match(identity("griffin"), /^\nYou are Griffin \(گریفین\), Owner's assistant\./);
+  assert.match(identity("platform"), /You are platform \(agent id platform\)/);
+  assert.match(identity("platform"), /You are not گریفین itself/);
+  assert.doesNotMatch(VOICE, /You are/);
+});
+
+test("pace rules, and a parent's steer is never the owner's approval", () => {
+  assert.match(NEVER_DEAD_END, /Independent reads go in ONE round/);
+  assert.match(NEVER_DEAD_END, /proves only that the guess is wrong/);
+  assert.match(PEER_CONTEXT, /never the owner's approval/);
+  assert.match(CORE_RULES, /never a push to its default branch/);
 });

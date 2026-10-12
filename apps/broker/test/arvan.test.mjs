@@ -148,13 +148,31 @@ test("arvan_dns_create: creates a new record, refuses to touch an existing name"
       "POST /cdn/4.0/domains/example.com/dns-records": (u, init) => Response.json({ data: { id: "2", ...JSON.parse(init.body) } }),
     },
   });
-  const out = await tools.arvan_dns_create.execute({ domain: "example.com", name: "baft", type: "A", value: "203.0.113.1", cloud: true });
-  assert.equal(out.created.name, "baft");
+  const out = await tools.arvan_dns_create.execute({ domain: "example.com", name: "shop", type: "A", value: "203.0.113.1", cloud: true });
+  assert.equal(out.created.name, "shop");
   const post = calls.find((c) => c.method === "POST");
   assert.deepEqual(JSON.parse(post.body).value, [{ ip: "203.0.113.1", port: null, weight: 100, country: "" }]);
   await assert.rejects(tools.arvan_dns_create.execute({ domain: "example.com", name: "mohr", type: "A", value: "1.2.3.4" }), /already has/);
   await assert.rejects(tools.arvan_dns_create.execute({ domain: "example.com", name: "x", type: "A", value: "not-ip" }), /IPv4/);
   assert.equal(calls.filter((c) => c.method !== "GET").length, 1, "no write on refusal");
+});
+
+test("arvan_dns_create: host_header rides along on CNAME (default source), A ignores it", async () => {
+  const { tools, calls } = setup({
+    responses: {
+      "GET /cdn/4.0/domains/example.net/dns-records": () => Response.json({ data: [] }),
+      "POST /cdn/4.0/domains/example.net/dns-records": (u, init) => Response.json({ data: { id: "9", ...JSON.parse(init.body) } }),
+    },
+  });
+  const out = await tools.arvan_dns_create.execute({ domain: "example.net", name: "temp1", type: "CNAME", value: "gateway.example.net", cloud: true, host_header: "app.example.net" });
+  assert.equal(out.created.host_header, "app.example.net");
+  const post = calls.find((c) => c.method === "POST");
+  assert.deepEqual(JSON.parse(post.body).value, { host: "gateway.example.net", host_header: "app.example.net" });
+
+  const plain = await tools.arvan_dns_create.execute({ domain: "example.net", name: "temp2", type: "CNAME", value: "gateway.example.net", cloud: true });
+  const post2 = calls.filter((c) => c.method === "POST").at(-1);
+  assert.deepEqual(JSON.parse(post2.body).value, { host: "gateway.example.net", host_header: "source" });
+  assert.equal(plain.created.host_header, undefined, "source is the silent default");
 });
 
 test("arvan_dns_delete: deletes by exact name, refuses ambiguous and NS", async () => {
@@ -188,4 +206,36 @@ test("arvan_dns_delete: deletes by exact name, refuses ambiguous and NS", async 
   await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "example.com", type: "NS" }), /NS/);
   await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "ghost" }), /no record named/);
   assert.equal(calls.filter((c) => c.method === "DELETE").length, 2, "refusals made no extra deletes");
+});
+
+// A cutover once stalled — no tool could add a page rule and Griffin asked for the
+// raw Arvan key. arvan_page_rule_create clones a sibling rule's settings and changes only the url.
+test("arvan_page_rule_create: copies a sibling's settings, pages through rules, refuses duplicates and foreign hosts", async () => {
+  const sibling = { id: "0ac3a8e2-591b-487f-92c2-3057ebfa1f39", seq: 3025, url_type: "regex", url: "https://api.example.com/orders/v2/transactions/balance/main*", load_balancer: "orders-lb", edge_compute_id: null, cache_level: "off", waf_status: true, fw_status: true, acceleration: { status: "inherit", extensions: [] }, slink_status: false, status: true, created_at: "x" };
+  const pages = { 1: [{ id: "11111111-1111-1111-1111-111111111111", seq: 10, url: "https://www.example.com/*" }], 2: [sibling] };
+  const { tools, calls } = setup({
+    responses: {
+      "GET /cdn/4.0/domains/example.com/page-rules": (u) => Response.json({ data: pages[u.searchParams.get("page")] || [], meta: { last_page: 2 } }),
+      "POST /cdn/4.0/domains/example.com/page-rules": (u, init) => Response.json({ data: { id: "new", ...JSON.parse(init.body) } }),
+    },
+  });
+  const listed = await tools.arvan_page_rules.execute({ domain: "example.com", search: "orders" });
+  assert.equal(listed.total, 2);
+  assert.equal(listed.rules[0].load_balancer, "orders-lb");
+
+  const out = await tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://api.example.com/orders/v1/factors/search*", copy_from: sibling.id });
+  const body = JSON.parse(calls.find((c) => c.method === "POST").body);
+  assert.equal(body.url, "https://api.example.com/orders/v1/factors/search*");
+  assert.equal(body.seq, 3026, "after the highest existing seq");
+  assert.equal(body.load_balancer, "orders-lb");
+  assert.equal(body.cache_level, "off");
+  assert.deepEqual(body.acceleration, sibling.acceleration);
+  assert.equal(body.id, undefined, "never copies identity");
+  assert.equal("edge_compute_id" in body, false, "Arvan rejects a null edge_compute_id");
+  assert.equal(out.created.id, "new");
+
+  await assert.rejects(tools.arvan_page_rule_create.execute({ domain: "example.com", url: sibling.url, copy_from: sibling.id }), /already exists/);
+  await assert.rejects(tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://evil.example.org/x*", copy_from: sibling.id }), /must be on example.com/);
+  await assert.rejects(tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://api.example.com/y*", copy_from: "22222222-2222-2222-2222-222222222222" }), /no page rule/);
+  assert.equal(calls.filter((c) => c.method === "POST").length, 1, "no write on refusal");
 });

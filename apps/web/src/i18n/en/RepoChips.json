@@ -1,0 +1,15 @@
+{
+  "کپی شد": "Copied",
+  "اجرا روی سرور گریفین؛ build و تست در sandbox همان سرور": "Runs on the Griffin server; builds and tests in that server's sandbox",
+  "سرور گریفین": "Griffin server",
+  "ریپوی این گفتگو: {repo} (کپی)": "This chat's repo: {repo} (copy)",
+  "کپی نام شاخه: {branch}": "Copy branch name: {branch}",
+  "کپی مسیر worktree: {path}": "Copy worktree path: {path}",
+  "این گفتگو worktree و شاخهٔ جدای خودش را می‌گیرد؛ با اولین پیام ساخته می‌شود": "This chat gets its own worktree and branch; created with the first message",
+  "{repo} کلون شد": "{repo} cloned",
+  "کلون نشد: {error}": "Clone failed: {error}",
+  "ریپوی این گفتگو (فقط تا قبل از اولین پیام)": "This chat's repo (only before the first message)",
+  "بدون ریپو": "No repo",
+  "جستجو، یا group/name برای کلون…": "Search, or group/name to clone…",
+  "کلون {project} از گیت‌لب": "Clone {project} from GitLab"
+}

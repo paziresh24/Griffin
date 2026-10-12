@@ -83,6 +83,8 @@ const TOOL_CHOICE_REFUSAL = {
   content: [{ type: "text", text: "انتخاب ابزار یا مسیر کار با خودت است، نه با آدم‌ها — بهترین گزینه را بزن و ادامه بده؛ اگر واقعاً مانعی هست، همان مانع را در جواب نهایی بگو." }],
 };
 
+const OPS_ASK_MS = 30 * 60_000;
+
 export function createAsks({ store = null, onSettled = () => {}, log = console } = {}) {
   const pending = new Map(); // targetChatId -> [{ question, resolve, sourceChatId, mirrorIds }]
   // Answers that arrived while the question card was visible but the SDK had not called execute() yet
@@ -133,13 +135,17 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
   function rootIsUnwatched(rootId) {
     const root = store?.getChat?.(rootId);
     if (!root) return false;
-    return root.caller === "scheduler" || root.caller === "ops" || Boolean(root.job_id);
+    // The ops room is unattended too, but its own question is the one thing that must reach the
+    // owner (a finding like «storage fills within 24 hours» once died here). It asks, with a timeout.
+    return root.caller === "scheduler" || Boolean(root.job_id);
   }
 
   function enqueue(chatId, question, args = {}) {
     const target = targetOf(chatId);
     const audience = args.audience === REQUESTER ? REQUESTER : OWNER;
-    if (rootIsUnwatched(target)) {
+    // Approvals for irreversible calls (via guard) are still refused in the ops room; only its own
+    // question to the owner goes out.
+    if (rootIsUnwatched(target) || (args.via === "guard" && store?.getChat?.(target)?.caller === "ops")) {
       return Promise.resolve({
         answered: false,
         reason: "nobody is watching this chain (scheduler/job/ops root) — decide yourself or refuse",
@@ -217,6 +223,18 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
         question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId,
       });
       for (const wake of listeners.get(target) || []) wake();
+      // An ops-room question must not park the room forever: no answer in OPS_ASK_MS → the run goes
+      // on and records the decision as waiting for the owner.
+      if (store?.getChat?.(target)?.caller === "ops") {
+        setTimeout(() => {
+          const queue = pending.get(target);
+          const at = queue?.indexOf(item) ?? -1;
+          if (at < 0) return;
+          queue.splice(at, 1);
+          if (!queue.length) pending.delete(target);
+          item.resolve({ answered: false, reason: "no answer from the owner in 30 minutes — record it in triage as waiting for him and go on" });
+        }, OPS_ASK_MS).unref?.();
+      }
     });
   }
 

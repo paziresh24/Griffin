@@ -30,7 +30,7 @@ function fakeKube({ psqlOutput = "id,key\n1,a\n", psqlError = null } = {}) {
 test("pg_query runs psql in the current primary, read-only by default", async () => {
   const kube = fakeKube();
   const { pg_query } = createPgTools({ kube });
-  const result = await pg_query.execute({ cluster: "prod", namespace: "team-a", name: "app-db", database: "hami", sql: "select id, key from attachments order by id desc limit 1" });
+  const result = await pg_query.execute({ cluster: "prod", namespace: "team-a", name: "app-db", database: "app", sql: "select id, key from attachments order by id desc limit 1" });
   assert.equal(kube.calls[0].api, "/apis/postgresql.cnpg.io/v1/namespaces/team-a/clusters/app-db");
   const args = kube.calls[1].args;
   assert.deepEqual(args.slice(0, 7), ["exec", "-n", "team-a", "app-db-2", "-c", "postgres", "--"]);

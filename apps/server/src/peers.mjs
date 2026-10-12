@@ -315,7 +315,10 @@ export function createPeers({
           writeDelegate(d.childId, { ...d, state: "running", at: now().toISOString() });
           watchChild(d.childId);
         }
-        const out = await runner.send(d.childId, { text: message, images: [], intent: running ? "steer" : "send" });
+        // Labelled so the child never reads it as the owner's word (a steer once talked a
+        // subagent out of refusing a push; PEER_CONTEXT says a parent's message approves nothing).
+        const text = `[پیام ایجنت والد — هدایت است، تأیید Owner نیست]\n\n${message}`;
+        const out = await runner.send(d.childId, { text, images: [], intent: running ? "steer" : "send" });
         return reply({ id: d.childId, delivered: out?.delivered || "run" });
       },
     };

@@ -71,6 +71,11 @@ export function digestMessage(allChanges, { openCount, bootstrap }) {
   return lines.join("\n");
 }
 
+// "critical" mode reaches the owner, but only for what he would want to hear (the away watcher's bar).
+export const CRITICAL_RULE = `[حالت critical] فقط حادثه‌های critical تازه/بدترشده به تو می‌رسند.
+- مستقل راستی‌آزمایی کن (عدد واقعی، روند، اثر روی کاربر)؛ آلارم تکراریِ از قبل معلوم را فقط ثبت کن.
+- اگر اثر روی کاربر یا خطر از دست رفتن داده هست، یا تصمیمی با صاحب سیستم است: یک ask_owner کوتاه فارسی با عدد و پیشنهاد (گزینه‌ها: «انجام بده» / «فعلاً نه»). وگرنه فقط incident_update.`;
+
 export function createOpsRoom({
   store,
   runner,
@@ -132,7 +137,7 @@ export function createOpsRoom({
     pending = [];
     bootstrapPending = false;
     const kv = store.getKv("ops_room");
-    const charter = kv?.fresh ? `${OPS_CHARTER}\n\n` : "";
+    const charter = kv?.fresh ? `${OPS_CHARTER}${mode === "critical" ? `\n\n${CRITICAL_RULE}` : ""}\n\n` : "";
     if (kv?.fresh) store.setKv("ops_room", { ...kv, fresh: false });
     const text = charter + digestMessage(changes, { openCount: incidents.open().length, bootstrap });
     sent.push(now().getTime());
@@ -144,6 +149,12 @@ export function createOpsRoom({
   return {
     mode,
     push(changes, { bootstrap = false } = {}) {
+      // "critical": only a critical incident that is new,
+      // worse or back gets a run; warnings and the bootstrap backlog never do.
+      if (mode === "critical") {
+        changes = changes.filter((c) => c.incident.severity === "critical" && c.kind !== "baseline" && c.kind !== "resolved");
+        bootstrap = false;
+      }
       if (!triaging || !changes.length) return;
       pending.push(...changes);
       if (pending.length > 500) pending = pending.slice(-500); // quiet flaps must not grow forever

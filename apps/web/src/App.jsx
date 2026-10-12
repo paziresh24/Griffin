@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { ChevronDown, ListChecks, Menu, Network, WifiOff } from "lucide-react";
 import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTimeline } from "./api.js";
+import { connectionNotice } from "./timeline-memo.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
 import { num, t, isRtl } from "./i18n.js";
@@ -11,19 +12,26 @@ import { IncidentsPage } from "./components/Incidents.jsx";
 import { PeersPage } from "./components/Peers.jsx";
 import { TelegramPage } from "./components/Telegram.jsx";
 import { SettingsPage } from "./components/Settings.jsx";
+import { WorkbenchPage } from "./components/Workbench.jsx";
+import { SetupPage, setupFlowFromHash } from "./components/Setup.jsx";
 import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { AgentGlyph, ThemeToggle } from "./components/Controls.jsx";
 import { ShareButton } from "./components/Share.jsx";
+import { UsageBadge } from "./components/Usage.jsx";
 import { Toaster, toast } from "sonner";
 import { Thread } from "./components/Thread.jsx";
 import { ChatChildrenContext } from "./components/Tool.jsx";
+import { SideChatButton, SidePanel } from "./components/SideChat.jsx";
+import { RepoChips } from "./components/RepoChips.jsx";
+import { emptySide, sideReducer } from "./side.js";
 
 export default function App() {
   const chatId = useRoute();
   const page = usePageRoute();
   const { chats, archived } = useChats();
   const { timeline, connection } = useTimeline(chatId);
+  const notice = connectionNotice(connection);
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
   const [fetchedChat, setFetchedChat] = useState(null);
   const chat = listed || (fetchedChat?.id === chatId ? fetchedChat : null);
@@ -58,8 +66,19 @@ export default function App() {
   const [draft, setDraft] = useState(() => ({
     mode: readSetting(STORAGE.mode, "agent"),
     model: readSetting(STORAGE.model, ""),
+    effort: readSetting(STORAGE.effort, ""),
     agent: readSetting(STORAGE.agent, "griffin"),
+    repo: null, // null = the server's default repo; "" = none
   }));
+
+  // First run (no engine key, wizard never finished): open the setup wizard once.
+  useEffect(() => {
+    api("/api/setup")
+      .then((r) => {
+        if (!r.done && r.needsEngine && !window.location.hash.startsWith("#/setup")) window.location.hash = "/setup/first";
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -70,7 +89,9 @@ export default function App() {
     ? {
         mode: chat.mode,
         model: chat.model || draft.model || "",
+        effort: chat.effort || "",
         agent: chat.agent || draft.agent || "griffin",
+        repo: chat.repo || "",
       }
     : draft;
   useEffect(() => {
@@ -101,14 +122,19 @@ export default function App() {
   }, [running]);
 
   const updateSettings = async (patch) => {
-    if (patch.model != null && settings.agent) {
-      // Model default lives on the agent profile; keep open chat in sync for the next run.
-      await api(`/api/agents/${settings.agent}`, { method: "PATCH", body: { model: patch.model || null } }).catch(setError);
-      if (chat) {
-        await api(`/api/chats/${chat.id}`, { method: "PATCH", body: { model: patch.model || null } }).catch(setError);
-      }
-      setDraft((d) => ({ ...d, model: patch.model || "" }));
-      writeSetting(STORAGE.model, patch.model || "");
+    // The repo: on an open chat until its worktree exists (the server refuses after), else the next chat's.
+    if (patch.repo != null) {
+      if (chat) await api(`/api/chats/${chat.id}`, { method: "PATCH", body: { repo: patch.repo } }).catch(setError);
+      else setDraft((d) => ({ ...d, repo: patch.repo }));
+      return;
+    }
+    // Model and effort are per chat (any provider: "claude:haiku"); the agent's default model and
+    // effort live on the agents page. A fresh composer remembers them for the next chat.
+    if (patch.model != null || patch.effort != null) {
+      if (chat) await api(`/api/chats/${chat.id}`, { method: "PATCH", body: patch }).catch(setError);
+      setDraft((d) => ({ ...d, ...patch }));
+      if (patch.model != null) writeSetting(STORAGE.model, patch.model || "");
+      if (patch.effort != null) writeSetting(STORAGE.effort, patch.effort || "");
       return;
     }
     if (chat && (patch.mode != null || patch.agent != null)) {
@@ -137,6 +163,25 @@ export default function App() {
   };
 
   const onError = useCallback((e) => setError(e), []);
+
+  // Side chat of the open chat: state per parent; a quote from «به چت کناری» opens it seeded.
+  const [side, sideDispatch] = useReducer(sideReducer, emptySide());
+  const [sideSeed, setSideSeed] = useState(null);
+  const sideParent = chatId && chat && !chat.parentChatId && !chat.sideOf && (chat.caller || "owner") === "owner" ? chatId : null;
+  useEffect(() => {
+    sideDispatch({ type: "parent", id: sideParent });
+    setSideSeed(null);
+  }, [sideParent]);
+  useEffect(() => {
+    const onInsert = (event) => {
+      if (!sideParent || !event.detail?.text) return;
+      setSideSeed(event.detail.text);
+      sideDispatch({ type: "open" });
+    };
+    window.addEventListener("griffin:side-insert", onInsert);
+    return () => window.removeEventListener("griffin:side-insert", onInsert);
+  }, [sideParent]);
+  const clearSideSeed = useCallback(() => setSideSeed(null), []);
   useEffect(() => {
     if (error) toast.error(error.status === 409 ? t("ایجنت هنوز روی پیام قبلی کار می‌کند.") : t("خطا: {message}", { message: error.message }));
   }, [error]);
@@ -149,6 +194,7 @@ export default function App() {
           text: prompt,
           mode: draft.mode,
           model: draft.model,
+          effort: draft.effort || undefined,
           agent: draft.agent || "griffin",
         },
       });
@@ -162,7 +208,9 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      {page === "settings" ? (
+      {page === "setup" ? (
+        <SetupPage key={setupFlowFromHash()} flow={setupFlowFromHash() || "first"} onClose={() => navigate(null)} />
+      ) : page === "settings" ? (
         <SettingsPage onBack={() => navigate(null)} />
       ) : (
         <>
@@ -198,7 +246,7 @@ export default function App() {
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
-            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramPage onBack={() => navigate(null)} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} onError={onError}>
+            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramPage onBack={() => navigate(null)} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
               <ChatChildrenContext.Provider value={chat?.children || []}>
               <Thread
                 header={
@@ -216,16 +264,18 @@ export default function App() {
                       </button>
                     ) : null}
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
-                    {chatId && connection !== "live" ? (
-                      <span className="flex items-center gap-1 text-xs text-warn" title={connection}>
-                        <WifiOff className="size-3.5" /> {connection === "connecting" ? t("اتصال…") : t("قطع")}
+                    {chatId && notice ? (
+                      <span className={`flex items-center gap-1 text-xs ${notice.tone === "warn" ? "text-warn" : "text-muted-foreground"}`} title={connection}>
+                        {notice.tone === "warn" ? <WifiOff className="size-3.5" /> : null} {t(notice.text)}
                       </span>
                     ) : null}
                     {chat?.caller && chat.caller !== "owner" ? (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground" dir="auto">
-                        {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: t("گریفین"), "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
+                        {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
                     ) : null}
+                    {sideParent ? <SideChatButton open={side.open} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
+                    <UsageBadge />
                     <ShareButton chatId={chatId} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
                   </header>
@@ -239,12 +289,38 @@ export default function App() {
                 onSuggestion={quickSend}
                 mode={settings.mode}
                 model={settings.model}
+                effort={settings.effort}
+                chatId={chatId}
                 onModeChange={(mode) => updateSettings({ mode })}
                 onModelChange={(model) => updateSettings({ model })}
+                onEffortChange={(effort) => updateSettings({ effort })}
+                composerTop={
+                  chat && (chat.caller || "owner") !== "owner" ? null : (
+                    <RepoChips
+                      repo={settings.repo}
+                      locked={Boolean(chat?.worktreePath)}
+                      branch={chat?.branch || null}
+                      worktreePath={chat?.worktreePath || null}
+                      onRepoChange={(repo) => updateSettings({ repo })}
+                    />
+                  )
+                }
               />
               </ChatChildrenContext.Provider>
             </GriffinRuntime>}
           </main>
+          {page ? null : (
+            <SidePanel
+              parentId={sideParent}
+              state={side}
+              dispatch={sideDispatch}
+              settings={settings}
+              agentLabel={agentMeta(settings.agent).label}
+              onError={onError}
+              seed={sideSeed}
+              onSeedConsumed={clearSideSeed}
+            />
+          )}
         </>
       )}
 

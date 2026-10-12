@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { chunk, markdownToPlain, markdownToTelegramHtml, withAgentFooter } from "./format.mjs";
+import { PERSONA } from "../persona.mjs";
 
 // Telegram and Bale speak the same Bot API; only the base URL and formatting differ.
 export const BOT_KINDS = {
@@ -149,7 +150,7 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
 
     // Called by the bridge when a linked Platform-Ban chat has something to deliver.
     async deliver(externalChat, message) {
-      if (message.clearStatus) return clearStatus(externalChat);
+      if (message.clearStatus) return message.done === false ? undefined : clearStatus(externalChat);
       if (message.status) return setStatus(externalChat, message.status);
       if (message.question) {
         await clearStatus(externalChat);
@@ -262,7 +263,7 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
         const code = bridge.integration(id)?.settings.pairingCode;
         if (code && start[1] && start[1].toUpperCase() === code) {
           bridge.pair(id, from, message.chat);
-          await sendText(from, say("✅ این گفتگو به گریفین وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /stop توقف کار فعلی", "✅ This chat is connected to Griffin. Everything you write here reaches the agent.\n/new new chat · /stop stop the current work"));
+          await sendText(from, say(`✅ این گفتگو به ${PERSONA.name} وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /stop توقف کار فعلی`, `✅ This chat is connected to ${PERSONA.latin}. Everything you write here reaches the agent.\n/new new chat · /stop stop the current work`));
         } else if (!paired().has(from)) {
           await sendText(from, say("این ربات خصوصی است. کد اتصال را از تنظیمات گریفین بگیر و بفرست: /start CODE", "This bot is private. Get the pairing code from Griffin's settings and send: /start CODE"));
         }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, ChevronDown, Loader2, MessageSquare, Radar } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
+import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
 
 // Griffin's incident layer: alerts of every cluster grouped into incidents, plus human signals
@@ -61,7 +62,7 @@ export function IncidentsPage({ onBack }) {
           ) : null}
         </div>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          {t("آلارم‌های سیستم‌هایی که وصل کرده‌ای بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. گریفین در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.")}
+          {t("آلارم‌های سیستم‌هایی که وصل کرده‌ای بدون LLM به حادثه تجمیع می‌شوند؛ پیام کاری همکاران هم «سیگنال انسانی» است. {name} در اتاق عملیات تشخیص می‌دهد و اینجا ثبت می‌کند — فعلاً در حالت سایه، بدون پیام به کسی.", { name: BRAND.name })}
         </p>
 
         {intake ? (
@@ -129,7 +130,7 @@ function AckButton({ incident: i, onDone }) {
     } else {
       const member = i.members.length > 1 ? window.prompt(`${t("کدام مورد عمدی است؟ خالی = کل حادثه")}\n${i.members.slice(0, 10).join("\n")}`, "") : "";
       if (member === null) return;
-      const reason = window.prompt(t("چرا عمدی است؟ (گریفین دیگر برای این هشدار بیدار نمی‌شود)"), "");
+      const reason = window.prompt(t("چرا عمدی است؟ ({name} دیگر برای این هشدار بیدار نمی‌شود)", { name: BRAND.name }), "");
       if (!reason) return;
       body = { member: member.trim(), reason };
     }

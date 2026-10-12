@@ -5,6 +5,7 @@ import { createS3Tools } from "./s3.mjs";
 import { createGrafanaTools } from "./grafana.mjs";
 import { createInfisicalTools } from "./infisical.mjs";
 import { createGitlabTools } from "./gitlab.mjs";
+import { createRepoTools } from "./repos.mjs";
 import { createPgTools } from "./pg.mjs";
 import { createArvanTools } from "./arvan.mjs";
 import { createVcenterTools } from "./vcenter.mjs";
@@ -12,6 +13,7 @@ import { createNetTools } from "./netcheck.mjs";
 import { createNsinTools } from "./nsin.mjs";
 import { createAlertTools } from "./alerts.mjs";
 import { EMPTY_SITE } from "./site.mjs";
+import { genv } from "./env.mjs";
 
 // Read-only kinds the agent may list. No secrets, no configmaps.
 const KINDS = {
@@ -32,7 +34,15 @@ const KINDS = {
 
 const DF_PATH = /^\/[A-Za-z0-9_./-]{0,200}$/;
 // Shell hosts for debug_exec, from the site config: { "<name>": { host, port, user } }.
-const DEBUG_HOSTS = {};
+// With GRIFFIN_SANDBOX_KEY set (deploy/compose.yaml, profile "tools"), a disposable `sandbox` box
+// (deploy/sandbox: no credentials, no kubeconfig) is the default host; its key is its own, never
+// the owner's.
+function sandboxHosts() {
+  const keyFile = genv("SANDBOX_KEY");
+  if (!keyFile) return {};
+  const [host, port] = String(genv("SANDBOX_ADDR", "127.0.0.1:2222")).split(":");
+  return { sandbox: { host, port: Number(port) || 22, user: "root", keyFile, loopback: true } };
+}
 
 const k8sName = (description) => ({ type: "string", pattern: K8S_NAME.source, description });
 
@@ -42,7 +52,7 @@ export function createTools({
   sshRun,
   site = EMPTY_SITE,
   fetchImpl = fetch,
-  debugHosts = site.debugHosts || DEBUG_HOSTS,
+  debugHosts = { ...sandboxHosts(), ...(site.debugHosts || {}) },
   metrics = createMetrics({ kube }),
   mikrotik = null,
   s3 = createS3Tools({ kube, config: site.s3 || null, fetchImpl }),
@@ -55,6 +65,7 @@ export function createTools({
   nsin = createNsinTools({ vault, fetchImpl }),
   alerts = createAlertTools({ kube, clusters: alertClustersOf(site) }),
   vcenter = null,
+  repos = createRepoTools({ vault, host: site.gitlab?.url || "" }),
 }) {
   // Cluster names are whatever the site config declares; nothing is baked into the code.
   const clusterNames = Object.keys(site.clusters || {});
@@ -64,6 +75,7 @@ export function createTools({
     if (!clusterNames.includes(name)) throw new ToolInputError(`cluster must be one of ${clusterNames.join(", ") || "(none configured)"}`);
     return name;
   };
+  const sshUser = site.ssh?.user || "griffin";
 
   const tools = {
     metrics_query: {
@@ -261,6 +273,35 @@ export function createTools({
       },
     },
 
+    kube_exec: {
+      description:
+        "Run one shell command inside a pod (kubectl exec … -- sh -c) over the cluster's emergency SSH path — works even when the API gateway or the SSO in front of it rejects. Use it for in-pod checks: env hash, curl from the pod, ls. Never print secret values — hash them (sha256sum). Output capped at 20KB.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          cluster,
+          namespace: k8sName("namespace"),
+          pod: k8sName("pod"),
+          container: k8sName("container"),
+          command: { type: "string", minLength: 1, maxLength: 2000, description: "shell command run with sh -c inside the container" },
+        },
+        required: ["cluster", "namespace", "pod", "command"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const name = requireCluster(args);
+        const namespace = requiredName(args.namespace, "namespace");
+        const pod = requiredName(args.pod, "pod");
+        const container = optionalName(args.container, "container");
+        const command = String(args.command || "");
+        if (!command.trim()) throw new ToolInputError("command required");
+        const result = await kube.withFallback(name, {
+          viaSsh: () => kube.emergency(name, ["exec", "-n", namespace, pod, ...(container ? ["-c", container] : []), "--", "sh", "-c", command]),
+        });
+        return { cluster: name, namespace, pod, container: container || null, output: String(result.value).slice(0, 20_000), source: result.source, attempts: result.attempts };
+      },
+    },
+
     kube_secret: {
       description:
         "Read a Kubernetes Secret's keys (values base64-decoded) from a namespace. Use it to check or fetch a credential instead of poking at the debug host. Prefer copying the value into Infisical (infisical_upsert) over sending it in chat.",
@@ -308,7 +349,7 @@ export function createTools({
           replace: { type: "boolean", description: "overwrite an existing target secret" },
           rewriteHost: {
             type: "object",
-            description: "replace one hostname token in every value (e.g. a DR app secret: baft-db-rw → baft-db-primary-rw)",
+            description: "replace one hostname token in every value (e.g. a DR app secret: shop-db-rw → shop-db-primary-rw)",
             properties: { from: { type: "string", pattern: K8S_NAME.source }, to: { type: "string", pattern: K8S_NAME.source } },
             required: ["from", "to"],
             additionalProperties: false,
@@ -399,12 +440,13 @@ export function createTools({
     },
 
     debug_exec: {
-      description: "Run one shell command on a configured shell host as root. Read-only diagnostics unless the owner approved a change.",
+      description:
+        "Run one shell command on a configured shell host (default: the first one — `sandbox` when it exists: a disposable container with no credentials and no kubeconfig, /root persists). Other hosts only when the question is about that host itself. Cluster work goes through kube_*, never kubectl here. Read-only diagnostics unless the owner approved a change.",
       inputSchema: {
         type: "object",
         properties: {
           host: { type: "string", enum: Object.keys(debugHosts) },
-          command: { type: "string", minLength: 1, maxLength: 4000 },
+          command: { type: "string", minLength: 1, maxLength: 16000 },
         },
         required: ["command"],
         additionalProperties: false,
@@ -414,9 +456,42 @@ export function createTools({
         const target = debugHosts[name];
         if (!target) throw new ToolInputError(`unknown host (configured: ${Object.keys(debugHosts).join(", ") || "none"})`);
         const command = String(args.command || "").trim();
-        if (!command || command.length > 4000 || /[\0\r\n]/.test(command)) throw new ToolInputError("invalid command");
+        // Multi-line scripts are the intended use (the prompt asks for one whole step per call); only
+        // NUL and CR are rejected. Isolation + the guard classifier, not a newline ban, are the fence.
+        if (!command) throw new ToolInputError("invalid command: empty");
+        if (command.length > 16_000) throw new ToolInputError(`invalid command: ${command.length} chars, the limit is 16000 — write the script to /root in two calls or shorten it`);
+        if (/[\0\r]/.test(command)) throw new ToolInputError("invalid command: contains NUL or CR (\\r) — use plain \\n line endings");
         const { stdout, stderr } = await sshRun(target, command, { timeoutMs: 120_000 });
-        return { host: name, stdout, stderr, source: `ssh ${target.host}` };
+        return { host: name, stdout, stderr, source: name === "sandbox" ? "sandbox" : `ssh ${target.host}` };
+      },
+    },
+    ssh_exec: {
+      description:
+        "Run one shell command on ANY server over SSH with Griffin's own key (kept in the broker's vault; give that key to a read-only user on your servers). Host keys are trusted on first use and pinned. Cluster work still goes through kube_*.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          host: { type: "string", pattern: "^[A-Za-z0-9._-]{1,253}$", description: "hostname or IP, e.g. 203.0.113.57 or app.example.com" },
+          command: { type: "string", minLength: 1, maxLength: 16000 },
+          port: { type: "integer", minimum: 1, maximum: 65535, description: "SSH port (default 22)" },
+          user: { type: "string", pattern: "^[A-Za-z0-9._-]{1,32}$", description: `login user (default ${sshUser})` },
+        },
+        required: ["host", "command"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const host = String(args.host || "");
+        if (!/^[A-Za-z0-9._-]{1,253}$/.test(host)) throw new ToolInputError("invalid host");
+        const user = args.user ? String(args.user) : sshUser;
+        if (!/^[A-Za-z0-9._-]{1,32}$/.test(user)) throw new ToolInputError("invalid user");
+        const port = Number(args.port) || 22;
+        const command = String(args.command || "").trim();
+        if (!command) throw new ToolInputError("invalid command: empty");
+        if (command.length > 16_000) throw new ToolInputError(`invalid command: ${command.length} chars, the limit is 16000`);
+        if (/[\0\r]/.test(command)) throw new ToolInputError("invalid command: contains NUL or CR (\\r) — use plain \\n line endings");
+        const target = { host, port, user, ...(site.ssh?.keySlug ? { keySlug: site.ssh.keySlug } : {}), tofu: true };
+        const { stdout, stderr } = await sshRun(target, command, { timeoutMs: 120_000 });
+        return { host, user, port, stdout, stderr, source: `ssh ${user}@${host}:${port}` };
       },
     },
   };
@@ -446,8 +521,8 @@ export function createTools({
       secretRef: site.vcenter?.infisical || null,
       readSecret: async (args) => (await infisical.infisical_get.execute(args)).value,
     });
-  Object.assign(tools, mikrotikTools, s3, pg, grafana, infisical, gitlab, arvan, vcenterTools, net, nsin, alerts);
-  return keepConfigured(tools, site);
+  Object.assign(tools, mikrotikTools, s3, pg, grafana, infisical, gitlab, arvan, vcenterTools, net, nsin, alerts, repos);
+  return keepConfigured(tools, { ...site, debugHosts });
 }
 
 // A tool nobody configured is worse than a missing one: the agent sees it, calls it, and gets an
@@ -460,8 +535,12 @@ export const TOOL_PACKS = {
   postgres: { prefixes: ["pg_"], needs: (site) => hasAny(site.clusters) },
   s3: { prefixes: ["s3_"], needs: (site) => Boolean(site.s3?.endpoint) },
   gitlab: { prefixes: ["gitlab_"], needs: (site) => Boolean(site.gitlab?.url) },
+  // clone/fetch/push for per-chat worktrees; same GitLab and token as the gitlab pack.
+  repos: { prefixes: ["git_clone", "git_fetch", "git_push"], needs: (site) => Boolean(site.gitlab?.url) },
   mikrotik: { prefixes: ["mikrotik_"], needs: (site) => hasAny(site.routers) },
   shell: { prefixes: ["debug_exec"], needs: (site) => hasAny(site.debugHosts) },
+  // SSH to any host with one key: broad, so opt in ("tools": { "ssh": true }, user/key in "ssh").
+  ssh: { prefixes: ["ssh_exec"], needs: () => false },
   vcenter: { prefixes: ["vcenter_"], needs: (site) => Boolean(site.vcenter?.infisical) },
   // These only need a credential in the vault, which the broker cannot see from here: opt in.
   infisical: { prefixes: ["infisical_"], needs: () => false },
@@ -613,7 +692,7 @@ export function summarize(kind, item) {
       return { ...meta, type: spec.type, clusterIP: spec.clusterIP, ports: (spec.ports || []).map((p) => `${p.port}/${p.protocol}`), externalIPs: (s.loadBalancer?.ingress || []).map((i) => i.ip || i.hostname) };
     case "deployments":
     case "statefulsets":
-      return { ...meta, replicas: spec.replicas ?? null, ready: s.readyReplicas ?? 0, updated: s.updatedReplicas ?? 0, images: (spec.template?.spec?.containers || []).map((c) => c.image) };
+      return { ...meta, replicas: spec.replicas ?? null, ready: s.readyReplicas ?? 0, updated: s.updatedReplicas ?? 0, images: (spec.template?.spec?.containers || []).map((c) => c.image), envSources: envSources(spec.template?.spec?.containers || []) };
     case "daemonsets":
       return { ...meta, desired: s.desiredNumberScheduled, ready: s.numberReady, unavailable: s.numberUnavailable ?? 0 };
     case "jobs":
@@ -627,6 +706,25 @@ export function summarize(kind, item) {
     default:
       return meta;
   }
+}
+
+// Where each container's env comes from — names only, never values. Without this a sub-agent once
+// never found that a token lived in a second secret and hunted for 20 minutes.
+function envSources(containers) {
+  const secrets = new Set();
+  const configMaps = new Set();
+  const keyRefs = [];
+  for (const c of containers) {
+    for (const from of c.envFrom || []) {
+      if (from.secretRef?.name) secrets.add(from.secretRef.name);
+      if (from.configMapRef?.name) configMaps.add(from.configMapRef.name);
+    }
+    for (const e of c.env || []) {
+      const ref = e.valueFrom?.secretKeyRef || e.valueFrom?.configMapKeyRef;
+      if (ref?.name) keyRefs.push(`${e.name} <- ${e.valueFrom.secretKeyRef ? "secret" : "configmap"} ${ref.name}/${ref.key}`);
+    }
+  }
+  return { secrets: [...secrets], configMaps: [...configMaps], keyRefs };
 }
 
 export function parseDf(text) {

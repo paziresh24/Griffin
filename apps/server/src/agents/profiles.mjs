@@ -7,6 +7,8 @@ export const SELF_MGMT_TOOLS = [
   "agent_tools_disable",
   "agent_settings_get",
   "agent_settings_set",
+  "self_check",
+  "self_fix",
 ];
 
 /** Tools the app itself provides (no broker, no credentials beyond what the owner connected). */
@@ -29,6 +31,7 @@ export const APP_TOOL_NAMES = [
   "jobs_run",
   "telegram_dialogs",
   "telegram_read",
+  "telegram_media",
   "telegram_send",
   "end_agent",
   "incidents_list",
@@ -121,6 +124,7 @@ export function publicProfile(profile) {
     instructions: profile.instructions || "",
     provider: profile.provider || "cursor",
     model: profile.model || null,
+    effort: profile.meta?.effort || null,
     tools: profile.tools || [],
     allTools: Boolean(profile.meta?.allTools),
     disabled: profile.meta?.disabled || [],

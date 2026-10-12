@@ -2,6 +2,7 @@
 #
 #   docker compose -f deploy/compose.yaml up -d --build          # the app alone: chat + agents
 #   COMPOSE_PROFILES=tools docker compose … up -d --build        # + the broker (infrastructure tools)
+#                                                                 #   and its sandbox shell (debug_exec)
 #   COMPOSE_PROFILES=tools,infra docker compose … up -d --build  # + its own vault and egress proxy
 #
 # The app alone is a complete install: chats, agents, jobs, charts, files, messengers. It holds the
@@ -24,17 +25,47 @@ services:
     network_mode: host
     restart: unless-stopped
     user: *user
+    depends_on: [sandbox]
     environment:
       GRIFFIN_BAO_URL: http://127.0.0.1:18200
       GRIFFIN_BAO_TOKEN_AGE: /vault/machine.token.age
       GRIFFIN_AGE_IDENTITY: /keys/identity.age
       GRIFFIN_SITE_CONFIG: /config/site.json
       GRIFFIN_SSH_KNOWN_HOSTS: /config/ssh_known_hosts
+      # debug_exec's default host (the sandbox service below) logs in with its own key, not yours.
+      GRIFFIN_SANDBOX_KEY: /sandbox-keys/client
+      GRIFFIN_SANDBOX_ADDR: 127.0.0.1:${GRIFFIN_SANDBOX_PORT:-2222}
+      # git clone/fetch/push for per-chat worktrees (same path in the app and the sandbox).
+      GRIFFIN_REPOS_ROOT: /workspace/repos
     volumes:
       - sockets:/run/griffin
       - ${GRIFFIN_CONFIG:-./config}:/config:ro
+      - ${GRIFFIN_WORKSPACE:-./workspace}/repos:/workspace/repos
+      - ${GRIFFIN_SANDBOX_DIR:-./sandbox}/keys:/sandbox-keys:ro
       - ${GRIFFIN_VAULT_TOKEN_AGE:?path to machine.token.age}:/vault/machine.token.age:ro
       - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
+
+  # debug_exec's default host: a throwaway shell with no credentials. Bridge network on purpose: it
+  # reaches the LAN and the internet through the host's NAT but not the host's loopback (vault,
+  # proxy, broker socket stay out of reach).
+  sandbox:
+    profiles: [tools]
+    build: { context: sandbox, network: host }
+    image: griffin-sandbox:local
+    restart: unless-stopped
+    hostname: griffin-sandbox
+    ports: ["127.0.0.1:${GRIFFIN_SANDBOX_PORT:-2222}:2222"]
+    environment:
+      BROKER_UID: ${GRIFFIN_UID:-1000}
+    volumes:
+      - ${GRIFFIN_SANDBOX_DIR:-./sandbox}/keys:/keys
+      - ${GRIFFIN_SANDBOX_DIR:-./sandbox}/root:/root
+      # Builds and tests run in a chat's worktree at the same path as in the app. The clones are
+      # read-only here; only worktrees are writable.
+      - ${GRIFFIN_WORKSPACE:-./workspace}/repos:/workspace/repos:ro
+      - ${GRIFFIN_WORKSPACE:-./workspace}/repos/_wt:/workspace/repos/_wt
+    mem_limit: 2g
+    pids_limit: 512
 
   app:
     build: { <<: *build, target: app }
@@ -56,6 +87,18 @@ services:
       GRIFFIN_OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-}
       # How agents refer to you in prompts and framed messages (a first name reads best).
       GRIFFIN_OWNER_NAME: ${OWNER_NAME:-}
+      # The assistant's name on this install; empty = Griffin.
+      GRIFFIN_ASSISTANT_NAME: ${ASSISTANT_NAME:-}
+      GRIFFIN_ASSISTANT_LATIN: ${ASSISTANT_LATIN:-}
+      # Optional model routing for colleague threads (e.g. claude / opus); empty = the agent profile.
+      GRIFFIN_TEAM_PROVIDER: ${TEAM_PROVIDER:-}
+      GRIFFIN_TEAM_MODEL: ${TEAM_MODEL:-}
+      GRIFFIN_TEAM_EFFORT: ${TEAM_EFFORT:-}
+      GRIFFIN_TEAM_SUB_PROVIDER: ${TEAM_SUB_PROVIDER:-}
+      GRIFFIN_TEAM_SUB_MODEL: ${TEAM_SUB_MODEL:-}
+      GRIFFIN_TEAM_SUB_EFFORT: ${TEAM_SUB_EFFORT:-}
+      # New web chats start on this repo under <workspace>/repos; empty = no repo.
+      GRIFFIN_DEFAULT_REPO: ${DEFAULT_REPO:-}
       GRIFFIN_PEER_SELF_SERVE: ${PEER_SELF_SERVE:-}
       # Links in messenger replies (charts, files) point here.
       GRIFFIN_PUBLIC_URL: ${GRIFFIN_PUBLIC_URL:-http://127.0.0.1:3100}

@@ -469,3 +469,23 @@ test("chats list and chat get include ask_agent children with live run status", 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("chat picker: a model of another provider moves the chat; effort is stored and validated", async () => {
+  const { store, app, cleanup } = setup([{ type: "text-delta", text: "ok" }]);
+  try {
+    store.updateAgentProfile("griffin", { provider: "openai", model: null });
+    const created = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin", model: "claude:haiku", effort: "low" }))).json();
+    await until(() => !store.runningRuns().length);
+    assert.equal(created.chat.provider, "claude");
+    assert.equal(created.chat.effort, "low");
+    const patch = (body) => app.request(`/api/chats/${created.chat.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    let body = await patch({ model: "", effort: "nonsense" });
+    assert.equal(body.chat.provider, "openai");
+    assert.equal(body.chat.effort, null);
+    body = await patch({ model: "claude:opus", effort: "max" });
+    assert.equal(store.getChat(created.chat.id).provider, "claude");
+    assert.equal(body.chat.effort, "max");
+  } finally {
+    cleanup();
+  }
+});

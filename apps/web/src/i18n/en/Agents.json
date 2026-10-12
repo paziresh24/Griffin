@@ -53,5 +53,12 @@
   "بساز": "Create",
   "انصراف": "Cancel",
   "{n} ابزار فعال": "{n} tools on",
-  "{n} صداکننده": "{n} callers"
+  "{n} صداکننده": "{n} callers",
+  "میزان فکر پیش‌فرض": "Default thinking effort",
+  "خودکار (پیش‌فرض موتور)": "Auto (engine default)",
+  "کم — سریع و ارزان": "Low — fast and cheap",
+  "متوسط": "Medium",
+  "زیاد": "High",
+  "خیلی زیاد (فقط Claude)": "Extra high (Claude only)",
+  "حداکثر (فقط Claude)": "Max (Claude only)"
 }

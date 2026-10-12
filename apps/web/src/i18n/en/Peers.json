@@ -18,7 +18,7 @@
  "بازگشت": "Back",
  "همتاها": "Peers",
  "همتای جدید": "New peer",
- "ایجنت‌های همکاران از راه MCP ({url}) مستقیم با گریفین کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.": "Teammates' agents work with Griffin directly over MCP ({url}). Each peer is one person; every client has its own token. Irreversible actions are refused on this path.",
+ "ایجنت‌های همکاران از راه MCP ({url}) مستقیم با {name} کار می‌کنند. هویت هر همتا یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.": "Teammates' agents work with {name} directly over MCP ({url}). Each peer is one person; every client has its own token. Irreversible actions are refused on this path.",
  "هنوز همتایی تعریف نشده.": "No peers yet.",
  "کارهای برگشت‌ناپذیر (ممیزی)": "Irreversible actions (audit)",
  "به درخواست {caller}": "Requested by {caller}",
@@ -60,5 +60,7 @@
  "بدون دسترسی (بسته)": "No access (closed)",
  "نام ابزار": "Tool name",
  "افزودن": "Add",
- "توکن را در مدیر رمزهای همان همکار بگذار، نه در پیام.": "Store the token in that teammate's secret manager, not in a message."
+ "توکن را در مدیر رمزهای همان همکار بگذار، نه در پیام.": "Store the token in that teammate's secret manager, not in a message.",
+ "لینک صفحهٔ وضعیت کپی شد": "Status page link copied",
+ "لینک صفحهٔ وضعیتِ همکار": "Teammate's status page link"
 }

@@ -40,6 +40,7 @@ const TOOLS = {
   kube_status: { icon: Boxes, label: t("وضعیت کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.prefix].filter(Boolean).join(" / "), open: true },
   kube_get: { icon: Database, label: t("خواندن منابع کلاستر"), subtitle: (a) => [a.cluster, a.kind, a.namespace, a.name].filter(Boolean).join(" / ") },
   kube_logs: { icon: ScrollText, label: t("لاگ پاد"), subtitle: (a) => [a.cluster, a.namespace, a.pod].filter(Boolean).join(" / ") },
+  kube_exec: { icon: ScrollText, label: t("دستور داخل پاد"), subtitle: (a) => [a.cluster, a.namespace, a.pod].filter(Boolean).join(" / ") },
   kube_df: { icon: HardDrive, label: t("فضای دیسک پاد"), subtitle: (a) => [a.cluster, a.namespace, a.pod, a.path].filter(Boolean).join(" / "), open: true },
   metrics_query: { icon: Search, label: t("کوئری Prometheus"), subtitle: (a) => [a.cluster, a.range, a.promql].filter(Boolean).join(" · "), open: false },
   pg_query: { icon: Database, label: t("کوئری Postgres"), subtitle: (a) => `${a.cluster}/${a.namespace}/${a.name}${a.database ? `/${a.database}` : ""}${a.write ? " ✎" : ""}`, open: true },

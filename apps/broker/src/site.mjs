@@ -12,6 +12,7 @@ import { genv } from "./env.mjs";
 //     "s3": { "cluster", "endpoint", "region", "secret": { namespace, name } },
 //     "routers": { "<name>": { … see mikrotik.mjs … } },
 //     "debugHosts": { "<name>": { host, port, user } },
+//     "ssh": { "user": "griffin", "keySlug": "<vault item>" },   // ssh_exec (opt-in pack "ssh")
 //     "sshKnownHosts": "/config/ssh_known_hosts" }
 
 export const EMPTY_SITE = Object.freeze({ clusters: {}, routers: {}, debugHosts: {} });

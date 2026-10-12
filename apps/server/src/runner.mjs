@@ -1,4 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { eventsFromUpdate } from "./updates.mjs";
+
+// Kept messages: the owner's message whose run ended in an error before anything
+// reached them (no text, no tool) is kept in the store's kv, oldest first, until a retry gets
+// through or the owner deletes it. A newer message joins the end of that FIFO, never jumps it.
+// After MAX_KEPT_RETRIES failed retries a kept message is no longer retried on its own and stops
+// holding newer ones back; «ارسال دوباره» and «حذف» still work.
+export const MAX_KEPT_RETRIES = 3;
+const keptKey = (chatId) => `kept:${chatId}`;
+export function keptList(store, chatId) {
+  const value = store.getKv?.(keptKey(chatId));
+  return Array.isArray(value) ? value : [];
+}
+// What the thread shows: ids only, oldest first (a delete names one by id, never by position).
+export const keptIds = (store, chatId) => keptList(store, chatId).map((k) => k.id);
 
 export class BusyError extends Error {
   constructor() {
@@ -34,6 +49,8 @@ export function createRunner({
   // Only for an explicit cancel (user / API), not for every run end.
   onUserCancel = () => {},
   onFinished = () => {},
+  // onPlanLimit(chat, error) -> true when the chat should be retried once on another provider.
+  onPlanLimit = () => false,
   // When true, a plain "send" while busy is downgraded to queue (used while ask_agent blocks).
   isSoftBusy = () => false,
   // When true, the run is deliberately parked (waiting for an answer to an open question), so
@@ -42,10 +59,26 @@ export function createRunner({
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
-  const agents = new Map(); // agentId -> SDKAgent
+  // Keyed by provider + agentId: a chat whose routing moved engines (GLM → Claude for a colleague
+  // thread) kept its old agent_id and got the cached GLM agent — Z.ai then 404'd "opus" (2026-10-11).
+  const agents = new Map(); // `${provider.id}:${agentId}` -> SDKAgent
   const pendingResume = []; // chats whose in-flight run died with the process
 
+  const kept = {
+    list: (chatId) => keptList(store, chatId),
+    save: (chatId, list) => (list.length ? store.setKv(keptKey(chatId), list) : store.deleteKv(keptKey(chatId))),
+    push: (chatId, message) => kept.save(chatId, [...kept.list(chatId), { id: `k${randomUUID().replace(/-/g, "").slice(0, 12)}`, message, fails: 0 }]),
+    // The oldest kept message still retried on its own, or -1.
+    next: (chatId) => kept.list(chatId).findIndex((k) => k.fails < MAX_KEPT_RETRIES),
+    update: (chatId, id, fn) => kept.save(chatId, kept.list(chatId).flatMap((k) => (k.id === id ? fn(k) : [k]))),
+  };
+  const startKept = (chatId, index) => {
+    const item = kept.list(chatId)[index];
+    return item ? startRun(chatId, item.message, [], { keptId: item.id }) : null;
+  };
+
   const sdkFor = (chat) => (providerFor ? providerFor(chat) : sdk);
+  const agentKey = (chat, id) => `${sdkFor(chat)?.id || ""}:${id}`;
 
   for (const run of store.runningRuns()) {
     const chat = store.getChat(run.chat_id);
@@ -88,26 +121,26 @@ export function createRunner({
   }
 
   async function createFresh(chat) {
-    if (chat.agent_id) agents.delete(chat.agent_id);
+    if (chat.agent_id) agents.delete(agentKey(chat, chat.agent_id));
     store.setAgentId(chat.id, null);
     const options = await agentOptions({ ...chat, agent_id: null });
     const provider = sdkFor(chat);
     const agent = await withRetry(() => provider.create(options));
-    agents.set(agent.agentId, agent);
+    agents.set(agentKey(chat, agent.agentId), agent);
     store.setAgentId(chat.id, agent.agentId);
     return agent;
   }
 
   async function agentFor(chat, { forceFresh = false } = {}) {
     if (forceFresh) return createFresh(chat);
-    if (chat.agent_id && agents.has(chat.agent_id)) return agents.get(chat.agent_id);
+    if (chat.agent_id && agents.has(agentKey(chat, chat.agent_id))) return agents.get(agentKey(chat, chat.agent_id));
     const options = await agentOptions(chat);
     const provider = sdkFor(chat);
     try {
       const agent = chat.agent_id
         ? await withRetry(() => provider.resume(chat.agent_id, options))
         : await withRetry(() => provider.create(options));
-      agents.set(agent.agentId, agent);
+      agents.set(agentKey(chat, agent.agentId), agent);
       if (agent.agentId !== chat.agent_id) store.setAgentId(chat.id, agent.agentId);
       return agent;
     } catch (error) {
@@ -156,11 +189,16 @@ export function createRunner({
     try {
       const chat = store.getChat(chatId);
       emit("run.phase", { phase: "connecting" });
+      const label = runLabel(chat);
       const run = await startSdkRun(chat, message, {
-        ...(chat.model ? { model: { id: chat.model } } : {}),
+        ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}),
+        ...(label.effort ? { effort: label.effort } : {}),
         mode: chat.mode === "plan" ? "plan" : "agent",
         onDelta: ({ update }) => {
-          for (const event of eventsFromUpdate(update)) emit(event.type, event.data);
+          for (const event of eventsFromUpdate(update)) {
+            if (!QUIET_EVENTS.has(event.type)) entry.produced = true;
+            emit(event.type, event.data);
+          }
         },
       });
       entry.run = run;
@@ -169,6 +207,11 @@ export function createRunner({
       const result = await run.wait();
       status = normalizeStatus(result.status, entry.cancelRequested);
       if (status === "error") error = result.error?.message || "run failed";
+      if (status === "error" && result.error?.code === "plan_limit" && !entry.retried && onPlanLimit(store.getChat(chatId), result.error)) {
+        entry.retryOnFallback = true;
+      }
+      // A session the provider only discovers is gone at send time: retry once on a fresh one.
+      if (status === "error" && result.error?.code === "agent_not_found" && !entry.retried) entry.retryOnFallback = true;
     } catch (caught) {
       status = entry.cancelRequested ? "cancelled" : "error";
       error = status === "error" ? String(caught?.message || caught) : null;
@@ -178,17 +221,52 @@ export function createRunner({
       // cancel) — do not double-write run state if the stuck promise eventually settles anyway.
       if (!entry.forcedDone) {
         onCancel(chatId); // releases a question still waiting when the run ends for any reason
-        emit("run.finished", { status, ...(error ? { error } : {}) });
+        // Nothing reached the owner: keep the message for «ارسال دوباره» (a fallback retry handles itself).
+        const keep = status === "error" && !entry.produced && !entry.retryOnFallback;
+        if (keep && !entry.keptId) kept.push(chatId, message);
+        if (keep && entry.keptId) {
+          kept.update(chatId, entry.keptId, (k) => [{ ...k, fails: k.fails + 1 }]);
+          if (kept.list(chatId).find((k) => k.id === entry.keptId)?.fails === MAX_KEPT_RETRIES) {
+            entry.keptGaveUp = true;
+            emit("note", { text: `این پیام ${MAX_KEPT_RETRIES} بار به ایجنت نرسید؛ دیگر خودکار فرستاده نمی‌شود و پیام‌های تازه‌تر منتظرش نمی‌مانند. «ارسال دوباره» یا «حذف» را بزنید.` });
+          }
+        }
+        // A retry that got an answer out: the kept message is delivered.
+        if (entry.keptId && !keep) {
+          kept.update(chatId, entry.keptId, () => []);
+          entry.keptDelivered = true;
+        }
+        emit("run.finished", { status, ...(error ? { error } : {}), ...(keep ? { undelivered: true } : {}) });
         store.finishRun(chatId, runId, status, error);
         active.delete(chatId);
       }
     }
     if (entry.forcedDone) return;
+    if (entry.retryOnFallback) {
+      // The session handle belongs to the limited provider; the next run starts fresh elsewhere.
+      store.setAgentId(chatId, null);
+      const retryId = startRun(chatId, message, entry.queue.splice(0));
+      const next = active.get(chatId);
+      if (next?.runId === retryId) next.retried = true;
+      return;
+    }
     if (status === "finished") Promise.resolve().then(() => onFinished(chatId)).catch(() => {});
     // Everything that queued up during the run goes in as ONE turn: separate turns answered each
     // stale message on its own (a colleague got three replies in a minute, 2026-09-25).
     const queued = entry.queue.splice(0);
-    if (queued.length) startRun(chatId, mergeQueued(queued), []);
+    // While kept messages wait, what queued joins the end of that FIFO instead of jumping it.
+    if (kept.next(chatId) >= 0 && queued.length) {
+      kept.push(chatId, mergeQueued(queued));
+      entry.drainKept = true;
+    } else if (queued.length) {
+      startRun(chatId, mergeQueued(queued), []);
+      return;
+    }
+    // The next kept message goes when this run was a retry that got through (or gave up), or the
+    // owner sent something during it; a first failure waits for «ارسال دوباره».
+    if (!entry.cancelRequested && kept.next(chatId) >= 0 && (entry.keptDelivered || entry.keptGaveUp || entry.drainKept)) {
+      startKept(chatId, kept.next(chatId));
+    }
   }
 
   function mergeQueued(messages) {
@@ -198,13 +276,13 @@ export function createRunner({
     return images.length ? { text, images } : text;
   }
 
-  function startRun(chatId, message, queue = []) {
+  function startRun(chatId, message, queue = [], { keptId = null } = {}) {
     const runId = store.startRun(chatId);
     const chat = store.getChat(chatId);
-    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now() };
+    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId };
     active.set(chatId, entry);
     const label = runLabel(chat);
-    store.appendEvent(chatId, runId, "run.started", { model: label.model, mode: chat.mode, provider: label.provider });
+    store.appendEvent(chatId, runId, "run.started", { model: label.model, mode: chat.mode, provider: label.provider, ...(keptId ? { retry: true } : {}) });
     execute(chatId, entry, message);
     return runId;
   }
@@ -222,13 +300,21 @@ export function createRunner({
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
       const message = toSdkMessage({ text, images });
       const userData = { text, images: images.length, ...(current ? { intent: effective } : {}) };
+      // Kept messages wait for a retry: a new one joins the end of that FIFO, delivered after them.
+      if (kept.next(chatId) >= 0) {
+        store.appendEvent(chatId, null, "user", { ...userData, intent: "queue" });
+        kept.push(chatId, message);
+        if (!current) return { runId: startKept(chatId, kept.next(chatId)), delivered: "queued" };
+        current.drainKept = true;
+        return { runId: current.runId, delivered: "queued" };
+      }
       if (!current) {
         store.appendEvent(chatId, null, "user", userData);
         return { runId: startRun(chatId, message), delivered: "run" };
       }
       if (effective === "send") throw new BusyError();
       if (effective === "steer" && current.run?.steer) {
-        const outcome = await current.run.steer(text).catch(() => "revert_to_followup");
+        const outcome = await current.run.steer(message).catch(() => "revert_to_followup");
         if (outcome === "complete_delivered") {
           store.appendEvent(chatId, current.runId, "user", userData);
           return { runId: current.runId, delivered: "steered" };
@@ -333,6 +419,33 @@ export function createRunner({
       return active.has(chatId);
     },
 
+    // «ارسال دوباره»: the oldest kept message (even one given up on) goes again now.
+    retry(chatId) {
+      if (active.has(chatId)) throw new BusyError();
+      if (!kept.list(chatId).length) return { status: "nothing-kept" };
+      return { runId: startKept(chatId, 0), delivered: "retry" };
+    },
+
+    // «حذف»: drops one kept message by id without sending it.
+    dropKept(chatId, id) {
+      const before = kept.list(chatId).length;
+      kept.update(chatId, id, () => []);
+      return kept.list(chatId).length < before;
+    },
+
+    // In-band note to a live run (providers that support nudge: the model must answer it before
+    // continuing). Used for the peer-task checkpoint. Returns false when there is nothing to note.
+    async note(chatId, text) {
+      const entry = active.get(chatId);
+      if (!entry?.run || typeof entry.run.nudge !== "function") return false;
+      try {
+        await entry.run.nudge(text);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
     // Runs doing work right now — not the ones parked on a question to a person. A deploy may
     // restart over parked runs (they resume and ask again); waiting hours for an answer blocked
     // every deploy (2026-09-26).
@@ -381,6 +494,9 @@ async function cancelSdkRun(run) {
   if (run.supports?.("cancel") === false) return;
   await run.cancel().catch(() => {});
 }
+
+// Events that do not mean anything reached the owner (a run that only emitted these failed silently).
+const QUIET_EVENTS = new Set(["run.phase", "usage", "status", "thinking", "thinking.done"]);
 
 function normalizeStatus(status, cancelRequested) {
   const value = String(status || "").toLowerCase();

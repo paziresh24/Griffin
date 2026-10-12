@@ -1,5 +1,6 @@
 import { guardTools } from "../guard.mjs";
 import { OWNER_NAME } from "../owner.mjs";
+import { PERSONA } from "../persona.mjs";
 
 // Telegram stand-in: owner types /agent in a teammate's chat; the agent (not canned text)
 // greets them, works, then closes with end_agent after saying goodbye.
@@ -60,7 +61,7 @@ export function coverageReplyPrompt(peerName, replyText, historyLines = []) {
     `کوتاه (۱ تا ۳ خط)، فارسی محاوره، نتیجه اول، بدون Markdown و بدون ایموجی. خودت را معرفی نکن (امضای پیام این کار را می‌کند). ` +
     `فقط اگر خودِ پیام شوخی یا تشکر بود، سبک جواب بده؛ سؤال جدی جواب جدی می‌خواهد. ` +
     `اگر ابزار چیزی پیدا نکرد، بگو «پیدا نکردم»، نه «وجود ندارد»؛ چیزی را که چک نکرده‌ای ادعا نکن. ` +
-    `خطِ «گریفین (ایجنت)» در تاریخچه جوابِ قبلیِ خودت است، نه حرفِ ${OWNER_NAME}. با Owner حرف نزن.]\n\n` +
+    `خطِ «${PERSONA.name} (ایجنت)» در تاریخچه جوابِ قبلیِ خودت است، نه حرفِ ${OWNER_NAME}. با Owner حرف نزن.]\n\n` +
     (history ? `تاریخچهٔ اخیر (قدیمی→جدید):\n${history}\n\n` : "") +
     `پیامی که باید جوابش را بدهی:\n«${quoted}»`
   );
@@ -70,8 +71,11 @@ export function coverageReplyPrompt(peerName, replyText, historyLines = []) {
  * The owner typing in a coverage chat from the web UI. Without a frame the agent took it for the
  * colleague and its answer went to them: «چه جوابی داده؟ متنش رو بفرست» reached the colleague.
  */
+// How the owner's web-UI note to a covered thread starts (the bridge recognizes it as internal).
+export const OWNER_NOTE_PREFIX = `«${OWNER_NAME} از داخل گریفین`;
+
 export function coverageOwnerNote(peerName, text) {
-  return `«${OWNER_NAME} از داخل گریفین — برای تو، نه برای ${peerName || "همکار"}»: ${String(text || "").trim()}`;
+  return `${OWNER_NOTE_PREFIX} — برای تو، نه برای ${peerName || "همکار"}»: ${String(text || "").trim()}`;
 }
 
 export function createEndAgentTool({ onEnd }) {

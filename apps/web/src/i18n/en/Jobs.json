@@ -7,7 +7,7 @@
  "بازگشت": "Back",
  "جاب‌ها": "Jobs",
  "جاب جدید": "New job",
- "کارهایی که گریفین خودش زمان‌بندی می‌کند. هر جاب یک دستور + یک ایجنت است؛ در گفتگوی جدا اجرا می‌شود و جواب — با نمودار و فایل — به پیام‌رسان‌هایی که انتخاب کردی می‌رود.": "Work Griffin schedules on its own. Each job is a prompt plus an agent; it runs in its own chat and the answer — with charts and files — goes to the messengers you pick.",
+ "کارهایی که {name} خودش زمان‌بندی می‌کند. هر جاب یک دستور + یک ایجنت است؛ در گفتگوی جدا اجرا می‌شود و جواب — با نمودار و فایل — به پیام‌رسان‌هایی که انتخاب کردی می‌رود.": "Work {name} schedules on its own. Each job is a prompt plus an agent; it runs in its own chat and the answer — with charts and files — goes to the messengers you pick.",
  "جاب «{name}» و گفتگوهای اجراهایش حذف شوند؟": "Delete job “{name}” and the chats of its runs?",
  "هنوز اجرا نشده": "Not run yet",
  "اجرا": "Run",

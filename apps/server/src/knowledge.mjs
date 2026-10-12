@@ -33,6 +33,7 @@ const listSchema = {
   type: "object",
   properties: {
     agent: { type: "string", description: "Agent id whose knowledge to list (default: this chat's agent)" },
+    file: { type: "string", description: "Read one note in full: a file name from the list or from the Playbook index in your rules" },
   },
   additionalProperties: false,
 };
@@ -144,13 +145,18 @@ export function createKnowledge({ store, root, git = true } = {}) {
         },
         [KNOWLEDGE_LIST]: {
           description:
-            "List local knowledge notes for an agent (filenames + titles). Does not load bodies into the prompt.",
+            "List local knowledge notes for an agent (filenames + titles), or read one note in full with {file} — including Playbook notes.",
           inputSchema: listSchema,
           async execute(args) {
             const chat = store.getChat(chatId);
             const agentId = String(args?.agent || chat?.agent || DEFAULT_AGENT);
             if (!resolveAgentMeta(agentId)) {
               return { isError: true, content: [{ type: "text", text: `unknown agent: ${agentId}` }] };
+            }
+            if (args?.file) {
+              const text = readNote(root, agentId, String(args.file));
+              if (text == null) return { isError: true, content: [{ type: "text", text: `no such note: ${args.file}` }] };
+              return { content: [{ type: "text", text }] };
             }
             const dir = agentDir(agentId);
             const notes = fs.readdirSync(dir)
@@ -225,7 +231,7 @@ function commit(root, enabled, message) {
 // Reviewed, unexpired notes for an agent — the ONLY knowledge injected into prompts. The owner
 // flips `reviewed: true` (reviewedRunbookSet); the agent can only write reviewed:false, so a note
 // the model invented never becomes trusted on its own (guards against knowledge poisoning).
-export function reviewedRunbooks(root, agentId, { max = 6, maxChars = 6000, now = Date.now() } = {}) {
+export function reviewedRunbooks(root, agentId, { max = 24, maxChars = 24000, now = Date.now() } = {}) {
   const dir = path.join(root, "agents", agentId, "knowledge");
   let names;
   try {
@@ -255,6 +261,42 @@ export function reviewedRunbooks(root, agentId, { max = 6, maxChars = 6000, now 
     if (out.length >= max || budget <= 0) break;
   }
   return out;
+}
+
+// The playbook: the owner's own verified notes, dropped as Markdown files with a `description:`
+// front-matter line into <knowledge>/playbook/ (for example synced from their own coding-assistant
+// memory). Only the one-line index goes into the prompt; the
+// model reads a note in full with knowledge_list {file}. A note that looks like it holds a secret
+// is never listed or served.
+const NOTE_FILE = /^[a-z0-9][a-z0-9._-]{0,120}\.md$/i;
+
+export function playbookIndex(root, { max = 250 } = {}) {
+  let names;
+  try {
+    names = fs.readdirSync(path.join(root, "playbook")).filter((n) => NOTE_FILE.test(n) && n !== "MEMORY.md").sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const file of names.slice(0, max)) {
+    const text = readNote(root, null, file);
+    if (!text) continue;
+    const description = /^description:\s*(.+)$/m.exec(text)?.[1]?.trim();
+    if (description) out.push({ file, description: description.slice(0, 240) });
+  }
+  return out;
+}
+
+function readNote(root, agentId, file) {
+  if (!NOTE_FILE.test(file)) return null;
+  const dirs = [agentId && path.join(root, "agents", agentId, "knowledge"), path.join(root, "playbook")].filter(Boolean);
+  for (const dir of dirs) {
+    try {
+      const text = fs.readFileSync(path.join(dir, file), "utf8");
+      return SECRET_RE.test(text) ? null : text;
+    } catch {}
+  }
+  return null;
 }
 
 // Owner review gate: list notes (with body) and flip the reviewed flag. Returns null if missing.

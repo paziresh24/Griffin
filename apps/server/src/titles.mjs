@@ -12,14 +12,14 @@ export function cleanTitle(raw) {
   return title.length >= 2 && title.split(" ").length <= 8 ? title.slice(0, 60) : null;
 }
 
-export function createTitler({ store, generate, log = console }) {
+export function createTitler({ store, generate, timelines = null, log = console }) {
   const inFlight = new Set();
 
   return async function maybeTitle(chatId, { backfill = false } = {}) {
     if (inFlight.has(chatId)) return null;
     const chat = store.getChat(chatId);
     if (!chat) return null;
-    const { messages } = foldEvents(store.allEvents(chatId));
+    const { messages } = timelines ? (await timelines.get(chatId)).timeline : foldEvents(store.allEvents(chatId));
     const firstUser = messages.find((m) => m.role === "user");
     const runs = messages.filter((m) => m.role === "assistant" && m.status !== "running");
     // only the first finished run, and only while the title is still the auto one (first line of the question)

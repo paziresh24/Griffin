@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
 import { t } from "../i18n.js";
+import { BRAND } from "../brand.js";
 
 export function AuthGate({ children }) {
   const [state, setState] = useState("checking");
@@ -61,7 +62,7 @@ function Login({ onDone }) {
         <div className="flex items-center gap-3">
           <img src="/icon.svg" alt="" className="size-10" />
           <div>
-            <h1 className="font-semibold">{t("گریفین")}</h1>
+            <h1 className="font-semibold">{BRAND.name}</h1>
             <p className="text-xs text-muted-foreground">{t("ورود با توکن Owner")}</p>
           </div>
         </div>

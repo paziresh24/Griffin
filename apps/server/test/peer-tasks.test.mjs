@@ -312,3 +312,40 @@ test("a parent finishing its turn does not cancel the question its child is wait
   await pending;
   assert.equal(childAnswer.answer, "بله");
 });
+
+test("a task silent past 5 minutes gets a factual status line and the model is told to report its blocker", async () => {
+  let release;
+  const { store, tasks, peer, runner } = setup(async (_id, emit) => {
+    emit("tool.started", { name: "kube_get", args: {} });
+    emit("text", { text: "زمان ری‌استارت پیدا شد" });
+    await new Promise((r) => { release = r; });
+  });
+  const notes = [];
+  runner.note = async (chatId, text) => notes.push({ chatId, text });
+  const r = await tasks.send(peer, { message: "تست exec", waitSec: 0 });
+  assert.equal(r.state, "working");
+  // Clock: 6 minutes after the task was created.
+  const created = Date.parse(store.getTask(r.taskId).created_at);
+  const late = createPeerTasks({ store, runner, asks: { isWaiting: () => false }, now: () => created + 6 * 60_000 });
+  await late.checkpoint();
+  await late.checkpoint(); // idempotent until the next 5-minute mark
+  const snap = await late.wait(peer, { taskId: r.taskId, waitSec: 0 });
+  const status = snap.progress.filter((p) => p.kind === "status");
+  assert.equal(status.length, 1);
+  assert.match(status[0].text, /دقیقه گذشته/);
+  assert.match(status[0].text, /kube_get/);
+  assert.match(status[0].text, /زمان ری‌استارت پیدا شد/);
+  assert.equal(notes.length, 1);
+  assert.match(notes[0].text, /مانع/);
+  release();
+});
+
+test("a new request carries the colleague's recent tasks so a repeat resumes instead of restarting", async () => {
+  const { store, tasks, peer } = setup(async (_chatId, emit) => { emit("text", { text: "ok" }); });
+  await tasks.send(peer, { message: "قفل ایمیج chat-ui", waitSec: 2 });
+  const second = await tasks.send(peer, { message: "دوباره قفل ایمیج", waitSec: 2 });
+  const sent = store.eventsAfter(second.contextId, 0).find((e) => e.type === "user").data.text;
+  assert.match(sent, /کارهای ۲۴ ساعت اخیرِ همین همکار/);
+  assert.match(sent, /قفل ایمیج chat-ui/);
+  assert.match(sent, /completed/);
+});

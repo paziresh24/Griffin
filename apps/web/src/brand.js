@@ -1,5 +1,5 @@
 // Griffin shell brand + per-agent accents. Agent ids stay stable; labels/colors are UI-facing.
-import { t } from "./i18n.js";
+import { lang, t } from "./i18n.js";
 
 export const BRAND = {
   id: "griffin",
@@ -14,6 +14,7 @@ export const STORAGE = {
   model: "griffin.model",
   agent: "griffin.agent",
   provider: "griffin.provider",
+  effort: "griffin.effort",
 };
 
 export const PROVIDER_META = {
@@ -74,6 +75,19 @@ export const AGENT_META = {
   },
 };
 
+export async function loadBrand() {
+  try {
+    const res = await fetch("/api/public/brand/info", { signal: AbortSignal.timeout(3000) });
+    const { name, latin } = await res.json();
+    // The assistant's own name per install (server persona); English UI shows its Latin form.
+    const shown = (lang === "en" && latin) || name;
+    if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = document.title = shown;
+    if (latin) BRAND.nameEn = latin;
+  } catch {
+    // keep the built-in defaults
+  }
+}
+
 export function agentMeta(id) {
   return AGENT_META[id] || {
     label: id || t("ایجنت"),
@@ -85,7 +99,7 @@ export function agentMeta(id) {
   };
 }
 
-/** Drive page primary from the active specialist; Griffin (default) keeps --brand (orange). */
+/** Drive page primary from the active specialist; the assistant (default) keeps --brand (orange). */
 export function applyAgentTheme(agentId) {
   const root = document.documentElement;
   if (!agentId || agentId === "griffin" || !AGENT_META[agentId]) {

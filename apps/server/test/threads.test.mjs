@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyThread, threadStartPrompt, wantsGriffin } from "../src/integrations/threads.mjs";
+import { classifyThread, handsToGriffin, threadStartPrompt, wantsGriffin } from "../src/integrations/threads.mjs";
 
 test("wantsGriffin matches only a call at the start", () => {
   assert.equal(wantsGriffin("گریفین یه سؤال"), true);
@@ -36,7 +36,45 @@ test("thread messages carry who said what; the behavior lives once in the run's 
   const { buildRules } = await import("../src/prompt.mjs");
   const rules = buildRules({ agent: "griffin", caller: "team" });
   assert.match(rules, /end_agent/);
-  assert.match(rules, /«گریفین»/);
+  assert.match(rules, /threads open by\s+themselves/);
   assert.match(rules, /\[NO_REPLY\]/);
   assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner" }), /Where you are: a 1:1 Telegram chat/);
+});
+
+test("handsToGriffin: only an explicit hand-off, not the owner answering himself", () => {
+  assert.equal(handsToGriffin("الان"), false);
+  assert.equal(handsToGriffin("البته ssh به سرورها دارید"), false);
+  assert.equal(handsToGriffin("بله، بهتون کمک میکنه"), true);
+  assert.equal(handsToGriffin("گریفین انجامش بده"), true);
+  assert.equal(handsToGriffin("کمکت می‌کنه"), true);
+});
+
+test("GLM fallback runs when Jev fails, so a classifier outage does not silence teammates", async () => {
+  const jev451 = async () => ({ ok: false, status: 451 });
+  // teammate asks for something -> GLM says open
+  const askOpen = async () => '{"open": true, "kind": "request"}';
+  const r = await classifyThread(
+    { history: [], message: "لطفاً دسترسی دیتابیس را بده", from: "teammate" },
+    { apiKey: "k", fetchImpl: jev451, fallbackAsk: askOpen },
+  );
+  assert.equal(r.start, true);
+  assert.match(r.reason, /451/);
+  assert.match(r.reason, /glm/);
+  // thanks -> GLM says not open
+  const askThanks = async () => '{"open": false, "kind": "thanks"}';
+  const r2 = await classifyThread({ history: [], message: "ممنون حله", from: "teammate" }, { apiKey: "k", fetchImpl: jev451, fallbackAsk: askThanks });
+  assert.equal(r2.start, false);
+  // no fallback provided -> fails closed with the jev reason
+  const r3 = await classifyThread({ history: [], message: "x", from: "teammate" }, { apiKey: "k", fetchImpl: jev451 });
+  assert.equal(r3.start, false);
+  assert.match(r3.reason, /451/);
+});
+
+test("Jev success path still used when it works (fallback not consulted)", async () => {
+  let fbCalled = false;
+  const jevOk = async () => ({ ok: true, json: async () => ({ answers: { open: { noul: 0.95 }, kind: { choice: "request", confidence: 0.9 } } }) });
+  const r = await classifyThread({ history: [], message: "پایپ‌لاین فیل شد", from: "teammate" }, { apiKey: "k", fetchImpl: jevOk, fallbackAsk: async () => { fbCalled = true; return "{}"; } });
+  assert.equal(r.start, true);
+  assert.match(r.reason, /jev open=0.95/);
+  assert.equal(fbCalled, false);
 });

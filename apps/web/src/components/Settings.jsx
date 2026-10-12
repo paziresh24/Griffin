@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
 import { Group, Item, SectionHeader } from "./SettingsParts.jsx";
-import { agentMeta } from "../brand.js";
+import { BRAND, agentMeta } from "../brand.js";
 import { lang, num, setLang, t } from "../i18n.js";
+import { ProvidersSection } from "./Providers.jsx";
+import { DoctorSection } from "./Doctor.jsx";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -16,8 +18,10 @@ const KIND_META = {
 };
 
 const SECTIONS = [
+  { id: "doctor", label: t("سلامت"), icon: Stethoscope, title: t("سلامت و تعمیر خودکار"), description: t("چک زنده‌ی موتورها، ایجنت‌ها، ران‌ها و اتصال‌ها؛ تعمیر با یک کلیک؛ و ویزاردهای راه‌اندازی.") },
   { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت"), description: t("مدل‌ها، کارگزار ابزارها، دریافت هشدار و مسیرهای کلاستر.") },
-  { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که گریفین از آن‌ها پیام می‌گیرد و جواب می‌دهد.") },
+  { id: "providers", label: t("موتورها"), icon: Cpu, title: t("موتورها و مدل‌ها"), description: t("پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.") },
+  { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد و جواب می‌دهد.", { name: BRAND.name }) },
   { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: t("فقط یادداشت‌های تأییدشده به قواعد همان ایجنت اضافه می‌شوند؛ بقیه اثری ندارند.") },
   { id: "account", label: t("حساب"), icon: KeyRound, title: t("حساب"), description: t("نشست‌های ورود به گریفین.") },
 ];
@@ -99,7 +103,7 @@ export function SettingsPage({ onBack }) {
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "status" ? <StatusSection /> : section === "knowledge" ? <KnowledgeSection /> : <AccountSection />}
+                {section === "doctor" ? <DoctorSection /> : section === "status" ? <StatusSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : <AccountSection />}
               </>
             )}
           </motion.div>
@@ -254,7 +258,7 @@ function IntegrationRow({ integration, onChange }) {
                   )}
                 </>
               ) : (
-                <p className="text-xs leading-5 text-muted-foreground">{t("گریفین با این اکانت در Saved Messages با تو حرف می‌زند، رشته‌های گفتگو با هم‌تیمی‌ها را جواب می‌دهد و ابزارهای تلگرام را دارد.")}</p>
+                <p className="text-xs leading-5 text-muted-foreground">{t("{name} با این اکانت در Saved Messages با تو حرف می‌زند، رشته‌های گفتگو با هم‌تیمی‌ها را جواب می‌دهد و ابزارهای تلگرام را دارد.", { name: BRAND.name })}</p>
               )}
               <div className="flex justify-end">
                 <button type="button" onClick={remove} className="press flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-muted-foreground hover:bg-bad/10 hover:text-bad">
@@ -388,7 +392,7 @@ function AccountLogin({ onDone }) {
         {busy ? <Loader2 className="size-4 animate-spin" /> : null} {step === "phone" ? t("ارسال کد") : t("ورود")}
       </button>
       <p className="text-center text-xs leading-5 text-muted-foreground">
-        {t("گریفین با این اکانت گروه‌ها و کانال‌ها را می‌خواند، در Saved Messages با تو گفتگو می‌کند و فقط بعد از تأیید تو از طرفت پیام می‌فرستد.")}
+        {t("{name} با این اکانت گروه‌ها و کانال‌ها را می‌خواند، در Saved Messages با تو گفتگو می‌کند و فقط بعد از تأیید تو از طرفت پیام می‌فرستد.", { name: BRAND.name })}
       </p>
     </form>
   );

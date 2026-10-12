@@ -101,8 +101,27 @@ export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request =
 }
 
 function errorResult(message, attempts) {
+  const hint = errorHint(String(message));
   return {
     isError: true,
-    content: [{ type: "text", text: JSON.stringify({ error: message, ...(attempts ? { attempts } : {}) }) }],
+    content: [{ type: "text", text: JSON.stringify({ error: message, ...(attempts ? { attempts } : {}), ...(hint ? { hint } : {}) }) }],
   };
+}
+
+// Error messages that tell the model how to self-correct (Fowler: "custom linter messages that
+// include instructions"). Each line is a recurring wasted-round class from 7 days of runs
+// (2026-10-08): the model retried the same guess instead of changing approach.
+const HINTS = [
+  [/all paths failed/i, "Every access path to this cluster failed (see attempts). Retrying the same call will not help: report the cluster as unreachable with the attempt errors, or answer from another source."],
+  [/domain not found/i, "Pass the zone apex registered in the CDN account (example.com, not api.example.com). arvan_domains / nsin_domains list the real zones."],
+  [/file not found|commit not found/i, "Wrong path or ref. Find the real path with gitlab_search {scope:\"filenames\"} (or the project's default branch) instead of guessing another path."],
+  [/(project|group) not found/i, "Wrong project/group path. Get the exact path_with_namespace from gitlab_projects {search} first."],
+  [/killed \(timeout\)/i, "The command hit the 120s limit. Narrow it, or start it in the background (nohup … > /root/x.log 2>&1 &) and read the log in the next call."],
+  [/serializer for text\/html/i, "kubectl got the SSO login page (gateway auth). Use kube_get / kube_exec / kube_logs / kube_secret, never kubectl from a shell."],
+  [/^timeout$|aborted due to timeout|ETIMEDOUT/i, "No answer within the timeout from this vantage point. Check dns_lookup / the route once; a second identical try is not new evidence."],
+  [/unauthorized|http_401|http_403|permission/i, "A permission refusal is the answer: report which permission on which system is missing. Do not switch identity or hunt other credentials."],
+];
+
+export function errorHint(message) {
+  return HINTS.find(([pattern]) => pattern.test(message))?.[1] || "";
 }

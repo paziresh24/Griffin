@@ -51,10 +51,12 @@ function schemaToZod(schema) {
         if (schema.additionalProperties === false) obj = obj.strict();
         return obj;
       }
+      // Not z.record: its JSON Schema (propertyNames) makes Claude Code drop the whole in-process
+      // MCP server, silently — every Griffin tool vanished because visualize had one (2026-10-08).
       if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-        return z.record(z.string(), schemaToZod(schema.additionalProperties));
+        return z.object({}).catchall(schemaToZod(schema.additionalProperties));
       }
-      return z.record(z.string(), z.unknown());
+      return z.object({}).passthrough();
     }
   }
 }

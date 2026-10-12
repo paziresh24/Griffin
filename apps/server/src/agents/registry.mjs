@@ -1,3 +1,5 @@
+import { PERSONA } from "../persona.mjs";
+
 // Agent registry: authority is who is calling, not a property of the agent itself.
 // Quota is enforced by filterTools (tools not in customTools cannot be called). Prompt text
 // only informs; it is not the control.
@@ -27,6 +29,7 @@ export const CORE_TOOLS = [
   "jobs_run",
   "telegram_dialogs",
   "telegram_read",
+  "telegram_media",
   "telegram_send",
   "end_agent",
 ];
@@ -39,13 +42,15 @@ const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_reque
 
 export const AGENTS = {
   griffin: {
-    label: "گریفین",
+    label: PERSONA.name,
     domain: "دستیار عمومی: مسئله را می‌فهمد، پلن می‌چیند و اگر ایجنت متخصصی هست کار را به او می‌سپارد",
     tools: CORE_TOOLS,
     callers: {
       owner: { tools: "*" },
       scheduler: { tools: SCHEDULER_TOOLS },
-      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write"] },
+      // Unattended triage; its own ask_owner reaches the owner with a timeout (asks.mjs), approvals
+      // for irreversible calls stay refused there.
+      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write", "incidents_list", "incident_update", "incident_history", "ask_owner"] },
       team: { tools: TEAM_TOOLS },
     },
   },
@@ -56,7 +61,7 @@ export const CALLER_LABELS = {
   scheduler: "زمان‌بند",
   ops: "اتاق عملیات",
   team: "همکار (پیام‌رسان)",
-  griffin: "گریفین",
+  griffin: PERSONA.name,
 };
 
 export function callerQuota(agentId, callerId) {

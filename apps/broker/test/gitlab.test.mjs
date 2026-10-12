@@ -109,3 +109,18 @@ test("repeated global fanout search is served from cache (no re-scan)", async ()
   assert.ok(!afterCalls.some((c) => c.includes("/projects/10/search")), "no per-project fan-out on a cache hit");
   assert.ok(!afterCalls.some((c) => c.startsWith("/api/v4/projects?")), "no project listing on a cache hit");
 });
+
+test("gitlab_pipeline without id lists the project's recent pipelines (no /pipelines/NaN)", async () => {
+  const paths = [];
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    paths.push(decodeURIComponent(u.pathname));
+    if (u.pathname.endsWith("/pipelines")) return Response.json([{ id: 9, ref: "main", status: "failed", sha: "abcdef123456", created_at: "t1", updated_at: "t2" }]);
+    return new Response("nope", { status: 404 });
+  };
+  const tools = createGitlabTools({ vault: { item: async () => "tok" }, fetchImpl, host: "https://gitlab.example.com" });
+  const out = await tools.gitlab_pipeline.execute({ project: "team/app" });
+  assert.deepEqual(out.pipelines, [{ id: 9, ref: "main", status: "failed", sha: "abcdef12", createdAt: "t1", updatedAt: "t2" }]);
+  assert.ok(!paths.some((p) => p.includes("NaN")));
+  await assert.rejects(tools.gitlab_pipeline.execute({ project: "team/app", retryFailed: true }), /id is required/);
+});

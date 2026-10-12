@@ -1,0 +1,21 @@
+{
+  "انجام شد": "Done",
+  "ناموفق": "Failed",
+  "لغو شد": "Canceled",
+  "رد شد": "Rejected",
+  "در جریان": "In progress",
+  "در صف": "Queued",
+  "منتظر جواب شما": "Waiting for your answer",
+  "منتظر تأیید Owner": "Waiting for the owner's approval",
+  "درخواست‌ها (۷ روز)": "Requests (7 days)",
+  "ناموفق/لغو": "Failed/canceled",
+  "میانهٔ زمان": "Median time",
+  "{n} دقیقه": "{n} min",
+  "تا ۵ دقیقه": "Within 5 min",
+  "کارهای {label} با {name}": "{label}'s work with {name}",
+  "هفت روز اخیر. هر ۳۰ ثانیه تازه می‌شود. فقط عنوان و نتیجه، نه محتوای گفتگو.": "Last seven days. Refreshes every 30 seconds. Only titles and outcomes, never the conversation itself.",
+  "{n} گزارش وضعیت": "{n} status updates",
+  "در هفت روز اخیر درخواستی نبوده.": "No requests in the last seven days.",
+  "این لینک وجود ندارد یا غیرفعال شده است.": "This link does not exist or has been disabled.",
+  "خطا {status}": "Error {status}"
+}

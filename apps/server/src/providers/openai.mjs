@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { PROVIDER_OPENAI } from "./ids.mjs";
+import { SIGNATURE_RE } from "../persona.mjs";
 
 export { PROVIDER_OPENAI };
 
@@ -45,6 +46,66 @@ const SILENT_NUDGE =
 
 // A round is "small-terminal" when it is exactly one debug_exec carrying a single short command —
 // no newlines, no chaining. That is the breadcrumb pattern the nudge is there to break.
+// Tool-result clearing (Anthropic "context editing", the lightest compaction): once a session
+// passes CLEAR_AT tokens, tool results older than the last CLEAR_KEEP are replaced by a short stub
+// (head preview + "re-run if needed"). Lossless where it matters — the events table keeps every
+// result — and done in batches of at least CLEAR_MIN so the cached prompt prefix breaks rarely.
+// 2026-10-08 evidence: 7d of glm-5.3-flash = 7,039 rounds at ~50k prompt tokens each, peaks 222k,
+// almost all of it stale tool output re-read every round.
+const CLEAR_AT_TOKENS = Math.max(20_000, Number(process.env.GRIFFIN_OPENAI_CLEAR_AT) || 80_000);
+const CLEAR_KEEP = Math.max(2, Number(process.env.GRIFFIN_OPENAI_CLEAR_KEEP) || 8);
+const CLEAR_MIN = 6;
+const CLEARED_MARK = "[نتیجهٔ قدیمی ابزار";
+
+// Error streak (Fowler's "sensor whose message says how to self-correct"): consecutive failing
+// tool calls with different args slip past the identical-round stuck detector — the model keeps
+// guessing paths/domains. One in-band nudge per send.
+const ERROR_STREAK = Math.max(2, Number(process.env.GRIFFIN_OPENAI_ERROR_STREAK) || 3);
+const ERROR_NUDGE =
+  "[تذکر سیستمی] چند فراخوانی پشت‌سرهم خطا داد. حدس نزن و همان را با تغییر جزئی تکرار نکن: پیام خطا و hint آن را بخوان؛ " +
+  "اگر مسیر واقعاً بسته است (دسترسی/سرویس پایین)، همان را مانعِ کار گزارش کن، وگرنه با ابزار درست مقدار واقعی را پیدا کن (مسیر، دامنه، نام).";
+
+// Premature stop (the "every 'continue' is a harness failure" rule): a final answer that promises
+// work («چک می‌کنم، خبر می‌دم») while no delegated subtask is running ends the run with nobody left
+// to wake it — 2026-10-08 evidence: dozens of runs ended exactly so. One continuation per send.
+const PROMISE_TAIL =
+  /(?:(?:چک|بررسی|نگاه|پیدا|درست|اجرا|امتحان|تست|اعمال|اضافه|تکمیل|ادامه|جمع‌?\s?بندی)\s*(?:رو\s*|را\s*)?(?:می[‌\s]?)(?:کنم|کنیم|دم|دهم|زنم|گیرم|گیریم)|(?:خبر|اطلاع|گزارش|نتیجه\S*)\s*(?:را\s*|رو\s*)?(?:می[‌\s]?)(?:دم|دهم|گم|گویم)|\blet me\b|\bI(?:'ll| will) (?:now )?(?:check|look|run|fix|try|verify|report))/i;
+const CONTINUE_NUDGE =
+  "[تذکر سیستمی] پیام آخرت قول کاری را داد که هنوز انجام نشده، و هیچ زیرکاری هم در جریان نیست — بعد از این پیام کسی بیدارت نمی‌کند. " +
+  "همین حالا همان کار را با ابزار انجام بده و جواب نهایی را بنویس؛ اگر واقعاً نمی‌شود، مانع را دقیق بگو.";
+
+const SIGNATURE_TAIL = new RegExp(`\\s*—\\s*${SIGNATURE_RE}\\s*$`, "u");
+
+export function promisesWork(text) {
+  const clean = String(text || "").replace(SIGNATURE_TAIL, "").trim();
+  if (!clean) return false;
+  // Only the closing sentence counts: an offer («اگر خواستید اعمال می‌کنم») or a question is fine.
+  const last = clean.split(/(?<=[.!؟?\n])\s+/u).filter(Boolean).slice(-2).join(" ").slice(-220);
+  // An offer, a question, or a decision left to a human («بگویید و اجرا می‌کنم», «با تأیید شما») is fine.
+  if (/[؟?]\s*$/.test(last) || /(^|\s)(اگر|اگه|در صورت|if you|بگویید|بگید|با شماست|تأیید|تایید)(\s|$)/i.test(last)) return false;
+  return PROMISE_TAIL.test(last);
+}
+
+// Read-only calls the model issued in one round run concurrently (it already declared them
+// independent by batching them). Anything that can change state or ask a human stays sequential,
+// so a cancel mid-batch still stops the rest (2026-10-06).
+const PARALLEL_SAFE =
+  /^(kube_(get|status|logs|df)|gitlab_(file|search|projects|commits)|infisical_(list|get|projects|access)|http_check|dns_lookup|tls_check|metrics_query|grafana_(search|dashboard|panel_query|query)|alerts_active|s3_list|knowledge_list|incidents_list|incident_history|list_agents|mikrotik_print|mikrotik_ping|nsin_edge_ranges|arvan_(domains|dns_records|dns_export|dnssec|cache_settings|purge_tags))$/;
+export function parallelSafe(call) {
+  const args = call?.args || {};
+  if (call?.name === "debug_exec") return !args.host || args.host === "sandbox";
+  if (call?.name === "pg_query") return !args.write;
+  return PARALLEL_SAFE.test(String(call?.name || ""));
+}
+
+// Head AND tail: a script's last section and an error trailer live at the end of the output.
+export function clipToolText(value, max) {
+  if (value.length <= max) return value;
+  const head = Math.floor(max * 0.6);
+  const tail = max - head;
+  return `${value.slice(0, head)}\n… [خروجی ${value.length} کاراکتری کوتاه شد: ${value.length - max} کاراکتر از وسط حذف شد] …\n${value.slice(-tail)}`;
+}
+
 function isSmallTerminalRound(toolCalls) {
   if (toolCalls.length !== 1) return false;
   const [call] = toolCalls;
@@ -79,6 +140,9 @@ export function createOpenAIProvider({
   stuckAfter = STUCK_AFTER,
   smallCmdAfter = SMALL_CMD_AFTER,
   silentAfter = SILENT_AFTER,
+  clearAtTokens = CLEAR_AT_TOKENS,
+  clearKeep = CLEAR_KEEP,
+  errorStreak = ERROR_STREAK,
   log = console,
 } = {}) {
   const root = String(baseUrl || "").replace(/\/+$/, "");
@@ -146,6 +210,31 @@ export function createOpenAIProvider({
 
   function contextTokens(session) {
     return session.promptTokens > 0 ? session.promptTokens : estimateTokens(session.messages);
+  }
+
+  // Returns how many results were stubbed. Only fires when enough stale results piled up, so the
+  // prompt prefix (and the endpoint's cache of it) changes in rare batches, not every round.
+  function clearStaleResults(session) {
+    const toolIdx = [];
+    session.messages.forEach((m, i) => {
+      if (m.role === "tool") toolIdx.push(i);
+    });
+    const stale = toolIdx
+      .slice(0, Math.max(0, toolIdx.length - clearKeep))
+      .filter((i) => {
+        const content = String(session.messages[i].content || "");
+        return content.length > 600 && !content.startsWith(CLEARED_MARK);
+      });
+    if (stale.length < CLEAR_MIN) return 0;
+    for (const i of stale) {
+      const content = String(session.messages[i].content);
+      session.messages[i] = {
+        ...session.messages[i],
+        content: `${CLEARED_MARK} (${content.length} کاراکتر) برای سبک‌کردن کانتکست پاک شد. ابتدایش: «${content.slice(0, 300)}…» — اگر دوباره لازمش داری، ابزار را دوباره بزن.]`,
+      };
+    }
+    session.promptTokens = 0;
+    return stale.length;
   }
 
   // Lossless-first stage before paying the summarizer: identical (call, result) pairs — the
@@ -270,6 +359,15 @@ export function createOpenAIProvider({
         if (signal?.aborted) throw error;
         // 429: the endpoint asked us to slow down — wait and send the same round again. Failing the
         // run dropped a colleague's answer when several chats ran at once (2026-09-25 eval: 2 of 10).
+        // A spent plan (Z.ai "Usage limit reached", code 1308/1310) does not come back in a minute:
+        // fail at once as plan_limit so Griffin moves the work to another provider. A saturated Z.ai
+        // coding window answers "issue with the selected model … may not exist or you may not have
+        // access" instead of a clean quota error (2026-10-10: both plans dry → a 5-min task took 2h
+        // because this was thrown as a plain error and the two-way fallback never fired).
+        if (/usage limit|quota|\b13(08|10)\b|insufficient (balance|quota)|issue with the selected model|may not have access/i.test(String(error?.message))) {
+          error.code = "plan_limit";
+          throw error;
+        }
         const limited = error?.status === 429 || /rate limit|too many requests/i.test(String(error?.message));
         // A dropped connection or a gateway 5xx is the network, not the model: retry the same round.
         // «fetch failed» ended a 12-minute run and threw its work away (2026-09-26).
@@ -429,7 +527,13 @@ export function createOpenAIProvider({
   function makeAgent(sessionId, options) {
     const isResume = Boolean(sessionId);
     const agentId = sessionId || randomUUID();
-    const session = loadSession(agentId, options?.cwd, isResume);
+    const session = loadSession(agentId, options?.stateDir || options?.cwd, isResume);
+    // Fresh session after a rewind/switch: seed the conversation it should still remember.
+    if (!isResume && session.messages.length === 0 && Array.isArray(options?.seedMessages) && options.seedMessages.length) {
+      session.messages = options.seedMessages
+        .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content)
+        .map((m) => ({ role: m.role, content: m.content }));
+    }
 
     return {
       get agentId() {
@@ -453,7 +557,7 @@ export function createOpenAIProvider({
 
         const run = {
           id: randomUUID(),
-          supports: (cap) => cap === "cancel" || cap === "nudge",
+          supports: (cap) => cap === "cancel" || cap === "nudge" || cap === "steer",
           async cancel() {
             abort.abort();
           },
@@ -464,13 +568,18 @@ export function createOpenAIProvider({
             nudgeText = String(text || STUCK_NUDGE);
             flow.abort(Object.assign(new Error("nudged"), { nudged: true }));
           },
-          async steer() {
-            return "revert_to_followup";
+          // A message the owner sends mid-run joins this run at the next round boundary (after the
+          // tools in flight, or instead of finishing) — real steering, not a queued next turn.
+          async steer(next) {
+            if (settled || abort.signal.aborted) return "revert_to_followup";
+            steered.push(next);
+            return "complete_delivered";
           },
           wait: () => done,
         };
 
         let nudgeText = null;
+        const steered = [];
         let flow = new AbortController();
         const flowSignal = () =>
           AbortSignal.any ? AbortSignal.any([abort.signal, flow.signal]) : abort.signal;
@@ -480,6 +589,13 @@ export function createOpenAIProvider({
           // survive a failure; only the in-flight round (assistant/tool_calls without all its
           // tool results) is rolled back, so the transcript never goes malformed.
           let committed = null;
+          // Steered messages enter the history as user turns; true when there were any.
+          const takeSteered = () => {
+            if (!steered.length) return false;
+            for (const next of steered.splice(0)) session.messages.push({ role: "user", content: toUserContent(next) });
+            committed = session.messages.length;
+            return true;
+          };
           let pressureCompacted = false;
           let overflowCompactions = 0;
           let stuckSignature = null;
@@ -489,10 +605,15 @@ export function createOpenAIProvider({
           let smallCmdNudged = false;
           let silentRounds = 0;
           let silentNudged = false;
+          let errorRun = 0;
+          let errorNudged = false;
+          let continueNudged = false;
           try {
             if (!apiKey) throw new Error("OpenAI API key missing");
             if (!root) throw new Error("OpenAI base url missing");
             const modelId = sendOptions.model?.id || options.model?.id || defaultModel;
+            // xhigh/max are Claude levels; an OpenAI-style endpoint gets its own top level.
+            const effort = { xhigh: "high", max: "high" }[sendOptions.effort] || sendOptions.effort || reasoningEffort;
             const system = systemPrompt(options, sendOptions.mode);
             session.messages.push({ role: "user", content: toUserContent(message) });
             committed = session.messages.length;
@@ -500,19 +621,26 @@ export function createOpenAIProvider({
 
             for (let round = 0; ; round += 1) {
               if (round >= runawayRounds) throw new Error(`runaway: ${runawayRounds} tool rounds in one send — looks like a loop`);
+              if (contextTokens(session) > clearAtTokens) {
+                const cleared = clearStaleResults(session);
+                if (cleared) {
+                  log.error?.(`[openai] cleared ${cleared} stale tool results (context over ${clearAtTokens} tokens)`);
+                  persistSession(agentId, session, options?.stateDir || options?.cwd);
+                }
+              }
               // Pressure trigger: compact before the endpoint ever has to refuse us.
               if (!pressureCompacted && contextTokens(session) > compactAtTokens) {
                 pressureCompacted = true;
                 await emit({ type: "summary-started" });
                 const done0 = await compactSession(session, { modelId, keep: compactKeepRecent, reason: "فشار کانتکست" });
-                if (done0) persistSession(agentId, session, options?.cwd);
+                if (done0) persistSession(agentId, session, options?.stateDir || options?.cwd);
               }
               let completion;
               try {
                 completion = await requestCompletion(
                   {
                     model: modelId,
-                    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+                    ...(effort ? { reasoning_effort: effort } : {}),
                     messages: [
                       { role: "system", content: system },
                       ...session.messages,
@@ -541,7 +669,7 @@ export function createOpenAIProvider({
                     reason: `سرریز کانتکست (تلاش ${overflowCompactions})`,
                   });
                   if (shrunk) {
-                    persistSession(agentId, session, options?.cwd);
+                    persistSession(agentId, session, options?.stateDir || options?.cwd);
                     continue;
                   }
                 }
@@ -561,7 +689,19 @@ export function createOpenAIProvider({
               if (!completion.toolCalls.length) {
                 if (!completion.text && !completion.usage && !completion.reasoning) throw new Error("empty completion from openai endpoint");
                 session.messages.push({ role: "assistant", content: completion.text || "" });
-                persistSession(agentId, session, options?.cwd);
+                if (!abort.signal.aborted && takeSteered()) {
+                  await emit({ type: "text-delta", text: "\n\n" });
+                  continue;
+                }
+                if (!continueNudged && !abort.signal.aborted && promisesWork(completion.text) && !(Number(options?.pendingWork?.()) > 0)) {
+                  continueNudged = true;
+                  log.error?.("[openai] final answer promises unfinished work with nothing pending — continuing the run");
+                  session.messages.push({ role: "user", content: CONTINUE_NUDGE });
+                  committed = session.messages.length;
+                  await emit({ type: "text-delta", text: "\n\n" });
+                  continue;
+                }
+                persistSession(agentId, session, options?.stateDir || options?.cwd);
                 finish({ status: abort.signal.aborted ? "cancelled" : "finished" });
                 return;
               }
@@ -574,14 +714,33 @@ export function createOpenAIProvider({
                   function: { name: call.name, arguments: call.argsStr || "{}" },
                 })),
               });
-              for (const call of completion.toolCalls) {
-                // A cancel mid-round must not run the rest of the batch: a stopped run still fired
-                // ask_owner and pinged the owner's Telegram (2026-10-06). The catch rolls back the round.
-                if (abort.signal.aborted) throw new Error("cancelled");
-                await runToolCall(call, { options, emit, session, log });
+              let outcomes;
+              if (completion.toolCalls.length > 1 && completion.toolCalls.every(parallelSafe)) {
+                outcomes = await Promise.all(completion.toolCalls.map((call) => runToolCall(call, { options, emit, log })));
+              } else {
+                outcomes = [];
+                for (const call of completion.toolCalls) {
+                  // A cancel mid-round must not run the rest of the batch: a stopped run still fired
+                  // ask_owner and pinged the owner's Telegram (2026-10-06). The catch rolls back the round.
+                  if (abort.signal.aborted) throw new Error("cancelled");
+                  outcomes.push(await runToolCall(call, { options, emit, log }));
+                }
+              }
+              for (const outcome of outcomes) {
+                session.messages.push(outcome.message);
+                errorRun = outcome.ok ? 0 : errorRun + 1;
               }
               if (abort.signal.aborted) throw new Error("cancelled");
               committed = session.messages.length;
+              if (takeSteered()) continue;
+              if (!errorNudged && errorRun >= errorStreak) {
+                errorNudged = true;
+                errorRun = 0;
+                log.error?.("[openai] streak of failing tool calls — asking the model to read the errors");
+                session.messages.push({ role: "user", content: ERROR_NUDGE });
+                committed = session.messages.length;
+                continue;
+              }
               // Pace: long streaks of one-short-command rounds or of owner-silence each get one
               // in-band nudge per send (2026-09-28: a pod investigation ran ~120 one-second
               // commands and stayed silent for ten minutes).
@@ -629,7 +788,7 @@ export function createOpenAIProvider({
             }
             finish({
               status: abort.signal.aborted ? "cancelled" : "error",
-              error: { message: String(error?.message || error) },
+              error: { message: String(error?.message || error), ...(error?.code === "plan_limit" ? { code: "plan_limit" } : {}) },
             });
           }
         })();
@@ -639,7 +798,7 @@ export function createOpenAIProvider({
     };
   }
 
-  async function runToolCall(call, { options, emit, session, log }) {
+  async function runToolCall(call, { options, emit, log }) {
     if (!call.emittedStarted) {
       await emit({ type: "tool-call-started", callId: call.id, toolCall: mcpToolCall(call.name, call.args) });
     }
@@ -652,6 +811,7 @@ export function createOpenAIProvider({
     } else {
       try {
         result = await def.execute(call.args || {});
+        if (result && typeof result === "object" && result.isError) ok = false;
       } catch (error) {
         ok = false;
         result = { error: String(error?.message || error) };
@@ -672,10 +832,8 @@ export function createOpenAIProvider({
     });
     // The timeline keeps the full (redacted) result; the model's context keeps a capped copy —
     // one 40 KB dump repeated over rounds is what starves long sessions.
-    const inContext =
-      value.length > toolMaxChars ? `${value.slice(0, toolMaxChars)}\n… [خروجی ${value.length} کاراکتری برای صرفه‌جویی در کانتکست کوتاه شد]` : value;
-    session.messages.push({ role: "tool", tool_call_id: call.id, content: inContext });
-    if (!ok) log.error?.(`[openai] tool ${call.name} failed: ${String(result?.error).slice(0, 300)}`);
+    if (!ok) log.error?.(`[openai] tool ${call.name} failed: ${String(result?.error ?? value).slice(0, 300)}`);
+    return { ok, message: { role: "tool", tool_call_id: call.id, content: clipToolText(value, toolMaxChars) } };
   }
 
   return {
@@ -711,6 +869,34 @@ export function createOpenAIProvider({
           error: error?.name === "TimeoutError" ? "timeout" : String(error?.cause?.code || error?.message),
           ms: Date.now() - started,
         };
+      }
+    },
+    // Plan quota (5-hour + weekly windows). Z.ai exposes it on the account host, not the coding
+    // path — derive the origin from baseUrl. Returns null for any other OpenAI-compatible endpoint.
+    async usage() {
+      if (!apiKey || !/\bz\.ai\b/.test(root)) return null;
+      const origin = root.replace(/\/api\/.*$/, "");
+      try {
+        const response = await fetchImpl(`${origin}/api/monitor/usage/quota/limit`, {
+          method: "GET",
+          headers: authHeaders(),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) return { error: `http ${response.status}` };
+        const limits = (await response.json())?.data?.limits || [];
+        // Observed 2026-10-05 (pro plan): unit 3 + number 5 = the 5-hour window, unit 6 + number 1 = weekly.
+        const label = (l) => (l.unit === 3 ? `${l.number} ساعته` : l.unit === 6 ? (l.number === 1 ? "هفتگی" : `${l.number} هفته`) : l.unit === 5 ? "روزانه" : `${l.number}×${l.unit}`);
+        const windows = limits.map((l) => ({
+          label: label(l),
+          used: l.currentValue ?? 0,
+          limit: l.usage ?? null,
+          remaining: l.remaining ?? null,
+          percentage: l.percentage ?? null,
+          resetAt: l.nextResetTime || null,
+        }));
+        return { provider: PROVIDER_OPENAI, windows };
+      } catch (error) {
+        return { error: error?.name === "TimeoutError" ? "timeout" : String(error?.message || error) };
       }
     },
     create(options) {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classify, forgetDecisions, guardTools } from "../src/guard.mjs";
+import { classify, forgetDecisions, guardTools, secretAdminBackdoor } from "../src/guard.mjs";
 import { createAsks } from "../src/asks.mjs";
 
 function recorder() {
@@ -19,6 +19,31 @@ test("classify depends on args, not only the tool name", () => {
   assert.equal(classify("kube_get", {}), null);
   assert.equal(classify("debug_exec", { command: "df -h" }), null);
   assert.ok(classify("debug_exec", { command: "rm -rf /" }).block);
+  assert.ok(classify("debug_exec", { host: "ops-box", command: "uptime" }).approve, "a real host (not the sandbox) asks the owner");
+  assert.equal(classify("debug_exec", { host: "sandbox", command: "uptime" }), null);
+  // ssh_exec: always owner-approval outside owner chats; destructive blocked.
+  assert.ok(classify("ssh_exec", { host: "203.0.113.57", command: "hostname" }).approve);
+  assert.ok(classify("ssh_exec", { host: "x", command: "rm -rf /" }).block);
+});
+
+test("git push / forge API writes from the shell need the owner; forge tokens are fenced", () => {
+  // The shape of a push that once wiped a shared GitOps repository.
+  const push = classify("debug_exec", { command: "cd /tmp/pg\ngit commit -q -m fix\ngit push --quiet -o merge_request.create=false origin bomfix:main 2>&1 | tail -3" });
+  assert.match(push.approve, /push/);
+  assert.match(push.approve, /bomfix:main/);
+  assert.ok(classify("debug_exec", { command: `curl -X PUT -H "PRIVATE-TOKEN: $T" https://gitlab.example.com/api/v4/projects/9/merge_requests/1/merge` }).approve);
+  assert.equal(classify("debug_exec", { command: `curl -s -H "PRIVATE-TOKEN: $T" https://gitlab.example.com/api/v4/user` }), null);
+  assert.equal(classify("debug_exec", { command: "git -C /workspace/repos/x log -3 && git status" }), null);
+  assert.ok(classify("infisical_get", { projectId: "owner", path: "/secrets/gitlab-superuser", name: "TOKEN" }).block);
+  assert.ok(classify("infisical_list", { projectId: "owner", search: "gitlab-superuser" }).block);
+  assert.ok(classify("debug_exec", { command: "cat ~/.secrets/gitlab-superuser.token" }).block);
+  assert.equal(classify("infisical_get", { projectId: "alice", path: "/", name: "N8N_API_KEY" }), null);
+  // After one name was blocked, a peer chain read OTHER working forge tokens.
+  assert.ok(classify("infisical_get", { projectId: "owner", path: "/ci", name: "GITLAB_TOKEN" }).block);
+  assert.ok(classify("infisical_get", { projectId: "owner", path: "/bots/shared", name: "gitlab-api-token" }).block);
+  assert.ok(classify("infisical_get", { projectId: "owner", path: "/", name: "GITHUB_TOKEN" }).block);
+  assert.ok(classify("debug_exec", { command: "infisical secrets get GITLAB_TOKEN --path /ci --plain" }).block);
+  assert.equal(classify("infisical_get", { projectId: "alice", path: "/", name: "SMS_TOKEN" }), null);
 });
 
 test("full Arvan cache purge needs the owner with the site-death warning; a narrow url purge is free", () => {
@@ -222,4 +247,95 @@ test("ask tools refuse a tool-choice question; a normal question still goes out"
   assert.equal(asks.isWaiting("tc1"), true);
   asks.answer("tc1", { answer: "x", selected: ["x"] });
   await pending;
+});
+
+test("a colleague trusted for in-pod reads runs kube_exec without waiting on the owner; others still ask", async () => {
+  forgetDecisions();
+  const asks = createAsks();
+  const store = recorder();
+  const kv = new Map([["peertrust:boss", { inPod: true }]]);
+  let caller = "peer:boss";
+  store.rootChatId = () => "t1";
+  store.getChat = () => ({ id: "t1", caller, title: "boss: check" });
+  store.getKv = (k) => kv.get(k) || null;
+  let ran = 0;
+  const tools = { kube_exec: { inputSchema: { type: "object", properties: {} }, async execute() { ran += 1; return { content: [] }; } } };
+  const guarded = guardTools(tools, { chatId: "t1", asks, store, caller: "platform", extra: new Set(["kube_exec"]) });
+  await guarded.kube_exec.execute({ cluster: "c1", namespace: "other", pod: "p", command: "env | sha256sum" });
+  assert.equal(ran, 1);
+  assert.equal(asks.isWaiting("t1"), false, "no owner question");
+  assert.equal(store.rows.at(-1).decision, "trusted", "audited");
+  caller = "peer:someone";
+  forgetDecisions();
+  await guarded.kube_exec.execute({ cluster: "c1", namespace: "someone", pod: "p", command: "ls" });
+  assert.equal(ran, 2, "a colleague's own namespace never waits on the owner");
+  const pending = guarded.kube_exec.execute({ cluster: "c1", namespace: "other2", pod: "p", command: "ls" });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asks.isWaiting("t1"), true, "an untrusted colleague still needs the owner");
+  asks.answer("t1", { answer: "نه", selected: ["نه"] });
+  await pending;
+  forgetDecisions();
+});
+
+test("a raw write to the Arvan/NSIN API from debug_exec asks the owner with the exact call", () => {
+  // The shape of the command that once switched a whole domain's cache off.
+  const cmd = `KEY=$(cat /root/.arvan-key)\ncurl -s -m 30 -X PATCH -H "Authorization: ApiKey $KEY" -H "Content-Type: application/json" \\\n  -d '{"cache_developer_mode":true}' \\\n  "https://napi.arvancloud.ir/cdn/4.0/domains/example.com/caching"`;
+  const c = classify("debug_exec", { command: cmd });
+  assert.ok(c.approve, "must ask");
+  assert.match(c.approve, /PATCH \/cdn\/4\.0\/domains\/example\.com\/caching/);
+  assert.match(c.approve, /cache_developer_mode":true/, "the owner sees the field and value");
+  assert.ok(classify("debug_exec", { command: `curl -s --request DELETE https://api.nsin.ir/domains/x.ir/dns/records/1` }).approve);
+  assert.ok(classify("debug_exec", { command: `curl -s https://api.nsin.ir/zones/x/purge --data '{"a":1}'` }).approve, "a body alone means a write");
+  assert.ok(classify("debug_exec", { command: `python3 -c "import requests; requests.patch('https://napi.arvancloud.ir/cdn/4.0/domains/d/caching', json={})"` }).approve);
+  // reads stay free
+  assert.equal(classify("debug_exec", { command: `curl -s -H "Authorization: ApiKey $K" https://napi.arvancloud.ir/cdn/4.0/domains/example.com/caching` }), null);
+  assert.equal(classify("debug_exec", { command: `curl -s -X POST https://example.com/api -d '{}'` }), null, "only the CDN control planes");
+});
+
+// A cutover needing 8 sibling page rules gets one approval, not eight; a rule on
+// another path still asks.
+test("page rules: one yes covers the same host/path, whatever sibling is copied, not another path", async () => {
+  forgetDecisions();
+  const asks = createAsks();
+  const store = recorder();
+  store.rootChatId = () => "pr1";
+  store.getChat = () => ({ id: "pr1", caller: "team", title: "billing" });
+  const made = [];
+  const tools = { arvan_page_rule_create: { inputSchema: { type: "object", properties: {} }, async execute(args) { made.push(args.url); return { content: [] }; } } };
+  const guarded = guardTools(tools, { chatId: "pr1", asks, store, caller: "arvan-ban" });
+  const rule = (url, copy_from = "11111111-2222-3333-4444-555555555555") => ({ domain: "example.com", copy_from, url });
+  const first = guarded.arvan_page_rule_create.execute(rule("https://api.example.com/billing/v1/factors/search*"));
+  await new Promise((r) => setTimeout(r, 20));
+  const asked = () => store.events.filter((e) => e.type === "tool.started").length;
+  assert.equal(asked(), 1);
+  assert.match(store.events.find((e) => e.type === "tool.started").data.args.question, /api\.example\.com\/billing/);
+  asks.answer("pr1", { answer: "بله", selected: ["بله"] });
+  await first;
+  await guarded.arvan_page_rule_create.execute(rule("https://api.example.com/billing/v1/payment/card-numbers*", "66666666-7777-8888-9999-000000000000"));
+  assert.equal(asked(), 1, "a sibling rule under the same path is not asked again");
+  const other = guarded.arvan_page_rule_create.execute(rule("https://api.example.com/*"));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asked(), 2, "a rule outside the approved path asks again");
+  asks.answer("pr1", { answer: "نه", selected: ["نه"] });
+  await other.catch(() => {});
+  assert.equal(made.length, 2);
+  forgetDecisions();
+});
+
+// An owner-rooted chat once read the secret manager's instance-admin secret and queried its DB.
+test("Infisical admin plane is fenced for every caller, owner included", async () => {
+  const { fenceBackdoors, secretAdminBackdoor } = await import("../src/guard.mjs");
+  assert.ok(secretAdminBackdoor("kube_secret", { cluster: "c1", namespace: "infisical", name: "infisical-instance-admin" }));
+  assert.ok(secretAdminBackdoor("pg_query", { cluster: "c2", namespace: "infisical", name: "infisical-db", database: "infisical", sql: "select 1" }));
+  assert.ok(secretAdminBackdoor("debug_exec", { command: "kubectl -n infisical get secret infisical-instance-admin -o json" }));
+  assert.equal(secretAdminBackdoor("pg_query", { name: "support-db", database: "postgres", sql: "select 1" }), null);
+  assert.equal(secretAdminBackdoor("kube_secret", { namespace: "alice", name: "app" }), null);
+  let ran = 0;
+  const store = recorder();
+  const tools = fenceBackdoors({ kube_secret: { async execute() { ran++; return {}; } } }, { chatId: "c", store, caller: "owner" });
+  const r = await tools.kube_secret.execute({ namespace: "infisical", name: "infisical-secrets" });
+  assert.equal(ran, 0);
+  assert.match(JSON.stringify(r), /infisical_machine_identity/);
+  await tools.kube_secret.execute({ namespace: "x", name: "y" });
+  assert.equal(ran, 1);
 });

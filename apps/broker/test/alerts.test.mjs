@@ -4,8 +4,8 @@ import { ALERTMANAGER_PATH, createAlertTools, normalizeAlert } from "../src/aler
 
 const raw = {
   fingerprint: "abc",
-  labels: { alertname: "SeaweedOwnerBucketHuge", severity: "critical", namespace: "storage", bucket: "salireza-sadr", pod: "x-1", source_cluster: "dr" },
-  annotations: { summary: "Owner S3 bucket salireza-sadr over 200Gi" },
+  labels: { alertname: "SeaweedOwnerBucketHuge", severity: "critical", namespace: "storage", bucket: "team-b", pod: "x-1", source_cluster: "dr" },
+  annotations: { summary: "Owner S3 bucket team-b over 200Gi" },
   startsAt: "2026-09-18T00:00:00Z",
   status: { state: "active" },
 };
@@ -14,8 +14,8 @@ test("normalizes the labels that identify what is broken", () => {
   const a = normalizeAlert(raw, "dr");
   assert.equal(a.alertname, "SeaweedOwnerBucketHuge");
   assert.equal(a.cluster, "dr");
-  assert.equal(a.labels.bucket, "salireza-sadr");
-  assert.equal(a.summary, "Owner S3 bucket salireza-sadr over 200Gi");
+  assert.equal(a.labels.bucket, "team-b");
+  assert.equal(a.summary, "Owner S3 bucket team-b over 200Gi");
 });
 
 test("target_cluster wins over the cluster that saw it", () => {

@@ -110,3 +110,20 @@ test("public share: read-only, scoped to its chat, revocable", async () => {
     cleanup();
   }
 });
+
+test("an old public name redirects browser GETs permanently; POSTs are still served", async () => {
+  const app = createApp({
+    store: { getAgentProfile: () => null },
+    runner: { activeCount: () => 0 },
+    timelines: {},
+    movedHosts: ["old.example.com"],
+    publicUrl: "https://new.example.com",
+  });
+  const get = await app.request("http://old.example.com/c/abc?x=1", { headers: { host: "old.example.com" } });
+  assert.equal(get.status, 301);
+  assert.equal(get.headers.get("location"), "https://new.example.com/c/abc?x=1");
+  const post = await app.request("http://old.example.com/healthz", { method: "POST", headers: { host: "old.example.com" } });
+  assert.notEqual(post.status, 301);
+  const lan = await app.request("http://192.0.2.46:3100/healthz", { headers: { host: "192.0.2.46:3100" } });
+  assert.equal(lan.status, 200);
+});

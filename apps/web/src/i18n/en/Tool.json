@@ -150,5 +150,6 @@
  "ساخت جاب": "Create job",
  "ویرایش جاب": "Edit job",
  "حذف جاب": "Delete job",
- "اجرای جاب": "Run job"
+ "اجرای جاب": "Run job",
+ "دستور داخل پاد": "Command in a pod"
 }

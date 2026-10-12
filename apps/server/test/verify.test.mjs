@@ -99,7 +99,7 @@ test("verify: a delegated subtask inherits trust from its ROOT chat and reports 
   ];
   const store = {
     // the subtask carries caller "griffin"; its root is a peer chat that received the report
-    getChat: (id) => (id === "sub9" ? { id, caller: "griffin" } : id === "peer-root" ? { id, caller: "peer:aida-ardani" } : null),
+    getChat: (id) => (id === "sub9" ? { id, caller: "griffin" } : id === "peer-root" ? { id, caller: "peer:jane-doe" } : null),
     rootChatId: (id) => (id === "sub9" ? "peer-root" : id),
     lastEventId: () => events.length,
     eventsAfter: () => events,

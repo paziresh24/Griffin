@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { Popover, Tooltip } from "radix-ui";
 import { Command } from "cmdk";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronsUpDown, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
+import { Brain, Check, ChevronsUpDown, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
 import { usePolling } from "../api.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
 import { t } from "../i18n.js";
@@ -245,15 +245,20 @@ export function ProviderPicker({ provider = "cursor", onChange, compact = false,
   );
 }
 
+// One picker for every provider (2026-10-08): a pick is "<provider>:<model>" and moves only this
+// chat; "auto" = the agent's default from the agents page.
 export function ModelPicker({ model, onChange, agent = "griffin", compact = false, icons = false }) {
   const agentData = usePolling("/api/agents", 60_000);
-  const provider = agentData?.agents?.find((a) => a.id === agent)?.provider || "cursor";
-  const data = usePolling(`/api/models?provider=${encodeURIComponent(provider || "cursor")}`, 10 * 60_000);
-  const models = data?.models || [];
+  const profile = agentData?.agents?.find((a) => a.id === agent);
+  const data = usePolling("/api/models?provider=all", 10 * 60_000);
+  const models = (data?.models || []).filter((m) => m.id !== "default");
   const [open, setOpen] = useState(false);
-  const current = models.find((m) => m.id === model);
-  const label = model ? current?.name || model : t("خودکار");
+  const [pinnedProvider, pinnedId] = String(model || "").includes(":") ? model.split(/:(.*)/s) : [profile?.provider || "cursor", model];
+  const current = models.find((m) => m.provider === pinnedProvider && m.id === pinnedId);
+  const short = PROVIDER_META[pinnedProvider]?.short || pinnedProvider;
+  const label = model ? `${current?.name || pinnedId} · ${short}` : t("خودکار");
   const showLabel = !icons || open;
+  const groups = Object.keys(PROVIDER_META).map((p) => [p, models.filter((m) => m.provider === p)]).filter(([, list]) => list.length);
 
   const pick = (id) => {
     onChange(id);
@@ -270,14 +275,14 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
           className={`press flex h-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground ${
             icons
               ? showLabel
-                ? "max-w-36 gap-1 px-2.5 text-[11px]"
+                ? "max-w-44 gap-1 px-2.5 text-[11px]"
                 : "w-8"
               : compact
-                ? "h-auto max-w-36 gap-1.5 px-2.5 py-1 text-[11px]"
-                : "h-auto max-w-40 gap-1.5 px-3 py-1.5 text-xs"
+                ? "h-auto max-w-44 gap-1.5 px-2.5 py-1 text-[11px]"
+                : "h-auto max-w-48 gap-1.5 px-3 py-1.5 text-xs"
           }`}
         >
-          <Sparkles className={`shrink-0 text-primary ${icons || compact ? "size-3.5" : "size-3.5"}`} />
+          <Sparkles className="size-3.5 shrink-0 text-primary" />
           {showLabel ? (
             <>
               <span className={`truncate ${model ? "ltr" : ""}`}>{label}</span>
@@ -287,17 +292,94 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-72 overflow-hidden rounded-xl border bg-card shadow-xl">
+        <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-80 overflow-hidden rounded-xl border bg-card shadow-xl">
           <Command loop className="flex flex-col">
             <Command.Input autoFocus placeholder={t("جستجوی مدل…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
-            <Command.List className="scrollbar-thin max-h-80 overflow-y-auto p-1">
+            <Command.List className="scrollbar-thin max-h-96 overflow-y-auto p-1">
               <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">{t("مدلی پیدا نشد")}</Command.Empty>
-              <ModelItem id="" name={t("خودکار")} note={t("بهترین مدل به‌صورت خودکار انتخاب می‌شود")} selected={!model} onSelect={pick} />
-              {models.filter((m) => m.id !== "default").map((m) => (
-                <ModelItem key={m.id} id={m.id} name={m.name} selected={model === m.id} onSelect={pick} />
+              <ModelItem
+                id=""
+                name={t("خودکار")}
+                note={`${t("پیش‌فرض ایجنت")}${profile ? ` (${PROVIDER_META[profile.provider]?.short || profile.provider}${profile.model ? ` · ${profile.model}` : ""})` : ""}`}
+                selected={!model}
+                onSelect={pick}
+              />
+              {groups.map(([provider, list]) => (
+                <Command.Group
+                  key={provider}
+                  heading={PROVIDER_META[provider]?.label || provider}
+                  className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:text-muted-foreground"
+                >
+                  {list.map((m) => (
+                    <ModelItem
+                      key={`${provider}:${m.id}`}
+                      id={`${provider}:${m.id}`}
+                      name={m.name}
+                      selected={pinnedProvider === provider && pinnedId === m.id && Boolean(model)}
+                      onSelect={pick}
+                    />
+                  ))}
+                </Command.Group>
               ))}
             </Command.List>
           </Command>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+// How hard the model thinks, per chat. Claude takes all five levels; OpenAI-style endpoints (GLM)
+// get low/medium/high (the server maps xhigh/max to high); Cursor ignores it.
+const EFFORTS = [
+  { id: "", name: t("خودکار"), note: t("پیش‌فرض ایجنت یا موتور") },
+  { id: "low", name: t("کم"), note: t("سریع و ارزان") },
+  { id: "medium", name: t("متوسط") },
+  { id: "high", name: t("زیاد") },
+  { id: "xhigh", name: t("خیلی زیاد"), note: t("فقط Claude") },
+  { id: "max", name: t("حداکثر"), note: t("فقط Claude؛ پرمصرف") },
+];
+
+export function EffortPicker({ effort = "", model = "", agent = "griffin", onChange }) {
+  const agentData = usePolling("/api/agents", 60_000);
+  const profile = agentData?.agents?.find((a) => a.id === agent);
+  const provider = String(model || "").includes(":") ? model.split(":")[0] : profile?.provider;
+  const [open, setOpen] = useState(false);
+  if (provider === "cursor") return null;
+  const current = EFFORTS.find((e) => e.id === (effort || "")) || EFFORTS[0];
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label={t("میزان فکر: {name}", { name: current.name })}
+          title={t("میزان فکر: {name}", { name: current.name })}
+          className="press flex h-8 shrink-0 items-center gap-1 rounded-full bg-muted px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+        >
+          <Brain className="size-3.5 shrink-0 text-primary" />
+          {effort ? <span>{current.name}</span> : null}
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 shadow-xl">
+          <p className="px-2.5 pb-1 pt-1.5 text-[11px] text-muted-foreground">{t("میزان فکر کردن مدل")}</p>
+          {EFFORTS.filter((e) => provider === "claude" || !["xhigh", "max"].includes(e.id)).map((e) => (
+            <button
+              key={e.id || "auto"}
+              type="button"
+              onClick={() => {
+                onChange(e.id);
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block">{e.name}</span>
+                {e.note ? <span className="block text-xs text-muted-foreground">{e.note}</span> : null}
+              </span>
+              {(effort || "") === e.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
+            </button>
+          ))}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
