@@ -139,3 +139,54 @@ test("migration gives the chat tools to agents the owner talks to, not to all-pl
     if (Array.isArray(quota.tools)) assert.ok(!quota.tools.includes("chat_suggest"));
   }
 });
+
+test("chat_suggest refuses a provider without a model and a model the account cannot run", async () => {
+  const { store } = setup();
+  const chat = store.createChat({ title: "a" });
+  const seen = [];
+  const checkModel = async (account, model) => {
+    seen.push([account, model]);
+    return account === "claude" && model !== "haiku" ? `engine account "claude" does not list model "${model}"; valid ids: opus, sonnet, haiku` : null;
+  };
+  const tools = createChatTools({ store, chatId: chat.id, checkModel });
+  const bare = await tools.chat_suggest.execute({ ...suggestion, provider: "claude" });
+  assert.ok(bare.isError && /without a model/.test(json(bare).error));
+  const wrong = await tools.chat_suggest.execute({ ...suggestion, provider: "claude", model: "claude-opus-4[1m]" });
+  assert.ok(wrong.isError && /valid ids/.test(json(wrong).error));
+  assert.ok(!(await tools.chat_suggest.execute({ ...suggestion, provider: "claude", model: "haiku" })).isError);
+  assert.ok(!(await tools.chat_suggest.execute({ ...suggestion, model: "glm-5.3" })).isError);
+  assert.deepEqual(seen.at(-1), [null, "glm-5.3"], "a bare model is checked on the chat's own engine");
+  assert.ok(!(await tools.chat_suggest.execute(suggestion)).isError, "no model named: no check");
+  assert.equal(seen.length, 3);
+});
+
+test("GET /api/chats/:id carries usage by model; a rewind may not cut back past a folder switch", async () => {
+  const { store, app } = setup();
+  const chat = store.createChat({ title: "a" });
+  const user = store.appendEvent(chat.id, null, "user", { text: "سلام" });
+  const runId = store.startRun(chat.id);
+  store.appendEvent(chat.id, runId, "run.started", { model: "glm-5.3" });
+  store.appendEvent(chat.id, runId, "usage", { inputTokens: 90, outputTokens: 10 });
+  store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+  const got = await (await app.request(`/api/chats/${chat.id}`)).json();
+  assert.deepEqual(got.chat.usage, { total: 100, byModel: [{ model: "glm-5.3", tokens: 100 }] });
+  assert.equal(got.chat.waitingForOwner, false);
+
+  const note = store.appendEvent(chat.id, null, "note", { text: "moved" });
+  store.setKv(`repomove:${chat.id}`, { from: "a", to: "b", noteId: note.id });
+  assert.equal((await post(app, `/api/chats/${chat.id}/rewind`, { eventId: user.id })).status, 409);
+  const later = store.appendEvent(chat.id, null, "user", { text: "بعد" });
+  assert.equal((await post(app, `/api/chats/${chat.id}/rewind`, { eventId: later.id })).status, 200);
+});
+
+test("GET /api/chats/:id/context: the last run's prompt tokens over the window", async () => {
+  const { store, app } = setup();
+  const chat = store.createChat({ title: "a" });
+  assert.equal((await (await app.request(`/api/chats/${chat.id}/context`)).json()).available, false);
+  const runId = store.startRun(chat.id);
+  store.appendEvent(chat.id, runId, "run.started", { model: "sonnet" });
+  store.appendEvent(chat.id, runId, "usage", { inputTokens: 50_000, outputTokens: 10 });
+  store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+  const got = await (await app.request(`/api/chats/${chat.id}/context`)).json();
+  assert.deepEqual(got, { available: true, used: 50_000, window: 200_000, percent: 25, model: "sonnet" });
+});

@@ -379,6 +379,7 @@ export function createOpenAIProvider({
         if ((limited || transient) && !error?.partialText && attempt < 6) {
           const wait = Math.min(error.retryAfterMs || 2_000 * 2 ** attempt, 60_000);
           log.error?.(`[openai] ${limited ? "rate limited" : `transient error (${error?.message})`} — retry in ${Math.round(wait / 1000)}s`);
+          await emit?.({ type: "api-retry", attempt: attempt + 1, maxRetries: 6, delayMs: wait, status: error?.status ?? (limited ? 429 : null) });
           await new Promise((resolve) => setTimeout(resolve, wait));
           continue;
         }
@@ -866,7 +867,8 @@ export function createOpenAIProvider({
           headers: authHeaders(),
           signal: AbortSignal.timeout(8_000),
         });
-        return { ok: response.ok || response.status === 401, status: response.status, ms: Date.now() - started };
+        // 401/403 = the key is refused: not healthy (the engine card would otherwise say «ready»).
+        return { ok: response.ok, status: response.status, ...(response.ok ? {} : { error: `http_${response.status}` }), ms: Date.now() - started };
       } catch (error) {
         return {
           ok: false,

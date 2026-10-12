@@ -94,5 +94,13 @@
   "روشن": "On",
   "خاموش": "Off",
   "ذخیره شد": "Saved",
-  "ذخیره": "Save"
+  "ذخیره": "Save",
+  "گفتگو": "Chat",
+  "رفتار کادر پیام و ادامهٔ کار؛ برای همهٔ گفتگوها و بی‌ری‌استارت.": "How the message box and auto-continue behave; for every chat, no restart.",
+  "ظاهر": "Appearance",
+  "پوستهٔ رابط روی همین مرورگر؛ روشن و تیره جداست و از دکمهٔ بالای صفحه عوض می‌شود. اسم {name} و لوگو با پوسته عوض نمی‌شود.": "The interface skin, for this browser only. Light and dark are separate and switch from the button at the top. The skin does not change {name}'s name or logo.",
+  "پیشنهاد پیام بعدی": "Next-message suggestion",
+  "کم‌رنگ در کادر، Tab برای پذیرفتن؛ فقط Claude": "Faint text in the box, Tab to accept; Claude only",
+  "ادامهٔ خودکار بعد از سقف": "Auto-continue after the limit",
+  "با بازشدن سقف مصرف، حداکثر سه بار؛ پیام شما لغوش می‌کند": "When the usage limit resets, up to three times; any message from you cancels it"
 }

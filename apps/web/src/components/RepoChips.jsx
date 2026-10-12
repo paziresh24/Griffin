@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, usePolling } from "../api.js";
 import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-switch.js";
 import { t } from "../i18n.js";
+import { copyText } from "../copy.js";
 
 // The row above the composer: where the chat runs, the repo it works on (picked
 // before the first message; then fixed), its own branch and its worktree. Each chip does something:
@@ -25,22 +26,7 @@ async function switchFolder(chatId, repo) {
   }
 }
 
-async function copyText(value) {
-  try {
-    await navigator.clipboard.writeText(value);
-    return true;
-  } catch {
-    // Plain HTTP (LAN address): the old path.
-    const area = Object.assign(document.createElement("textarea"), { value });
-    document.body.append(area);
-    area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    return ok;
-  }
-}
-
-const chip = "inline-flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-full bg-muted px-2.5 text-[11px] text-muted-foreground hover:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0";
+const chip = "g-chip inline-flex h-7 max-w-56 shrink-0 items-center gap-1.5 rounded-full bg-muted px-2.5 text-[11px] text-muted-foreground hover:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0";
 
 function CopyChip({ icon, value, label, title }) {
   const [copied, setCopied] = useState(false);

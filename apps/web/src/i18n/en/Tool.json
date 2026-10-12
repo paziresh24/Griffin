@@ -159,5 +159,21 @@
   "دستور در سندباکس": "Command in the sandbox",
   "دستور داخل پاد {pod}": "Command in pod {pod}",
   "کنسول میکروتیک {router}": "MikroTik console {router}",
-  "دستور": "Command"
+  "دستور": "Command",
+  "اجرای دستور": "Run command",
+  "ویرایش فایل (چندبخشی)": "Edit file (multi-part)",
+  "ویرایش نوت‌بوک": "Edit notebook",
+  "افزودن کار": "Add task",
+  "به‌روزرسانی کار": "Update task",
+  "فهرست کارها": "List tasks",
+  "خواندن کار": "Read task",
+  "خروجی کار": "Task output",
+  "توقف کار": "Stop task",
+  "پایش": "Monitor",
+  "بیدارباش": "Wake-up",
+  "صفحهٔ claude.ai": "claude.ai page",
+  "گردش‌کار": "Workflow",
+  "مهارت": "Skill",
+  "یافتن ابزار": "Find tool",
+  "پایان نقشه": "Finish plan"
 }

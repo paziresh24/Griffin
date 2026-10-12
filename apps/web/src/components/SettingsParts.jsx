@@ -9,7 +9,7 @@ export function Group({ title, action, children }) {
           {action ? <div className="ms-auto">{action}</div> : null}
         </div>
       ) : null}
-      <div className="divide-y overflow-hidden rounded-2xl border bg-card">{children}</div>
+      <div className="g-group divide-y overflow-hidden rounded-2xl border bg-card">{children}</div>
     </section>
   );
 }
@@ -17,13 +17,13 @@ export function Group({ title, action, children }) {
 export function Item({ icon: Icon, tint = "bg-muted text-muted-foreground", title, subtitle, trailing, onClick, children }) {
   const Row = onClick ? "button" : "div";
   return (
-    <div>
+    <div className="g-item">
       <Row
         {...(onClick ? { type: "button", onClick } : {})}
-        className={`flex w-full items-center gap-3 px-4 py-3 text-start ${onClick ? "hover:bg-muted/50" : ""}`}
+        className={`g-item-row flex w-full items-center gap-3 px-4 py-3 text-start ${onClick ? "hover:bg-muted/50" : ""}`}
       >
         {Icon ? (
-          <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${tint}`}>
+          <span className={`g-item-icon flex size-8 shrink-0 items-center justify-center rounded-lg ${tint}`}>
             <Icon className="size-4" />
           </span>
         ) : null}
@@ -40,7 +40,7 @@ export function Item({ icon: Icon, tint = "bg-muted text-muted-foreground", titl
 
 export function SectionHeader({ title, description, action }) {
   return (
-    <div className="mb-6 flex items-start gap-3">
+    <div className="g-section-head mb-6 flex items-start gap-3">
       <div className="min-w-0 flex-1">
         <h2 className="text-xl font-semibold">{title}</h2>
         {description ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p> : null}

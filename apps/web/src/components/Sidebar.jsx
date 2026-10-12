@@ -2,41 +2,38 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import {
   AlarmClock, Radar, TerminalSquare, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronRight, ChevronUp,
-  Filter, FolderInput, FolderPlus, FolderTree, LogOut, MessageCircle, MoreHorizontal, Pencil, Pin, PinOff, Plus, Search,
+  CircleHelp, Coins, ExternalLink, Filter, FolderInput, FolderPlus, FolderTree, LogOut, Mail, MailOpen, MessageCircle, MoreHorizontal, Pencil, Pin, PinOff, Plus, Search,
   Settings2, Trash2, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate, usePolling } from "../api.js";
 import { BRAND, agentMeta, readSetting, writeSetting } from "../brand.js";
 import { textDir } from "../dir.js";
-import { locale, num, t } from "../i18n.js";
-import { groupSections } from "../chat-groups.js";
+import { num, t } from "../i18n.js";
+import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, sortChats } from "../chat-list.js";
+import { isUnreadChat, markSeen, markUnread, seenOf, useSeenVersion } from "../seen.js";
+import { isPlainClick } from "../sidebar-width.js";
+import { useSkin } from "../skin.js";
 import { PROFILE_EVENT, ownerView } from "../profile.js";
 import { AgentGlyph, AgentPicker } from "./Controls.jsx";
 import { SidebarNotes } from "./Notes.jsx";
 import { UsageBadge } from "./Usage.jsx";
 import { SidebarSuggestions } from "./ChatTools.jsx";
 
-const SORTS = [
-  { id: "updated", label: t("جدیدترین") },
-  { id: "title", label: t("نام (الفبا)") },
-  { id: "running", label: t("در حال اجرا اول") },
-];
+const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));
 
-const GROUPS = [
-  { id: "none", label: t("بدون گروه‌بندی") },
-  { id: "custom", label: t("گروه‌های خودم") },
-  { id: "owner", label: t("بر اساس صاحب") },
-  { id: "agent", label: t("بر اساس ایجنت") },
-  { id: "status", label: t("بر اساس وضعیت") },
-];
-
-const FILTERS = [
-  { id: "all", label: t("همه") },
-  { id: "running", label: t("در حال اجرا") },
-  { id: "error", label: t("دارای خطا") },
-  { id: "pinned", label: t("سنجاق‌شده") },
-];
+// A list choice kept across reloads; a stored value that is no longer offered falls back.
+function useStored(key, initial, allowed) {
+  const [value, setValue] = useState(() => {
+    const saved = readSetting(key, initial);
+    return allowed.some((item) => item.id === saved) ? saved : initial;
+  });
+  const set = (next) => {
+    setValue(next);
+    writeSetting(key, next);
+  };
+  return [value, set];
+}
 
 // Each tab lists only its own threads: «گفتگو» is what the owner started by hand; Telegram-born,
 // peer, ops-room and job threads live under their tabs. Sub-agent chats never appear here — the
@@ -53,14 +50,16 @@ const sectionOfPage = (page) => Object.keys(SECTIONS).find((k) => SECTIONS[k].pa
 
 export function Sidebar({ chats, archived, groups = [], onNewChat = null, activeId, activeSource = null, activePersonId = null, page = null, agent, onAgentChange, agentLocked = false, onClose }) {
   const section = sectionOfPage(page) || (!page && activeSource && SECTIONS[activeSource] ? activeSource : "manual");
+  const karsara = useSkin() === "karsara";
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState("updated");
+  const [sort, setSort] = useStored("griffin.sidebar.sort", "updated", SORTS);
+  const seenVersion = useSeenVersion(); // read state re-shapes the list (unread filter, sort, groups)
   // Telegram and peer threads group by whose they are by default, so one person's threads can be
   // folded away while another's stay open. The choice is kept, so the owner's groups stay up.
   const [groupChoice, setGroupChoice] = useState(() => {
     try { return JSON.parse(readSetting("griffin.sidebar.groupBy", "{}")) || {}; } catch { return {}; }
   });
-  const groupBy = groupChoice[section] || (section === "telegram" || section === "peer" ? "owner" : "none");
+  const groupBy = (GROUPS.some((g) => g.id === groupChoice[section]) && groupChoice[section]) || (section === "telegram" || section === "peer" ? "owner" : "none");
   const setGroupBy = (value) => setGroupChoice((g) => {
     const next = { ...g, [section]: value };
     writeSetting("griffin.sidebar.groupBy", JSON.stringify(next));
@@ -74,7 +73,7 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
     writeSetting("griffin.sidebar.collapsed", JSON.stringify(next));
     return next;
   });
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useStored("griffin.sidebar.filter", "all", FILTERS);
   const [showArchived, setShowArchived] = useState(false);
 
   const list = useMemo(
@@ -84,66 +83,22 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
   const archivedHere = useMemo(() => archived.filter((c) => (c.source || "manual") === section), [archived, section]);
 
   const prepared = useMemo(() => {
-    let items = [...list];
-    if (filter === "running") items = items.filter((c) => c.runStatus === "running");
-    else if (filter === "error") items = items.filter((c) => c.runStatus === "error");
-    else if (filter === "pinned") items = items.filter((c) => c.pinned);
-
     const q = query.trim().toLowerCase();
-    if (q) items = items.filter((c) => c.title.toLowerCase().includes(q));
+    const items = q ? list.filter((c) => c.title.toLowerCase().includes(q)) : list;
+    return sortChats(filterChats(items, filter, isUnread, { keepId: activeId }), sort, isUnread);
+  }, [list, query, sort, filter, activeId, seenVersion]);
 
-    items.sort((a, b) => {
-      if (sort === "title") return String(a.title).localeCompare(String(b.title), locale);
-      if (sort === "running") {
-        const ar = a.runStatus === "running" ? 0 : 1;
-        const br = b.runStatus === "running" ? 0 : 1;
-        if (ar !== br) return ar - br;
-      }
-      return String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
-    });
-    return items;
-  }, [list, query, sort, filter]);
-
-  const sections = useMemo(() => {
-    if (groupBy === "custom") return groupSections(prepared, groups, { narrowed: Boolean(query.trim()) || filter !== "all" || showArchived });
-    if (groupBy === "owner") {
-      const map = new Map();
-      for (const chat of prepared) {
-        const key = chat.ownerKey || "none";
-        if (!map.has(key)) map.set(key, { key: `${section}:${key}`, title: chat.ownerLabel || t("بدون صاحب"), chats: [], collapsible: true });
-        map.get(key).chats.push(chat);
-      }
-      return [...map.values()];
-    }
-    if (groupBy === "agent") {
-      const map = new Map();
-      for (const chat of prepared) {
-        const key = chat.agent || "griffin";
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push(chat);
-      }
-      return [...map.entries()].map(([id, items]) => ({
-        title: agentMeta(id).label,
-        chats: items,
-      }));
-    }
-    if (groupBy === "status") {
-      const running = prepared.filter((c) => c.runStatus === "running");
-      const errored = prepared.filter((c) => c.runStatus === "error");
-      const rest = prepared.filter((c) => c.runStatus !== "running" && c.runStatus !== "error");
-      return [
-        running.length ? { title: t("در حال اجرا"), chats: running } : null,
-        errored.length ? { title: t("خطا"), chats: errored } : null,
-        rest.length ? { title: t("بقیه"), chats: rest } : null,
-      ].filter(Boolean);
-    }
-    const pinned = prepared.filter((c) => c.pinned);
-    const rest = prepared.filter((c) => !c.pinned);
-      return [
-      pinned.length ? { title: t("سنجاق‌شده"), chats: pinned } : null,
-      { title: null, chats: rest },
-    ].filter((s) => s && s.chats.length);
-  }, [prepared, groupBy, groups, query, filter, showArchived, section]);
+  const sections = useMemo(
+    () =>
+      groupChats(prepared, groupBy, {
+        isUnread,
+        agentLabel: (id) => agentMeta(id).label,
+        groups,
+        narrowed: Boolean(query.trim()) || filter !== "all" || showArchived,
+        scope: section,
+      }),
+    [prepared, groupBy, groups, query, filter, showArchived, section, seenVersion],
+  );
 
   const open = (id) => {
     navigate(id);
@@ -161,10 +116,10 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
   };
 
   return (
-    <aside className="flex h-full w-full flex-col bg-card">
-      <div className="flex min-w-0 items-center gap-3 px-3 pb-3 pt-[max(env(safe-area-inset-top),0.85rem)]">
-        <img src="/icon.svg" alt={BRAND.name} className="size-10 shrink-0 rounded-xl" title={BRAND.name} />
-        <AgentPicker agent={agent} onChange={onAgentChange} locked={agentLocked} className="min-w-[11rem]" />
+    <aside className="g-sidebar flex h-full w-full flex-col bg-card">
+      <div className={`flex min-w-0 items-center ${karsara ? "gap-2 px-2 pb-2 pt-[max(env(safe-area-inset-top),0.6rem)]" : "gap-3 px-3 pb-3 pt-[max(env(safe-area-inset-top),0.85rem)]"}`}>
+        {karsara ? null : <img src="/icon.svg" alt={BRAND.name} className="size-10 shrink-0 rounded-xl" title={BRAND.name} />}
+        <AgentPicker agent={agent} onChange={onAgentChange} locked={agentLocked} className={karsara ? "min-w-[10rem]" : "min-w-[11rem]"} />
         {onClose ? (
           <button type="button" onClick={onClose} className="rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("بستن")}>
             <X className="size-5" />
@@ -173,7 +128,7 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
       </div>
 
       <div className="px-2">
-        <label className="flex items-center gap-1 rounded-lg bg-muted py-0.5 pe-0.5 ps-2.5">
+        <label className="g-sidebar-search flex items-center gap-1 rounded-lg bg-muted py-0.5 pe-0.5 ps-2.5">
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             data-reload-safe=""
@@ -191,39 +146,45 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
             </button>
           ) : null}
           {section === "telegram" ? null : <>
-            <SortMenu sort={sort} groupBy={groupBy} onSort={setSort} onGroupBy={setGroupBy} />
-            <FilterMenu filter={filter} onFilter={setFilter} />
+            <SortMenu sort={sort} groupBy={groupBy} onSort={setSort} onGroupBy={setGroupBy} karsara={karsara} />
+            <FilterMenu filter={filter} onFilter={setFilter} karsara={karsara} />
           </>}
         </label>
       </div>
 
       {/* Only "new" and the search stay fixed; everything else scrolls with the chat list. */}
       <div className="mt-2 px-2">
-        <NavButton active={!page && !activeId} icon={Bot} label={t("جدید")} onClick={() => startChat(null)} />
+        <NavButton active={!page && !activeId} icon={Bot} href="#/" label={t("جدید")} onClick={() => startChat(null)} karsara={karsara} />
       </div>
 
       <nav className="scrollbar-thin mt-0.5 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {section === "manual" && !showArchived ? <SidebarNotes refreshKey={chats} onNavigate={onClose} /> : null}
         <SidebarSuggestions refreshKey={chats} onNavigate={onClose} />
         <div className="space-y-0.5">
-          <NavButton active={section === "telegram"} icon={MessageCircle} label={t("تلگرام")} onClick={() => go("/telegram")} />
-          <NavButton active={section === "job"} icon={AlarmClock} label={t("جاب")} onClick={() => go("/jobs")} />
-          <NavButton active={section === "ops"} icon={Radar} label={t("حادثه‌ها")} onClick={() => go("/incidents")} />
-          <NavButton active={section === "peer"} icon={Users} label={t("ایجنت‌های همکاران")} onClick={() => go("/peers")} />
-          <NavButton active={section === "workbench"} icon={TerminalSquare} label={t("میز کار")} onClick={() => go("/workbench")} />
+          <NavButton active={section === "telegram"} icon={MessageCircle} href="#/telegram" label={t("تلگرام")} onClick={() => go("/telegram")} karsara={karsara} />
+          <NavButton active={section === "job"} icon={AlarmClock} href="#/jobs" label={t("جاب")} onClick={() => go("/jobs")} karsara={karsara} />
+          <NavButton active={section === "ops"} icon={Radar} href="#/incidents" label={t("حادثه‌ها")} onClick={() => go("/incidents")} karsara={karsara} />
+          <NavButton active={section === "peer"} icon={Users} href="#/peers" label={t("ایجنت‌های همکاران")} onClick={() => go("/peers")} karsara={karsara} />
+          <NavButton active={section === "workbench"} icon={TerminalSquare} href="#/workbench" label={t("میز کار")} onClick={() => go("/workbench")} karsara={karsara} />
         </div>
 
-        <div className="my-4 flex items-center justify-center" aria-hidden>
-          <span className="size-1 rounded-full bg-border" />
-        </div>
+        {karsara ? (
+          <div className="mt-2" />
+        ) : (
+          <div className="my-4 flex items-center justify-center" aria-hidden>
+            <span className="size-1 rounded-full bg-border" />
+          </div>
+        )}
 
         {section === "telegram" ? (
           <MotherList query={query} activePersonId={activePersonId} onNavigate={onClose} />
         ) : (
           <>
-          <h2 className="truncate px-1 text-start text-xs font-medium text-muted-foreground">
-            {showArchived ? t("بایگانی") : SECTIONS[section].label}
-          </h2>
+          {karsara && !showArchived ? null : (
+            <h2 className="truncate px-1 text-start text-xs font-medium text-muted-foreground">
+              {showArchived ? t("بایگانی") : SECTIONS[section].label}
+            </h2>
+          )}
           <div className="mt-2" />
           {sections.map((item) => (
             <Section
@@ -239,6 +200,7 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
               onToggle={() => toggleGroup(item.key)}
               onGroupCreated={() => setGroupBy("custom")}
               onNewChat={showArchived ? null : startChat}
+              karsara={karsara}
             />
           ))}
           {groupBy === "custom" && !showArchived ? (
@@ -262,12 +224,12 @@ export function Sidebar({ chats, archived, groups = [], onNewChat = null, active
         )}
       </nav>
 
-      <UserBar onNavigate={onClose} />
+      <UserBar onNavigate={onClose} karsara={karsara} />
     </aside>
   );
 }
 
-function SortMenu({ sort, groupBy, onSort, onGroupBy }) {
+function SortMenu({ sort, groupBy, onSort, onGroupBy, karsara = false }) {
   const [open, setOpen] = useState(false);
   const active = sort !== "updated" || groupBy !== "none";
   return (
@@ -277,15 +239,17 @@ function SortMenu({ sort, groupBy, onSort, onGroupBy }) {
           type="button"
           title={t("مرتب‌سازی")}
           aria-label={t("مرتب‌سازی")}
-          className={`press flex size-8 items-center justify-center rounded-lg ${
-            active || open ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          className={`press flex items-center justify-center rounded-lg ${
+            karsara
+              ? `size-7 hover:bg-muted ${active ? "text-primary" : "text-muted-foreground hover:text-foreground"}`
+              : `size-8 ${active || open ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`
           }`}
         >
-          <ArrowUpDown className="size-4" />
+          <ArrowUpDown className={karsara ? "size-3.5" : "size-4"} />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="start" sideOffset={6} className="pop z-50 w-52 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-xl">
+        <Popover.Content align="start" sideOffset={6} className="g-menu pop z-50 w-52 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-xl">
           <p className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">{t("مرتب‌سازی")}</p>
           {SORTS.map((item) => (
             <MenuPick key={item.id} icon={item.id === "title" ? ArrowDownAZ : ArrowUpDown} label={item.label} selected={sort === item.id} onClick={() => { onSort(item.id); setOpen(false); }} />
@@ -303,7 +267,7 @@ function SortMenu({ sort, groupBy, onSort, onGroupBy }) {
   );
 }
 
-function FilterMenu({ filter, onFilter }) {
+function FilterMenu({ filter, onFilter, karsara = false }) {
   const [open, setOpen] = useState(false);
   const active = filter !== "all";
   return (
@@ -313,15 +277,17 @@ function FilterMenu({ filter, onFilter }) {
           type="button"
           title={t("فیلتر")}
           aria-label={t("فیلتر")}
-          className={`press flex size-8 items-center justify-center rounded-lg ${
-            active || open ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          className={`press flex items-center justify-center rounded-lg ${
+            karsara
+              ? `size-7 hover:bg-muted ${active ? "text-primary" : "text-muted-foreground hover:text-foreground"}`
+              : `size-8 ${active || open ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`
           }`}
         >
-          <Filter className="size-4" />
+          <Filter className={karsara ? "size-3.5" : "size-4"} />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="start" sideOffset={6} className="pop z-50 w-44 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-xl">
+        <Popover.Content align="start" sideOffset={6} className="g-menu pop z-50 w-44 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-xl">
           {FILTERS.map((item) => (
             <MenuPick key={item.id} label={item.label} selected={filter === item.id} onClick={() => { onFilter(item.id); setOpen(false); }} />
           ))}
@@ -333,7 +299,7 @@ function FilterMenu({ filter, onFilter }) {
 
 function MenuPick({ icon: Icon, label, selected, onClick }) {
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-muted">
+    <button type="button" onClick={onClick} className="g-menu-row flex w-full items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-muted">
       {Icon ? <Icon className="size-3.5 text-muted-foreground" /> : null}
       <span className="flex-1 text-start">{label}</span>
       {selected ? <Check className="size-3.5 text-primary" /> : null}
@@ -341,8 +307,17 @@ function MenuPick({ icon: Icon, label, selected, onClick }) {
   );
 }
 
-function UserBar({ onNavigate }) {
+function UserBar({ onNavigate, karsara = false }) {
   const [open, setOpen] = useState(false);
+  // Something to connect (no engine with a working key): marked here, so it is seen without opening Settings.
+  const [setupMissing, setSetupMissing] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api("/api/setup").then((r) => live && setSetupMissing(Boolean(r?.needsEngine)), () => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   // The owner's name and photo (profile.js). The server waits up to 3 s for a Telegram photo on its
   // way, so a first answer with Telegram's name and no photo is asked once more a little later;
   // asked again now and then so a later Telegram connection shows up.
@@ -387,6 +362,11 @@ function UserBar({ onNavigate }) {
     window.location.hash = hash;
     onNavigate?.();
   };
+  // Settings opens on the section it last showed (Settings.jsx readSection).
+  const goTokens = () => {
+    writeSetting("griffin.settings.section", "tokens");
+    go("/settings");
+  };
   const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
 
   return (
@@ -395,16 +375,19 @@ function UserBar({ onNavigate }) {
         <Popover.Trigger asChild>
           <button
             type="button"
-            className="press flex min-w-0 flex-1 items-center gap-2.5 rounded-xl bg-muted/50 px-2 py-1.5 text-start hover:bg-muted data-[state=open]:bg-muted"
+            className={`g-user-bar press flex min-w-0 flex-1 items-center text-start hover:bg-muted data-[state=open]:bg-muted ${
+              karsara ? "min-h-11 gap-2 rounded-md px-2" : "gap-2.5 rounded-xl bg-muted/50 px-2 py-1.5"
+            }`}
             aria-label={t("منوی کاربر")}
           >
             <img
               src={owner.photo}
               alt=""
-              className={`size-9 shrink-0 rounded-full ${owner.isPhoto ? "object-cover" : ""}`}
+              className={`${karsara ? "size-6" : "size-9"} shrink-0 rounded-full ${owner.isPhoto ? "object-cover" : ""}`}
               onError={owner.isPhoto ? onPhotoError : undefined}
             />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium" dir="auto">{owner.name}</span>
+            <span className={`min-w-0 flex-1 truncate text-sm ${karsara ? "" : "font-medium"}`} dir="auto">{owner.name}</span>
+            {setupMissing ? <span className="size-2 shrink-0 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : null}
             <ChevronUp className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "opacity-70"}`} />
           </button>
         </Popover.Trigger>
@@ -414,11 +397,12 @@ function UserBar({ onNavigate }) {
             align="start"
             sideOffset={8}
             avoidCollisions={false}
-            className="pop z-50 w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-xl border bg-card p-1 shadow-xl"
+            className="g-menu pop z-50 w-[var(--radix-popover-trigger-width)] overflow-hidden rounded-xl border bg-card p-1 shadow-xl"
           >
             <MenuRow icon={Bot} label={t("ایجنت‌ها")} onClick={() => go("/agents")} />
+            <MenuRow icon={Coins} label={t("مصرف توکن")} onClick={goTokens} />
             <UsageBadge />
-            <MenuRow icon={Settings2} label={t("تنظیمات")} onClick={() => go("/settings")} />
+            <MenuRow icon={Settings2} label={t("تنظیمات")} onClick={() => go("/settings")} warn={setupMissing} />
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
@@ -435,32 +419,41 @@ function UserBar({ onNavigate }) {
   );
 }
 
-function MenuRow({ icon: Icon, label, onClick }) {
+function MenuRow({ icon: Icon, label, onClick, warn = false }) {
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm hover:bg-muted">
+    <button type="button" onClick={onClick} className="g-menu-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm hover:bg-muted">
       <Icon className="size-4 text-muted-foreground" />
       <span>{label}</span>
+      {warn ? <span className="ms-auto size-2 rounded-full bg-warn" aria-hidden /> : null}
     </button>
   );
 }
 
-function NavButton({ active, icon: Icon, label, onClick }) {
+// A real link: middle-click, Ctrl+click and «Open in new tab» open the page in another tab; a
+// plain click stays in this one. Under the Karsara skin a flat list row (g-nav-row).
+function NavButton({ active, icon: Icon, href, label, onClick, karsara = false }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <a
+      href={href}
+      onClick={(event) => {
+        if (!isPlainClick(event)) return;
+        event.preventDefault();
+        onClick();
+      }}
       aria-current={active ? "page" : undefined}
-      className={`flex w-full items-center justify-start gap-2.5 rounded-lg px-3 py-2 text-sm font-medium ${
-        active ? "bg-primary/12 text-primary" : "text-foreground/80 hover:bg-muted/70 hover:text-foreground"
+      className={`g-nav-row flex w-full items-center justify-start text-sm ${
+        karsara
+          ? `min-h-9 gap-2 rounded-md px-2.5 ${active ? "bg-muted text-foreground" : "text-foreground hover:bg-muted"}`
+          : `gap-2.5 rounded-lg px-3 py-2 font-medium ${active ? "bg-primary/12 text-primary" : "text-foreground/80 hover:bg-muted/70 hover:text-foreground"}`
       }`}
     >
-      <Icon className="size-4 shrink-0" />
+      <Icon className={`size-4 shrink-0 ${karsara ? "text-muted-foreground" : ""}`} />
       <span>{label}</span>
-    </button>
+    </a>
   );
 }
 
-// The owner's groups: created from the list or from a chat's "move to group", renamed and deleted
+// The owner's groups: created from the list or from a chat's «انتقال به گروه», renamed and deleted
 // from the group's heading. Deleting a group never touches its chats; they become ungrouped.
 async function newGroup() {
   const name = window.prompt(t("نام گروه جدید"))?.trim();
@@ -473,7 +466,7 @@ const groupFailed = () => {
   return {};
 };
 
-function Section({ title, group = null, chats, groups, activeId, onOpen, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat }) {
+function Section({ title, group = null, chats, groups, activeId, onOpen, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat, karsara = false }) {
   const [menu, setMenu] = useState(false);
   // An empty group of the owner's still shows (a new one must show up to be used).
   if (!chats.length && !group) return null;
@@ -526,7 +519,7 @@ function Section({ title, group = null, chats, groups, activeId, onOpen, collaps
           {menu ? (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
-              <div className="absolute end-2 top-8 z-20 w-44 overflow-hidden rounded-lg border bg-card text-sm shadow-lg">
+              <div className="g-menu absolute end-2 top-8 z-20 w-44 overflow-hidden rounded-lg border bg-card text-sm shadow-lg">
                 <ChatMenuItem icon={Pencil} onClick={rename}>{t("تغییر نام گروه")}</ChatMenuItem>
                 <ChatMenuItem icon={Trash2} onClick={remove}>{t("حذف گروه")}</ChatMenuItem>
               </div>
@@ -536,20 +529,23 @@ function Section({ title, group = null, chats, groups, activeId, onOpen, collaps
       ) : title ? <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">{title}</p> : <div className="pt-1" />}
       {collapsed ? null : <ul>
         {chats.map((chat) => (
-          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} onOpen={onOpen} groups={groups} onGroupCreated={onGroupCreated} />
+          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} onOpen={onOpen} groups={groups} onGroupCreated={onGroupCreated} karsara={karsara} />
         ))}
       </ul>}
     </div>
   );
 }
 
-function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
+function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated, karsara = false }) {
   const [menu, setMenu] = useState(false);
   const [moving, setMoving] = useState(false); // the menu shows the group list instead
   const closeMenu = () => {
     setMenu(false);
     setMoving(false);
   };
+  useSeenVersion(); // a markSeen elsewhere (opening this chat) clears the badge live
+  const unread = isUnread(chat);
+  const state = chatState(chat, isUnread);
   const agents = chatAgents(chat);
   const patch = (body) => api(`/api/chats/${chat.id}`, { method: "PATCH", body }).catch(() => {});
   const moveTo = (groupId) => {
@@ -570,22 +566,49 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
   };
   return (
     <li className="relative">
-      <div className={`group flex items-center rounded-lg ${active ? "bg-muted" : "hover:bg-muted/60"}`}>
-        <button type="button" onClick={() => onOpen(chat.id)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-start text-sm">
-          <ChatAgentGlyphs agents={agents} />
-          <span className="min-w-0 flex-1 truncate" dir={textDir(chat.title)}>
+      <div
+        className={`g-chat-row group flex items-center rounded-lg ${active ? "bg-muted" : "hover:bg-muted/60"}`}
+        data-active={active ? "true" : undefined}
+        onContextMenu={(event) => {
+          // Right click = the «گزینه‌ها» menu. Shift+right click keeps the browser's own menu.
+          if (event.shiftKey) return;
+          event.preventDefault();
+          setMenu(true);
+        }}
+      >
+        {/* A real link: middle-click, Ctrl+click and the browser's «Open in new tab» work. */}
+        <a
+          href={`#/c/${chat.id}`}
+          onClick={(event) => {
+            if (!isPlainClick(event)) return;
+            event.preventDefault();
+            markSeen(chat.id, chat.updatedAt); // also the open chat, after «علامت خوانده‌نشده»
+            onOpen(chat.id);
+          }}
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-start text-sm"
+        >
+          {karsara ? null : <ChatAgentGlyphs agents={agents} />}
+          <span className={`min-w-0 flex-1 truncate ${unread ? "font-semibold text-foreground" : ""}`} dir={textDir(chat.title)}>
             {chat.title}
           </span>
-          {chat.runStatus === "running" ? (
-            <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
-          ) : chat.runStatus === "error" ? (
-            <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
+          {state.id === "ask" ? (
+            <span className="shrink-0" title={state.label}><CircleHelp className="size-3.5 text-warn" aria-label={state.label} /></span>
+          ) : state.id === "running" ? (
+            karsara ? (
+              <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" title={state.label} />
+            ) : (
+              <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
+            )
+          ) : state.id === "error" ? (
+            <span className="size-1.5 shrink-0 rounded-full bg-bad" title={state.label} />
           ) : null}
-        </button>
+          {unread ? <span className="size-2 shrink-0 rounded-full bg-primary ring-2 ring-primary/25" title={t("محتوای دیده‌نشده")} /> : null}
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{ago(chat.updatedAt || chat.createdAt)}</span>
+        </a>
         <button
           type="button"
           onClick={() => (menu ? closeMenu() : setMenu(true))}
-          className="me-1 rounded p-1 text-muted-foreground opacity-100 hover:bg-background md:opacity-0 md:group-hover:opacity-100"
+          className="me-1 rounded p-1 text-muted-foreground opacity-100 hover:bg-background md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
           aria-label={t("گزینه‌ها")}
         >
           <MoreHorizontal className="size-4" />
@@ -593,32 +616,54 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
       </div>
       {menu ? (
         <>
-          <div className="fixed inset-0 z-10" onClick={closeMenu} />
+          <div
+            className="fixed inset-0 z-10"
+            onClick={closeMenu}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              closeMenu();
+            }}
+          />
           {moving ? (
-            <div className="scrollbar-thin absolute end-2 top-9 z-20 max-h-80 w-56 overflow-y-auto rounded-lg border bg-card text-sm shadow-lg">
+            <div className="g-menu scrollbar-thin absolute end-2 top-9 z-20 max-h-80 w-56 overflow-y-auto rounded-lg border bg-card text-sm shadow-lg">
               <ChatMenuItem icon={ChevronRight} onClick={() => setMoving(false)}>{t("انتقال به گروه")}</ChatMenuItem>
               <div className="my-1 border-t" />
               {groups.map((g) => (
-                <button key={g.id} type="button" onClick={() => moveTo(g.id)} className="flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
+                <button key={g.id} type="button" onClick={() => moveTo(g.id)} className="g-menu-row flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
                   <span className="min-w-0 flex-1 truncate text-start" dir="auto">{g.name}</span>
                   {chat.groupId === g.id ? <Check className="size-3.5 text-primary" /> : null}
                 </button>
               ))}
               {groups.length ? <div className="my-1 border-t" /> : null}
-              <button type="button" onClick={() => moveTo(null)} className="flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
+              <button type="button" onClick={() => moveTo(null)} className="g-menu-row flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
                 <span className="flex-1 text-start">{t("بدون گروه")}</span>
                 {!groups.some((g) => g.id === chat.groupId) ? <Check className="size-3.5 text-primary" /> : null}
               </button>
               <ChatMenuItem icon={FolderPlus} onClick={moveToNew}>{t("گروه جدید…")}</ChatMenuItem>
             </div>
           ) : (
-          <div className="absolute end-2 top-9 z-20 w-44 overflow-hidden rounded-lg border bg-card text-sm shadow-lg">
+          <div className="g-menu absolute end-2 top-9 z-20 w-48 overflow-hidden rounded-lg border bg-card text-sm shadow-lg">
             <ChatMenuItem icon={chat.pinned ? PinOff : Pin} onClick={() => { closeMenu(); patch({ pinned: !chat.pinned }); }}>
               {chat.pinned ? t("برداشتن سنجاق") : t("سنجاق")}
             </ChatMenuItem>
             <ChatMenuItem icon={Pencil} onClick={rename}>{t("تغییر نام")}</ChatMenuItem>
+            {chat.runStatus === "running" ? null : (
+              <ChatMenuItem
+                icon={unread ? MailOpen : Mail}
+                onClick={() => {
+                  closeMenu();
+                  if (unread) markSeen(chat.id, chat.updatedAt);
+                  else markUnread(chat.id);
+                }}
+              >
+                {unread ? t("علامت خوانده‌شده") : t("علامت خوانده‌نشده")}
+              </ChatMenuItem>
+            )}
             <ChatMenuItem icon={chat.archived ? ArchiveRestore : Archive} onClick={() => { closeMenu(); patch({ archived: !chat.archived }); }}>
               {chat.archived ? t("خروج از بایگانی") : t("بایگانی")}
+            </ChatMenuItem>
+            <ChatMenuItem icon={ExternalLink} onClick={() => { closeMenu(); window.open(`#/c/${chat.id}`, "_blank", "noopener"); }}>
+              {t("باز کردن در تب جدید")}
             </ChatMenuItem>
             <ChatMenuItem icon={FolderInput} onClick={() => setMoving(true)}>{t("انتقال به گروه")}</ChatMenuItem>
           </div>
@@ -657,7 +702,7 @@ function ChatAgentGlyphs({ agents }) {
 
 function ChatMenuItem({ icon: Icon, children, onClick }) {
   return (
-    <button type="button" onClick={onClick} className="flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
+    <button type="button" onClick={onClick} className="g-menu-row flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
       <Icon className="size-4 text-muted-foreground" />
       {children}
     </button>

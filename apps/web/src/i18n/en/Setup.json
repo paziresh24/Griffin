@@ -67,5 +67,18 @@
   "شروع گفتگو": "Start chatting",
   "با اکانت Claude وارد شو؛ {name} توکن بلندمدت را خودش می‌گیرد و نگه می‌دارد.": "Sign in with your Claude account; {name} gets and keeps the long-lived token itself.",
   "ایجنت‌ها با این جواب می‌دهند. کلید رمزنگاری‌شده در سکرت‌منیجر همین سرور می‌ماند.": "Agents answer with this. The key stays encrypted in this server's secret store.",
-  "یا اگر توکن را از قبل داری:": "Or, if you already have a token:"
+  "یا اگر توکن را از قبل داری:": "Or, if you already have a token:",
+  "با اکانت Claude وارد شو": "Sign in with a Claude account",
+  "پرداخت به ازای مصرف": "Pay as you go",
+  "GPT با کلید API": "GPT with an API key",
+  "صدها مدل با یک کلید": "Hundreds of models, one key",
+  "مدل محلی، بدون کلید": "A local model, no key",
+  "Z.ai، vLLM، LM Studio، …": "Z.ai, vLLM, LM Studio, …",
+  "کلید API کرسر": "A Cursor API key",
+  "کلید رد شد — دوباره کپی کن (بدون فاصله). برای اشتراک Claude (توکن sk-ant-oat…) گزینهٔ «اشتراک Pro/Max» را بزن.": "The key was refused — copy it again (no spaces). For a Claude subscription (an sk-ant-oat… token) pick «Pro/Max subscription».",
+  "کدام موتور؟": "Which engine?",
+  "ایجنت‌ها با این فکر می‌کنند و جواب می‌دهند. کلید رمزنگاری‌شده روی همین سرور می‌ماند و جایی نمایش داده نمی‌شود.": "Agents think and answer with this. The key stays encrypted on this server and is never shown.",
+  "نام (اختیاری، مثلاً {engine} شخصی)": "Name (optional, e.g. personal {engine})",
+  "ایجنت اصلی از این موتور استفاده کند": "Let the main agent use this engine",
+  "مدل پیش‌فرض این موتور": "This engine's default model"
 }

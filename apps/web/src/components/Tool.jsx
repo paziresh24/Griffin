@@ -10,10 +10,11 @@ import { MediaView } from "./Media.jsx";
 import { ChartCard } from "./Chart.jsx";
 import { AgentGlyph } from "./Controls.jsx";
 import { t, num } from "../i18n.js";
+import { useSkin } from "../skin.js";
 import {
   AlertTriangle, Boxes, Check, ChevronDown, CircleDashed, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
-  Square,
+  Square, Activity, AlarmClock, CalendarClock, BookOpen,
 } from "lucide-react";
 
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
@@ -117,7 +118,47 @@ const TOOLS = {
   jobs_update: { icon: FolderTree, label: t("ویرایش جاب"), subtitle: (a) => a.name || a.id },
   jobs_delete: { icon: FolderTree, label: t("حذف جاب"), subtitle: (a) => a.id },
   jobs_run: { icon: FolderTree, label: t("اجرای جاب"), subtitle: (a) => a.id },
+
+  // Claude Code's own tools. Griffin's Claude engine runs only griffin MCP tools
+  // with Bash off, but a stray native call still gets a label and icon instead of a raw-name row.
+  Bash: { icon: Terminal, label: t("اجرای دستور"), subtitle: (a) => a.command },
+  Edit: { icon: PencilLine, label: t("ویرایش فایل"), subtitle: (a) => a.file_path, open: true },
+  MultiEdit: { icon: PencilLine, label: t("ویرایش فایل (چندبخشی)"), subtitle: (a) => a.file_path, open: true },
+  Write: { icon: PencilLine, label: t("نوشتن فایل"), subtitle: (a) => a.file_path, open: true },
+  Read: { icon: FileText, label: t("خواندن فایل"), subtitle: (a) => a.file_path },
+  Grep: { icon: Search, label: t("جستجو در کد"), subtitle: (a) => a.pattern },
+  Glob: { icon: FolderTree, label: t("یافتن فایل‌ها"), subtitle: (a) => a.pattern },
+  WebFetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
+  WebSearch: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.query },
+  Task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description },
+  Agent: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description },
+  TodoWrite: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
+  NotebookEdit: { icon: PencilLine, label: t("ویرایش نوت‌بوک"), subtitle: (a) => a.notebook_path, open: true },
+  TaskCreate: { icon: ListChecks, label: t("افزودن کار"), subtitle: (a) => a.subject || a.description },
+  TaskUpdate: { icon: ListChecks, label: t("به‌روزرسانی کار"), subtitle: (a) => a.subject || a.taskId || a.task_id },
+  TaskList: { icon: ListChecks, label: t("فهرست کارها") },
+  TaskGet: { icon: ListChecks, label: t("خواندن کار"), subtitle: (a) => a.taskId || a.task_id },
+  TaskOutput: { icon: Terminal, label: t("خروجی کار"), subtitle: (a) => a.taskId || a.task_id },
+  TaskStop: { icon: X, label: t("توقف کار"), subtitle: (a) => a.taskId || a.task_id },
+  Monitor: { icon: Activity, label: t("پایش"), subtitle: (a) => a.description || a.command },
+  ScheduleWakeup: { icon: AlarmClock, label: t("بیدارباش"), subtitle: (a) => [a.delaySeconds != null ? `${a.delaySeconds}s` : null, a.reason].filter(Boolean).join(" · ") },
+  CronCreate: { icon: CalendarClock, label: t("زمان‌بندی"), subtitle: (a) => a.cron || a.schedule },
+  Artifact: { icon: Globe, label: t("صفحهٔ claude.ai"), subtitle: (a) => [a.action || "publish", a.url || a.file_path].filter(Boolean).join(" · ") },
+  Workflow: { icon: Workflow, label: t("گردش‌کار"), subtitle: (a) => a.description },
+  Skill: { icon: BookOpen, label: t("مهارت"), subtitle: (a) => a.skill },
+  ToolSearch: { icon: Search, label: t("یافتن ابزار"), subtitle: (a) => a.query },
+  ExitPlanMode: { icon: ListChecks, label: t("پایان نقشه"), open: true },
 };
+
+// A running step under the Karsara skin: a thin spinning ring instead of a spinner icon.
+const Ring = () => <span aria-label={t("در حال اجرا")} className="inline-block size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent opacity-70" />;
+
+// A file path shortened to its last two segments, so the one-line row stays readable.
+export function shortTarget(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (/^[A-Za-z]:[\\/]|^\//.test(text) && !text.includes(" ")) return text.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+  return text;
+}
 
 export function ToolCard(props) {
   if (props.toolName === "ask_owner") return <AskCard {...props} />;
@@ -146,11 +187,13 @@ function PeerCard({ args = {}, result, isError, status }) {
     : isError
       ? t("{agent} · خطا", { agent: meta.label })
       : t("{agent} · انجام شد", { agent: meta.label });
+  // Karsara: the same content in a flat frame (a tool row, the body in its own box).
+  const karsara = useSkin() === "karsara";
 
   return (
     <div
-      className={`my-2 overflow-hidden rounded-xl border ${isError ? "border-bad/50" : ""}`}
-      style={{
+      className={karsara ? "my-0.5" : `my-2 overflow-hidden rounded-xl border ${isError ? "border-bad/50" : ""}`}
+      style={karsara ? undefined : {
         borderColor: isError ? undefined : `${meta.color}55`,
         background: `color-mix(in srgb, ${meta.color} 10%, var(--card))`,
       }}
@@ -158,10 +201,10 @@ function PeerCard({ args = {}, result, isError, status }) {
       <button
         type="button"
         onClick={() => !running && hasBody && setOpen(!expanded)}
-        className="flex w-full items-start gap-2.5 px-3 py-2.5 text-start text-sm hover:bg-black/5 dark:hover:bg-white/5"
+        className={karsara ? "g-tool-head flex w-full items-start gap-1.5 rounded-md px-1.5 py-1 text-start text-sm hover:bg-muted" : "flex w-full items-start gap-2.5 px-3 py-2.5 text-start text-sm hover:bg-black/5 dark:hover:bg-white/5"}
         disabled={running || !hasBody}
       >
-        <AgentGlyph id={args.agent} className="mt-0.5 size-7" />
+        <AgentGlyph id={args.agent} className={karsara ? "mt-0.5 size-4" : "mt-0.5 size-7"} />
         <div className="min-w-0 flex-1 space-y-0.5">
           <p className={`font-medium leading-snug ${running ? "shimmer" : ""}`} dir="auto" style={{ color: meta.color }}>
             {headline}
@@ -207,10 +250,10 @@ function PeerCard({ args = {}, result, isError, status }) {
             </button>
           ) : null}
           {running ? (
-            <Loader2 className="size-4 animate-spin" style={{ color: meta.color }} />
+            karsara ? <Ring /> : <Loader2 className="size-4 animate-spin" style={{ color: meta.color }} />
           ) : isError ? (
             <X className="size-4 text-bad" />
-          ) : (
+          ) : karsara ? null : (
             <Check className="size-4 text-ok" />
           )}
           {!running && hasBody ? (
@@ -230,7 +273,7 @@ function PeerCard({ args = {}, result, isError, status }) {
             transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
             className="overflow-hidden"
           >
-            <div className="space-y-2 border-t px-3 py-2.5 text-sm" style={{ borderColor: `${meta.color}33` }}>
+            <div className={karsara ? "g-tool-body my-1 space-y-2 rounded-lg border px-3 py-2.5 text-sm" : "space-y-2 border-t px-3 py-2.5 text-sm"} style={karsara ? undefined : { borderColor: `${meta.color}33` }}>
               {markdown ? <PeerMarkdown text={markdown} /> : null}
               {Array.isArray(envelope?.unknowns) && envelope.unknowns.length ? (
                 <p className="text-xs text-bad" dir="auto">{envelope.unknowns.join(" · ")}</p>
@@ -336,6 +379,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
   const summary = taskFinalText(steps);
   const hasBody = Boolean(summary || steps.length || isError);
   const toolCount = steps.filter((s) => s?.toolCall).length;
+  const karsara = useSkin() === "karsara";
 
   const openSubchat = async (e) => {
     e.stopPropagation();
@@ -353,8 +397,8 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
   };
 
   return (
-    <div className={`my-2 overflow-hidden rounded-xl border bg-card ${isError ? "border-bad/50" : ""}`}>
-      <div className="flex w-full items-start gap-2.5 px-3 py-2.5 text-sm">
+    <div className={karsara ? "my-0.5" : `my-2 overflow-hidden rounded-xl border bg-card ${isError ? "border-bad/50" : ""}`}>
+      <div className={karsara ? "g-tool-head flex w-full items-start gap-1.5 rounded-md px-1.5 py-1 text-sm" : "flex w-full items-start gap-2.5 px-3 py-2.5 text-sm"}>
         <button
           type="button"
           onClick={() => !running && hasBody && setOpen(!open)}
@@ -388,7 +432,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
               {t("ساب‌چت")}
             </button>
           ) : null}
-          {running ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : isError ? <X className="size-4 text-bad" /> : <Check className="size-4 text-ok" />}
+          {running ? (karsara ? <Ring /> : <Loader2 className="size-4 animate-spin text-muted-foreground" />) : isError ? <X className="size-4 text-bad" /> : karsara ? null : <Check className="size-4 text-ok" />}
           {!running && hasBody ? (
             <button type="button" onClick={() => setOpen(!open)} className="rounded p-0.5 hover:bg-muted" aria-label={t("جزئیات")}>
               <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }} className="flex">
@@ -409,7 +453,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
             transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
             className="overflow-hidden"
           >
-            <div className="space-y-3 border-t px-3 py-2.5 text-sm">
+            <div className={karsara ? "g-tool-body my-1 space-y-3 rounded-lg border px-3 py-2.5 text-sm" : "space-y-3 border-t px-3 py-2.5 text-sm"}>
               {summary ? <PeerMarkdown text={summary} /> : <p className="text-xs text-muted-foreground">{t("خلاصه‌ای نبود؛ ساب‌چت را باز کن.")}</p>}
             </div>
           </motion.div>
@@ -454,6 +498,42 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
   const Icon = meta.icon;
   const plain = stepTitle(toolName, args);
   const subtitle = plain ? (running || isError ? args.command : "") : safe(() => meta.subtitle?.(args));
+  const karsara = useSkin() === "karsara";
+
+  if (karsara) {
+    // Karsara: no card — a flat row (icon · name · «·» · short target), no ✓ on success, a ring while
+    // running; the opened body is its own box. Claude Code's tools keep their English name.
+    const name = /^[A-Z]/.test(toolName || "") ? toolName : meta.label;
+    const target = plain ? "" : subtitle;
+    return (
+      <div className="my-0.5">
+        <button type="button" onClick={() => setOpen(!expanded)} aria-expanded={expanded} className="g-tool-head flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-start text-sm text-muted-foreground hover:bg-muted">
+          <Icon className="size-3.5 shrink-0" />
+          {plain ? (
+            <span dir="auto" className="min-w-0 truncate text-foreground/85" title={args.command ? `${plain}\n${args.command}` : plain}>{plain}</span>
+          ) : (
+            <span className="shrink-0 text-foreground/85">{name}</span>
+          )}
+          {target ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="ltr min-w-0 truncate font-mono text-xs" title={String(target)}>{shortTarget(target)}</span>
+            </>
+          ) : null}
+          <span className="ms-auto flex shrink-0 items-center gap-2">
+            {result?.source ? <SourceBadge source={result.source} attempts={result.attempts} /> : null}
+            {running ? <Ring /> : result?.cancelled ? <span className="text-xs">{t("متوقف شد")}</span> : isError ? <X className="size-3.5 text-bad" /> : null}
+            <ChevronDown className={`size-3.5 ${expanded ? "rotate-180" : ""}`} />
+          </span>
+        </button>
+        {expanded && !running ? (
+          <div className="g-tool-body my-1 rounded-lg border px-3 py-2 text-sm">
+            <ToolBody toolName={toolName} args={args} result={result} isError={isError} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className={`my-2 overflow-hidden rounded-lg border bg-card ${isError ? "border-bad/50" : ""}`}>
@@ -545,6 +625,7 @@ function ToolBody({ toolName, args, result, isError }) {
       return <Code text={result?.content} footer={result?.totalLines ? t("{n} خط", { n: num(result.totalLines) }) : null} />;
     case "updateTodos":
     case "readTodos":
+    case "TodoWrite":
       return <Todos todos={result?.todos || args.todos || []} />;
     case "glob":
       return <List items={result?.files} total={result?.totalFiles} />;

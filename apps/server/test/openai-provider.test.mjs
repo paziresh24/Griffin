@@ -165,12 +165,13 @@ describe("openai-compatible provider", () => {
     assert.equal(health.status, 200);
   });
 
-  it("treats 401 as reachable in health, and reports missing config", async () => {
+  it("a refused key is unhealthy (but reachable: it has a status), and reports missing config", async () => {
     mock.on(() => ({ status: 401, body: { error: { message: "bad key" } } }));
     const provider = providerFor(baseUrl);
     const health = await provider.health();
-    assert.equal(health.ok, true);
+    assert.equal(health.ok, false);
     assert.equal(health.status, 401);
+    assert.equal(health.error, "http_401");
 
     const bare = createOpenAIProvider({ apiKey: "", baseUrl });
     assert.equal((await bare.health()).error, "no openai api key");

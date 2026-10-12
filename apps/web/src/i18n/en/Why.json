@@ -26,5 +26,6 @@
   "هر تغییر پیش از اجرا دو بازبین دارد": "Every change has two reviewers before it runs",
   "شبیه‌سازی: اثری اجرا نمی‌شود": "Simulation: nothing with an effect runs",
   "ابزارها: {used} از {total} به کار رفت": "Tools: {used} of {total} used",
-  "خوانده نشد": "Could not read it"
+  "خوانده نشد": "Could not read it",
+  "قاعده‌ها از جواب قبلی عوض شده‌اند": "Rules changed since the previous answer"
 }

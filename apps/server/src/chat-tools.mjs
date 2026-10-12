@@ -57,7 +57,10 @@ const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }
 const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: String(error) }) }] });
 const str = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
 
-export function createChatTools({ store, chatId, isValidRepo = () => false }) {
+// checkModel(account|null, model, chat) → null when that account runs the model as named, else the
+// reason (with the valid ids). account null = the chat's own engine. index.mjs checks the account
+// registry (enabled, keyed, not limited) and the account's model list.
+export function createChatTools({ store, chatId, isValidRepo = () => false, checkModel = async () => null }) {
   return {
     chat_suggest: {
       description:
@@ -95,9 +98,17 @@ export function createChatTools({ store, chatId, isValidRepo = () => false }) {
         if (repo && !isValidRepo(repo)) return fail(`unknown repo: ${repo}`);
         // No model named: the new chat runs where this one does (a suggestion from an
         // OpenAI-compatible chat must not start on another engine). The provider only qualifies a bare model ("openai" + "glm-5.3").
+        // Nothing silent: a provider without a model, a model that account does not
+        // list, or an account that cannot run now is refused, not swapped for a default nobody chose.
         const provider = str(args?.provider, 40);
         const model = str(args?.model, 200);
+        if (provider && !model) return fail(`provider "${provider}" named without a model: name the model too, or omit both to use this chat's.`);
         const pinned = model ? (provider && !splitModel(model) ? `${provider}:${model}` : model) : chat?.model || null;
+        if (model) {
+          const split = splitModel(pinned);
+          const problem = await checkModel(split?.provider || null, split?.model || pinned, chat);
+          if (problem) return fail(problem);
+        }
         const row = store.createSuggestion({
           fromChatId: chatId,
           title,

@@ -23,7 +23,7 @@ export function AuthGate({ children }) {
   if (state === "checking") {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-3">
-        <img src="/icon.svg" alt="" className="size-12 rounded-xl ring-2 ring-brand/40" />
+        <img src="/icon.svg" alt="" className="g-login-logo size-12 rounded-xl ring-2 ring-brand/40" />
         <span className="agent-dots text-brand" aria-hidden><i /><i /><i /></span>
       </div>
     );

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, CircleHelp, Loader2, Send } from "lucide-react";
 import { api, useRoute } from "../api.js";
-import { t } from "../i18n.js";
+import { num, t } from "../i18n.js";
 import { holdReload } from "../new-version.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
@@ -42,15 +42,15 @@ export function AskCard({ args = {}, result, isError, status }) {
 
   const closed = Boolean(answered) || sent;
   return (
-    <div className={`my-2 rounded-lg border bg-card ${waiting && !closed ? "border-primary/60" : ""}`}>
+    <div className={`g-box my-2 rounded-lg border bg-card ${waiting && !closed ? "border-primary/60" : ""}`}>
       <div className="flex items-start gap-2 px-3 pt-2.5 text-sm">
-        <CircleHelp className="mt-0.5 size-4 shrink-0 text-primary" />
+        <CircleHelp className="g-ask-icon mt-0.5 size-4 shrink-0 text-primary" />
         <p className="min-w-0 flex-1 font-medium" dir="auto">{args.question}</p>
       </div>
 
       {answered ? (
         <p className="flex items-center gap-2 px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground" dir="auto">
-          <Check className="size-4 shrink-0 text-ok" />
+          <Check className="g-ask-done size-4 shrink-0 text-ok" />
           {answered.answer}
         </p>
       ) : sent ? (
@@ -74,11 +74,20 @@ export function AskCard({ args = {}, result, isError, status }) {
                     type="button"
                     disabled={sending}
                     onClick={() => (args.multiSelect ? toggle(option.label) : submit(option.label))}
-                    className={`rounded-md border px-3 py-2 text-start text-sm transition-colors hover:bg-muted/60 ${
-                      active ? "border-primary bg-primary/10" : ""
+                    aria-pressed={args.multiSelect ? active : undefined}
+                    className={`min-w-0 rounded-md border px-3 py-2 text-start text-sm transition-colors pointer-coarse:min-h-11 ${
+                      active ? "border-primary bg-primary/10 hover:bg-primary/15" : "hover:bg-muted/60"
                     }`}
                   >
-                    <span className="block font-medium" dir="auto">{option.label}</span>
+                    <span className="flex items-start gap-2 font-medium" dir="auto">
+                      {/* Multi-select: a checkbox on every option, so it reads as "pick several" before the first tap. */}
+                      {args.multiSelect ? (
+                        <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border ${active ? "border-primary bg-primary text-primary-foreground" : ""}`}>
+                          {active ? <Check className="size-3" /> : null}
+                        </span>
+                      ) : null}
+                      <span className="min-w-0 flex-1">{option.label}</span>
+                    </span>
                     {option.description ? (
                       <span className="block text-xs text-muted-foreground" dir="auto">{option.description}</span>
                     ) : null}
@@ -86,6 +95,13 @@ export function AskCard({ args = {}, result, isError, status }) {
                 );
               })}
             </div>
+          ) : null}
+          {options.length > 0 && args.multiSelect ? (
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {selected.length
+                ? t("{n} گزینه انتخاب شد؛ برای فرستادن، دکمهٔ ارسال را بزن.", { n: num(selected.length) })
+                : t("می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.")}
+            </p>
           ) : null}
           <form
             className="flex items-center gap-2"
@@ -99,12 +115,12 @@ export function AskCard({ args = {}, result, isError, status }) {
               onChange={(event) => setText(event.target.value)}
               placeholder={options.length ? t("توضیح یا گزینهٔ دیگر…") : t("پاسخ…")}
               dir="auto"
-              className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              className="g-input min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary pointer-coarse:h-11"
             />
             <button
               type="submit"
               disabled={sending || (!text.trim() && !selected.length)}
-              className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground disabled:opacity-40"
+              className="g-btn flex size-9 shrink-0 items-center !p-0 justify-center rounded-md bg-primary text-primary-foreground disabled:opacity-40 pointer-coarse:size-11"
               aria-label={t("ارسال پاسخ")}
             >
               {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4 rtl:-scale-x-100" />}

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyEvent, emptyTimeline, finalText, foldEvents } from "../src/index.mjs";
+import { applyEvent, emptyTimeline, finalText, foldEvents, usageByModel } from "../src/index.mjs";
 
 let nextId = 1;
 const ev = (type, data = {}, runId = "run1") => ({ id: nextId++, runId, type, data, at: "t" });
@@ -132,4 +132,26 @@ test("a suggestion's status change updates its card, in whichever run holds it",
   ]);
   assert.equal(t.messages[0].parts[0].status, "started");
   assert.equal(t.messages[1].parts[0].status, "open");
+});
+
+test("retry phase, manifest changes and per-model usage (each run once)", () => {
+  const t = foldEvents([
+    ev("run.started", { model: "glm-5.3" }, "a"),
+    ev("manifest", { changes: [{ kind: "rules" }, { kind: "tools" }] }, null),
+    ev("run.phase", { phase: "retrying", detail: { attempt: 2, max: 6, status: 429, delayMs: 4000 } }, "a"),
+    ev("usage", { inputTokens: 100, outputTokens: 20 }, "a"),
+    ev("run.finished", { status: "finished" }, "a"),
+    ev("manifest", { changes: [{ kind: "rules" }] }, null), // no running run: ignored
+    ev("run.started", { model: "sonnet" }, "b"),
+    ev("usage", { inputTokens: 50, outputTokens: 5 }, "b"),
+    ev("run.finished", { status: "finished" }, "b"),
+  ]);
+  const [a, b] = t.messages;
+  assert.equal(a.manifestChanges, 2);
+  assert.equal(a.phaseDetail.attempt, 2);
+  assert.equal(a.phaseAt, "t");
+  assert.equal(b.manifestChanges, undefined);
+  // a split run repeats its usage on the later piece: counted once
+  const split = [...t.messages, { ...a, id: "ra~9" }];
+  assert.deepEqual(usageByModel(split), { total: 175, byModel: [{ model: "glm-5.3", tokens: 120 }, { model: "sonnet", tokens: 55 }] });
 });

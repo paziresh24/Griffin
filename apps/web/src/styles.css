@@ -129,8 +129,11 @@ body {
   overscroll-behavior: none;
 }
 
-* {
-  border-color: var(--border);
+/* In the base layer, so utilities like border-primary still win over it. */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
 }
 
 /* Numbers, IDs and paths read left-to-right even inside Persian text. */
@@ -139,42 +142,27 @@ body {
   unicode-bidi: isolate;
 }
 
-/* Markdown sheets: Persian blocks flush right, English flush left. Streamdown pins
-   table headers with `text-left`, which left the titles on the left while RTL body
-   cells went right — override that so title and content share one direction.
-   Never use unicode-bidi:plaintext here: it re-detects from the first strong char
-   and flips English-leading Persian paragraphs back to LTR. */
-.sd-block[dir="rtl"] {
+/* Markdown sheets: the sheet's dir comes from chatDir (any Persian → rtl), passed to Streamdown as
+   well — not Streamdown's dir="auto", which picks by majority and flips Persian paragraphs full of pod
+   names and English terms to LTR. Every block aligns to its dir; plain right/left (not `start`), so
+   Streamdown's `text-left` on table headers loses on specificity. Never unicode-bidi:plaintext: it
+   re-detects from the first strong char and flips English-leading Persian paragraphs back to LTR. */
+.sd-block[dir="rtl"],
+.sd-block [dir="rtl"] {
   direction: rtl;
   text-align: right;
 }
 
-.sd-block[dir="ltr"] {
+.sd-block[dir="ltr"],
+.sd-block [dir="ltr"] {
   direction: ltr;
   text-align: left;
-}
-
-.sd-block[dir="rtl"] :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, th, td) {
-  direction: rtl;
-  text-align: right !important;
-  unicode-bidi: embed;
-}
-
-.sd-block[dir="rtl"] :is(pre, code, .ltr) {
-  direction: ltr;
-  text-align: left !important;
-  unicode-bidi: isolate;
-}
-
-.sd-block[dir="ltr"] :is(h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, th, td) {
-  direction: ltr;
-  text-align: left !important;
-  unicode-bidi: embed;
 }
 
 /* A table's fullscreen view is portalled to <body>, outside .sd-block, so it takes the page's
    RTL; headers (Streamdown pins `text-left`) follow the cells to that side. One alignment for
    the whole table — a per-cell plaintext bidi would leave ragged columns. */
+.sd-block :is([data-streamdown="table-header-cell"], [data-streamdown="table-cell"]),
 [data-streamdown="table-fullscreen"] :is([data-streamdown="table-header-cell"], [data-streamdown="table-cell"]) {
   text-align: start;
 }
@@ -192,13 +180,37 @@ body {
   unicode-bidi: embed;
 }
 
-.sd-block[dir="rtl"] blockquote {
+/* Streamdown's classes are physical (border-l, pl-4): logical properties put the quote bar on the
+   block's own start side. */
+.sd-block [data-streamdown="blockquote"],
+.sd-block blockquote {
   border-left-width: 0;
-  border-right-width: 4px;
-  border-right-style: solid;
-  border-right-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  border-inline-start: 4px solid color-mix(in oklch, var(--muted-foreground) 30%, transparent);
   padding-left: 0;
-  padding-right: 1rem;
+  padding-inline-start: 1rem;
+}
+
+/* Nested bullets read as a level down, not as the same bullet again. */
+.sd-block [data-streamdown="unordered-list"] [data-streamdown="unordered-list"] {
+  list-style-type: circle;
+}
+
+/* Task lists: the checkbox is the marker; a done item is struck through and muted. An item with a
+   nested list is not struck — the line would run through its unfinished children too. */
+.sd-block li.task-list-item {
+  list-style: none;
+}
+
+.sd-block .task-list-item:has(> input:checked, > p > input:checked):not(:has(ul, ol)) {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+.sd-block .task-list-item > input,
+.sd-block .task-list-item > p > input {
+  margin-inline-end: 0.4rem;
+  accent-color: var(--muted-foreground);
+  vertical-align: middle;
 }
 
 .sd-block[dir="rtl"] :is(ul, ol) {
@@ -362,3 +374,557 @@ button:not(:disabled):active {
 
 /* Back arrows point right in Persian (RTL) and left in English. */
 html[dir="ltr"] .rtl-mirror { transform: scaleX(-1); }
+/* Chart series (Settings → «مصرف توکن»): shared by the chart, its legend and the table dots. */
+:root {
+  --series-0: var(--primary);
+  --series-1: var(--agent-platform);
+  --series-2: var(--warn);
+  --series-3: var(--agent-nsin);
+  --series-4: var(--bad);
+  --series-5: var(--muted-foreground);
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Skin «Karsara» (html[data-skin="karsara"], skin.js): a second, flat look contributed by a fork —
+   one blue accent, smaller radii, borders instead of shadows, no shimmer or glow. :root[...]
+   outranks html[data-agent], so the skin keeps its one accent instead of tinting the page per agent.
+   --brand (the assistant's mark) stays: the skin changes the look, not the brand.
+   Font: IRANSansX when the device has it installed (it is a commercial face and is not bundled),
+   else Vazirmatn (OFL), the default skin's font.
+   --------------------------------------------------------------------------------------------- */
+@font-face {
+  font-family: "iran-sans-x";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: local("IRANSansX"), local("IRANSansXV"), local("IRANSansX Regular"), local("IRANSansX-Regular");
+}
+
+:root[data-skin="karsara"] {
+  --background: #f2f3f5;
+  --foreground: #2b2f33;
+  --card: #ffffff;
+  --muted: #e2e8f0;
+  --muted-foreground: #475569;
+  --border: #cbd5e1;
+  --input: var(--border);
+  --primary: #2b4dcc;
+  --primary-foreground: #ffffff;
+  --accent: #e2e8f0;
+  --ok: #166534;
+  --warn: #92400e;
+  --bad: #b91c1c;
+  --emergency: #92400e;
+  /* Only --radius (= rounded-lg) in this skin; rounded-xl/2xl keep Tailwind's 0.75/1rem there. */
+  --radius: 0.5rem;
+  --font-sans: "iran-sans-x", "Vazirmatn Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --scrollbar-thumb: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+  --series-1: #a85a12;
+  --series-2: #2f9e6e;
+  --series-3: #8a5fd1;
+  --series-4: #c9507e;
+  --series-5: #7d8590;
+}
+
+:root.dark[data-skin="karsara"] {
+  --background: #121218;
+  --foreground: #f1f5f9;
+  --card: #1a1a2a;
+  --muted: #2a2a3c;
+  --muted-foreground: #94a3b8;
+  --border: #3a3a50;
+  --primary: #7b92f0;
+  --primary-foreground: #0f1a2a;
+  --accent: #2a2a3c;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --emergency: #fbbf24;
+  --series-1: #eba052;
+  --series-2: #4cc38a;
+  --series-3: #a98be6;
+  --series-4: #e57aa3;
+  --series-5: #8b949e;
+}
+
+[data-skin="karsara"] body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  /* IRANSansX draws Persian digits with ss02; technical text turns it back off. */
+  font-feature-settings: "ss02";
+}
+[data-skin="karsara"] :is(.ltr, [dir="ltr"], code, pre, kbd, samp) {
+  font-feature-settings: "ss02" 0;
+}
+
+/* Flat: no shimmer, glow, pulse or press-scale; one soft shadow for menus, borders elsewhere. */
+[data-skin="karsara"] .shimmer {
+  background: none;
+  color: var(--muted-foreground);
+  animation: none;
+}
+[data-skin="karsara"] .agent-pulse { color: inherit; animation: none; }
+[data-skin="karsara"] .welcome-glow::after { display: none; }
+[data-skin="karsara"] .agent-dots {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: karsara-spin 0.9s linear infinite;
+}
+[data-skin="karsara"] .agent-dots i { display: none; }
+@keyframes karsara-spin { to { transform: rotate(360deg); } }
+[data-skin="karsara"] :is(.press, button):active:not(:disabled) { transform: none; }
+[data-skin="karsara"] .pop { animation: karsara-fade 120ms ease-out; }
+@keyframes karsara-fade { from { opacity: 0; } to { opacity: 1; } }
+[data-skin="karsara"] :focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent); outline-offset: 1px; }
+[data-skin="karsara"] :is(textarea, input):focus-visible { outline: none; }
+[data-skin="karsara"] :is(.shadow-xl, .shadow-lg) { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14) !important; }
+[data-skin="karsara"] :is(.shadow-md, .shadow, .shadow-sm) { box-shadow: none !important; }
+
+[data-skin="karsara"] .sd-block [data-streamdown="inline-code"] { border: 1px solid var(--border); color: var(--bad); font-size: 0.85em; }
+@media (prefers-reduced-motion: reduce) {
+  [data-skin="karsara"] .agent-dots { animation-duration: 2.4s; }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   The Karsara skin's shapes on Griffin's hook classes (g-*): pill, menu/row, chip, icon button,
+   list row, tool head, box, button, ….
+   The hooks carry no style of their own; only this skin draws them. Unlayered on purpose: they must
+   beat the Tailwind utilities each component still carries. `display` is set only where the element
+   has no `hidden` variant, which it would otherwise override.
+   --------------------------------------------------------------------------------------------- */
+[data-skin="karsara"] {
+  --kc-chip: var(--muted);
+  --kc-chip-hover: color-mix(in srgb, var(--muted) 80%, var(--foreground) 20%);
+  --kc-row-hover: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+[data-skin="karsara"] .sd-block :is([data-streamdown="blockquote"], blockquote) {
+  border-inline-start: 3px solid color-mix(in oklch, var(--muted-foreground) 35%, transparent);
+  font-style: normal;
+}
+
+/* Sidebar: flat, the canvas colour, bordered search, list rows. */
+[data-skin="karsara"] .g-sidebar { background: var(--background); }
+[data-skin="karsara"] .g-sidebar-search {
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+}
+[data-skin="karsara"] .g-sidebar-search:focus-within { border-color: var(--primary); }
+[data-skin="karsara"] :is(.g-nav-row, .g-chat-row, .g-list-row, .g-user-bar, .g-agent-picker) {
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.3;
+}
+[data-skin="karsara"] .g-agent-picker { min-height: 44px; }
+[data-skin="karsara"] .g-list-row { color: var(--muted-foreground); }
+[data-skin="karsara"] :is(.g-nav-row, .g-chat-row, .g-list-row, .g-user-bar, .g-agent-picker):hover { background: var(--kc-row-hover); }
+[data-skin="karsara"] :is(.g-nav-row, .g-chat-row, .g-list-row, .g-user-bar, .g-agent-picker):is([aria-current="page"], [data-active="true"], [data-state="open"]) {
+  background: var(--kc-chip);
+  color: var(--foreground);
+}
+[data-skin="karsara"] :is(.g-nav-row, .g-list-row) > svg { width: 16px; height: 16px; color: var(--muted-foreground); }
+
+/* Menus and their rows. */
+[data-skin="karsara"] .g-menu {
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.3;
+}
+[data-skin="karsara"] .g-menu-row {
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--foreground);
+}
+[data-skin="karsara"] .g-menu-row:is(:hover:not(:disabled), :focus-visible, [data-highlighted], [aria-selected="true"]) { background: var(--kc-chip); outline: none; }
+[data-skin="karsara"] .g-menu-row:disabled { opacity: 0.45; cursor: not-allowed; }
+[data-skin="karsara"] .g-menu-title { color: var(--foreground); font-size: 13px; font-weight: 500; }
+
+/* Composer: one 12px box, the controls in a bar under it. */
+[data-skin="karsara"] :is(.g-composer, .composer-box) {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: none;
+}
+[data-skin="karsara"] :is(.g-composer, .composer-box):focus-within { border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+[data-skin="karsara"] .g-composer-bar > * { min-width: 0; }
+[data-skin="karsara"] .g-composer-bar .g-text-btn { flex-shrink: 1; overflow: hidden; }
+[data-skin="karsara"] .g-composer-bar .g-pill { flex-shrink: 0; }
+
+/* Chips (repo/branch/side chat), the model pill, text and icon buttons, the send button. */
+[data-skin="karsara"] .g-chip {
+  gap: 5px;
+  max-width: min(14rem, 100%);
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--kc-chip);
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+}
+[data-skin="karsara"] .g-chip > svg { width: 14px; height: 14px; flex-shrink: 0; stroke-width: 1.75; }
+[data-skin="karsara"] .g-chip > span { overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+[data-skin="karsara"] :is(button.g-chip:hover, .g-chip[data-state="open"]) { color: var(--foreground); background: color-mix(in srgb, var(--muted) 85%, var(--foreground) 15%); }
+[data-skin="karsara"] .g-pill {
+  gap: 4px;
+  max-width: min(11rem, 100%);
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--kc-chip);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1;
+}
+[data-skin="karsara"] :is(.g-pill:hover, .g-pill[data-state="open"]) { background: var(--kc-chip-hover); }
+[data-skin="karsara"] .g-text-btn {
+  padding: 8px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+}
+[data-skin="karsara"] .g-text-btn:hover:not(:disabled) { background: transparent; color: var(--foreground); }
+[data-skin="karsara"] :is(.g-icon-btn, .g-send) {
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted-foreground);
+}
+[data-skin="karsara"] :is(.g-icon-btn, .g-send, .g-chip, .g-pill, .g-btn):not([class*="hidden"]) { display: inline-flex; }
+[data-skin="karsara"] :is(.g-icon-btn, .g-send):hover:not(:disabled) { background: var(--kc-chip); color: var(--foreground); }
+[data-skin="karsara"] :is(.g-icon-btn, .g-send):disabled { opacity: 0.35; }
+[data-skin="karsara"] :is(.g-icon-btn, .g-send) > svg { width: 16px; height: 16px; stroke-width: 1.75; }
+/* Send is the composer's one filled button, and only while it can send; stop stays plain. */
+[data-skin="karsara"] .g-send:not(:disabled):not([data-stop]) { background: var(--primary); color: var(--primary-foreground); }
+[data-skin="karsara"] .g-send:hover:not(:disabled):not([data-stop]) { background: color-mix(in srgb, var(--primary) 85%, var(--foreground)); color: var(--primary-foreground); }
+
+/* Tool calls: a flat row, the opened body in its own box; the work log's header the same. */
+[data-skin="karsara"] :is(.g-tool-head, .g-worklog-head) {
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-align: start;
+}
+[data-skin="karsara"] :is(.g-tool-head, .g-worklog-head):hover { color: var(--foreground); background: color-mix(in srgb, var(--muted) 60%, transparent); }
+[data-skin="karsara"] .g-tool-body {
+  max-width: 100%;
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 13px;
+}
+/* Run footer and phase: plain muted text, no pill. */
+[data-skin="karsara"] :is(.g-run-meta, .g-run-phase) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+[data-skin="karsara"] :is(.g-user-bubble, .chat-text.bg-accent) {
+  max-width: 88%;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--kc-chip);
+  color: var(--foreground);
+}
+[data-skin="karsara"] .g-box {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: none;
+}
+[data-skin="karsara"] .g-thread-footer {
+  background: var(--background);
+  padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+}
+
+/* Selection toolbar and its note popup. */
+[data-skin="karsara"] .g-sel-actions {
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 8px 24px color-mix(in srgb, black 22%, transparent) !important;
+  font-size: 12px;
+  white-space: nowrap;
+}
+[data-skin="karsara"] .g-sel-actions button {
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--foreground);
+}
+[data-skin="karsara"] .g-sel-actions button:hover { background: var(--kc-chip); }
+[data-skin="karsara"] .g-quote-pop {
+  gap: 8px;
+  width: min(24rem, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 26%, transparent) !important;
+  font-size: 13px;
+}
+[data-skin="karsara"] .g-quote-pop textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 14px;
+  line-height: 1.7;
+}
+[data-skin="karsara"] .g-quote-pop textarea:focus { border-color: color-mix(in srgb, var(--primary) 50%, var(--border)); }
+
+/* Side chat: a fixed column beside the thread on a wide screen. */
+@media (min-width: 48rem) {
+  [data-skin="karsara"] .side-panel { width: min(23.75rem, 40vw); }
+}
+[data-skin="karsara"] .side-panel { background: var(--background); }
+
+/* Pages: neutral buttons, the text colour as the one filled button, tags, inputs, badges. */
+[data-skin="karsara"] .g-btn {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 400;
+}
+[data-skin="karsara"] .g-btn:hover:not(:disabled) { background: var(--kc-chip); }
+[data-skin="karsara"] .g-btn:disabled { opacity: 0.45; }
+[data-skin="karsara"] .g-btn-primary { border-color: transparent; background: var(--foreground); color: var(--background); }
+[data-skin="karsara"] .g-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--foreground) 85%, var(--background)); }
+[data-skin="karsara"] .g-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--kc-chip);
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+[data-skin="karsara"] .g-input {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  outline: none;
+}
+[data-skin="karsara"] textarea.g-input { height: auto; min-height: 52px; padding: 6px 8px; line-height: 1.7; }
+[data-skin="karsara"] .g-input:focus { border-color: var(--primary); }
+[data-skin="karsara"] .g-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--kc-chip);
+  color: var(--foreground);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+[data-skin="karsara"] :is(.g-icon-btn, .g-float-btn) > .g-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--primary);
+  color: var(--background);
+  font-size: 10px;
+  line-height: 16px;
+  pointer-events: none;
+}
+[data-skin="karsara"] .g-float-btn {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: none;
+  color: var(--muted-foreground);
+}
+[data-skin="karsara"] :is(.g-float-btn:hover, .g-float-btn[data-state="open"]) { color: var(--foreground); }
+
+/* Suggested chats and notes. */
+[data-skin="karsara"] .g-suggest { gap: 6px; margin: 8px 0; padding: 10px 12px; }
+[data-skin="karsara"] .g-suggest:not([data-status="open"]) { background: transparent; color: var(--muted-foreground); }
+[data-skin="karsara"] .g-suggest-row { border-radius: 8px; }
+[data-skin="karsara"] .g-suggest-row:hover { background: var(--kc-row-hover); }
+[data-skin="karsara"] .g-suggest-row .g-btn { min-height: 28px; padding: 0 8px; font-size: 13px; }
+[data-skin="karsara"] .g-note-item { padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; }
+[data-skin="karsara"] .g-note-item[data-open="true"] { background: color-mix(in srgb, var(--muted) 50%, transparent); }
+[data-skin="karsara"] .g-note-item .g-note-when { color: var(--warn); }
+
+/* Settings: one card per setting with a 40px tile, the active nav item filled. */
+[data-skin="karsara"] .g-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+[data-skin="karsara"] .g-group > * {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--card);
+}
+[data-skin="karsara"] .g-item-row { gap: 12px; padding: 1rem; }
+[data-skin="karsara"] .g-item-icon { width: 2.5rem; height: 2.5rem; border-radius: 0.75rem; }
+[data-skin="karsara"] .g-item-icon > svg { width: 20px; height: 20px; }
+[data-skin="karsara"] .g-section-head { margin-bottom: 1rem; }
+[data-skin="karsara"] .g-section-head h2 { font-size: 1.125rem; line-height: 1.75rem; }
+[data-skin="karsara"] .g-settings-rail { width: 14rem; background: var(--card); }
+[data-skin="karsara"] .g-settings-rail h1 { font-size: 0.875rem; }
+[data-skin="karsara"] .g-settings-rail nav { padding-inline: 0.5rem; }
+[data-skin="karsara"] .g-settings-rail nav > * + * { margin-top: 0.25rem; }
+[data-skin="karsara"] .g-settings-rail nav button {
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.75rem;
+  color: var(--foreground);
+  font-weight: 400;
+}
+[data-skin="karsara"] .g-settings-rail nav button:hover:not([aria-current="page"]) { background: var(--muted); }
+[data-skin="karsara"] .g-settings-rail nav button[aria-current="page"] { background: var(--primary); color: var(--primary-foreground); }
+[data-skin="karsara"] .g-settings-rail nav button > svg { color: inherit; }
+[data-skin="karsara"] .g-settings-rail .g-nav-bar { display: none; }
+[data-skin="karsara"] .g-settings-strip {
+  gap: 4px;
+  margin-inline: 0;
+  padding: 4px;
+  border-radius: 0.75rem;
+  background: var(--muted);
+}
+[data-skin="karsara"] .g-settings-strip button {
+  flex: 1 0 auto;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+[data-skin="karsara"] .g-settings-strip button[aria-current="page"] { background: var(--card); color: var(--foreground); font-weight: 500; }
+[data-skin="karsara"] .g-settings-strip button > svg { display: none; }
+[data-skin="karsara"] .g-settings-content { max-width: 48rem; }
+@media (min-width: 40rem) {
+  [data-skin="karsara"] .g-settings-content { padding-inline: 1.5rem; padding-top: max(env(safe-area-inset-top), 1rem); }
+}
+
+/* «مصرف توکن»: segmented range, borderless chart, bigger numbers. */
+[data-skin="karsara"] .g-tok-ranges {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--kc-chip);
+  font-size: 13px;
+}
+[data-skin="karsara"] .g-tok-ranges button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 400;
+}
+[data-skin="karsara"] .g-tok-ranges button[aria-pressed="true"] { background: var(--background); color: var(--foreground); box-shadow: 0 0 0 1px var(--border); }
+[data-skin="karsara"] .g-tok-stats { grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 8px; }
+[data-skin="karsara"] .g-tok-stat { gap: 2px; padding: 10px 12px; border-radius: 12px; background: transparent; font-size: 12px; }
+[data-skin="karsara"] .g-tok-stat bdi { display: block; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: start; }
+[data-skin="karsara"] .g-tok-chart { gap: 2px; height: 11rem; padding: 0; border: 0; border-radius: 0; background: transparent; }
+[data-skin="karsara"] .g-tok-table { border-radius: 12px; background: transparent; }
+[data-skin="karsara"] .g-tok-table table { font-size: 13px; font-variant-numeric: tabular-nums; }
+[data-skin="karsara"] .g-tok-table th { font-size: 12px; font-weight: 400; }
+
+/* Small pieces. */
+[data-skin="karsara"] .g-usage-bar { height: 4px; }
+[data-skin="karsara"] .g-login-logo { box-shadow: none; }
+[data-skin="karsara"] .g-ask-icon { color: var(--muted-foreground); }
+[data-skin="karsara"] .g-ask-done { color: var(--primary); }
+
+/* Phone widths: nothing in the thread wider than the screen; touch targets ≥ 44px. */
+@media (pointer: coarse) {
+  [data-skin="karsara"] :is(.g-icon-btn, .g-send) { width: 44px; height: 44px; }
+  [data-skin="karsara"] :is(.g-chip, .g-pill) { position: relative; height: 36px; }
+  [data-skin="karsara"] :is(.g-pill, button.g-chip)::after { content: ""; position: absolute; inset: -4px 0; }
+  [data-skin="karsara"] .g-text-btn { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+  [data-skin="karsara"] :is(.g-btn, .g-nav-row, .g-chat-row, .g-list-row, .g-user-bar, .g-tool-head, .g-worklog-head, .g-sidebar-search) { min-height: 44px; }
+  [data-skin="karsara"] .g-sidebar-search { height: 44px; }
+  [data-skin="karsara"] input.g-input { height: 44px; }
+  [data-skin="karsara"] :is(button.size-8, .g-tap) { min-width: 44px; min-height: 44px; }
+  [data-skin="karsara"] .g-sel-actions button { height: 36px; padding: 0 12px; }
+  [data-skin="karsara"] .g-sel-actions { font-size: 13px; }
+  [data-skin="karsara"] .g-tok-ranges button { min-height: 36px; }
+  [data-skin="karsara"] .g-suggest-row .g-btn { min-height: 44px; }
+}
+@media (max-width: 480px) {
+  [data-skin="karsara"] .g-chip { flex-shrink: 0; max-width: 11rem; }
+}

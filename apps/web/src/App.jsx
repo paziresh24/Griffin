@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { ChevronDown, ListChecks, Menu, Network, Square, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { ChevronDown, ListChecks, Menu, Network, Square, Wifi, WifiOff, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTelegramPerson, useTimeline } from "./api.js";
 import { connectionNotice } from "./timeline-memo.js";
@@ -8,7 +8,7 @@ import { lastRun } from "@griffin/timeline";
 import { tabTitle } from "./tab-title.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
-import { num, t, isRtl } from "./i18n.js";
+import { num, t, isRtl, locale } from "./i18n.js";
 import { AgentsPage } from "./components/Agents.jsx";
 import { JobsPage } from "./components/Jobs.jsx";
 import { IncidentsPage } from "./components/Incidents.jsx";
@@ -28,6 +28,35 @@ import { ChatChildrenContext } from "./components/Tool.jsx";
 import { SideChatButton, SidePanel } from "./components/SideChat.jsx";
 import { RepoChips } from "./components/RepoChips.jsx";
 import { emptySide, sideReducer } from "./side.js";
+import { useSkin } from "./skin.js";
+import { arriveAt, lookAt, seedSeen } from "./seen.js";
+import { SIDEBAR_WIDTH, clampSidebarWidth, loadSidebarWidth, saveSidebarWidth } from "./sidebar-width.js";
+import { badgeText } from "./chat-tools.js";
+import { useSuggestions } from "./components/ChatTools.jsx";
+import { quoteStore, withQuotes } from "./quotes.js";
+import { formatTokens } from "./tokens-format.js";
+
+// The thread's connection state in the header (timeline-memo.js connectionNotice). `wrap`: the
+// phone's own row, where the whole sentence shows.
+function ConnectionNotice({ notice, onRetry, className = "flex", wrap = false, hideTextOnPhone = false }) {
+  const tone = notice.tone === "warn" ? "text-warn" : notice.tone === "ok" ? "text-ok" : "text-muted-foreground";
+  return (
+    <span className={`min-w-0 items-center gap-1 text-xs ${tone} ${className}`} title={t(notice.text)}>
+      {notice.tone === "warn" ? <WifiOff className="size-3.5 shrink-0" aria-hidden /> : notice.tone === "ok" ? <Wifi className="size-3.5 shrink-0" aria-hidden /> : null}
+      <span className={wrap ? "min-w-0" : hideTextOnPhone ? "hidden truncate sm:inline" : "truncate"}>{t(notice.text)}</span>
+      {notice.action ? <button type="button" onClick={onRetry} className="press shrink-0 rounded-md px-1.5 py-0.5 underline hover:bg-muted">{t(notice.action)}</button> : null}
+    </span>
+  );
+}
+
+// «به چت جدید» from a selection: the quote, the owner's request under it, then a line naming the chat
+// it came from, so the agent can read that chat when it needs more (chat_read).
+function newChatContextNote(id, title = "") {
+  const name = String(title || "").replace(/\s+/g, " ").trim();
+  return name
+    ? t("این بخش از گفتگوی «{name}» (شناسهٔ {id}) است؛ اگر زمینهٔ بیشتری لازم شد، آن گفتگو را با chat_read بخوان.", { name, id })
+    : t("این بخش از گفتگوی (شناسهٔ {id}) است؛ اگر زمینهٔ بیشتری لازم شد، آن گفتگو را با chat_read بخوان.", { id });
+}
 
 export default function App() {
   const chatId = useRoute();
@@ -39,6 +68,21 @@ export default function App() {
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
   const [fetchedChat, setFetchedChat] = useState(null);
   const chat = listed || (fetchedChat?.id === chatId ? fetchedChat : null);
+  // Token use is only on the chat's own record (GET /api/chats/:id), not on the list: read it when
+  // the chat opens and again when a run starts or ends.
+  const [chatUsage, setChatUsage] = useState(null);
+  useEffect(() => {
+    setChatUsage(null);
+    if (!chatId) return undefined;
+    let alive = true;
+    api(`/api/chats/${chatId}`)
+      .then((data) => alive && setChatUsage(data?.chat?.usage || null))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [chatId, chat?.runStatus]);
+  const usageOfChat = chat?.usage || chatUsage;
 
   // A new version after an update: a notice that stays until the owner reloads (a hidden tab
   // reloads by itself — new-version.js).
@@ -73,6 +117,25 @@ export default function App() {
       alive = false;
     };
   }, [chatId, listed]);
+  // While a chat is the open route and the tab is visible, its content counts as seen (seen.js): a
+  // run that finishes in a hidden tab, or after the owner moved on, leaves it unread.
+  useEffect(() => {
+    if (chats.length) seedSeen([...chats, ...archived]);
+  }, [chats, archived]);
+  const seenTarget = chat?.updatedAt;
+  const seenState = useRef({ chat: null, pending: false });
+  useEffect(() => {
+    // Opening the chat clears a hand-made «خوانده‌نشده» mark; coming back to the tab does not.
+    arriveAt(seenState.current, chatId);
+    if (!chatId || !seenTarget) return undefined;
+    const see = () => lookAt(seenState.current, chatId, seenTarget, document.visibilityState === "visible");
+    see();
+    document.addEventListener("visibilitychange", see);
+    return () => document.removeEventListener("visibilitychange", see);
+  }, [chatId, seenTarget]);
+  const karsara = useSkin() === "karsara";
+  const openSuggestionCount = useSuggestions().open.length;
+
   // The tab a chat belongs to; a sub-agent chat belongs to its parent's tab.
   const activeSource = useMemo(() => {
     if (!chat) return null;
@@ -222,8 +285,49 @@ export default function App() {
   }, [sideParent]);
   const clearSideSeed = useCallback(() => setSideSeed(null), []);
   useEffect(() => {
-    if (error) toast.error(error.status === 409 ? t("ایجنت هنوز روی پیام قبلی کار می‌کند.") : t("خطا: {message}", { message: error.message }));
+    if (!error) return;
+    // A message that did not reach the server is back in the box (runtime.jsx sets keptText); say so.
+    const kept = error.keptText ? t("پیام فرستاده نشد و در کادر پیام ماند.") : "";
+    const line = (text) => (kept ? `${text} ${kept}` : text);
+    if (error.status === 409) toast.error(line(t("ایجنت هنوز روی پیام قبلی کار می‌کند.")));
+    else if (!error.status && (error instanceof TypeError || error.keptText)) toast.error(`${t("ارتباط با سرور {name} قطع است.", { name: BRAND.name })} ${kept || t("دوباره امتحان کنید.")}`);
+    else toast.error(line(t("خطا: {message}", { message: error.message })));
   }, [error]);
+
+  // «به چت جدید» in the selection toolbar (SelectionActions): a plain new chat starts at once with the
+  // selection, the owner's request and a line naming this chat, in this chat's repo. If it cannot be
+  // made, nothing is lost: all of it waits in a new chat's box.
+  useEffect(() => {
+    const onNewChat = async (event) => {
+      const { text, chatId: from, request } = event.detail || {};
+      if (!String(text || "").trim()) return;
+      const title = from && from === chatId ? chatTitle : "";
+      const context = from ? newChatContextNote(from, title) : "";
+      const ask = String(request || "").trim();
+      try {
+        if (!ask) throw new Error(t("درخواستی نوشته نشد"));
+        const { chat: created } = await api("/api/chats", {
+          method: "POST",
+          body: {
+            text: withQuotes([{ text, note: ask }], context),
+            mode: draft.mode,
+            ...(chat?.model ? { model: chat.model } : {}),
+            effort: draft.effort || undefined,
+            agent: settings.agent || "griffin",
+            ...(chat?.repo ? { repo: chat.repo } : {}),
+          },
+        });
+        if (created?.id) navigate(created.id);
+      } catch (e) {
+        quoteStore.add(null, { text, note: [ask, context].filter(Boolean).join("\n\n") });
+        setDraft((d) => ({ ...d, repo: chat ? chat.repo || "" : null, groupId: "" }));
+        navigate(null);
+        toast.error(t("گفتگوی تازه شروع نشد؛ متن در کادر گفتگوی تازه ماند: {message}", { message: e.message }));
+      }
+    };
+    window.addEventListener("griffin:new-chat-insert", onNewChat);
+    return () => window.removeEventListener("griffin:new-chat-insert", onNewChat);
+  }, [chatId, chatTitle, chat, draft.mode, draft.effort, settings.agent]);
 
   const quickSend = async (prompt) => {
     try {
@@ -254,7 +358,7 @@ export default function App() {
         <SettingsPage onBack={() => navigate(null)} onSection={setSettingsSection} />
       ) : (
         <>
-          <div className="hidden w-80 shrink-0 border-e md:block">
+          <ResizableSidebar initial={karsara ? SIDEBAR_WIDTH.karsara : SIDEBAR_WIDTH.initial}>
             <Sidebar
               chats={chats}
               archived={archived}
@@ -268,11 +372,11 @@ export default function App() {
               onAgentChange={selectAgent}
               agentLocked={chat?.runStatus === "running"}
             />
-          </div>
+          </ResizableSidebar>
           {drawer ? (
             <div className="fixed inset-0 z-40 md:hidden">
-              <div className="absolute inset-0 bg-black/50" onClick={() => setDrawer(false)} />
-              <div className="absolute inset-y-0 start-0 w-[90%] max-w-96 shadow-xl">
+              <div className={`absolute inset-0 ${karsara ? "bg-black/40" : "bg-black/50"}`} onClick={() => setDrawer(false)} />
+              <div className={`absolute inset-y-0 start-0 ${karsara ? "w-[86%] max-w-80 border-e" : "w-[90%] max-w-96 shadow-xl"}`}>
                 <Sidebar
                   chats={chats}
                   archived={archived}
@@ -297,9 +401,13 @@ export default function App() {
               <ChatRecord.Provider value={chat}>
               <Thread
                 header={
-                  <header className="flex items-center gap-2 border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
-                    <button type="button" onClick={() => setDrawer(true)} className="rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
+                  <header className="border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
+                    <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setDrawer(true)} className="relative rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
                       <Menu className="size-5" />
+                      {badgeText(openSuggestionCount) ? (
+                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground" aria-label={t("{n} پیشنهاد", { n: num(openSuggestionCount) })}>{badgeText(openSuggestionCount)}</span>
+                      ) : null}
                     </button>
                     {chat?.personId && chat.caller === "team" && !chat.parentChatId ? (
                       <button
@@ -322,10 +430,17 @@ export default function App() {
                     ) : null}
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
                     {chatId && notice ? (
-                      <span className={`flex min-w-0 items-center gap-1 text-xs ${notice.tone === "warn" ? "text-warn" : notice.tone === "ok" ? "text-ok" : "text-muted-foreground"}`} title={t(notice.text)} role="status">
-                        {notice.tone === "warn" ? <WifiOff className="size-3.5 shrink-0" /> : null}
-                        <span className={notice.action ? "hidden truncate sm:inline" : "truncate"}>{t(notice.text)}</span>
-                        {notice.action ? <button type="button" onClick={reconnect} className="press shrink-0 rounded-md px-1.5 py-0.5 underline hover:bg-muted">{t(notice.action)}</button> : null}
+                      // Under the Karsara skin a lost connection moves to its own row on a phone (below).
+                      <ConnectionNotice notice={notice} onRetry={reconnect} hideTextOnPhone={Boolean(notice.action)} className={karsara && notice.action ? "hidden sm:flex" : "flex"} />
+                    ) : null}
+                    {usageOfChat?.total ? (
+                      <span
+                        className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+                        title={(usageOfChat.byModel || []).map((m) => `${m.model} ${formatTokens(m.tokens)}`).join(" · ")}
+                      >
+                        <Zap className="size-3" aria-hidden />
+                        <bdi className="ltr">{formatTokens(usageOfChat.total)}</bdi>
+                        <span className="hidden sm:inline">{t("توکن")}</span>
                       </span>
                     ) : null}
                     {chat?.caller && chat.caller !== "owner" ? (
@@ -333,7 +448,8 @@ export default function App() {
                         {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
                     ) : null}
-                    {sideParent ? <SideChatButton open={side.open} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
+                    {karsara && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="hidden sm:flex" /> : null}
+                    {sideParent ? <SideChatButton open={side.open} count={side.sides.length} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
                     {chat?.parentChatId && chat.runStatus === "running" ? (
                       <button type="button" onClick={() => stopChat(chat.id)} className="press inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs text-bad hover:bg-bad/10">
                         <Square className="size-3.5" /> {t("توقف")}
@@ -341,6 +457,11 @@ export default function App() {
                     ) : null}
                     <ShareButton chatId={chatId} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
+                    </div>
+                    {karsara && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="mt-2 flex w-fit sm:hidden" /> : null}
+                    {karsara && chatId && notice?.action ? <ConnectionNotice notice={notice} onRetry={reconnect} className="mt-2 flex sm:hidden" wrap /> : null}
+                    {/* One live region that stays in the page, so a screen reader hears each change once. */}
+                    <span className="sr-only" role="status" aria-live="polite">{chatId && notice && notice.tone !== "muted" && notice.text ? t(notice.text) : ""}</span>
                   </header>
                 }
                 runInfo={<><SubagentsBar chat={chat} /><TodoProgress timeline={timeline} /></>}
@@ -348,7 +469,7 @@ export default function App() {
                 agentLabel={agentMeta(settings.agent).label}
                 agent={settings.agent}
                 fresh={!chatId}
-                recentTitles={recentTitles}
+                recentTitles={karsara ? [] : recentTitles}
                 onSuggestion={quickSend}
                 mode={settings.mode}
                 model={settings.model}
@@ -414,7 +535,7 @@ function TodoProgress({ timeline }) {
   if (done === todos.length) return null;
   const current = todos.find((t) => /progress/i.test(t.status)) || todos.find((t) => !/complete|done/i.test(t.status));
   return (
-    <div className="mb-2 rounded-xl border bg-card text-sm">
+    <div className="g-box mb-2 rounded-xl border bg-card text-sm">
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-2">
         <ListChecks className="size-4 text-primary" />
         <span className="ltr text-xs text-muted-foreground">{done}/{todos.length}</span>
@@ -447,7 +568,7 @@ function SubagentsBar({ chat }) {
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <button type="button" className="press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
+        <button type="button" className="g-box press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
           <Network className="size-3.5 text-primary" />
           <span>{t("{n} زیرایجنت", { n: num(count) })}</span>
           {running ? <span className="flex items-center gap-1 text-primary"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{t("{n} در حال کار", { n: num(running) })}</span> : null}
@@ -487,5 +608,99 @@ function SubagentsBar({ chat }) {
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+function LimitResumeChip({ chat, className = "" }) {
+  const at = new Date(chat.limitResumeAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+  return (
+    <span className={`${className} shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground`} title={t("این گفتگو به سقف مصرف خورد و بعد از بازشدن سقف خودش ادامه می‌دهد")}>
+      {t("ادامهٔ خودکار ساعت {at}", { at })}
+      <button
+        type="button"
+        className="rounded-full px-1 hover:bg-background hover:text-foreground"
+        title={t("لغو ادامهٔ خودکار")}
+        aria-label={t("لغو ادامهٔ خودکار")}
+        onClick={() => api(`/api/chats/${chat.id}/limit-resume`, { method: "DELETE" }).catch((e) => toast.error(e.message))}
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
+// The desktop sidebar with a draggable edge. The width is written straight to the
+// element while dragging (the app does not re-render per pixel) and kept in the browser on release.
+// The sidebar sits at the start of the RTL row, so its free edge is the inline end.
+function browserStorage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function ResizableSidebar({ initial, children }) {
+  const box = useRef(null);
+  const [width, setWidth] = useState(() => loadSidebarWidth(browserStorage(), window.innerWidth, initial));
+  const [dragging, setDragging] = useState(false);
+  const rtl = () => getComputedStyle(box.current).direction === "rtl";
+  const commit = (next) => {
+    setWidth(next);
+    saveSidebarWidth(browserStorage(), next);
+  };
+  const onPointerDown = (event) => {
+    if (event.button) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const rect = box.current.getBoundingClientRect();
+    const fromRight = rtl();
+    let latest = width;
+    setDragging(true);
+    document.body.style.userSelect = "none";
+    const move = (e) => {
+      latest = clampSidebarWidth(fromRight ? rect.right - e.clientX : e.clientX - rect.left, window.innerWidth);
+      box.current.style.width = `${latest}px`;
+    };
+    const done = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", done);
+      handle.removeEventListener("pointercancel", done);
+      handle.removeEventListener("lostpointercapture", done);
+      document.body.style.userSelect = "";
+      setDragging(false);
+      commit(latest);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", done);
+    handle.addEventListener("pointercancel", done);
+    handle.addEventListener("lostpointercapture", done);
+  };
+  const onKeyDown = (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const outward = (event.key === "ArrowLeft") === rtl(); // towards the chat: wider
+    commit(clampSidebarWidth(width + (outward ? 16 : -16), window.innerWidth));
+  };
+  return (
+    <div ref={box} className="relative hidden shrink-0 border-e md:block" style={{ width }}>
+      {children}
+      <div
+        className="absolute inset-y-0 -end-1 z-10 w-2 cursor-col-resize touch-none outline-none hover:bg-primary/25 focus-visible:bg-primary/40 data-[dragging=true]:bg-primary/40"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t("تغییر پهنای فهرست گفتگوها")}
+        aria-valuemin={SIDEBAR_WIDTH.min}
+        aria-valuemax={SIDEBAR_WIDTH.max}
+        aria-valuenow={width}
+        tabIndex={0}
+        title={t("بکشید تا پهنا عوض شود؛ دو بار کلیک: پهنای معمول")}
+        data-dragging={dragging ? "true" : undefined}
+        onPointerDown={onPointerDown}
+        onDoubleClick={() => commit(initial)}
+        onKeyDown={onKeyDown}
+      />
+    </div>
   );
 }

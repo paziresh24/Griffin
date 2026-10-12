@@ -23,5 +23,17 @@
   "نسخهٔ تازهٔ {name} آماده است.": "A new version of {name} is ready.",
   "با بارگذاری دوباره آن را می‌گیرید؛ پیش‌نویس پیام‌ها می‌ماند.": "Reload to get it; your message drafts are kept.",
   "بارگذاری دوباره": "Reload",
-  "چت مادر": "Mother chat"
+  "چت مادر": "Mother chat",
+  "این بخش از گفتگوی «{name}» (شناسهٔ {id}) است؛ اگر زمینهٔ بیشتری لازم شد، آن گفتگو را با chat_read بخوان.": "This part is from the chat «{name}» (id {id}); if more context is needed, read that chat with chat_read.",
+  "این بخش از گفتگوی (شناسهٔ {id}) است؛ اگر زمینهٔ بیشتری لازم شد، آن گفتگو را با chat_read بخوان.": "This part is from the chat with id {id}; if more context is needed, read that chat with chat_read.",
+  "پیام فرستاده نشد و در کادر پیام ماند.": "The message was not sent and is still in the message box.",
+  "ارتباط با سرور {name} قطع است.": "Lost connection to the {name} server.",
+  "دوباره امتحان کنید.": "Try again.",
+  "درخواستی نوشته نشد": "No request was written",
+  "گفتگوی تازه شروع نشد؛ متن در کادر گفتگوی تازه ماند: {message}": "The new chat did not start; the text is waiting in a new chat's box: {message}",
+  "{n} پیشنهاد": "{n} suggestions",
+  "این گفتگو به سقف مصرف خورد و بعد از بازشدن سقف خودش ادامه می‌دهد": "This chat hit the usage limit and will continue by itself once the limit resets",
+  "ادامهٔ خودکار ساعت {at}": "Auto-continue at {at}",
+  "تغییر پهنای فهرست گفتگوها": "Resize the chat list",
+  "بکشید تا پهنا عوض شود؛ دو بار کلیک: پهنای معمول": "Drag to resize; double-click: default width"
 }

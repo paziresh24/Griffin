@@ -1,0 +1,14 @@
+{
+  "سقف مصرف پنج‌ساعته": "5-hour usage limit",
+  "سقف مصرف هفتگی": "Weekly usage limit",
+  "سقف مصرف هفتگی Opus": "Weekly Opus usage limit",
+  "سقف مصرف هفتگی Sonnet": "Weekly Sonnet usage limit",
+  "اتصال برقرار نشد": "could not connect",
+  "سرور مدل شلوغ است": "model server is busy",
+  "محدودیت نرخ درخواست": "rate limited",
+  "خطای {n}": "error {n}",
+  "تلاش دوباره ({n} از {max})؛ {reason}": "Retrying ({n} of {max}); {reason}",
+  "تلاش دوباره ({n})؛ {reason}": "Retrying ({n}); {reason}",
+  "{which} پر شد؛ ساعت {time} باز می‌شود": "{which} reached; reopens at {time}",
+  "{which} پر شد": "{which} reached"
+}

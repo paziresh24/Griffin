@@ -10,15 +10,15 @@ import { locale, num, t } from "../i18n.js";
 // fresh input, output, and the cache written and read.
 
 const RANGES = [7, 30, 90];
-const COLOURS = ["var(--primary)", "var(--agent-platform)", "var(--warn)", "var(--agent-nsin)", "var(--bad)", "var(--muted-foreground)"];
-const colour = (index) => COLOURS[Math.min(Math.max(index, 0), COLOURS.length - 1)];
+const SERIES = 6; // colours --series-0..5 (styles.css, per skin); later models share the last one
+const colour = (index) => `var(--series-${Math.min(Math.max(index, 0), SERIES - 1)})`;
 const dayLabel = (date, options) => new Date(`${date}T12:00:00Z`).toLocaleDateString(locale, { timeZone: "UTC", ...options });
 const fa = (n) => num(Number(n || 0));
 const share = (part, whole) => `${whole ? Math.round((part / whole) * 100) : 0}%`;
 
 function Stat({ label, value, hint }) {
   return (
-    <div className="rounded-xl border bg-card px-3 py-2" title={hint}>
+    <div className="g-tok-stat rounded-xl border bg-card px-3 py-2" title={hint}>
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <bdi className="ltr text-sm font-semibold">{formatTokens(value)}</bdi>
     </div>
@@ -29,7 +29,7 @@ function DailyChart({ days, order }) {
   const bars = useMemo(() => dayBars(days, order), [days, order]);
   const labelled = labelledDays(bars.length);
   return (
-    <div className="flex h-44 items-end gap-px rounded-2xl border bg-card p-3" dir="ltr" role="img" aria-label={t("مصرف روزانهٔ توکن به تفکیک مدل")}>
+    <div className="g-tok-chart flex h-44 items-end gap-px rounded-2xl border bg-card p-3" dir="ltr" role="img" aria-label={t("مصرف روزانهٔ توکن به تفکیک مدل")}>
       {bars.map((bar, i) => (
         <div
           key={bar.date}
@@ -50,7 +50,7 @@ function DailyChart({ days, order }) {
 
 function Table({ head, children }) {
   return (
-    <div className="scrollbar-thin overflow-x-auto rounded-2xl border bg-card">
+    <div className="g-tok-table scrollbar-thin overflow-x-auto rounded-2xl border bg-card">
       <table className="w-full text-xs">
         <thead className="text-muted-foreground">
           <tr>{head.map((h) => <th key={h} className="px-3 py-2 text-start font-medium">{h}</th>)}</tr>
@@ -80,10 +80,11 @@ export function TokensSection() {
 
   const order = useMemo(() => (data ? modelOrder(data.days) : []), [data]);
   const cell = "px-3 py-2";
+  const heading = "mb-2 text-sm font-semibold";
 
   return (
     <div className="space-y-5">
-      <div className="flex gap-1.5" role="group" aria-label={t("بازهٔ زمانی")}>
+      <div className="g-tok-ranges flex gap-1.5" role="group" aria-label={t("بازهٔ زمانی")}>
         {RANGES.map((n) => (
           <button
             key={n}
@@ -105,7 +106,7 @@ export function TokensSection() {
         <p className="py-12 text-center text-sm text-muted-foreground">{t("در این بازه مصرفی ثبت نشده است.")}</p>
       ) : (
         <div className={`space-y-5 ${data.range !== days ? "opacity-60" : ""}`}>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <div className="g-tok-stats grid grid-cols-2 gap-2 sm:grid-cols-5">
             <Stat label={t("کل")} value={data.totals.total} hint={t("همهٔ توکن‌های ثبت‌شده در این بازه")} />
             <Stat label={t("ورودی تازه")} value={data.totals.input} hint={t("متن تازه‌ای که به مدل رفته")} />
             <Stat label={t("خروجی")} value={data.totals.output} hint={t("آنچه مدل نوشته، با فکرکردنش")} />
@@ -113,6 +114,8 @@ export function TokensSection() {
             <Stat label={t("خواندن از کش")} value={data.totals.cacheRead} hint={t("متن ذخیره‌شده‌ای که دوباره خوانده شده؛ معمولاً بیشترین سهم و ارزان‌ترین")} />
           </div>
 
+          <div>
+          <h2 className={heading}>{t("روزانه")}</h2>
           <DailyChart days={data.days} order={order} />
           <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {order.map((model, index) => (
@@ -122,11 +125,14 @@ export function TokensSection() {
               </li>
             ))}
           </ul>
+          </div>
 
+          <div>
+          <h2 className={heading}>{t("به تفکیک مدل")}</h2>
           <Table head={[t("مدل"), t("کل"), t("سهم"), t("ورودی"), t("خروجی"), t("نوبت")]}>
             {data.byModel.map((m) => (
               <tr key={m.model}>
-                <td className={cell}><bdi className="ltr">{m.model}</bdi></td>
+                <td className={cell}><i className="me-1.5 inline-block size-2.5 rounded-sm align-[-1px]" style={{ background: colour(order.indexOf(m.model)) }} aria-hidden /><bdi className="ltr">{m.model}</bdi></td>
                 <td className={`${cell} ltr`}>{formatTokens(m.total)}</td>
                 <td className={`${cell} ltr`}>{share(m.total, data.totals.total)}</td>
                 <td className={`${cell} ltr`}>{formatTokens(m.input + m.cacheWrite + m.cacheRead)}</td>
@@ -135,7 +141,13 @@ export function TokensSection() {
               </tr>
             ))}
           </Table>
+          </div>
 
+          <div>
+          <h2 className={heading}>
+            {t("به تفکیک گفتگو")}
+            {data.chatCount > data.byChat.length ? <span className="text-xs font-normal text-muted-foreground"> · {t("{shown} گفتگوی پرمصرف از {total}", { shown: fa(data.byChat.length), total: fa(data.chatCount) })}</span> : null}
+          </h2>
           <Table head={[t("گفتگو"), t("کل"), t("سهم"), t("مدل"), t("نوبت")]}>
             {data.byChat.map((c) => (
               <tr key={c.chatId}>
@@ -151,8 +163,8 @@ export function TokensSection() {
               </tr>
             ))}
           </Table>
+          </div>
           <p className="text-xs leading-6 text-muted-foreground">
-            {data.chatCount > data.byChat.length ? `${t("{shown} گفتگوی پرمصرف از {total}.", { shown: fa(data.byChat.length), total: fa(data.chatCount) })} ` : ""}
             {t("روزها به وقت")} <bdi className="ltr">{data.timeZone}</bdi> {t("است. «ورودی» در جدول مدل‌ها متن تازه و کش را با هم می‌شمارد.")}
           </p>
         </div>
