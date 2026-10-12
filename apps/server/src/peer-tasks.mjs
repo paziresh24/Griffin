@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
 import { normalizeProvider } from "./providers/ids.mjs";
+import { genv } from "./env.mjs";
 
 // Tasks for external agents (A2A lifecycle over Griffin chats). A context is a chat owned by one
 // peer user; a task is one request in it. Nothing here blocks until the work is done: send
@@ -43,7 +44,7 @@ function recentBlock(recent) {
 // GitOps repo, their secret-store project…), from GRIFFIN_PEER_SELF_SERVE with {user} for their id.
 // Without it a colleague's agent routes every read through Griffin: one live case was eight
 // requests a day, 4–30 minutes each, for work their own kubeconfig could do.
-export function selfServeKit(userId, template = process.env.GRIFFIN_PEER_SELF_SERVE) {
+export function selfServeKit(userId, template = genv("PEER_SELF_SERVE")) {
   const text = String(template || "").trim();
   return text ? text.replaceAll("{user}", userId) : "";
 }

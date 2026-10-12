@@ -67,7 +67,7 @@ ENV NODE_ENV=production \
     GRIFFIN_BROKER_SOCKET=/run/griffin/broker.sock \
     GRIFFIN_SITE_CONFIG=/config/site.json \
     GRIFFIN_SSH_KNOWN_HOSTS=/config/ssh_known_hosts
-RUN mkdir -p /run/griffin && chown node:node /run/griffin
+RUN mkdir -p /run/griffin /broker-data && chown node:node /run/griffin /broker-data
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "const p=process.env.GRIFFIN_BROKER_SOCKET;require('http').get({socketPath:p,path:'/healthz'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"

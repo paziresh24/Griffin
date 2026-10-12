@@ -3,6 +3,8 @@ import { ArrowLeft, ArrowRight, Bot, Check, Copy, Cpu, Globe, Loader2, Plug, Sen
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { t } from "../i18n.js";
+import { BRAND } from "../brand.js";
+import { ClaudeSignin } from "./Providers.jsx";
 
 // Setup wizards: first run (engine → name → messenger), and each piece on its own from Settings or
 // from a doctor finding. #/setup/<flow>. Every step tests what it saved for real before moving on.
@@ -22,7 +24,7 @@ export function setupFlowFromHash(hash = window.location.hash) {
 }
 
 const ENGINES = [
-  { id: "claude-sub", provider: "claude", label: t("Claude — اشتراک Pro/Max"), hint: t("روی سیستمی که Claude Code دارد: claude setup-token — توکن sk-ant-oat… را اینجا بگذار."), placeholder: "sk-ant-oat…" },
+  { id: "claude-sub", provider: "claude", label: t("Claude — اشتراک Pro/Max"), hint: t("با اکانت Claude وارد شو؛ {name} توکن بلندمدت را خودش می‌گیرد و نگه می‌دارد.", { name: BRAND.name }), placeholder: "sk-ant-oat…" },
   { id: "claude-api", provider: "claude", label: t("Claude — کلید API"), hint: t("از console.anthropic.com → API keys."), placeholder: "sk-ant-api…" },
   { id: "openai", provider: "openai", preset: "openai", label: "OpenAI", hint: t("از platform.openai.com → API keys."), placeholder: "sk-…", model: "gpt-4o-mini" },
   { id: "openrouter", provider: "openai", preset: "openrouter", label: "OpenRouter", hint: t("یک کلید برای صدها مدل؛ مدل را مثل provider/model بنویس."), placeholder: "sk-or-…", model: "" },
@@ -125,22 +127,27 @@ function EngineStep({ onNext, moveDefault }) {
       if (engine.custom) body.baseUrl = baseUrl.trim();
       if (engine.provider === "openai" && model.trim()) body.model = model.trim();
       await api(`/api/providers/${engine.provider}`, { method: "PATCH", body });
-      const r = await api(`/api/doctor/engine/${engine.provider}`);
-      setResult(r);
-      if (r.ok) {
-        if (moveDefault) await api("/api/agents/griffin", { method: "PATCH", body: { provider: engine.provider } }).catch(() => {});
-        await api("/api/doctor/heal", { method: "POST" }).catch(() => {});
-      }
+      await verify();
     } catch (e) {
       setResult({ ok: false, cause: "other", detail: e.message });
     }
     setBusy(false);
   };
 
+  // After a key or a browser sign-in: test it for real, then put the default agent on it.
+  const verify = async () => {
+    const r = await api(`/api/doctor/engine/${engine.provider}`);
+    setResult(r);
+    if (r.ok) {
+      if (moveDefault) await api("/api/agents/griffin", { method: "PATCH", body: { provider: engine.provider } }).catch(() => {});
+      await api("/api/doctor/heal", { method: "POST" }).catch(() => {});
+    }
+  };
+
   return (
     <div className="space-y-4">
       <h2 className="flex items-center gap-2 text-lg font-semibold"><Cpu className="size-5" /> {t("موتور هوش مصنوعی")}</h2>
-      <p className="text-sm text-muted-foreground">{t("ایجنت‌ها با این جواب می‌دهند. کلید فقط روی همین سرور (فایل 0600) می‌ماند.")}</p>
+      <p className="text-sm text-muted-foreground">{t("ایجنت‌ها با این جواب می‌دهند. کلید رمزنگاری‌شده در سکرت‌منیجر همین سرور می‌ماند.")}</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {ENGINES.map((e) => (
           <button key={e.id} type="button" onClick={() => pick(e)} className={`press rounded-xl border p-3 text-start text-sm ${choice === e.id ? "border-primary bg-primary/10" : "hover:bg-muted/50"}`}>
@@ -151,6 +158,8 @@ function EngineStep({ onNext, moveDefault }) {
       {engine ? (
         <div className="space-y-3 rounded-2xl border bg-card p-4">
           <p className="text-xs leading-6 text-muted-foreground" dir="auto">{engine.hint}</p>
+          {engine.id === "claude-sub" ? <ClaudeSignin id="claude" onDone={() => verify().catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} /> : null}
+          {engine.id === "claude-sub" ? <p className="text-xs text-muted-foreground">{t("یا اگر توکن را از قبل داری:")}</p> : null}
           {engine.custom ? <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" /> : null}
           {engine.noKey ? null : <input className={field} dir="ltr" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={engine.placeholder} />}
           {engine.provider === "openai" ? <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" /> : null}

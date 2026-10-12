@@ -1,11 +1,15 @@
 import { execFile } from "node:child_process";
+import { statSync } from "node:fs";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
 // Reads items from the host-local OpenBao. The machine token is age-encrypted on disk;
 // only the broker container has the identity and the encrypted token mounted.
+// local: the broker's own encrypted box (secretbox.mjs). Items set from the UI go there when no
+// OpenBao is configured (url/token empty); reads check the box first, then OpenBao.
 export function createVault({
+  local = null,
   url = "http://127.0.0.1:18200",
   tokenAge = "/emergency-vault/machine.token.age",
   identity = "/emergency-keys/quarantine.age",
@@ -14,6 +18,16 @@ export function createVault({
   fetchImpl = fetch,
 } = {}) {
   const cache = new Map();
+  // OpenBao counts only when its token and identity are actually mounted (a fresh install has none;
+  // compose binds /dev/null there, which is not a file).
+  const isFile = (f) => {
+    try {
+      return statSync(f).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const bao = Boolean(url && tokenAge && identity && isFile(tokenAge) && isFile(identity));
 
   async function machineToken() {
     try {
@@ -28,6 +42,9 @@ export function createVault({
 
   return {
     async item(slug) {
+      const own = local?.get(slug);
+      if (own) return own;
+      if (!bao) throw new Error(`secret ${slug} is not set (Settings → Secrets)`);
       const hit = cache.get(slug);
       if (hit && Date.now() - hit.at < ttlMs) return hit.value;
       const response = await fetchImpl(`${url}/v1/emergency/data/items/${encodeURIComponent(slug)}`, {
@@ -44,6 +61,11 @@ export function createVault({
     // Used by the vault-put CLI to store operator-issued credentials without exposing them.
     async put(slug, value) {
       if (typeof value !== "string" || !value) throw new Error("refusing to store an empty value");
+      if (!bao) {
+        if (!local) throw new Error("no secret store configured");
+        local.set(slug, value);
+        return;
+      }
       const response = await fetchImpl(`${url}/v1/emergency/data/items/${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "X-Vault-Token": await machineToken(), "Content-Type": "application/json" },
@@ -52,6 +74,36 @@ export function createVault({
       });
       if (!response.ok) throw new Error(`emergency vault write http_${response.status}`);
       cache.delete(slug);
+    },
+
+    // Names only — never values. OpenBao listing needs a token with list on the metadata path.
+    async list() {
+      const items = (local?.list() || []).map((x) => ({ name: x.name, source: "broker", updatedAt: x.updatedAt, last4: x.last4 }));
+      if (!bao) return { backend: "broker", items };
+      try {
+        const response = await fetchImpl(`${url}/v1/emergency/metadata/items?list=true`, {
+          headers: { "X-Vault-Token": await machineToken(), Accept: "application/json" },
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) throw new Error(`http_${response.status}`);
+        const keys = (await response.json())?.data?.keys || [];
+        return { backend: "openbao", items: [...items, ...keys.filter((k) => !items.some((i) => i.name === k)).map((name) => ({ name, source: "openbao" }))] };
+      } catch (error) {
+        return { backend: "openbao", items, error: `cannot list OpenBao items (${error.message})` };
+      }
+    },
+
+    async remove(slug) {
+      cache.delete(slug);
+      if (local?.delete(slug)) return true;
+      if (!bao) return false;
+      const response = await fetchImpl(`${url}/v1/emergency/metadata/items/${encodeURIComponent(slug)}`, {
+        method: "DELETE",
+        headers: { "X-Vault-Token": await machineToken() },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok && response.status !== 404) throw new Error(`emergency vault delete http_${response.status}`);
+      return response.ok;
     },
   };
 }

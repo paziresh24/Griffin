@@ -40,10 +40,10 @@ export function planWindows(windows) {
     .filter(([key, w]) => WINDOW_LABELS[key] && w && w.utilization != null)
     .map(([key, w]) => ({ label: WINDOW_LABELS[key], percentage: Math.round(Number(w.utilization) * 100), resetAt: w.resetsAt ? w.resetsAt * 1000 : null }));
 }
-// Last plan windows any run saw (process-wide; one subscription).
-const lastLimits = { windows: null, at: null };
 
 export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
+  // Last plan windows this account's runs saw (one subscription per account).
+  const lastLimits = { windows: null, at: null };
   return {
     id: PROVIDER_CLAUDE,
     defaultModel,

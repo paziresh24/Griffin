@@ -194,7 +194,8 @@ test("vault.put writes KV v2 with the machine token and never accepts empty valu
     return new Response(null, { status: 204 });
   };
   try {
-    const store = createVault({ url: "http://bao", ageBin, fetchImpl });
+    for (const f of ["token.age", "id.age"]) fs.writeFileSync(path.join(dir, f), "x");
+    const store = createVault({ url: "http://bao", ageBin, fetchImpl, tokenAge: path.join(dir, "token.age"), identity: path.join(dir, "id.age") });
     await store.put("kube__token", '{"type":"authentik-basic"}');
     assert.deepEqual(calls[0], {
       url: "http://bao/v1/emergency/data/items/kube__token",
@@ -372,4 +373,24 @@ test("tool packs follow the site config: nothing configured, nothing but credent
     sshRun: async () => ({}),
   });
   assert.ok(Object.keys(forced).includes("arvan_domains"));
+});
+
+test("without OpenBao, tool credentials live in the broker's own box and only names come back", async () => {
+  const { createVault } = await import("../src/vault.mjs");
+  const { createSecretStore } = await import("../src/secretbox.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "box-"));
+  try {
+    const vault = createVault({ local: createSecretStore({ dataDir: dir }), tokenAge: path.join(dir, "missing") });
+    await assert.rejects(vault.item("gitlab__token"), /not set/);
+    await vault.put("gitlab__token", "tok-example-123456789");
+    assert.equal(await vault.item("gitlab__token"), "tok-example-123456789");
+    const listed = await vault.list();
+    assert.equal(listed.backend, "broker");
+    assert.deepEqual(listed.items.map((i) => i.name), ["gitlab__token"]);
+    assert.ok(!JSON.stringify(listed).includes("tok-example-123456789"));
+    assert.equal(await vault.remove("gitlab__token"), true);
+    assert.ok(!fs.readFileSync(path.join(dir, "secrets.json"), "utf8").includes("tok-example"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -125,6 +125,7 @@ export function publicProfile(profile) {
     provider: profile.provider || "cursor",
     model: profile.model || null,
     effort: profile.meta?.effort || null,
+    models: profile.meta?.models || [],
     tools: profile.tools || [],
     allTools: Boolean(profile.meta?.allTools),
     disabled: profile.meta?.disabled || [],

@@ -151,5 +151,6 @@
  "ویرایش جاب": "Edit job",
  "حذف جاب": "Delete job",
  "اجرای جاب": "Run job",
- "دستور داخل پاد": "Command in a pod"
+ "دستور داخل پاد": "Command in a pod",
+ "توقف این زیرایجنت": "Stop this subagent"
 }

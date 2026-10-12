@@ -1,0 +1,13 @@
+{
+  "در حال ری‌استارت… صفحه چند ثانیه بعد دوباره وصل می‌شود.": "Restarting… the page reconnects in a few seconds.",
+  "ران‌هایی در جریان‌اند و قطع می‌شوند. باز هم ری‌استارت شود؟": "Runs are in progress and will be interrupted. Restart anyway?",
+  "بعد از ری‌استارت": "after restart",
+  "پیش‌فرض ({value})": "Default ({value})",
+  "پیش‌فرض": "Default",
+  "— مثل ایجنت —": "— same as the agent —",
+  "ری‌استارت {name}": "Restart {name}",
+  " ({n} ران در جریان)": " ({n} runs in progress)",
+  "خالی = مقدار متغیر محیطی یا پیش‌فرض. مسیرها، پورت‌ها و سوکت کارگزار عمداً فقط هنگام نصب تعیین می‌شوند.": "Empty = the environment variable or the default. Paths, ports and the broker socket are set only at install time, on purpose.",
+  "ذخیره شد": "Saved",
+  "ذخیره": "Save"
+}

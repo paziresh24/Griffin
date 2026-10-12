@@ -12,6 +12,7 @@ import readline from "node:readline";
 //   griffin jobs / jobs run <id>            scheduled work
 //   griffin health                          what this install can reach
 //   griffin doctor [fix <id> | heal]        live self-check, and its fixes
+//   griffin secrets / engines / config      credentials, engine accounts, runtime settings
 //
 // It talks to a running Griffin over HTTP with the owner token, which it finds by itself:
 // GRIFFIN_TOKEN, or <data dir>/owner.token when it runs on the same machine.
@@ -33,6 +34,12 @@ function usage(code = 0) {
   griffin health                      providers, broker, tools
   griffin doctor [fix <id> | heal]    live check of engines, agents, runs; apply a fix
   griffin chats                       recent chats
+  griffin secrets [list | set NAME [--tools] | rm NAME [--tools]]
+                                      names only; set reads the value from stdin; --tools = the broker's
+  griffin engines [list | on ID | off ID | add KIND [LABEL]]
+                                      engine accounts (KIND: cursor, claude, openai)
+  griffin config [list | set KEY VALUE | restart]
+                                      runtime settings (Settings → Configuration)
 
 Options
   --url <url>        Griffin base url (default $GRIFFIN_URL or http://127.0.0.1:3100)
@@ -65,6 +72,8 @@ function parseArgs(argv) {
     else if (arg === "--domain") options.domain = take();
     else if (arg === "--instructions") options.instructions = take();
     else if (arg === "--instructions-file") options.instructions = fs.readFileSync(take(), "utf8");
+    // --tools a,b,c (agents new) or a bare --tools flag (secrets: the broker's vault).
+    else if (arg === "--tools" && (argv[i + 1] === undefined || argv[i + 1].startsWith("-"))) options.toolsScope = true;
     else if (arg === "--tools") options.tools = take().split(",").map((t) => t.trim()).filter(Boolean);
     else rest.push(arg);
   }
@@ -273,6 +282,84 @@ async function doctor(options, rest) {
   for (const done of body.applied || []) process.stdout.write(`fixed: ${done}\n`);
 }
 
+async function readStdin() {
+  if (process.stdin.isTTY) process.stderr.write(paint(DIM, "value (it echoes; prefer piping it in), then Ctrl-D: "));
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
+
+// Secret values only ever go in (stdin → API); nothing here prints one, not even its last characters.
+async function secrets(options, rest) {
+  const [sub = "list", name = options.tools?.[0]] = rest;
+  const scope = options.toolsScope || options.tools ? "tools" : "app";
+  if (sub === "set") {
+    if (!name) fail("usage: griffin secrets set NAME [--tools]   (value on stdin)");
+    const value = await readStdin();
+    if (!value) fail("empty value on stdin");
+    await call(options, "PUT", "/api/secrets", { scope, name, value });
+    return process.stdout.write(`set ${name} (${scope})\n`);
+  }
+  if (sub === "rm") {
+    if (!name) fail("usage: griffin secrets rm NAME [--tools]");
+    await call(options, "DELETE", `/api/secrets?scope=${scope}&name=${encodeURIComponent(name)}`);
+    return process.stdout.write(`removed ${name} (${scope})\n`);
+  }
+  if (sub !== "list") fail("usage: griffin secrets [list | set NAME [--tools] | rm NAME [--tools]]");
+  const body = await call(options, "GET", "/api/secrets");
+  const strip = (items) => (items || []).map(({ name: n, note, updatedAt, source }) => ({ name: n, note, updatedAt, source }));
+  if (options.json) return process.stdout.write(`${JSON.stringify({ app: strip(body.app), tools: { ...body.tools, items: strip(body.tools?.items) } }, null, 2)}\n`);
+  const row = (i) => process.stdout.write(`  ${i.name}${paint(DIM, `${i.source ? ` · ${i.source}` : ""}${i.updatedAt ? ` · ${new Date(i.updatedAt).toISOString()}` : ""}${i.note ? ` — ${i.note}` : ""}`)}\n`);
+  process.stdout.write(`${paint(BOLD, "app")}\n`);
+  strip(body.app).forEach(row);
+  process.stdout.write(`${paint(BOLD, "tools")}${paint(DIM, ` (${body.tools?.error || body.tools?.backend || "?"})`)}\n`);
+  strip(body.tools?.items).forEach(row);
+  const set = new Set((body.tools?.items || []).map((i) => i.name));
+  for (const c of body.catalog || []) if (!set.has(c.name)) process.stdout.write(paint(DIM, `  ○ ${c.name} — ${c.note}\n`));
+}
+
+async function engines(options, rest) {
+  const [sub = "list", id, ...label] = rest;
+  if (sub === "on" || sub === "off") {
+    if (!id) fail(`usage: griffin engines ${sub} ID`);
+    await call(options, "PATCH", `/api/providers/${encodeURIComponent(id)}`, { enabled: sub === "on" });
+    return process.stdout.write(`${id} ${sub}\n`);
+  }
+  if (sub === "add") {
+    if (!id) fail("usage: griffin engines add KIND [LABEL]   (KIND: cursor, claude, openai)");
+    const created = await call(options, "POST", "/api/providers", { kind: id, label: label.join(" ") });
+    return process.stdout.write(`added ${created.id} — set its key with: griffin secrets set engine/${created.id}\n`);
+  }
+  if (sub !== "list") fail("usage: griffin engines [list | on ID | off ID | add KIND [LABEL]]");
+  const { providers: list } = await call(options, "GET", "/api/providers");
+  if (options.json) return process.stdout.write(`${JSON.stringify(list.map(({ models, ...p }) => p), null, 2)}\n`);
+  for (const p of list) {
+    const state = !p.enabled ? "off" : p.health?.ok ? "ok" : p.health?.error || "down";
+    const notes = [p.kind, p.defaultModel, p.hasKey ? "key set" : "no key", p.limitedUntil ? `limited until ${new Date(p.limitedUntil).toISOString()}` : ""].filter(Boolean);
+    process.stdout.write(`${p.enabled ? (p.health?.ok ? "✓" : "✗") : "○"} ${paint(BOLD, p.id)}${p.label ? ` ${p.label}` : ""} ${paint(DIM, `${state} · ${notes.join(" · ")}`)}\n`);
+  }
+}
+
+async function config(options, rest) {
+  const [sub = "list", key, ...value] = rest;
+  if (sub === "set") {
+    if (!key) fail("usage: griffin config set KEY VALUE   (empty VALUE clears it)");
+    const r = await call(options, "PATCH", "/api/config", { [key]: value.join(" ") });
+    return process.stdout.write(`${key} saved${r?.restart ? " — applies after: griffin config restart" : ""}\n`);
+  }
+  if (sub === "restart") {
+    await call(options, "POST", "/api/admin/restart", {});
+    return process.stdout.write("restarting\n");
+  }
+  if (sub !== "list") fail("usage: griffin config [list | set KEY VALUE | restart]");
+  const { settings } = await call(options, "GET", "/api/config");
+  if (options.json) return process.stdout.write(`${JSON.stringify(settings, null, 2)}\n`);
+  for (const s of settings) {
+    const from = s.value ? "" : s.fromEnv ? " (env)" : "";
+    process.stdout.write(`${paint(BOLD, s.key)} = ${s.effective || paint(DIM, "—")}${paint(DIM, `${from}${s.live ? "" : " · restart"}`)}\n`);
+  }
+}
+
 const { options, rest } = parseArgs(process.argv.slice(2));
 const command = rest[0];
 
@@ -282,6 +369,9 @@ try {
   else if (command === "chats") await chats(options);
   else if (command === "health") await health(options);
   else if (command === "doctor") await doctor(options, rest.slice(1));
+  else if (command === "secrets") await secrets(options, rest.slice(1));
+  else if (command === "engines") await engines(options, rest.slice(1));
+  else if (command === "config") await config(options, rest.slice(1));
   else if (options.interactive) await interactive(options);
   else if (rest.length) await ask(options, rest.join(" "));
   else usage(1);

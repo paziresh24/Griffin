@@ -42,8 +42,12 @@ services:
       - ${GRIFFIN_CONFIG:-./config}:/config:ro
       - ${GRIFFIN_WORKSPACE:-./workspace}/repos:/workspace/repos
       - ${GRIFFIN_SANDBOX_DIR:-./sandbox}/keys:/sandbox-keys:ro
-      - ${GRIFFIN_VAULT_TOKEN_AGE:?path to machine.token.age}:/vault/machine.token.age:ro
-      - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
+      # Tool credentials set from Settings → Secrets land here (encrypted) when there is no OpenBao.
+      - broker-data:/broker-data
+      # OpenBao is optional (profile "infra"): point these at its machine token and age identity;
+      # left at /dev/null the broker uses only its own box above.
+      - ${GRIFFIN_VAULT_TOKEN_AGE:-/dev/null}:/vault/machine.token.age:ro
+      - ${GRIFFIN_AGE_IDENTITY:-/dev/null}:/keys/identity.age:ro
 
   # debug_exec's default host: a throwaway shell with no credentials. Bridge network on purpose: it
   # reaches the LAN and the internet through the host's NAT but not the host's loopback (vault,
@@ -161,9 +165,10 @@ services:
       GRIFFIN_AGE_IDENTITY: /keys/identity.age
     volumes:
       - ${GRIFFIN_VAULT_DIR:-/srv/griffin/vault}/state/unseal.b64.age:/vault/unseal.b64.age:ro
-      - ${GRIFFIN_AGE_IDENTITY:?path to the age identity}:/keys/identity.age:ro
+      - ${GRIFFIN_AGE_IDENTITY:-/dev/null}:/keys/identity.age:ro
     healthcheck:
       disable: true
 
 volumes:
   sockets:
+  broker-data:

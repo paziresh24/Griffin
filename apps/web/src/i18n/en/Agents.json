@@ -60,5 +60,12 @@
   "متوسط": "Medium",
   "زیاد": "High",
   "خیلی زیاد (فقط Claude)": "Extra high (Claude only)",
-  "حداکثر (فقط Claude)": "Max (Claude only)"
+  "حداکثر (فقط Claude)": "Max (Claude only)",
+  "مدل‌ها به ترتیب اولویت: اولین حسابِ روشن، کلیددار و بدون سقف اجرا می‌شود؛ بقیه جایگزین‌اند.": "Models in priority order: the first account that is on, has a key and is not at its limit runs; the rest are fallbacks.",
+  " (خاموش)": " (off)",
+  "مدل پیش‌فرض حساب": "Account default model",
+  "بالا": "Up",
+  "پایین": "Down",
+  "جایگزین": "Fallback",
+  "ذخیرهٔ ترتیب": "Save order"
 }

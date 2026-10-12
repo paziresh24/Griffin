@@ -13,6 +13,7 @@ import { t, num } from "../i18n.js";
 import {
   AlertTriangle, Boxes, Check, ChevronDown, CircleDashed, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
+  Square,
 } from "lucide-react";
 
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
@@ -178,6 +179,17 @@ function PeerCard({ args = {}, result, isError, status }) {
             >
               <ExternalLink className="size-3" />
               {t("دیدن چت")}
+            </button>
+          ) : null}
+          {running && liveChild ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); api(`/api/chats/${liveChild.id}/cancel`, { method: "POST" }).catch(() => {}); }}
+              className="inline-flex items-center gap-1 rounded-md border border-bad/40 px-2 py-1 text-[11px] font-medium text-bad hover:bg-bad/10"
+              title={t("توقف این زیرایجنت")}
+            >
+              <Square className="size-3" />
+              {t("توقف")}
             </button>
           ) : null}
           {!running && envelope?.chatRef ? (

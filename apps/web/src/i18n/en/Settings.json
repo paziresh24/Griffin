@@ -73,5 +73,10 @@
   "چک زنده‌ی موتورها، ایجنت‌ها، ران‌ها و اتصال‌ها؛ تعمیر با یک کلیک؛ و ویزاردهای راه‌اندازی.": "Live checks of engines, agents, runs and connections; one-click fixes; and the setup wizards.",
   "موتورها": "Engines",
   "موتورها و مدل‌ها": "Engines and models",
-  "پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.": "Providers, each one's key and default model, and which agent uses which engine."
+  "پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.": "Providers, each one's key and default model, and which agent uses which engine.",
+  "سکرت‌ها": "Secrets",
+  "سکرت‌منیجر": "Secret store",
+  "کلیدها و توکن‌هایی که موتورها و ابزارها لازم دارند — رمزنگاری‌شده روی همین سرور، هرگز نمایش داده نمی‌شوند.": "Keys and tokens the engines and tools need — encrypted on this server, never shown.",
+  "پیکربندی": "Configuration",
+  "تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.": "Settings that used to need an environment variable and a redeploy — now here, with a restart from this page."
 }
