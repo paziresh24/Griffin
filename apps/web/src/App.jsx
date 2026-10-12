@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { ChevronDown, ListChecks, Menu, Network, WifiOff } from "lucide-react";
+import { ChevronDown, ListChecks, Menu, Network, Square, WifiOff } from "lucide-react";
 import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTimeline } from "./api.js";
 import { connectionNotice } from "./timeline-memo.js";
@@ -275,6 +275,11 @@ export default function App() {
                       </span>
                     ) : null}
                     {sideParent ? <SideChatButton open={side.open} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
+                    {chat?.parentChatId && chat.runStatus === "running" ? (
+                      <button type="button" onClick={() => stopChat(chat.id)} className="press inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs text-bad hover:bg-bad/10">
+                        <Square className="size-3.5" /> {t("توقف")}
+                      </button>
+                    ) : null}
                     <UsageBadge />
                     <ShareButton chatId={chatId} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
@@ -370,6 +375,11 @@ function TodoProgress({ timeline }) {
 }
 
 // Sub-agents this chat started, as a count above the composer; the list opens on demand.
+// Stops one sub-agent chat (and whatever it delegated further); the parent keeps going.
+function stopChat(id) {
+  return api(`/api/chats/${id}/cancel`, { method: "POST" }).then(() => toast.success(t("متوقف شد")), (e) => toast.error(e.message));
+}
+
 function SubagentsBar({ chat }) {
   const [open, setOpen] = useState(false);
   const children = chat?.children || [];
@@ -388,21 +398,32 @@ function SubagentsBar({ chat }) {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content side="top" align="start" sideOffset={6} className="pop z-50 max-h-80 w-80 overflow-y-auto rounded-xl border bg-card p-1 text-sm shadow-xl">
-          {children.map((child) => (
-            <button
-              key={child.id}
-              type="button"
-              onClick={() => { setOpen(false); navigate(child.id); }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted"
-            >
-              <AgentGlyph id={child.agent} className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
-              {child.runStatus === "running" ? (
-                <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
-              ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
-                <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
-              ) : null}
+          {running > 1 ? (
+            <button type="button" onClick={() => Promise.all(children.filter((c) => c.runStatus === "running").map((c) => stopChat(c.id)))} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-bad hover:bg-bad/10">
+              <Square className="size-3.5" /> {t("توقف همهٔ زیرایجنت‌ها")}
             </button>
+          ) : null}
+          {children.map((child) => (
+            <div key={child.id} className="flex items-center rounded-lg hover:bg-muted">
+              <button
+                type="button"
+                onClick={() => { setOpen(false); navigate(child.id); }}
+                className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-start"
+              >
+                <AgentGlyph id={child.agent} className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
+                {child.runStatus === "running" ? (
+                  <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
+                ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
+                  <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
+                ) : null}
+              </button>
+              {child.runStatus === "running" ? (
+                <button type="button" onClick={() => stopChat(child.id)} className="press me-1 rounded-md p-1.5 text-muted-foreground hover:bg-bad/10 hover:text-bad" title={t("توقف این زیرایجنت")} aria-label={t("توقف این زیرایجنت")}>
+                  <Square className="size-3.5" />
+                </button>
+              ) : null}
+            </div>
           ))}
           {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">{t("و {n} مورد قدیمی‌تر", { n: num(count - children.length) })}</p> : null}
         </Popover.Content>

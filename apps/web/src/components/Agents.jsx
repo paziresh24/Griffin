@@ -1,10 +1,66 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Bot, Check, Loader2, Plus, Settings2, Trash2, Users } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Bot, Check, Loader2, Plus, Settings2, Trash2, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
 import { isRtl, num, t } from "../i18n.js";
 import { AgentGlyph } from "./Controls.jsx";
+import { accountLabel } from "./Providers.jsx";
+
+// The engines/models an agent runs on, in order: the first one that is switched on, has a key and is
+// not at its plan limit runs; the rest are fallbacks (a second Claude account, then GLM, …).
+function ModelPriority({ agent, busy, onSave }) {
+  const [accounts, setAccounts] = useState([]);
+  const initial = agent.models?.length ? agent.models : [agent.model ? `${agent.provider}:${agent.model}` : agent.provider || "cursor"];
+  const [rows, setRows] = useState(() => initial.map((entry) => {
+    const i = String(entry).indexOf(":");
+    return i < 0 ? { account: entry, model: "" } : { account: entry.slice(0, i), model: entry.slice(i + 1) };
+  }));
+  useEffect(() => {
+    api("/api/providers").then((d) => setAccounts(d.providers || [])).catch(() => {});
+  }, []);
+  const dirty = JSON.stringify(rows.map((r) => (r.model ? `${r.account}:${r.model}` : r.account))) !== JSON.stringify(initial);
+  const set = (i, patch) => setRows((list) => list.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const move = (i, d) => setRows((list) => {
+    const next = [...list];
+    const [row] = next.splice(i, 1);
+    next.splice(Math.max(0, Math.min(next.length, i + d)), 0, row);
+    return next;
+  });
+  const field = "rounded-lg border bg-background px-2 py-1.5 text-sm";
+  return (
+    <div className="space-y-2">
+      <p className="text-xs leading-6 text-muted-foreground">{t("مدل‌ها به ترتیب اولویت: اولین حسابِ روشن، کلیددار و بدون سقف اجرا می‌شود؛ بقیه جایگزین‌اند.")}</p>
+      {rows.map((row, i) => {
+        const acct = accounts.find((a) => a.id === row.account);
+        return (
+          <div key={i} className="flex flex-wrap items-center gap-1.5">
+            <span className="w-5 text-center text-xs text-muted-foreground">{i + 1}</span>
+            <select className={`${field} min-w-36`} value={row.account} onChange={(e) => set(i, { account: e.target.value, model: "" })}>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{accountLabel(a)}{a.enabled ? "" : t(" (خاموش)")}</option>)}
+              {!acct ? <option value={row.account}>{row.account}</option> : null}
+            </select>
+            <input className={`${field} min-w-0 flex-1`} dir="ltr" list={`models-${row.account}`} value={row.model} onChange={(e) => set(i, { model: e.target.value })} placeholder={acct?.defaultModel || t("مدل پیش‌فرض حساب")} />
+            <datalist id={`models-${row.account}`}>{(acct?.models || []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>
+            <button type="button" disabled={i === 0} onClick={() => move(i, -1)} className="press rounded-md p-1 hover:bg-muted disabled:opacity-30" aria-label={t("بالا")}><ArrowUp className="size-4" /></button>
+            <button type="button" disabled={i === rows.length - 1} onClick={() => move(i, 1)} className="press rounded-md p-1 hover:bg-muted disabled:opacity-30" aria-label={t("پایین")}><ArrowDown className="size-4" /></button>
+            <button type="button" disabled={rows.length === 1} onClick={() => setRows((list) => list.filter((_, j) => j !== i))} className="press rounded-md p-1 hover:bg-bad/10 hover:text-bad disabled:opacity-30" aria-label={t("حذف")}><X className="size-4" /></button>
+          </div>
+        );
+      })}
+      <div className="flex gap-2">
+        <button type="button" onClick={() => setRows((list) => [...list, { account: accounts.find((a) => a.enabled)?.id || "claude", model: "" }])} className="press inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs">
+          <Plus className="size-3.5" /> {t("جایگزین")}
+        </button>
+        {dirty ? (
+          <button type="button" disabled={busy} onClick={() => onSave(rows.map((r) => (r.model.trim() ? `${r.account}:${r.model.trim()}` : r.account)))} className="press inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground">
+            <Check className="size-3.5" /> {t("ذخیرهٔ ترتیب")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 const input = "w-full rounded-xl border bg-background px-3 py-2 text-sm";
 const pill = "press rounded-full border px-3 py-1.5 text-sm";
@@ -260,32 +316,7 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
 
         <section className="mb-6 space-y-3 rounded-2xl border bg-card p-4">
           <h2 className="flex items-center gap-2 text-sm font-medium"><Settings2 className="size-4" /> {t("موتور و مدل")}</h2>
-          <div className="flex flex-wrap gap-2">
-            {Object.values(PROVIDER_META).map((p) => {
-              const active = (agent.provider || "cursor") === p.id;
-              return (
-                <button key={p.id} type="button" disabled={busy} onClick={() => onPatch({ provider: p.id, model: null })} className={`${pill} ltr ${active ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted"}`}>
-                  {active ? <Check className="me-1 inline size-3.5" /> : null}
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
-          <label className="block text-xs text-muted-foreground">
-            {t("مدل پیش‌فرض")}
-            <input
-              className={`${input} mt-1 ltr`}
-              dir="ltr"
-              defaultValue={agent.model || ""}
-              key={`${agent.id}-${agent.provider}-${agent.model || ""}`}
-              placeholder="auto"
-              onBlur={(e) => {
-                const value = e.target.value.trim();
-                if (value === (agent.model || "")) return;
-                onPatch({ model: value || null });
-              }}
-            />
-          </label>
+          <ModelPriority key={agent.id} agent={agent} busy={busy} onSave={(models) => onPatch({ models })} />
           <label className="block text-xs text-muted-foreground">
             {t("میزان فکر پیش‌فرض")}
             <select

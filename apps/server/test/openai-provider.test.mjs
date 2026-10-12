@@ -135,7 +135,7 @@ describe("openai-compatible provider", () => {
   });
 
   it("exposes the openai provider through createProviders", () => {
-    const providers = createProviders({ openaiApiKey: "k", openaiBaseUrl: "http://x/v1", openaiModel: "m" });
+    const providers = createProviders({ accounts: [{ id: "openai", apiKey: "k", baseUrl: "http://x/v1", model: "m" }] });
     assert.equal(providers.openai.id, "openai");
     assert.equal(providers.openai.defaultModel, "m");
   });

@@ -55,8 +55,13 @@ import {
   PROVIDER_CURSOR,
   PROVIDER_OPENAI,
   PROVIDERS,
+  kindOf,
+  setAccounts,
 } from "./providers/index.mjs";
-import { effortOf, splitModel } from "./providers/ids.mjs";
+import { effortOf, splitModel, ACCOUNT_ID, KINDS } from "./providers/ids.mjs";
+import { createSecretStore } from "./secrets.mjs";
+import { createConfig } from "./config.mjs";
+import { createClaudeSignin } from "./claude-signin.mjs";
 import { createDoctor, hookConsoleErrors } from "./doctor.mjs";
 import { PERSONA, PERSONA_FILE } from "./persona.mjs";
 
@@ -115,10 +120,14 @@ function openaiApiKey() {
 }
 
 fs.mkdirSync(DATA, { recursive: true });
+const secrets = createSecretStore({ dataDir: DATA });
 // A fresh install gives the built-in agent the engine whose key is present, so the first chat works
 // with whichever key the owner brought. Existing profiles are never changed.
-const seedProvider = anthropicApiKey() ? "claude" : openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "cursor";
+const seedProvider = secrets.get("engine/claude") || anthropicApiKey()
+  ? "claude"
+  : secrets.get("engine/openai") || openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "cursor";
 const store = openStore(resolveDbPath(DATA), { seedProvider });
+const config = createConfig({ store });
 const refreshWorkspaces = () => {
   const profiles = store.listAgentProfiles();
   prepareAgentWorkspaces(WORKSPACE, {
@@ -238,7 +247,6 @@ const demoSdk = demo ? (await import("./demo-sdk.mjs")).demoSdk : null;
 
 // Provider settings the owner sets from the UI (kv "provider:<id>"); env stays the fallback.
 // Keys live only in 0600 files under DATA and are never sent back to the browser.
-const KEY_FILES = { [PROVIDER_CURSOR]: "cursor.api-key", [PROVIDER_CLAUDE]: "anthropic.api-key", [PROVIDER_OPENAI]: "openai.api-key" };
 // OpenAI-compatible endpoints the owner switches between; keyFile = the key already on disk for it.
 const OPENAI_PRESETS = [
   { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyFile: "openai.api-key" },
@@ -257,26 +265,57 @@ function providerConfig(id) {
   }
 }
 
+// Engine accounts (kv "engines"): the three base accounts plus any the owner adds (a second Claude
+// account, an OpenRouter one …). Each can be switched off; a switched-off account is never routed to.
+// Its settings stay in kv "provider:<id>", its key in the secret store as "engine/<id>".
+function accounts() {
+  let saved = [];
+  try {
+    saved = JSON.parse(store.getKv("engines") || "[]") || [];
+  } catch {
+    saved = [];
+  }
+  const byId = new Map(saved.filter((a) => ACCOUNT_ID.test(a?.id || "")).map((a) => [a.id, a]));
+  const base = KINDS.map((id) => ({ id, ...(byId.get(id) || {}) }));
+  const extra = saved.filter((a) => ACCOUNT_ID.test(a?.id || "") && !KINDS.includes(a.id));
+  return [...base, ...extra].map((a) => ({ id: a.id, kind: kindOf(a.id) || a.id.split("-")[0], label: a.label || "", enabled: a.enabled !== false }));
+}
+function saveAccounts(list) {
+  store.setKv("engines", JSON.stringify(list.map(({ id, label, enabled }) => ({ id, label, enabled }))));
+  setAccounts(list);
+}
+setAccounts(accounts());
+const accountEnabled = (id) => accounts().find((a) => a.id === id)?.enabled ?? false;
+
 function providerKey(id) {
+  const stored = secrets.get(`engine/${id}`);
+  if (stored) return stored;
+  // Older installs: a key file named in the account's settings, then the base account's env/file.
   const file = providerConfig(id).keyFile;
   if (file && SAFE_KEY_FILE.test(file)) {
     const full = path.join(DATA, file);
     return fs.existsSync(full) ? fs.readFileSync(full, "utf8").trim() : "";
   }
-  return id === PROVIDER_CURSOR ? cursorApiKey() : id === PROVIDER_CLAUDE ? anthropicApiKey() : openaiApiKey();
+  return id === PROVIDER_CURSOR ? cursorApiKey() : id === PROVIDER_CLAUDE ? anthropicApiKey() : id === PROVIDER_OPENAI ? openaiApiKey() : "";
 }
 
 function buildProviders() {
-  const openai = providerConfig(PROVIDER_OPENAI);
   return createProviders({
-    cursorApiKey: providerKey(PROVIDER_CURSOR),
-    anthropicApiKey: providerKey(PROVIDER_CLAUDE),
-    openaiApiKey: providerKey(PROVIDER_OPENAI),
-    openaiBaseUrl: openai.baseUrl ?? genv("OPENAI_BASE_URL", ""),
-    openaiModel: openai.model || genv("OPENAI_MODEL", ""),
-    openaiReasoningEffort: openai.reasoningEffort ?? genv("OPENAI_REASONING_EFFORT", ""),
-    cursorModel: providerConfig(PROVIDER_CURSOR).model || env.CURSOR_MODEL || "auto",
-    claudeModel: providerConfig(PROVIDER_CLAUDE).model || env.CLAUDE_MODEL || "sonnet",
+    accounts: accounts().map(({ id, kind }) => {
+      const config = providerConfig(id);
+      const base = id === kind;
+      const model = config.model
+        || (base && kind === PROVIDER_OPENAI ? genv("OPENAI_MODEL", "") : "")
+        || (base && kind === PROVIDER_CURSOR ? env.CURSOR_MODEL || "" : "")
+        || (base && kind === PROVIDER_CLAUDE ? env.CLAUDE_MODEL || "" : "");
+      return {
+        id,
+        apiKey: providerKey(id),
+        baseUrl: config.baseUrl ?? (base && kind === PROVIDER_OPENAI ? genv("OPENAI_BASE_URL", "") : ""),
+        model,
+        reasoningEffort: config.reasoningEffort ?? (base && kind === PROVIDER_OPENAI ? genv("OPENAI_REASONING_EFFORT", "") : ""),
+      };
+    }),
     builtinTools: TOOLS,
     demoSdk,
   });
@@ -286,6 +325,7 @@ function buildProviders() {
 // new settings while a run already in flight finishes on the old object.
 const providers = buildProviders();
 function reconfigureProviders() {
+  for (const id of Object.keys(providers)) if (!PROVIDERS.includes(id)) delete providers[id];
   Object.assign(providers, buildProviders());
   modelCache = { at: 0, byProvider: {} };
 }
@@ -293,42 +333,50 @@ function reconfigureProviders() {
 // The provider and model a chat's next run actually uses: the agent profile decides, the chat's own
 // model overrides, the env default fills in. The same answer labels run.started, so the UI shows the
 // real model instead of "auto".
-// Order: a model the chat pinned in the picker ("claude:sonnet") → the colleague-thread routing
-// (GRIFFIN_TEAM_PROVIDER/MODEL for the thread, TEAM_SUB_* for the subtasks it delegates; unset by
-// default) → the agent profile.
-// A provider whose plan limit is hit (kv limited:<provider>) is skipped until it resets, if the other
-// engine has a key: Claude → the OpenAI-compatible engine; that one → Claude (GRIFFIN_FALLBACK_CLAUDE_MODEL).
 const limitedUntil = (provider) => store.getKv(`limited:${provider}`) || 0;
 const isLimited = (provider) => limitedUntil(provider) > Date.now();
-function routeModel(chat, { skip = null } = {}) {
+// Candidates in order; the first USABLE one runs (enabled, has a key, not at its plan limit):
+//   1. a model the chat pinned in the picker ("claude-2:sonnet")
+//   2. colleague-thread routing (TEAM_* for the thread, TEAM_SUB_* for what it delegates)
+//   3. the agent's ordered model list (meta.models, set on the Agents page) — "account:model" or
+//      just "account" for that account's default model
+//   4. the agent's provider/model
+//   5. the old one-way fallback: OpenAI-compatible → Claude (FALLBACK_CLAUDE_MODEL), anything else → the OpenAI-compatible engine
+//   6. any other usable account, base accounts first
+// A plan limit marks the account limited (kv limited:<id>) and the run retries on the next usable
+// candidate, so «Claude account 1 hit its limit» just moves to account 2 (owner 2026-10-12).
+function modelCandidates(chat) {
   const profile = store.getAgentProfile(chat?.agent || DEFAULT_AGENT);
   const effort = effortOf(chat?.effort) || effortOf(profile?.meta?.effort);
-  const usable = (provider) => normalizeProvider(provider) !== skip;
+  const list = [];
+  const add = (provider, model, extraEffort) => {
+    if (!kindOf(provider)) return;
+    list.push({ provider, model: model || providers[provider]?.defaultModel || "auto", effort: effort || extraEffort || null });
+  };
   const pinned = splitModel(chat?.model);
-  if (pinned && usable(pinned.provider)) return { provider: normalizeProvider(pinned.provider), model: pinned.model, effort };
+  if (pinned) add(pinned.provider, pinned.model);
   const teamRoot = chat?.caller === COVERAGE_CALLER || (chat?.parent_chat_id && rootCallerOf(store, chat) === COVERAGE_CALLER);
   const prefix = chat?.caller === COVERAGE_CALLER ? "TEAM" : "TEAM_SUB";
   const team = teamRoot ? genv(`${prefix}_PROVIDER`, "") : "";
-  if (team && usable(team)) {
-    const provider = normalizeProvider(team);
-    return { provider, model: genv(`${prefix}_MODEL`, "") || providers[provider]?.defaultModel || "auto", effort: effort || effortOf(genv(`${prefix}_EFFORT`, "")) };
+  if (team) add(team, genv(`${prefix}_MODEL`, ""), effortOf(genv(`${prefix}_EFFORT`, "")));
+  for (const entry of profile?.meta?.models || []) {
+    const split = splitModel(entry);
+    if (split) add(split.provider, split.model);
+    else add(String(entry), null);
   }
-  const provider = normalizeProvider(profile?.provider || chat?.provider);
-  if (!usable(provider)) {
-    // The profile's own provider is the limited one: OpenAI-compatible → Claude; anything else → it.
-    return provider === PROVIDER_OPENAI
-      ? { provider: PROVIDER_CLAUDE, model: genv("FALLBACK_CLAUDE_MODEL", "haiku"), effort }
-      : { provider: PROVIDER_OPENAI, model: providers[PROVIDER_OPENAI]?.defaultModel || "auto", effort };
-  }
-  const fallback = providers[provider]?.defaultModel || "auto";
-  return { provider, model: (pinned ? null : chat?.model) || profile?.model || fallback, effort };
+  const own = profile?.provider || chat?.provider;
+  if (kindOf(own)) add(own, (pinned ? null : chat?.model) || profile?.model);
+  if (kindOf(own) === PROVIDER_OPENAI) add(PROVIDER_CLAUDE, genv("FALLBACK_CLAUDE_MODEL", "haiku"));
+  else add(PROVIDER_OPENAI, null);
+  for (const a of accounts()) add(a.id, null);
+  return list;
 }
-function runModel(chat) {
-  const pick = routeModel(chat);
-  if (!isLimited(pick.provider)) return pick;
-  const other = routeModel(chat, { skip: pick.provider });
-  return isLimited(other.provider) || !providerKey(other.provider) ? pick : other;
+const usableAccount = (id) => accountEnabled(id) && !isLimited(id) && (Boolean(providerKey(id)) || demo);
+function routeModel(chat) {
+  const list = modelCandidates(chat);
+  return list.find((c) => usableAccount(c.provider)) || list.find((c) => accountEnabled(c.provider)) || list[0] || { provider: DEFAULT_PROVIDER, model: "auto", effort: null };
 }
+const runModel = routeModel;
 
 const runner = createRunner({
   store,
@@ -346,6 +394,8 @@ const runner = createRunner({
     const limited = runModel(chat).provider;
     const until = error.resetsAt && error.resetsAt > Date.now() ? error.resetsAt : Date.now() + 60 * 60_000;
     store.setKv(`limited:${limited}`, until);
+    // Per-account usage for the engines page: when it last hit its limit and until when.
+    store.setKv(`limitseen:${limited}`, JSON.stringify({ at: Date.now(), until }));
     const next = runModel(chat).provider;
     console.error(`[${limited}] plan limit until ${new Date(until).toISOString()} — chat ${chat?.id} moves to ${next}`);
     return next !== limited;
@@ -552,12 +602,12 @@ async function models(provider = null) {
   }
   const byProvider = {};
   await Promise.all(
-    [PROVIDER_CURSOR, PROVIDER_CLAUDE, PROVIDER_OPENAI].map(async (id) => {
+    PROVIDERS.filter((id) => providers[id]).map(async (id) => {
       try {
         byProvider[id] = (await providers[id].listModels()).map((m) => ({ ...m, provider: id }));
       } catch (error) {
         console.error(`[models:${id}]`, error?.message || error);
-        byProvider[id] = id === PROVIDER_CLAUDE ? (await import("./providers/claude.mjs")).CLAUDE_MODELS.map((m) => ({ ...m, provider: id })) : [];
+        byProvider[id] = kindOf(id) === PROVIDER_CLAUDE ? (await import("./providers/claude.mjs")).CLAUDE_MODELS.map((m) => ({ ...m, provider: id })) : [];
       }
     }),
   );
@@ -586,22 +636,24 @@ async function usage() {
 }
 
 async function health() {
-  const [probe, cursor, claude, openai] = await Promise.all([
+  const enabled = accounts().filter((a) => a.enabled && providers[a.id]);
+  const [probe, ...checks] = await Promise.all([
     !brokerEnabled()
       ? Promise.resolve({ ok: true, configured: false })
       : brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
           .then((r) => ({ ok: r.status === 200, ...r.body }))
           .catch((error) => ({ ok: false, error: error.message })),
-    providers[PROVIDER_CURSOR].health(),
-    providers[PROVIDER_CLAUDE].health(),
-    providers[PROVIDER_OPENAI].health(),
+    ...enabled.map((a) => providers[a.id].health().catch((error) => ({ ok: false, error: String(error?.message || error) }))),
   ]);
+  const engines = Object.fromEntries(enabled.map((a, i) => [a.id, { ...checks[i], kind: a.kind, label: a.label || a.id }]));
   return {
     broker: { ok: probe.ok, configured: brokerEnabled(), ...(probe.error ? { error: probe.error } : {}) },
     clusters: probe.clusters || null,
-    cursor,
-    claude,
-    openai,
+    // Kept for older clients: the three base accounts, as before.
+    cursor: engines.cursor || { ok: false, error: "disabled" },
+    claude: engines.claude || { ok: false, error: "disabled" },
+    openai: engines.openai || { ok: false, error: "disabled" },
+    engines,
     ops: { mode: opsRoom.mode, room: opsRoom.roomId(), pending: opsRoom.pendingCount(), ...intake.status() },
     activeRuns: runner.activeCount(),
   };
@@ -618,7 +670,7 @@ const integrations = createIntegrations({
   // is the fallback so one external-classifier outage never silences teammate replies.
   classifyThread: (args) =>
     classifyThread(args, {
-      apiKey: readSecret("TYPESAFE_API_KEY", "TYPESAFE_API_KEY_FILE", "typesafe.api-key"),
+      apiKey: secrets.get("typesafe") || readSecret("TYPESAFE_API_KEY", "TYPESAFE_API_KEY_FILE", "typesafe.api-key"),
       fallbackAsk: (prompt) => generateText(prompt, { effort: "low", timeoutMs: 20_000 }),
     }),
 });
@@ -755,7 +807,7 @@ const app = createApp({
     peerAuth.routes(api, { selfMgmtTools: SELF_MGMT_TOOLS });
     // Voice dictation in the composer (stt.mjs); the key is a 0600 file like the engine keys.
     sttRoutes(api, {
-      getKey: () => readSecret("STT_API_KEY", "STT_API_KEY_FILE", "stt.api-key"),
+      getKey: () => secrets.get("stt") || readSecret("STT_API_KEY", "STT_API_KEY_FILE", "stt.api-key"),
       config: {
         baseUrl: genv("STT_BASE_URL", STT_DEFAULTS.baseUrl),
         model: genv("STT_MODEL", STT_DEFAULTS.model),
@@ -766,55 +818,195 @@ const app = createApp({
     api.get("/api/providers", async (c) => {
       const profiles = store.listAgentProfiles();
       const list = await Promise.all(
-        PROVIDERS.map(async (id) => {
+        accounts().map(async (account) => {
+          const { id, kind } = account;
           const p = providers[id];
           const config = providerConfig(id);
           const [health, list] = await Promise.all([
-            p.health().catch((error) => ({ ok: false, error: String(error?.message || error) })),
-            models(id).catch(() => []),
+            account.enabled && p ? p.health().catch((error) => ({ ok: false, error: String(error?.message || error) })) : { ok: false, error: "disabled" },
+            account.enabled && p ? models(id).catch(() => []) : [],
           ]);
+          let limit = null;
+          try {
+            limit = JSON.parse(store.getKv(`limitseen:${id}`) || "null");
+          } catch {
+            limit = null;
+          }
           return {
             id,
+            kind,
+            label: account.label || "",
+            enabled: account.enabled,
+            removable: id !== kind,
             hasKey: Boolean(providerKey(id)),
-            keyFile: config.keyFile || KEY_FILES[id],
-            defaultModel: p.defaultModel || null,
-            baseUrl: id === PROVIDER_OPENAI ? config.baseUrl ?? genv("OPENAI_BASE_URL", "") : null,
-            reasoningEffort: id === PROVIDER_OPENAI ? config.reasoningEffort ?? genv("OPENAI_REASONING_EFFORT", "") : null,
+            keyIn: secrets.has(`engine/${id}`) ? "secrets" : providerKey(id) ? "legacy" : null,
+            defaultModel: p?.defaultModel || null,
+            baseUrl: kind === PROVIDER_OPENAI ? config.baseUrl ?? (id === kind ? genv("OPENAI_BASE_URL", "") : "") : null,
+            reasoningEffort: kind === PROVIDER_OPENAI ? config.reasoningEffort ?? (id === kind ? genv("OPENAI_REASONING_EFFORT", "") : "") : null,
+            limitedUntil: isLimited(id) ? limitedUntil(id) : null,
+            lastLimit: limit,
             health,
             models: list.map((m) => ({ id: m.id, name: m.name || m.id })),
-            agents: profiles.filter((a) => normalizeProvider(a.provider) === id).map((a) => ({ id: a.id, label: a.label, model: a.model || null })),
+            agents: profiles
+              .filter((a) => normalizeProvider(a.provider) === id || (a.meta?.models || []).some((m) => String(m).split(":")[0] === id))
+              .map((a) => ({ id: a.id, label: a.label, model: a.model || null })),
           };
         }),
       );
-      return c.json({ providers: list, presets: OPENAI_PRESETS.map(({ id, label, baseUrl, keyFile }) => ({ id, label, baseUrl, hasKey: fs.existsSync(path.join(DATA, keyFile)) })) });
+      return c.json({ providers: list, kinds: KINDS, presets: OPENAI_PRESETS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })) });
+    });
+    // A new engine account: a second Claude subscription, an OpenRouter key next to Z.ai, …
+    api.post("/api/providers", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const kind = String(body.kind || "");
+      if (!KINDS.includes(kind)) return c.json({ error: "kind must be cursor, claude or openai" }, 400);
+      const slug = String(body.slug || body.preset || "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 16);
+      const list = accounts();
+      let id = slug ? `${kind}-${slug}` : `${kind}-2`;
+      for (let n = 2; list.some((a) => a.id === id); n += 1) id = slug ? `${kind}-${slug}${n}` : `${kind}-${n}`;
+      if (!ACCOUNT_ID.test(id)) return c.json({ error: "invalid account id" }, 400);
+      saveAccounts([...list, { id, label: String(body.label || "").trim().slice(0, 40), enabled: true }]);
+      store.setKv(`provider:${id}`, JSON.stringify({}));
+      reconfigureProviders();
+      return c.json({ id }, 201);
+    });
+    api.delete("/api/providers/:id", (c) => {
+      const id = c.req.param("id");
+      if (KINDS.includes(id)) return c.json({ error: "a base engine can be switched off, not removed" }, 400);
+      const list = accounts();
+      if (!list.some((a) => a.id === id)) return c.json({ error: "unknown provider" }, 404);
+      saveAccounts(list.filter((a) => a.id !== id));
+      secrets.delete(`engine/${id}`);
+      store.deleteKv(`provider:${id}`);
+      reconfigureProviders();
+      return c.json({ ok: true });
+    });
+    // Claude account sign-in from the browser: the token lands in the secret store, never in a response.
+    const claudeSignin = createClaudeSignin({
+      onToken: (id, token) => {
+        secrets.set(`engine/${id}`, token, { note: `Claude account ${id} (browser sign-in)` });
+        store.deleteKv(`limited:${id}`);
+        reconfigureProviders();
+      },
+    });
+    api.post("/api/providers/:id/signin", async (c) => {
+      const id = c.req.param("id");
+      if (kindOf(id) !== PROVIDER_CLAUDE) return c.json({ error: "browser sign-in is for Claude accounts" }, 400);
+      try {
+        return c.json(await claudeSignin.start(id));
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+    });
+    api.post("/api/providers/:id/signin/code", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        return c.json(await claudeSignin.submit(c.req.param("id"), body.code));
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
     });
     api.patch("/api/providers/:id", async (c) => {
-      const id = normalizeProvider(c.req.param("id"));
-      if (id !== c.req.param("id")) return c.json({ error: "unknown provider" }, 404);
+      const id = c.req.param("id");
+      if (!kindOf(id)) return c.json({ error: "unknown provider" }, 404);
+      const kind = kindOf(id);
       const body = await c.req.json().catch(() => ({}));
       const next = { ...providerConfig(id) };
-      if (id === PROVIDER_OPENAI && typeof body.preset === "string") {
+      if (kind === PROVIDER_OPENAI && typeof body.preset === "string") {
         const preset = OPENAI_PRESETS.find((p) => p.id === body.preset);
         if (!preset) return c.json({ error: "unknown preset" }, 400);
         next.baseUrl = preset.baseUrl;
-        next.keyFile = preset.keyFile;
+        // The preset's old key file still counts until a key is pasted here.
+        if (!secrets.has(`engine/${id}`)) next.keyFile = preset.keyFile;
       }
-      if (id === PROVIDER_OPENAI && typeof body.baseUrl === "string") {
+      if (kind === PROVIDER_OPENAI && typeof body.baseUrl === "string") {
         if (body.baseUrl && !/^https?:\/\/[^\s]+$/.test(body.baseUrl)) return c.json({ error: "invalid base URL" }, 400);
         next.baseUrl = body.baseUrl.trim();
       }
-      if (id === PROVIDER_OPENAI && typeof body.reasoningEffort === "string") {
+      if (kind === PROVIDER_OPENAI && typeof body.reasoningEffort === "string") {
         if (!["", "low", "medium", "high"].includes(body.reasoningEffort)) return c.json({ error: "invalid reasoning effort" }, 400);
         next.reasoningEffort = body.reasoningEffort;
       }
       if (typeof body.model === "string") next.model = body.model.trim().slice(0, 120);
       if (typeof body.apiKey === "string" && body.apiKey.trim()) {
-        const file = next.keyFile && SAFE_KEY_FILE.test(next.keyFile) ? next.keyFile : KEY_FILES[id];
-        fs.writeFileSync(path.join(DATA, file), `${body.apiKey.trim()}\n`, { mode: 0o600 });
-        next.keyFile = file;
+        secrets.set(`engine/${id}`, body.apiKey.trim(), { note: `engine ${id}` });
+        delete next.keyFile;
       }
+      if (typeof body.enabled === "boolean" || typeof body.label === "string") {
+        saveAccounts(accounts().map((a) => (a.id === id ? {
+          ...a,
+          ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+          ...(typeof body.label === "string" ? { label: body.label.trim().slice(0, 40) } : {}),
+        } : a)));
+      }
+      if (body.clearLimit === true) store.deleteKv(`limited:${id}`);
       store.setKv(`provider:${id}`, JSON.stringify(next));
       reconfigureProviders();
+      return c.json({ ok: true });
+    });
+    // Secrets (Settings → Secrets, `griffin secrets`): "app" = Griffin's own encrypted store (engine
+    // keys, anything the app uses); "tools" = the broker's vault (OpenBao when mounted, else the
+    // broker's own encrypted box). Names and last-4 only; a value goes in and never comes back out.
+    const TOOL_SECRETS = [
+      { name: "gitlab__token", note: "GitLab token for gitlab_* and repo tools" },
+      { name: "kube__token", note: "Kubernetes API bearer token (kube_* tools)" },
+      { name: "ssh-bastion__owner-key", note: "SSH private key for the emergency kube path and shell tools" },
+      { name: "infisical__universal-auth", note: "Infisical machine identity (JSON: clientId, clientSecret)" },
+      { name: "arvan__api-key", note: "ArvanCloud API key (full Authorization header)" },
+      { name: "nsin__api-key", note: "NSIN CDN API key" },
+    ];
+    // No broker (GRIFFIN_BROKER=off or no socket): app secrets still work, tool secrets say why not.
+    const brokerSecrets = (method, body) =>
+      brokerEnabled()
+        ? brokerRequest(toolSource.socketPath, method, "/secrets", body, 20_000)
+        : Promise.resolve({ status: 503, body: { error: "no broker" } });
+    api.get("/api/secrets", async (c) => {
+      const tools = await brokerSecrets("GET").then((r) => (r.status === 200 ? r.body : { error: r.body?.error || `http_${r.status}` })).catch((error) => ({ error: `tools broker unreachable (${error.message})` }));
+      return c.json({ app: secrets.list(), tools: { backend: tools.backend || null, items: tools.items || [], error: tools.error || null }, catalog: TOOL_SECRETS });
+    });
+    api.put("/api/secrets", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const name = String(body.name || "");
+      const value = String(body.value ?? "");
+      try {
+        if (body.scope === "tools") {
+          const r = await brokerSecrets("PUT", { name, value });
+          if (r.status !== 200) return c.json({ error: r.body?.error || `http_${r.status}` }, 400);
+        } else {
+          secrets.set(name, value, { note: typeof body.note === "string" ? body.note : undefined });
+          if (name.startsWith("engine/")) reconfigureProviders();
+        }
+        return c.json({ ok: true });
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+    });
+    api.delete("/api/secrets", async (c) => {
+      const name = c.req.query("name") || "";
+      if (c.req.query("scope") === "tools") {
+        const r = await brokerSecrets("DELETE", { name }).catch((error) => ({ status: 502, body: { error: error.message } }));
+        return r.status === 200 ? c.json({ ok: true }) : c.json({ error: r.body?.error || `http_${r.status}` }, 400);
+      }
+      const removed = secrets.delete(name);
+      if (name.startsWith("engine/")) reconfigureProviders();
+      return removed ? c.json({ ok: true }) : c.json({ error: "not found" }, 404);
+    });
+    // Settings → Configuration: what used to be env-only (config.mjs). Some apply after a restart,
+    // which the owner can do from the same page (the container's restart policy brings it back).
+    api.get("/api/config", (c) => c.json({ settings: config.view(), activeRuns: runner.activeCount() }));
+    api.patch("/api/config", async (c) => {
+      try {
+        return c.json(config.set(await c.req.json().catch(() => ({}))));
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+    });
+    api.post("/api/admin/restart", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const active = runner.activeCount();
+      if (active && body.force !== true) return c.json({ error: "runs are in progress", activeRuns: active }, 409);
+      console.log("[griffin] restart requested from the UI");
+      setTimeout(() => process.kill(process.pid, "SIGTERM"), 300).unref();
       return c.json({ ok: true });
     });
     // Doctor (self-check / self-repair) and the setup wizard (apps/web Setup.jsx).
@@ -1030,14 +1222,26 @@ const app = createApp({
         if (!next.owner) next.owner = { tools: "*" };
         patch.meta = { ...(store.getAgentProfile(id)?.meta || {}), callers: next };
       }
-      if (typeof body.provider === "string") patch.provider = normalizeProvider(body.provider);
+      if (typeof body.provider === "string" && kindOf(body.provider)) patch.provider = body.provider;
       if (typeof body.model === "string") patch.model = body.model.trim() || null;
       if (body.model === null) patch.model = null;
       if (Array.isArray(body.tools)) patch.tools = body.tools.map(String);
       // Default reasoning effort for the agent's chats ("" clears it); a chat's own choice wins.
       if ("effort" in body) {
         const current = store.getAgentProfile(id);
-        patch.meta = { ...(current.meta || {}), effort: effortOf(body.effort) };
+        patch.meta = { ...(current.meta || {}), ...(patch.meta || {}), effort: effortOf(body.effort) };
+      }
+      // Ordered engines/models this agent runs on: the first usable one wins, the rest are its
+      // fallbacks («account:model» or just «account» for that account's default model).
+      if (Array.isArray(body.models)) {
+        const models = [...new Set(body.models.map(String).map((m) => m.trim()).filter((m) => kindOf(m) || splitModel(m)))].slice(0, 12);
+        const current = store.getAgentProfile(id);
+        patch.meta = { ...(current.meta || {}), ...(patch.meta || {}), models };
+        if (models.length) {
+          const first = splitModel(models[0]) || { provider: models[0], model: null };
+          patch.provider = first.provider;
+          patch.model = first.model;
+        }
       }
       if (Array.isArray(body.enable)) {
         store.enableAgentTools(id, body.enable);

@@ -6,9 +6,11 @@ are what the optional broker adds, and they appear only once you describe that i
 
 | What | Where | Read by |
 |---|---|---|
-| Runtime knobs — port, paths, proxy, public URL | `GRIFFIN_*` environment variables | app + broker |
+| Deploy-time knobs — port, paths, proxy, broker socket | `GRIFFIN_*` environment variables | app + broker |
+| Runtime settings — public URL, ops room, self-repair, reviewers, routing, voice… | **Settings → Configuration** (or `griffin config`); the env is the fallback | app |
+| Engine accounts and their keys | **Settings → Engines** (or `griffin engines`) | app |
 | Inventory — clusters, routers, GitLab, object storage, shell hosts | `config/site.json` (shape: `config/site.example.json`) | broker |
-| Credentials | OpenBao/Vault KV or a secret manager, never files in this repo | broker only |
+| Credentials | **Settings → Secrets** (or `griffin secrets`): encrypted boxes in the app and the broker; OpenBao optional. Never files in this repo | app / broker |
 
 ## Do I need the broker?
 
@@ -56,8 +58,19 @@ says so — "no clusters configured", "no GitLab configured" — instead of gues
 
 ## Secrets
 
+Set them in **Settings → Secrets** or with `griffin secrets set NAME [--tools]` (value on stdin). No
+page, API or tool ever returns a value — only the name, the last four characters and when it changed.
+
+- **App secrets** (engine keys `engine/<account>`, `stt`, `typesafe`, anything else the app uses) live
+  in `<data>/secrets.json`, AES-256-GCM with a random key file next to it (0600).
+- **Tool secrets** (scope `tools`) go to the broker. Without OpenBao they land in the broker's own box
+  of the same kind on the `broker-data` volume (`GRIFFIN_BROKER_DATA`, default `/broker-data`). With
+  OpenBao mounted (`GRIFFIN_BAO_URL` + age-encrypted machine token and identity, compose profile
+  `infra`) reads fall through to it and writes go to it. Without a broker (`GRIFFIN_BROKER=off`) the
+  page says "no broker" and only app secrets exist.
+
 The broker resolves every credential at call time and never returns a value to the agent. Items it
-looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encrypted on disk):
+looks up:
 
 | Item | Used by |
 |---|---|
@@ -69,6 +82,30 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | `mikrotik-<name>__api` | `{host, port, user, password}` for a router; a router may instead point at a secret-manager path |
 
 `apps/broker/src/vault-put.mjs` writes an item without printing it.
+
+## Engines and accounts
+
+An engine is an account of one kind: `cursor`, `claude` or `openai` (any OpenAI-compatible
+chat/completions endpoint — OpenAI, OpenRouter, Z.ai, Ollama…). The three base accounts keep the kind
+as their id; add more of a kind (`claude-2`, `openai-openrouter`) in **Settings → Engines** or with
+`griffin engines add KIND [LABEL]`. Each account has its own key (secret `engine/<id>`), model, base
+URL, and an on/off switch; a switched-off account is never routed to. A Claude subscription account
+can be signed in from the browser (the token goes straight into the secret store).
+
+A run takes the first usable candidate (on, has a key, not at its plan limit): a model pinned in the
+chat → colleague-thread routing (`TEAM_*`) → the agent's ordered model list (Agents page) → the
+agent's own engine → the other kind → any other account. A plan limit marks that account until it
+resets and the run moves to the next candidate, so a second Claude account picks up when the first
+runs dry.
+
+## Configuration page
+
+**Settings → Configuration** (`griffin config list|set KEY VALUE`) stores in the app's database what
+used to need an env edit: public URL, ops room mode, self-repair, reviewers, colleague-thread routing
+(`TEAM_*`), `FALLBACK_CLAUDE_MODEL`, title model, default repo, peer self-serve text, voice
+(`STT_*`). A value set there wins over `GRIFFIN_<KEY>`. Some apply only after a restart; the page (or
+`griffin config restart`) restarts the app when no run is in progress — the container's restart
+policy brings it back. Paths, ports, the broker socket, `OWNER_NAME` and `TZ` stay env-only.
 
 ## Environment
 
@@ -82,7 +119,8 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | `GRIFFIN_WORKSPACE` | agent workspaces, rules and the knowledge git |
 | `GRIFFIN_SITE_CONFIG`, `GRIFFIN_SSH_KNOWN_HOSTS` | broker inventory paths |
 | `GRIFFIN_BROKER_SOCKET` | unix socket shared by app and broker |
-| `GRIFFIN_BAO_URL`, `GRIFFIN_BAO_TOKEN_AGE`, `GRIFFIN_AGE_IDENTITY` | vault access (broker only) |
+| `GRIFFIN_BAO_URL`, `GRIFFIN_BAO_TOKEN_AGE`, `GRIFFIN_AGE_IDENTITY` | optional OpenBao access (broker only) |
+| `GRIFFIN_BROKER_DATA` | the broker's own encrypted secret box (default `/broker-data`) |
 | `GRIFFIN_PUBLIC_URL` | absolute URL used in chart/file links sent to messengers |
 | `GRIFFIN_PROXY`, `CURSOR_PROXY`, `GRIFFIN_TELEGRAM_SOCKS` | egress (see `deploy/xray/`); without them, the proxy set in the setup wizard (`<data>/proxy.json`) is used |
 | `GRIFFIN_OPS_MODE` | incident ops room: `shadow` (LLM triage), `record` (group and show only), `off` |
@@ -95,5 +133,6 @@ looks up in the vault (OpenBao KV at `GRIFFIN_BAO_URL`, machine token age-encryp
 | `GRIFFIN_REVIEW` | `on` sends every change-making tool call to two independent reviewer models before it runs |
 | `GRIFFIN_AUTH=off`, `GRIFFIN_DEMO=1` | local development only — never in production |
 
-Model provider keys are files on the data volume (`cursor.api-key`, `anthropic.api-key`,
-`openai.api-key`, mode 0600) or `ANTHROPIC_API_KEY` in the app's environment.
+Model provider keys belong in Settings → Engines (secret store). Older installs keep working with
+files on the data volume (`cursor.api-key`, `anthropic.api-key`, `openai.api-key`, mode 0600) or
+`ANTHROPIC_API_KEY` in the app's environment; a key set in the store wins.

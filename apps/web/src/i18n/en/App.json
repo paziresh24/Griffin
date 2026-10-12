@@ -17,5 +17,7 @@
   "{n} در حال کار": "{n} working",
   "خطا": "Error",
   "و {n} مورد قدیمی‌تر": "and {n} older",
-  "بارگذاری…": "Loading…"
+  "بارگذاری…": "Loading…",
+  "توقف همهٔ زیرایجنت‌ها": "Stop all subagents",
+  "توقف این زیرایجنت": "Stop this subagent"
 }

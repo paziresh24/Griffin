@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { kindOf } from "./providers/ids.mjs";
 
 // Self-check and self-repair. Born from a fresh install where a Claude subscription token went in
 // as an API key, health said ok, and every run finished empty. The doctor probes each engine for real, reads the last runs, and
@@ -73,7 +74,9 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     const done = (fields) => ({ id, hasKey: Boolean(key), ms: now() - started, ...fields });
     if (!key) return done({ ok: false, cause: "no_key" });
     let r;
-    if (id === "openai") {
+    // Several accounts share a kind (claude, claude-2 …): branch on the kind, keep the account's own key.
+    const kind = kindOf(id) || id;
+    if (kind === "openai") {
       const base = String(config.baseUrl || openaiBaseUrl() || "https://api.openai.com/v1").replace(/\/+$/, "");
       const model = config.model || providers[id]?.defaultModel;
       if (!model) return done({ ok: false, cause: "model", detail: "no default model" });
@@ -82,7 +85,7 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
         headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
         body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
       }, 30_000);
-    } else if (id === "claude") {
+    } else if (kind === "claude") {
       r = await call("https://api.anthropic.com/v1/models", {
         headers: {
           ...(isOAuth(key) ? { authorization: `Bearer ${key}`, "anthropic-beta": "oauth-2025-04-20" } : { "x-api-key": key }),

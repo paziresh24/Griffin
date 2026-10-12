@@ -20,6 +20,7 @@ export function createCursorProvider({
       }));
     },
     async health() {
+      if (!apiKey) return { ok: false, error: "no cursor api key" };
       const started = Date.now();
       try {
         const response = await fetch("https://api.cursor.com/", {

@@ -14,7 +14,7 @@ import { loadSite } from "./site.mjs";
 //   POST /tools/:name   -> { ok: true, result } | { ok: false, error, attempts? }
 //   GET  /probe         -> every cluster path, API checked with a real authenticated read
 //   POST /data/metrics  -> full Prometheus series for charts (not exposed to the agent)
-export function createBrokerServer({ tools, probe, log = console }) {
+export function createBrokerServer({ tools, probe, vault = null, log = console }) {
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
       res.writeHead(status, { "content-type": "application/json" });
@@ -23,6 +23,22 @@ export function createBrokerServer({ tools, probe, log = console }) {
     try {
       if (req.method === "GET" && req.url === "/healthz") return send(200, { ok: true });
       if (req.method === "GET" && req.url === "/probe" && probe) return send(200, await probe());
+      // Tool credentials, managed from the app's Settings → Secrets. Names out, values only in.
+      if (req.url === "/secrets" && vault?.list) {
+        if (req.method === "GET") return send(200, { ok: true, ...(await vault.list()) });
+        const body = await readJson(req);
+        const name = String(body.name || "");
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,100}$/.test(name)) return send(400, { ok: false, error: "invalid secret name" });
+        try {
+          if (req.method === "PUT") {
+            await vault.put(name, String(body.value ?? "").trim());
+            return send(200, { ok: true });
+          }
+          if (req.method === "DELETE") return send(200, { ok: true, removed: await vault.remove(name) });
+        } catch (error) {
+          return send(400, { ok: false, error: error.message });
+        }
+      }
       if (req.method === "GET" && req.url === "/tools") {
         return send(200, Object.entries(tools).map(([name, tool]) => ({ name, description: tool.description, inputSchema: tool.inputSchema })));
       }
@@ -78,7 +94,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { genv } = await import("./env.mjs");
   const env = process.env;
   const socketPath = genv("BROKER_SOCKET", "/run/griffin/broker.sock");
+  const { createSecretStore } = await import("./secretbox.mjs");
+  // The box needs a writable dir (compose mounts one); without it the broker still runs on OpenBao.
+  let local = null;
+  try {
+    local = createSecretStore({ dataDir: genv("BROKER_DATA", "/broker-data") });
+  } catch (error) {
+    console.error(`[broker] no local secret store: ${error.message}`);
+  }
   const vault = createVault({
+    local,
     url: genv("BAO_URL"),
     tokenAge: genv("BAO_TOKEN_AGE"),
     identity: genv("AGE_IDENTITY"),
@@ -87,7 +112,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const sshRun = createSsh({ vault, knownHosts: genv("SSH_KNOWN_HOSTS", site.sshKnownHosts || "/config/ssh_known_hosts") });
   const clusters = genv("CLUSTERS") ? JSON.parse(genv("CLUSTERS")) : site.clusters;
   const kube = createKube({ vault, sshRun, clusters });
-  const server = createBrokerServer({ tools: createTools({ kube, vault, sshRun, site: { ...site, clusters } }), probe: createProbe({ clusters, kube }) });
+  const server = createBrokerServer({ tools: createTools({ kube, vault, sshRun, site: { ...site, clusters } }), probe: createProbe({ clusters, kube }), vault });
   fs.mkdirSync(path.dirname(socketPath), { recursive: true });
   fs.rmSync(socketPath, { force: true });
   server.listen(socketPath, () => {

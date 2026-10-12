@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
@@ -10,6 +10,8 @@ import { BRAND, agentMeta } from "../brand.js";
 import { lang, num, setLang, t } from "../i18n.js";
 import { ProvidersSection } from "./Providers.jsx";
 import { DoctorSection } from "./Doctor.jsx";
+import { SecretsSection } from "./Secrets.jsx";
+import { ConfigSection } from "./Config.jsx";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -21,6 +23,8 @@ const SECTIONS = [
   { id: "doctor", label: t("سلامت"), icon: Stethoscope, title: t("سلامت و تعمیر خودکار"), description: t("چک زنده‌ی موتورها، ایجنت‌ها، ران‌ها و اتصال‌ها؛ تعمیر با یک کلیک؛ و ویزاردهای راه‌اندازی.") },
   { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت"), description: t("مدل‌ها، کارگزار ابزارها، دریافت هشدار و مسیرهای کلاستر.") },
   { id: "providers", label: t("موتورها"), icon: Cpu, title: t("موتورها و مدل‌ها"), description: t("پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.") },
+  { id: "secrets", label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌منیجر"), description: t("کلیدها و توکن‌هایی که موتورها و ابزارها لازم دارند — رمزنگاری‌شده روی همین سرور، هرگز نمایش داده نمی‌شوند.") },
+  { id: "config", label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.") },
   { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد و جواب می‌دهد.", { name: BRAND.name }) },
   { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: t("فقط یادداشت‌های تأییدشده به قواعد همان ایجنت اضافه می‌شوند؛ بقیه اثری ندارند.") },
   { id: "account", label: t("حساب"), icon: KeyRound, title: t("حساب"), description: t("نشست‌های ورود به گریفین.") },
@@ -103,7 +107,7 @@ export function SettingsPage({ onBack }) {
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "doctor" ? <DoctorSection /> : section === "status" ? <StatusSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : <AccountSection />}
+                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : <AccountSection />}
               </>
             )}
           </motion.div>

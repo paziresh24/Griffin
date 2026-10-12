@@ -64,5 +64,8 @@
   "چک نهایی…": "Final check…",
   "چک نهایی چند مورد پیدا کرد (تنظیمات → سلامت):": "The final check found a few things (Settings → Health):",
   "چک نهایی: همه‌چیز سالم است.": "Final check: everything is healthy.",
-  "شروع گفتگو": "Start chatting"
+  "شروع گفتگو": "Start chatting",
+  "با اکانت Claude وارد شو؛ {name} توکن بلندمدت را خودش می‌گیرد و نگه می‌دارد.": "Sign in with your Claude account; {name} gets and keeps the long-lived token itself.",
+  "ایجنت‌ها با این جواب می‌دهند. کلید رمزنگاری‌شده در سکرت‌منیجر همین سرور می‌ماند.": "Agents answer with this. The key stays encrypted in this server's secret store.",
+  "یا اگر توکن را از قبل داری:": "Or, if you already have a token:"
 }
