@@ -83,12 +83,18 @@ describe("harness loop", () => {
   }
 
   it("runs a batch of reads concurrently and keeps result order", async () => {
-    const slow = (tag) => ({ description: tag, inputSchema: { type: "object" }, execute: async () => (await new Promise((r) => setTimeout(r, 150)), { tag }) });
+    // Overlap is measured on the tools themselves, not the whole run, so a slow CI box can't flake it.
+    const spans = {};
+    const slow = (tag) => ({ description: tag, inputSchema: { type: "object" }, execute: async () => {
+      spans[tag] = { start: Date.now() };
+      await new Promise((r) => setTimeout(r, 150));
+      spans[tag].end = Date.now();
+      return { tag };
+    } });
     mock.script([{ calls: [{ name: "kube_get" }, { name: "kube_status" }] }, { text: "ok" }]);
-    const started = Date.now();
     const result = await run({ kube_get: slow("A"), kube_status: slow("B") });
     assert.equal(result.status, "finished");
-    assert.ok(Date.now() - started < 280, "two 150ms reads should overlap");
+    assert.ok(spans.B.start < spans.A.end && spans.A.start < spans.B.end, "two 150ms reads should overlap");
     const tail = mock.requests[1].messages.filter((m) => m.role === "tool").map((m) => JSON.parse(m.content).tag);
     assert.deepEqual(tail, ["A", "B"]);
   });
