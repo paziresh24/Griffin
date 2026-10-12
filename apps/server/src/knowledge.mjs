@@ -12,6 +12,9 @@ export const KNOWLEDGE_LIST = "knowledge_list";
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_BODY = 32_000;
+// Every character a regex with the m flag treats as a line end, plus other control characters:
+// none may sit in a title, or the title could forge a frontmatter line (`reviewed:`, `chat:`).
+const LINE_BREAKS = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
 const SECRET_RE =
   /(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)|(?:\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b)|(?:\b(?:sk|pk|api)[_-]?[a-z0-9]{20,}\b)|(?:\b(?:ghp|gho|glpat|xox[baprs])-[A-Za-z0-9_-]{20,}\b)|(?:\bAKIA[0-9A-Z]{16}\b)/i;
 
@@ -89,7 +92,7 @@ export function createKnowledge({ store, root, git = true } = {}) {
           async execute(args) {
             const chat = store.getChat(chatId);
             const agentId = chat?.agent || DEFAULT_AGENT;
-            const title = String(args?.title || "").trim().slice(0, 120);
+            const title = String(args?.title || "").replace(LINE_BREAKS, " ").trim().slice(0, 120);
             const body = String(args?.body || "");
             if (!title) return { isError: true, content: [{ type: "text", text: "title required" }] };
             if (!body.trim()) return { isError: true, content: [{ type: "text", text: "body required" }] };
@@ -163,15 +166,12 @@ export function createKnowledge({ store, root, git = true } = {}) {
               .filter((name) => name.endsWith(".md"))
               .slice(0, 200)
               .map((name) => {
-                const text = fs.readFileSync(path.join(dir, name), "utf8");
-                const title = /title:\s*(?:"([^"]*)"|([^\n]+))/.exec(text);
-                const reviewed = /reviewed:\s*true/.test(text);
-                const expires = /expires:\s*([^\n]+)/.exec(text)?.[1]?.trim() || null;
+                const front = frontmatter(fs.readFileSync(path.join(dir, name), "utf8"));
                 return {
                   file: name,
-                  title: (title?.[1] || title?.[2] || name).trim(),
-                  reviewed,
-                  expires,
+                  title: noteTitle(front, name),
+                  reviewed: front.get("reviewed") === "true",
+                  expires: front.get("expires") || null,
                 };
               });
             return {
@@ -248,11 +248,12 @@ export function reviewedRunbooks(root, agentId, { max = 24, maxChars = 24000, no
     } catch {
       continue;
     }
-    if (!/^reviewed:\s*true\s*$/m.test(text)) continue;
-    const expires = /^expires:\s*(.+)$/m.exec(text)?.[1]?.trim();
+    const front = frontmatter(text);
+    if (front.get("reviewed") !== "true") continue;
+    const expires = front.get("expires");
     if (expires && Date.parse(expires) <= now) continue;
-    const title = (/^title:\s*(?:"([^"]*)"|(.+))$/m.exec(text) || [])[1] || (/^title:\s*(?:"([^"]*)"|(.+))$/m.exec(text) || [])[2] || name;
-    const body = text.replace(/^---[\s\S]*?---\n/, "").trim();
+    const title = noteTitle(front, name);
+    const body = noteBody(text);
     if (!body) continue;
     const chunk = body.slice(0, Math.max(0, budget));
     if (!chunk) break;
@@ -310,14 +311,14 @@ export function listAgentNotes(root, agentId) {
   }
   return names.sort().map((name) => {
     const text = fs.readFileSync(path.join(dir, name), "utf8");
-    const title = (/^title:\s*(?:"([^"]*)"|(.+))$/m.exec(text) || [])[1] || (/^title:\s*(?:"([^"]*)"|(.+))$/m.exec(text) || [])[2] || name;
+    const front = frontmatter(text);
     return {
       file: name,
-      title: String(title).trim(),
-      reviewed: /^reviewed:\s*true\s*$/m.test(text),
-      expires: /^expires:\s*(.+)$/m.exec(text)?.[1]?.trim() || null,
-      at: /^at:\s*(.+)$/m.exec(text)?.[1]?.trim() || null,
-      body: text.replace(/^---[\s\S]*?---\n/, "").trim(),
+      title: noteTitle(front, name),
+      reviewed: front.get("reviewed") === "true",
+      expires: front.get("expires") || null,
+      at: front.get("at") || null,
+      body: noteBody(text),
     };
   });
 }
@@ -327,10 +328,16 @@ export function setNoteReviewed(root, agentId, file, reviewed, { git = true } = 
   const full = path.join(root, "agents", agentId, "knowledge", file);
   if (!fs.existsSync(full)) return false;
   let text = fs.readFileSync(full, "utf8");
-  if (/^reviewed:\s*(true|false)\s*$/m.test(text)) {
-    text = text.replace(/^reviewed:\s*(?:true|false)\s*$/m, `reviewed: ${reviewed ? "true" : "false"}`);
+  const flag = `reviewed: ${reviewed ? "true" : "false"}`;
+  const lines = text.split("\n");
+  const end = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
+  if (end < 0) {
+    text = `---\n${flag}\n---\n${text}`;
   } else {
-    text = text.replace(/^---\n/, `---\nreviewed: ${reviewed ? "true" : "false"}\n`);
+    const at = lines.slice(1, end).findIndex((line) => /^reviewed:/.test(line));
+    if (at >= 0) lines[at + 1] = flag;
+    else lines.splice(1, 0, flag);
+    text = lines.join("\n");
   }
   fs.writeFileSync(full, text, "utf8");
   commit(root, git, `knowledge: ${reviewed ? "review" : "unreview"} ${agentId}/${file}`);
@@ -339,4 +346,32 @@ export function setNoteReviewed(root, agentId, file, reviewed, { git = true } = 
 
 export function findSecrets(text) {
   return SECRET_RE.test(String(text || ""));
+}
+
+// The frontmatter of a note as key -> value, split on "\n" only (never U+2028/U+2029/\r, which a
+// title could carry): only the first block between "---" lines at the very top counts, so a body
+// line like `reviewed: true` can never pass the owner's review gate.
+export function frontmatter(text) {
+  const out = new Map();
+  const lines = String(text || "").split("\n");
+  if (lines[0] !== "---") return out;
+  for (let i = 1; i < lines.length && lines[i] !== "---"; i += 1) {
+    const match = /^([a-z_]+):[ \t]*(.*)$/.exec(lines[i]);
+    if (match && !out.has(match[1])) out.set(match[1], match[2].trim());
+  }
+  return out;
+}
+
+function noteTitle(front, fallback) {
+  const raw = front.get("title");
+  if (!raw) return fallback;
+  let title = raw;
+  if (raw.startsWith('"')) {
+    try { title = JSON.parse(raw); } catch { title = raw.replace(/^"|"$/g, ""); }
+  }
+  return String(title).replace(LINE_BREAKS, " ").trim() || fallback;
+}
+
+function noteBody(text) {
+  return String(text).replace(/^---\n[\s\S]*?\n---\n/, "").trim();
 }

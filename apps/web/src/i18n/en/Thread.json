@@ -44,5 +44,17 @@
   "یادداشت فقط متن نگه می‌دارد؛ نقل‌قول را بردارید": "A note holds text only; remove the quote",
   "اتصال لحظه‌ای قطع شد؛ دوباره وصل می‌شوم — پیام‌هایت محفوظ است": "The connection dropped for a moment; reconnecting — your messages are safe",
   "تلاش دوباره": "Try again",
-  "وصل شد": "Connected"
+  "وصل شد": "Connected",
+  "هیچ موتور هوش مصنوعی وصل نیست": "No AI engine is connected",
+  "هنوز وصل نیستند": "Not connected yet",
+  "این‌ها هنوز وصل نیستند:": "These are not connected yet:",
+  "گفتگو از اینجا به بعد پاک می‌شود": "The conversation from here on is deleted",
+  "برگشت به اینجا": "Go back to here",
+  "پیامت به ایجنت نرسید و نگه داشته شد.": "Your message did not reach the agent and was kept.",
+  "کاری را شرح دهید یا سؤالی بپرسید": "Describe a task or ask a question",
+  "پیام به {agent}": "Message {agent}",
+  "نوشتن پیشنهاد در کادر: {text}": "Write the suggestion into the box: {text}",
+  "پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود": "Writes the suggestion into the box; it is not sent",
+  "پذیرفتن": "Accept",
+  "ارسال (Enter)": "Send (Enter)"
 }

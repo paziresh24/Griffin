@@ -7,7 +7,8 @@
 //   user (cont.)   { clientId? }            with the run's id: steered into that run (or the typed answer to its question)
 //   user.read      {}                        the engine took the steered message(s) into its next request
 //   run.started    { model }
-//   run.phase      { phase, detail? }        connecting | retrying | working
+//   run.phase      { phase, detail? }        connecting | retrying {attempt,max,status,delayMs} | limited {resetsAt,limitType} | working
+//   manifest       { changes }               the session's manifest (runId null) -> the running run's manifestChanges
 //   text           { text }                  raw delta, appended verbatim
 //   thinking       { text }                  raw delta, appended verbatim
 //   thinking.done  { durationMs }
@@ -216,7 +217,10 @@ function reduceRun(run, event, data) {
     case "user.read":
       return run.waiting?.length && !run.readable ? { ...run, readable: true } : run;
     case "run.phase":
-      return { ...run, phase: data.phase, phaseDetail: data.detail || null };
+      return { ...run, phase: data.phase, phaseDetail: data.detail || null, phaseAt: event.at || null };
+    case "manifest":
+      // What changed in the rules/tools/engine since the previous session (the footer's «چرا؟» flag).
+      return run.status === "running" && Array.isArray(data.changes) && data.changes.length ? { ...run, manifestChanges: data.changes.length } : run;
     case "text":
       return appendDelta({ ...run, phase: "working" }, "text", data.text);
     case "thinking":
@@ -276,6 +280,25 @@ function setSuggestionStatus(messages, id, status) {
     return copy;
   }
   return messages;
+}
+
+// Tokens a chat used, by model: each run counted once (a run split by a steered message repeats its
+// usage on every piece; the last piece holds the whole run's). tokens = input + output.
+export function usageByModel(messages) {
+  const runs = new Map();
+  for (const m of messages || []) {
+    if (m.role === "assistant" && m.usage) runs.set(m.runId || m.id, m);
+  }
+  const byModel = new Map();
+  let total = 0;
+  for (const run of runs.values()) {
+    const tokens = (Number(run.usage.input) || 0) + (Number(run.usage.output) || 0);
+    if (!tokens) continue;
+    total += tokens;
+    const model = run.model || "auto";
+    byModel.set(model, (byModel.get(model) || 0) + tokens);
+  }
+  return { total, byModel: [...byModel].map(([model, tokens]) => ({ model, tokens })).sort((a, b) => b.tokens - a.tokens) };
 }
 
 function addUsage(prev, data) {

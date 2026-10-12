@@ -3,6 +3,7 @@ import { useState } from "react";
 import { usePolling } from "../api.js";
 import { BRAND } from "../brand.js";
 import { num, t } from "../i18n.js";
+import { useSkin } from "../skin.js";
 
 const fa = (n) => num(Number(n || 0));
 const pct = (n) => num(Number(n || 0) / 100, { style: "percent" });
@@ -36,14 +37,16 @@ function percentOf(w) {
 export function UsageBadge() {
   const [open, setOpen] = useState(false);
   const data = usePolling("/api/usage", 60_000);
+  // The Karsara skin warns from 75%, the default skin from 70%; both turn red at 90%.
+  const warnAt = useSkin() === "karsara" ? 75 : 70;
   const windows = (data?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id })));
   const worst = windows.reduce((max, w) => Math.max(max, percentOf(w) ?? 0), 0);
-  const tone = worst >= 90 ? "text-bad" : worst >= 70 ? "text-warn" : "text-muted-foreground";
+  const tone = worst >= 90 ? "text-bad" : worst >= warnAt ? "text-warn" : "text-muted-foreground";
   const summary = windows.length ? windows.map((w) => `${t(w.label)} ${pct(percentOf(w) ?? 0)}`).join(" · ") : data ? tokens(data.local?.last5h?.input + data.local?.last5h?.output) + " tok/5h" : "…";
 
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm hover:bg-muted ${open ? "bg-muted" : ""}`}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className={`g-menu-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-sm hover:bg-muted ${open ? "bg-muted" : ""}`}>
         <Gauge className="size-4 text-muted-foreground" />
         <span className="flex-1 text-start">{t("مصرف توکن")}</span>
         <span className={`text-[11px] ${tone}`}>{summary}</span>
@@ -60,8 +63,8 @@ export function UsageBadge() {
                     <span>{t(w.label)} <span className="text-muted-foreground" dir="ltr">({w.provider})</span></span>
                     <span>{p == null ? "—" : pct(p)}</span>
                   </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className={`h-full ${p >= 90 ? "bg-bad" : p >= 70 ? "bg-warn" : "bg-ok"}`} style={{ width: `${Math.min(100, p || 0)}%` }} />
+                  <div className="g-usage-bar mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className={`h-full ${p >= 90 ? "bg-bad" : p >= warnAt ? "bg-warn" : "bg-ok"}`} style={{ width: `${Math.min(100, p || 0)}%` }} />
                   </div>
                   {resetIn(w.resetAt) ? <div className="mt-0.5 text-muted-foreground">{t("ریست تا {time}", { time: resetIn(w.resetAt) })}</div> : null}
                 </div>

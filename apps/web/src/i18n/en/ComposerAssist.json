@@ -5,5 +5,10 @@
   "Tab یا لمس: در کادر نوشته می‌شود؛ فقط با ارسال شما فرستاده می‌شود": "Tab or tap: it goes into the box; it is sent only when you send it",
   "حالت سریع Claude: فقط روی Opus، از مصرف اضافهٔ حساب": "Claude fast mode: Opus only, billed to the account's extra usage",
   "سریع": "Fast",
-  "ادامه در گفتگوی تازه از اینجا": "Continue in a new conversation from here"
+  "ادامه در گفتگوی تازه از اینجا": "Continue in a new conversation from here",
+  "حالت سریع: روشن": "Fast mode: on",
+  "حالت سریع: خاموش": "Fast mode: off",
+  "هزینهٔ اضافه؛ فقط Opus. از نوبت بعد این گفتگو اثر می‌کند.": "Extra cost; Opus only. Takes effect from this chat's next turn.",
+  "حالت سریع": "Fast mode",
+  "هنوز سریع نیست: {note}": "Not fast yet: {note}"
 }

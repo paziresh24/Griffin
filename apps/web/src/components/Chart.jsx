@@ -25,7 +25,7 @@ function vegaConfig() {
   const text = cssVar("--foreground");
   const muted = cssVar("--muted-foreground");
   const grid = cssVar("--border");
-  const font = "Vazirmatn Variable, system-ui, sans-serif";
+  const font = cssVar("--font-sans") || "Vazirmatn Variable, system-ui, sans-serif";
   return {
     background: "transparent",
     font,
@@ -90,8 +90,23 @@ function collectTitles(node, out = []) {
 // own short height), which is why maximize looked like a no-op. Widths are left as the spec drew
 // them; the caller measures the rendered SVG and rescales with scaleWidths() when it overflows
 // the slot (layout maths of concat/hconcat is not guessable ahead of render).
+// Drop fixed pixel widths so the chart fills its card (agents often leave a fixed width, so the chart
+// sat in one corner) and the fullscreen canvas.
+function forceContainerWidth(node) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) return node.forEach(forceContainerWidth);
+  if (typeof node.width === "number") node.width = "container";
+  else if (node.width === undefined && (node.mark || node.layer || node.encoding)) node.width = "container";
+  for (const key of ["layer", "hconcat", "vconcat", "concat"]) {
+    if (Array.isArray(node[key])) node[key].forEach(forceContainerWidth);
+  }
+  if (node.spec) forceContainerWidth(node.spec);
+}
+
 function prepare(spec, { height, maximized = false } = {}) {
   const copy = structuredClone(spec);
+  // hconcat children share the row: they keep their own widths.
+  if (!Array.isArray(copy.hconcat)) forceContainerWidth(copy);
   applyTitleDirection(copy, isRtlText(collectTitles(copy).join(" ")));
 
   if (maximized) {
@@ -114,19 +129,21 @@ function prepare(spec, { height, maximized = false } = {}) {
   } else if (copy.height === undefined) {
     copy.height = 260;
   }
-  // No autosize override: "fit-x" re-fits to vega-embed's container measurement, which resolves
-  // to 0 in this build — the default ("pad") honours the explicit pixel widths the spec carries.
+  // fit-x against the measured card (the ResizeObserver below reflows it once the width settles).
+  if (!Array.isArray(copy.hconcat)) copy.autosize = { type: "fit-x", contains: "padding" };
   return copy;
 }
 
 function VegaView({ spec, height, maximized = false, onView }) {
   const ref = useRef(null);
   const [error, setError] = useState(null);
-  const [theme, setTheme] = useState(isDark());
+  // Light/dark and the skin both change the colours read by vegaConfig(); either one redraws.
+  const look = () => `${isDark()}:${document.documentElement.dataset.skin || ""}`;
+  const [theme, setTheme] = useState(look);
 
   useEffect(() => {
-    const observer = new MutationObserver(() => setTheme(isDark()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    const observer = new MutationObserver(() => setTheme(look()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-skin"] });
     return () => observer.disconnect();
   }, []);
 

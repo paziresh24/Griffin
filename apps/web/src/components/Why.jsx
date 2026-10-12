@@ -18,9 +18,20 @@ export function WhyButton({ open, onToggle }) {
       aria-expanded={open}
       title={t("چرا این جواب؟")}
       aria-label={t("چرا این جواب؟")}
-      className={`rounded-full p-1.5 transition-colors hover:bg-muted hover:text-foreground ${open ? "text-foreground" : "text-muted-foreground"}`}
+      className={`g-icon-btn rounded-full p-1.5 transition-colors hover:bg-muted hover:text-foreground ${open ? "text-foreground" : "text-muted-foreground"}`}
     >
       <Route className="size-3.5" />
+    </button>
+  );
+}
+
+// Beside the footer's «چرا؟»: shows only when this reply ran with other rules than the previous one
+// (run.manifestChanges); a tap opens the panel that lists what changed.
+export function WhyFlag({ count, onClick }) {
+  if (!count) return null;
+  return (
+    <button type="button" onClick={onClick} className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+      {t("قاعده‌ها از جواب قبلی عوض شده‌اند")}
     </button>
   );
 }
@@ -48,7 +59,7 @@ export function WhyPanel({ chatId, runId }) {
   const rows = whyRows(steps);
   const changes = manifest?.changes || [];
   return (
-    <div className="mt-2 space-y-2 rounded-xl border bg-muted/30 px-3 py-2 text-sm" dir={DIR}>
+    <div className="g-box mt-2 space-y-2 rounded-xl border bg-muted/30 px-3 py-2 text-sm" dir={DIR}>
       <RunLine run={run} />
       {rows.length ? (
         <ol className="space-y-0.5">

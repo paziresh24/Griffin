@@ -28,6 +28,11 @@ export function eventsFromUpdate(update) {
       return [{ type: "user.read", data: {} }];
     case "summary-started":
       return [{ type: "run.phase", data: { phase: "summarizing" } }];
+    // An engine retrying a refused/dropped request, or a closed plan window (web run-phase.js labels).
+    case "api-retry":
+      return [{ type: "run.phase", data: { phase: "retrying", detail: { attempt: update.attempt ?? null, max: update.maxRetries ?? null, delayMs: update.delayMs ?? 0, status: update.status ?? null } } }];
+    case "rate-limit":
+      return update.status === "rejected" ? [{ type: "run.phase", data: { phase: "limited", detail: { resetsAt: update.resetsAt ?? null, limitType: update.limitType ?? null } } }] : [];
     case "checkpoint":
       // Claude: the session entry this run ended on, so a fork can start from this reply.
       return update.lastMessageId ? [{ type: "checkpoint", data: { lastMessageId: update.lastMessageId, sessionId: update.sessionId ?? null } }] : [];

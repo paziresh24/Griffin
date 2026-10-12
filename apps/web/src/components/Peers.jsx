@@ -325,7 +325,30 @@ const limitsForm = (q) => ({
   overBudget: q.messages?.overBudget || "",
   unavailable: q.messages?.unavailable || "",
 });
-const capText = (used, limit) => (limit == null ? t("{used} (بی‌سقف)", { used: num(used || 0) }) : t("{used} از {limit}", { used: num(used || 0), limit: num(limit) }));
+const compact = (n) => {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+};
+const WINDOW_NAME = { hourly: t("یک ساعت"), daily: t("۲۴ ساعت") };
+
+// One token window as a bar: primary, warn from 80%, bad at the cap; grey without a cap.
+function UsageMeter({ window, used, limit }) {
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const tone = !limit ? "bg-muted-foreground/40" : pct >= 100 ? "bg-bad" : pct >= 80 ? "bg-warn" : "bg-primary";
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>{WINDOW_NAME[window]}</span>
+        <span className="ltr font-mono">{compact(used)} / {limit ? compact(limit) : t("بی‌سقف")}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${limit ? Math.max(pct, used ? 2 : 0) : 0}%` }} />
+      </div>
+    </div>
+  );
+}
 
 function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
   const [editing, setEditing] = useState(false);
@@ -387,7 +410,7 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
           ))}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">{t("بدون دسترسی (بسته)")}</p>
+        <p className="text-xs text-muted-foreground">{t("بدون دسترسی (بسته) — این همکار نمی‌تواند به این ایجنت کار بدهد.")}</p>
       )}
       {editing ? (
         <div className="mt-2 flex gap-2">
@@ -399,11 +422,16 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
         </div>
       ) : null}
       {quota.tools?.length && !editing ? (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {t("مدل:")} <span className="ltr font-mono">{quota.model || t("پیش‌فرض ایجنت")}</span>
-          {quota.models?.length ? <> · {t("مجاز:")} <span className="ltr font-mono">{quota.models.join(", ")}</span></> : null}
-          {" · "}{t("یک ساعت: {hour} · ۲۴ ساعت: {day} توکن", { hour: capText(quota.usage?.hourly, quota.budget?.hourly), day: capText(quota.usage?.daily, quota.budget?.daily) })}
-        </p>
+        <>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {t("مدل:")} <span className="ltr font-mono">{quota.model || t("پیش‌فرض ایجنت")}</span>
+            {quota.models?.length ? <> · {t("مجاز:")} <span className="ltr font-mono">{quota.models.join(", ")}</span></> : null}
+          </p>
+          <div className="mt-1.5 flex gap-4">
+            <UsageMeter window="hourly" used={quota.usage?.hourly || 0} limit={quota.budget?.hourly} />
+            <UsageMeter window="daily" used={quota.usage?.daily || 0} limit={quota.budget?.daily} />
+          </div>
+        </>
       ) : null}
       {editing && tools.length ? (
         <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">

@@ -155,6 +155,15 @@ export function createClaudeEventBridge() {
       if (message.type === "assistant") return onAssistantMessage(message.message || message);
       if (message.type === "user") return onUserMessage(message.message || message);
       if (message.type === "result") return onResult(message);
+      // Claude Code retries a refused or dropped API request: the run's phase says so.
+      if (message.type === "system" && message.subtype === "api_retry") {
+        return [{ type: "api-retry", attempt: Number(message.attempt) || 1, maxRetries: Number(message.max_retries) || null, delayMs: Number(message.retry_delay_ms) || 0, status: message.error_status ?? null }];
+      }
+      // A closed plan window: shown as the phase until the run ends or moves to another engine.
+      if (message.type === "rate_limit_event" && message.rate_limit_info?.status === "rejected" && !message.rate_limit_info.overageInUse) {
+        const info = message.rate_limit_info;
+        return [{ type: "rate-limit", status: "rejected", resetsAt: info.resetsAt ? info.resetsAt * 1000 : null, limitType: info.rateLimitType ?? null }];
+      }
       return [];
     },
   };

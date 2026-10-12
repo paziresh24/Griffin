@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, History, PanelLeft, PanelRight, X } from "lucide-react";
+import { ArrowUp, CornerDownLeft, History, PanelLeft, PanelRight, X } from "lucide-react";
 import { api, useTimeline } from "../api.js";
 import { textDir } from "../dir.js";
 import { sidePaths } from "../side.js";
 import { GriffinRuntime } from "../runtime.jsx";
-import { isRtl, t } from "../i18n.js";
+import { isRtl, num, t } from "../i18n.js";
 import { Thread } from "./Thread.jsx";
 import { submitMode, useTouchPrimary } from "../touch.js";
+import { useSkin } from "../skin.js";
 
 // The side panel sits on the reading end's far side: left in RTL, right in LTR.
 const SideIcon = isRtl ? PanelLeft : PanelRight;
@@ -15,18 +16,19 @@ const SideIcon = isRtl ? PanelLeft : PanelRight;
 // with that chat's conversation as context (server: seedTurns). A panel beside the thread on a
 // desktop, a full-screen sheet on a phone; closing only hides it.
 
-/** Header button that opens the side chat of the current chat. */
-export function SideChatButton({ open, onClick }) {
+/** Header button that opens the side chat of the current chat; count = this chat's side chats. */
+export function SideChatButton({ open, onClick, count = 0 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={open}
-      className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs hover:bg-muted ${open ? "bg-muted text-foreground" : "text-muted-foreground"}`}
-      title={t("چت کناری: یک سؤال جدا، بدون به‌هم‌زدن این گفتگو")}
+      className={`g-chip flex items-center gap-1 rounded-lg px-2 py-1 text-xs hover:bg-muted ${open ? "bg-muted text-foreground" : "text-muted-foreground"}`}
+      title={count ? t("چت کناری ({n}): یک سؤال جدا، بدون به‌هم‌زدن این گفتگو", { n: num(count) }) : t("چت کناری: یک سؤال جدا، بدون به‌هم‌زدن این گفتگو")}
     >
       <SideIcon className="size-4" />
       <span className="hidden sm:inline">{t("چت کناری")}</span>
+      {count ? <span className="tabular-nums opacity-70">{num(count)}</span> : null}
     </button>
   );
 }
@@ -34,8 +36,9 @@ export function SideChatButton({ open, onClick }) {
 export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onError, seed, onSeedConsumed }) {
   const { open, activeId, sides } = state;
 
+  // Loaded with the parent (not only when open) so the header button can show how many there are.
   useEffect(() => {
-    if (!open || !parentId) return undefined;
+    if (!parentId) return undefined;
     let alive = true;
     api(sidePaths.list(parentId))
       .then((data) => alive && dispatch({ type: "loaded", parentId, chats: data?.chats }))
@@ -58,11 +61,11 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
       <header className="flex min-w-0 items-center gap-1 border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
         <h2 className="min-w-0 flex-1 truncate px-1.5 text-sm font-medium" dir="auto">{active?.title || t("چت کناری")}</h2>
         {activeId ? (
-          <button type="button" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "new" })} title={t("چت‌های کناری و چت تازه")}>
+          <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "new" })} title={t("چت‌های کناری و چت تازه")}>
             <History className="size-4" />
           </button>
         ) : null}
-        <button type="button" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "close" })} title={t("بستن (چت کناری می‌ماند)")}>
+        <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "close" })} title={t("بستن (چت کناری می‌ماند)")}>
           <X className="size-4" />
         </button>
       </header>
@@ -78,10 +81,11 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
 // The same thread as the main chat, bound to the side chat: it streams, steers and queues alike.
 function SideThread({ chat, chatId, settings, agentLabel, onError }) {
   const { timeline } = useTimeline(chatId);
+  const karsara = useSkin() === "karsara";
   return (
     <div className="min-h-0 flex-1">
       <GriffinRuntime chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
-        <Thread chatId={chatId} agentLabel={agentLabel} agent={settings.agent} mode={settings.mode} model={settings.model} />
+        <Thread chatId={chatId} agentLabel={agentLabel} agent={settings.agent} mode={settings.mode} model={settings.model} compact={karsara} />
       </GriffinRuntime>
     </div>
   );
@@ -92,6 +96,7 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const touch = useTouchPrimary();
+  const karsara = useSkin() === "karsara";
   const inputRef = useRef(null);
   useEffect(() => {
     if (!seed) return;
@@ -129,7 +134,7 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
             <ul>
               {sides.map((chat) => (
                 <li key={chat.id}>
-                  <button type="button" className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted" onClick={() => dispatch({ type: "select", id: chat.id })}>
+                  <button type="button" className={`g-nav-row flex w-full items-center gap-2 text-start text-sm hover:bg-muted ${karsara ? "min-h-9 rounded-md px-2" : "rounded-lg px-2.5 py-2"}`} onClick={() => dispatch({ type: "select", id: chat.id })}>
                     {chat.runStatus === "running" ? <span className="size-1.5 shrink-0 rounded-full bg-primary" title={t("در حال اجرا")} /> : null}
                     <span className="min-w-0 flex-1 truncate" dir="auto">{chat.title || t("چت کناری")}</span>
                   </button>
@@ -138,11 +143,13 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
             </ul>
           </>
         ) : (
-          <p className="px-2.5 py-6 text-center text-sm text-muted-foreground">{t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد، ولی چت کناری آن را می‌بیند.")}</p>
+          <p className="px-2.5 py-6 text-center text-sm text-muted-foreground">
+            {karsara ? t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.") : t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد، ولی چت کناری آن را می‌بیند.")}
+          </p>
         )}
       </div>
       <div className="px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2">
-        <div className="flex items-end gap-1 rounded-2xl border bg-card px-2 py-1.5 shadow-sm focus-within:border-primary/60">
+        <div className="g-composer flex items-end gap-1 rounded-2xl border bg-card px-2 py-1.5 shadow-sm focus-within:border-primary/60">
           <textarea
             ref={inputRef}
             rows={1}
@@ -161,8 +168,8 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
             placeholder={t("سؤال کناری‌ات را بنویس")}
             className="scrollbar-thin max-h-[45dvh] min-h-10 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 leading-7 outline-none placeholder:text-muted-foreground"
           />
-          <button type="button" className="mb-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-30" onClick={send} disabled={sending || !text.trim()} title={t("ارسال")}>
-            <ArrowUp className="size-5" />
+          <button type="button" className={`g-send mb-0.5 flex shrink-0 items-center justify-center bg-primary text-primary-foreground disabled:opacity-30 ${karsara ? "size-8 rounded-lg" : "size-9 rounded-full"}`} onClick={send} disabled={sending || !text.trim()} title={t("ارسال")}>
+            {karsara ? <CornerDownLeft className="size-4" /> : <ArrowUp className="size-5" />}
           </button>
         </div>
       </div>

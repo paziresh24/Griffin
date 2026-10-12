@@ -8,5 +8,7 @@
   "یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد، ولی چت کناری آن را می‌بیند.": "Ask a separate question; the main conversation stays untouched, but the side chat can see it.",
   "پیام چت کناری": "Side chat message",
   "سؤال کناری‌ات را بنویس": "Write your side question",
-  "ارسال": "Send"
+  "ارسال": "Send",
+  "چت کناری ({n}): یک سؤال جدا، بدون به‌هم‌زدن این گفتگو": "Side chat ({n}): a separate question without disturbing this conversation",
+  "یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.": "Ask a separate question; the main conversation stays untouched."
 }

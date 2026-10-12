@@ -1,17 +1,17 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAuiState,
+  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAui, useAuiState,
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { motion } from "motion/react";
 import {
-  ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, ImagePlus, ListTodo, Loader2, Mic, Pencil, Quote, RotateCcw, Square, Trash2, X,
+  AlertCircle, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, ImagePlus, ListTodo, Loader2, Mic, Pencil, Plus, Quote, RotateCcw, Square, Trash2, X,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
 import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
 import { textDir } from "../dir.js";
-import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker } from "./Controls.jsx";
+import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
 import { locale, num, t, isRtl } from "../i18n.js";
@@ -22,15 +22,21 @@ import { FAILED_LABEL, SENDING_LABEL, SENT_LABEL } from "../outbox.js";
 import { quoteStore } from "../quotes.js";
 import { SelectionActions } from "./SelectionActions.jsx";
 import { QuoteChip } from "./QuoteChip.jsx";
-import { ComposerAssist, ForkButton } from "./ComposerAssist.jsx";
+import { ComposerAssist, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
 import { submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
 import { holdReload } from "../new-version.js";
 import { LaterButton } from "./Notes.jsx";
-import { WhyButton, WhyPanel } from "./Why.jsx";
+import { WhyButton, WhyFlag, WhyPanel } from "./Why.jsx";
+import { phaseLabel } from "../run-phase.js";
 import { answerItems, chapterAnchor } from "../chat-tools.js";
 import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./ChatTools.jsx";
+import { tr } from "./Setup.jsx";
+import { useSkin } from "../skin.js";
+import { MessageBoundary } from "../boundary.js";
+import { escCancels } from "../keys.js";
+import { exactTime, fullAgo } from "../elapsed.js";
 
 const ChatContext = createContext({ chatId: null, readOnly: false });
 
@@ -56,6 +62,7 @@ export function Thread({
   effort = "",
   onEffortChange,
   composerTop = null,
+  compact = false,
 }) {
   return (
     <ChatContext.Provider value={{ chatId, readOnly }}>
@@ -77,19 +84,20 @@ export function Thread({
         effort={effort}
         onEffortChange={onEffortChange}
         composerTop={composerTop}
+        compact={compact}
       />
     </ThreadPrimitive.Root>
     </ChatContext.Provider>
   );
 }
 
-function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop }) {
+function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop, compact }) {
   // New chat: composer centered with suggestions under it. Ongoing chat: docked composer.
   const showHero = fresh && !readOnly;
-  const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange, effort, onEffortChange, top: composerTop };
+  const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange, effort, onEffortChange, top: composerTop, compact };
 
   return (
-    <ThreadPrimitive.Viewport className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+    <ThreadPrimitive.Viewport data-griffin-thread="" className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className={`mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero ? "justify-center" : ""}`}>
         {showHero ? (
           <WelcomeHero
@@ -100,13 +108,15 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
           />
         ) : (
           <>
-            <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+            <MessageBoundary>
+              <ThreadPrimitive.Messages components={{ UserMessage: SafeUserMessage, AssistantMessage: SafeAssistantMessage }} />
+            </MessageBoundary>
             <div className="min-h-6 flex-1" />
           </>
         )}
       </div>
       {readOnly || showHero ? null : (
-        <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto w-full max-w-3xl bg-gradient-to-t from-background via-background to-transparent px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 sm:px-6">
+        <ThreadPrimitive.ViewportFooter className="g-thread-footer sticky bottom-0 mx-auto w-full max-w-3xl bg-gradient-to-t from-background via-background to-transparent px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 sm:px-6">
           <ThreadPrimitive.ScrollToBottom className="absolute -top-10 left-1/2 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border bg-card shadow disabled:invisible">
             <ArrowDown className="size-4" />
           </ThreadPrimitive.ScrollToBottom>
@@ -119,12 +129,39 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   );
 }
 
-function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, top }) {
+function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, top, compact }) {
   const meta = agentMeta(agent);
+  const karsara = useSkin() === "karsara";
   const suggestions = useMemo(
     () => pickSuggestions(agent, { count: 4, recentTitles, salt: String(recentTitles[0] || "") }),
     [agent, recentTitles],
   );
+  const composer = (
+    <Composer
+      agentLabel={agentLabel}
+      variant="hero"
+      mode={mode}
+      model={model}
+      agent={agent}
+      onModeChange={onModeChange}
+      onModelChange={onModelChange}
+      effort={effort}
+      onEffortChange={onEffortChange}
+      top={top}
+      compact={compact}
+    />
+  );
+
+  // Karsara skin: one quiet line, what is not connected yet, the composer. No glyph, no pills, no motion.
+  if (karsara) {
+    return (
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 py-6">
+        <h2 className="text-center text-lg font-medium text-foreground/90" dir="auto">{meta.blurb || meta.label}</h2>
+        {compact ? null : <SetupCard />}
+        {composer}
+      </div>
+    );
+  }
 
   return (
     <motion.div
@@ -144,18 +181,10 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
         <p className="mt-1 text-sm text-muted-foreground" dir="auto">{meta.blurb}</p>
       </motion.div>
       <motion.div variants={fadeUp} className="w-full">
-        <Composer
-          agentLabel={agentLabel}
-          variant="hero"
-          mode={mode}
-          model={model}
-          agent={agent}
-          onModeChange={onModeChange}
-          onModelChange={onModelChange}
-          effort={effort}
-          onEffortChange={onEffortChange}
-          top={top}
-        />
+        <SetupCard />
+      </motion.div>
+      <motion.div variants={fadeUp} className="w-full">
+        {composer}
       </motion.div>
       <motion.div variants={fadeUp} className="flex w-full flex-wrap justify-center gap-2">
         {suggestions.map((item, i) => (
@@ -183,10 +212,110 @@ const fadeUp = {
   show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 380, damping: 28 } },
 };
 
+// «هنوز وصل نیستند» on a new chat: an engine with no working key, a messenger that
+// is down — each with its wizard and a «بعداً» that hides that one item on this browser.
+const SETUP_LATER = "griffin.setup-later";
+const readLater = () => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(SETUP_LATER) || "[]"));
+  } catch {
+    return new Set();
+  }
+};
+
+export function setupItems(setup, report) {
+  const items = [];
+  const engines = (report?.checks || []).filter((c) => c.level !== "ok" && (c.id === "engines" || c.id.startsWith("engine:")));
+  if (engines.length) for (const c of engines) items.push({ id: c.id, text: tr(c.title, c.vars), flow: "engine" });
+  else if (setup?.needsEngine) items.push({ id: "engines", text: t("هیچ موتور هوش مصنوعی وصل نیست"), flow: "engine" });
+  for (const c of report?.checks || []) {
+    if (c.level !== "ok" && c.id.startsWith("integration:")) items.push({ id: c.id, text: tr(c.title, c.vars), flow: "telegram" });
+  }
+  return items;
+}
+
+function SetupCard() {
+  const [setup, setSetup] = useState(null);
+  const [report, setReport] = useState(null);
+  const [later, setLater] = useState(readLater);
+  useEffect(() => {
+    let alive = true;
+    api("/api/setup").then((r) => alive && setSetup(r), () => {});
+    loadDoctor().then((r) => alive && setReport(r));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const items = setupItems(setup, report).filter((item) => !later.has(item.id));
+  if (!items.length) return null;
+  const putOff = (id) => {
+    const next = new Set(later).add(id);
+    setLater(next);
+    try {
+      localStorage.setItem(SETUP_LATER, JSON.stringify([...next]));
+    } catch {
+      // storage unavailable: hidden for this page only
+    }
+  };
+  return (
+    <section className="g-box rounded-2xl border border-warn/40 bg-warn/5 p-4 text-start" aria-label={t("هنوز وصل نیستند")} dir={isRtl ? "rtl" : "ltr"}>
+      <p className="mb-2 text-sm font-medium">{t("این‌ها هنوز وصل نیستند:")}</p>
+      <ul className="divide-y">
+        {items.map((item) => (
+          <li key={item.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+            <span className="min-w-0 flex-1" dir="auto">{item.text}</span>
+            <a href={`#/setup/${item.flow}`} className="g-btn inline-flex min-h-9 items-center rounded-lg border px-3 text-xs hover:bg-muted">{t("وصل کن")}</a>
+            <button type="button" onClick={() => putOff(item.id)} className="inline-flex min-h-9 items-center px-2 text-xs text-muted-foreground hover:text-foreground">{t("بعداً")}</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function chatDir(value) {
   // Chat UI is Persian-first: only pure Latin stays LTR; anything else (Persian,
   // digits-only, empty) is RTL so English-leading mixed lines stay right-aligned.
   return textDir(value) === "ltr" ? "ltr" : "rtl";
+}
+
+// One bad message never blanks the thread: it alone shows «نمایش این پیام ممکن نشد».
+function SafeUserMessage() {
+  return <MessageBoundary><UserMessage /></MessageBoundary>;
+}
+
+function SafeAssistantMessage() {
+  return <MessageBoundary><AssistantMessage /></MessageBoundary>;
+}
+
+// One clock for every message's elapsed time: a tick each half minute, only while something listens.
+const tickClock = { listeners: new Set(), timer: null, tick: 0 };
+function subscribeClock(onChange) {
+  tickClock.listeners.add(onChange);
+  tickClock.timer ??= setInterval(() => {
+    tickClock.tick += 1;
+    for (const listener of tickClock.listeners) listener();
+  }, 30_000);
+  return () => {
+    tickClock.listeners.delete(onChange);
+    if (!tickClock.listeners.size) {
+      clearInterval(tickClock.timer);
+      tickClock.timer = null;
+    }
+  };
+}
+
+// How long ago, in full («۲ ساعت و ۳ دقیقه پیش»), while the pointer rests on the message; the exact
+// date and time as its tooltip.
+function MessageTime({ at }) {
+  useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
+  const text = fullAgo(at);
+  if (!text) return null;
+  return (
+    <span className="text-xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-80" title={exactTime(at)}>
+      {text}
+    </span>
+  );
 }
 
 // A message sent while a run was busy: waiting, then it reached the agent (started) or a Stop or
@@ -201,6 +330,8 @@ function UserMessage() {
   const { chatId, readOnly } = useContext(ChatContext);
   const custom = useAuiState((s) => s.message.metadata?.custom);
   const messageId = useAuiState((s) => s.message.id);
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const karsara = useSkin() === "karsara";
   const text = useAuiState((s) => {
     const parts = s.message.content || s.message.parts || [];
     if (typeof parts === "string") return parts;
@@ -213,6 +344,9 @@ function UserMessage() {
   const canEdit = chatId && eventId && !readOnly;
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
+  const rewind = () => {
+    if (confirm(t("گفتگو از اینجا به بعد پاک شود؟"))) act({});
+  };
 
   const act = async (body) => {
     setBusy(true);
@@ -252,26 +386,52 @@ function UserMessage() {
 
   return (
     <MessagePrimitive.Root className="group my-3 flex flex-col items-start">
-      <div className="flex items-start gap-1.5">
-        <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7" dir={dir}>
+      <div className="flex w-full items-start gap-1.5">
+        <div className="g-user-bubble chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7" dir={dir}>
           <MessagePrimitive.Parts />
         </div>
-        {canEdit ? (
+        {canEdit && !karsara ? (
           <div className="mt-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
             <button type="button" title={t("ویرایش و ارسال دوباره")} onClick={() => setEditing(text)} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="size-3.5" /></button>
-            <button type="button" title={t("برگشت به اینجا (حذف ادامه)")} onClick={() => { if (confirm(t("گفتگو از اینجا به بعد پاک شود؟"))) act({}); }} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3.5" /></button>
+            <button type="button" title={t("برگشت به اینجا (حذف ادامه)")} onClick={rewind} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3.5" /></button>
           </div>
         ) : null}
       </div>
       {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
       {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} /> : null}
+      {/* Zero height: shown on hover under the bubble without moving the thread. */}
+      <span className="mt-0.5 flex h-0 items-center gap-3 overflow-visible whitespace-nowrap leading-4">
+        <MessageTime at={createdAt} />
+        {canEdit && karsara ? (
+          <>
+            <button type="button" onClick={rewind} disabled={busy} title={t("گفتگو از اینجا به بعد پاک می‌شود")} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
+              <RotateCcw className="size-3" /> {t("برگشت به اینجا")}
+            </button>
+            <button type="button" onClick={() => setEditing(text)} title={t("ویرایش و ارسال دوباره")} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
+              <Pencil className="size-3" /> {t("ویرایش")}
+            </button>
+          </>
+        ) : null}
+      </span>
     </MessagePrimitive.Root>
   );
 }
 
 // A message still on its way (outbox.js): its state, and on a failure «ارسال دوباره» / «ویرایش».
 function SendState({ state, clientId }) {
+  const karsara = useSkin() === "karsara";
+  if (state === "failed" && karsara) {
+    return (
+      <span className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        <span className="flex items-center gap-1 text-bad"><AlertCircle className="size-3.5" /> {FAILED_LABEL}</span>
+        <button type="button" onClick={() => retrySend(clientId)} className="g-btn inline-flex min-h-9 items-center gap-1 rounded-lg border px-3 py-1 text-xs hover:bg-muted">
+          <RotateCcw className="size-3.5" /> {t("ارسال دوباره")}
+        </button>
+        <button type="button" onClick={() => editSend(clientId)} className="min-h-9 px-2 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{t("ویرایش")}</button>
+      </span>
+    );
+  }
   if (state === "failed") {
     return (
       <span className="mt-1 flex items-center gap-2 text-xs text-bad">
@@ -340,6 +500,7 @@ function ThreadTools() {
 function KeptActions() {
   const custom = useAuiState((s) => s.message.metadata?.custom);
   const [busy, setBusy] = useState(false);
+  const karsara = useSkin() === "karsara";
   if (!custom?.onRetry) return null;
   const act = async (fn) => {
     setBusy(true);
@@ -349,6 +510,19 @@ function KeptActions() {
       setBusy(false);
     }
   };
+  if (karsara) {
+    return (
+      <div className="g-box mt-2 flex flex-wrap items-center gap-3 rounded-xl border bg-card px-3 py-2 text-sm" dir={isRtl ? "rtl" : "ltr"}>
+        <span className="text-bad">{t("پیامت به ایجنت نرسید و نگه داشته شد.")}</span>
+        <button type="button" disabled={busy} onClick={() => act(custom.onRetry)} className="g-btn inline-flex min-h-11 min-w-28 items-center justify-center gap-1.5 rounded-lg border px-3 hover:bg-muted disabled:opacity-50">
+          <RotateCcw className="size-4" /> {t("ارسال دوباره")}
+        </button>
+        <button type="button" disabled={busy} onClick={() => act(custom.onDelete)} className="inline-flex min-h-11 items-center px-3 text-muted-foreground underline-offset-4 hover:text-bad hover:underline disabled:opacity-60">
+          {t("حذف")}
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
       <span>{t("این پیام به ایجنت نرسید و نگه داشته شد.")}</span>
@@ -405,6 +579,7 @@ function compactTokens(n) {
 function RunFooter({ run }) {
   const { chatId } = useContext(ChatContext);
   const [why, setWhy] = useState(false);
+  const karsara = useSkin() === "karsara";
   if (!run) return null;
   const copyable = run.status !== "running";
   // «چرا؟» once the reply is done; a shared page has no chat id (and no session to ask with).
@@ -413,11 +588,63 @@ function RunFooter({ run }) {
   const model = run.model && run.status !== "running" ? run.model : null;
   const done = run.status !== "running";
   const answeredAt = done && run.endedAt ? formatAnsweredAt(run.endedAt) : null;
+  const tokens = run.usage ? (
+    <span
+      dir="ltr"
+      title={t("ورودی {input} (کش {cached}) · خروجی {output} · {requests} درخواست · کانتکست {context}", { input: num(run.usage.input), cached: num(run.usage.cached), output: num(run.usage.output), requests: num(run.usage.requests), context: num(run.usage.context) })}
+    >
+      {compactTokens(run.usage.input + run.usage.output)} tok
+    </span>
+  ) : null;
+  const actions = copyable ? (
+    <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="flex items-center">
+      <ActionBarPrimitive.Copy
+        className="g-icon-btn rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        title={t("کپی پاسخ")}
+      >
+        <MessagePrimitive.If copied><Check className="size-3.5 text-ok" /></MessagePrimitive.If>
+        <MessagePrimitive.If copied={false}><Copy className="size-3.5" /></MessagePrimitive.If>
+      </ActionBarPrimitive.Copy>
+      {explainable ? <WhyButton open={why} onToggle={() => setWhy(!why)} /> : null}
+      <ForkButton run={run} />
+    </ActionBarPrimitive.Root>
+  ) : null;
+
+  // Karsara skin: plain muted text and a ring, no pills.
+  if (karsara) {
+    return (
+      <>
+      <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
+        {run.status === "running" ? <RunPhase run={run} /> : null}
+        {run.status === "error" ? <span className="text-xs text-bad" dir="auto">{run.error || t("خطا")}</span> : null}
+        {run.status === "cancelled" ? <span className="text-xs text-muted-foreground" dir="auto">{run.error || t("متوقف شد")}</span> : null}
+        {done && (answeredAt || seconds || model || run.usage) ? (
+          <div className="g-run-meta flex items-center gap-1.5 text-xs text-muted-foreground">
+            {answeredAt || seconds ? (
+              <span className="inline-flex items-center gap-1" title={[answeredAt && t("جواب: {time}", { time: answeredAt }), seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) })].filter(Boolean).join(" · ")}>
+                <Clock className="size-3 opacity-70" />
+                {answeredAt ? <span>{answeredAt}</span> : null}
+                {seconds ? <span className={answeredAt ? "opacity-70" : ""}>{answeredAt ? `(${formatDuration(seconds, { compact: true })})` : formatDuration(seconds, { compact: true })}</span> : null}
+              </span>
+            ) : null}
+            {(answeredAt || seconds) && model ? <span className="text-border">·</span> : null}
+            {model ? <span className="max-w-40 truncate" title={model} dir="ltr">{model}</span> : null}
+            {tokens ? <><span className="text-border">·</span>{tokens}</> : null}
+          </div>
+        ) : null}
+        {done ? <MessageTime at={run.endedAt || run.startedAt} /> : null}
+        {actions}
+        {explainable && !why ? <WhyFlag count={run.manifestChanges} onClick={() => setWhy(true)} /> : null}
+      </div>
+      {explainable && why ? <WhyPanel chatId={chatId} runId={run.runId} /> : null}
+      </>
+    );
+  }
 
   return (
     <>
     <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
-      {run.status === "running" ? <RunPhase phase={run.phase} /> : null}
+      {run.status === "running" ? <RunPhase run={run} /> : null}
       {run.status === "error" ? (
         <span className="rounded-md bg-bad/10 px-2 py-0.5 text-xs text-bad" dir="auto">{run.error || t("خطا")}</span>
       ) : null}
@@ -428,7 +655,7 @@ function RunFooter({ run }) {
       ) : null}
 
       {done && (answeredAt || seconds || model || run.usage) ? (
-        <div className="flex items-center gap-1.5 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] text-muted-foreground">
+        <div className="g-run-meta flex items-center gap-1.5 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] text-muted-foreground">
           {answeredAt || seconds ? (
             <span
               className="inline-flex items-center gap-1"
@@ -446,52 +673,48 @@ function RunFooter({ run }) {
               {model}
             </span>
           ) : null}
-          {run.usage ? (
+          {tokens ? (
             <>
               <span className="text-border">·</span>
-              <span
-                dir="ltr"
-                title={t("ورودی {input} (کش {cached}) · خروجی {output} · {requests} درخواست · کانتکست {context}", { input: num(run.usage.input), cached: num(run.usage.cached), output: num(run.usage.output), requests: num(run.usage.requests), context: num(run.usage.context) })}
-              >
-                {compactTokens(run.usage.input + run.usage.output)} tok
-              </span>
+              {tokens}
             </>
           ) : null}
         </div>
       ) : null}
 
-      {copyable ? (
-        <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="flex items-center">
-          <ActionBarPrimitive.Copy
-            className="rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title={t("کپی پاسخ")}
-          >
-            <MessagePrimitive.If copied><Check className="size-3.5 text-ok" /></MessagePrimitive.If>
-            <MessagePrimitive.If copied={false}><Copy className="size-3.5" /></MessagePrimitive.If>
-          </ActionBarPrimitive.Copy>
-          {explainable ? <WhyButton open={why} onToggle={() => setWhy(!why)} /> : null}
-          <ForkButton run={run} />
-        </ActionBarPrimitive.Root>
-      ) : null}
+      {done ? <MessageTime at={run.endedAt || run.startedAt} /> : null}
+      {actions}
+      {explainable && !why ? <WhyFlag count={run.manifestChanges} onClick={() => setWhy(true)} /> : null}
     </div>
     {explainable && why ? <WhyPanel chatId={chatId} runId={run.runId} /> : null}
     </>
   );
 }
 
-const PHASES = { connecting: t("در حال اتصال"), working: t("در حال کار"), summarizing: t("خلاصه‌سازی") };
-
-function RunPhase({ phase }) {
+// What the running turn is doing (run-phase.js): a retry or a closed limit in words. The shared
+// clock lets a retry label expire.
+function RunPhase({ run }) {
+  const karsara = useSkin() === "karsara";
+  useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
+  const label = phaseLabel(run.phase, run.phaseDetail, { at: run.phaseAt, now: Date.now() });
+  if (karsara) {
+    return (
+      <span className="g-run-phase inline-flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/35 border-t-primary" aria-hidden />
+        {label}
+      </span>
+    );
+  }
   return (
     <motion.span
       initial={{ opacity: 0, scale: 0.92 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-primary"
+      className="g-run-phase inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-primary"
     >
       <span className="agent-dots" aria-hidden>
         <i /><i /><i />
       </span>
-      <span className="agent-pulse">{PHASES[phase] || t("در حال کار")}</span>
+      <span className="agent-pulse">{label}</span>
     </motion.span>
   );
 }
@@ -611,7 +834,7 @@ function DictateButton({ value, setText, focus, size }) {
     setState("recording");
     recorder.start();
   };
-  const btn = "mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted";
+  const btn = "g-icon-btn mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted";
   if (state === "working") {
     return <span className={btn} title={t("در حال تبدیل گفتار به متن")} aria-live="polite"><Loader2 className={`${size} animate-spin`} /></span>;
   }
@@ -629,12 +852,18 @@ function DictateButton({ value, setText, focus, size }) {
   );
 }
 
-function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", agent = "griffin", onModeChange, onModelChange, effort, onEffortChange, top = null }) {
+// compact (the side panel under the Karsara skin): no chips row, no toolbar, no «بعداً».
+function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", agent = "griffin", onModeChange, onModelChange, effort, onEffortChange, top = null, compact = false }) {
   const running = useAuiState((s) => s.thread.isRunning);
   const hero = variant === "hero";
   const touch = useTouchPrimary();
+  const karsara = useSkin() === "karsara";
   const inputRef = useRef(null);
+  const rootRef = useRef(null);
+  const aui = useAui();
   const { value: composerText, setText } = unstable_useComposerInput();
+  // The suggested next message: a row above the input, or ghost text in the empty box (Karsara skin).
+  const next = useNextStep();
   // What was being typed in this chat comes back after a reload or a look at another chat
   // (draft.js). The composer is mounted once per chat, so this runs once per chat.
   const { boxId: chatId, sendQuotes, settings } = useRuntimeChat();
@@ -673,10 +902,134 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     saveDraft(browserStorage(), chatId, composerText);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerText]);
+  // Esc anywhere in this thread stops the running turn, as the stop button does.
+  // The box itself is assistant-ui's (cancelOnEscape); an open dialog, menu or the «/» list, or a
+  // focused field, keeps its own Esc (keys.js). A side chat stops only for an Esc inside it.
+  const escRunning = useRef(running);
+  escRunning.current = running;
+  useEffect(() => {
+    const onKey = (event) => {
+      const root = rootRef.current;
+      const thread = root?.closest("[data-griffin-thread]");
+      const target = event.target instanceof Element ? event.target : null;
+      const inside = Boolean(target && thread?.contains(target));
+      const loose = !target || target === document.body;
+      if (!inside && !(loose && !root?.closest(".side-panel"))) return;
+      const layerOpen = Boolean(document.querySelector('[role="dialog"], [role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
+      if (!escCancels(event, { running: escRunning.current, layerOpen })) return;
+      event.preventDefault();
+      aui.composer.cancel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [aui]);
+  const focusInput = () => inputRef.current?.focus();
+  const placeholder = karsara
+    ? next ? "" : running ? t("پیام بده تا وسط کار به ایجنت برسد…") : t("کاری را شرح دهید یا سؤالی بپرسید")
+    : running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agent} بپرس…", { agent: agentLabel });
+  const input = (
+    <ComposerPrimitive.Input
+      ref={inputRef}
+      data-reload-safe=""
+      rows={1}
+      autoFocus
+      dir={composerText.trim() ? chatDir(composerText) : isRtl ? "rtl" : "ltr"}
+      submitMode={submitMode(touch)}
+      aria-label={t("پیام به {agent}", { agent: agentLabel })}
+      placeholder={placeholder}
+      className={`scrollbar-thin min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
+        karsara
+          ? `px-1.5 py-2 text-start text-[15px] leading-7 ${hero ? "max-h-40 min-h-16" : "max-h-[45dvh] min-h-10"}`
+          : `flex-1 px-1 text-start ${hero ? "max-h-12 min-h-10 py-2 text-sm leading-6" : "max-h-[45vh] min-h-10 py-2 leading-7"}`
+      }`}
+    />
+  );
+  const later = (
+    <LaterButton
+      text={composerText}
+      chatId={chatId}
+      options={{ repo: settings?.repo, model: settings?.model, agent: settings?.agent, mode: settings?.mode, effort: settings?.effort }}
+      disabled={quotes.length > 0}
+      disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ نقل‌قول را بردارید")}
+      size={hero && !karsara ? "size-4" : "size-5"}
+      onSaved={() => {
+        setText("");
+        saveDraft(browserStorage(), chatId, "");
+      }}
+    />
+  );
+
+  if (karsara) {
+    return (
+      <div ref={rootRef} className="min-w-0">
+        {compact ? null : top}
+        <ComposerPrimitive.Root className="composer-box g-composer relative rounded-xl border bg-card focus-within:border-primary/60">
+          {quotes.length ? (
+            <div className="flex flex-col gap-1 px-2 pt-2">
+              {quotes.map((q) => (
+                <QuoteChip key={q.id} chatId={chatId} quote={q} onDone={focusInput} />
+              ))}
+            </div>
+          ) : null}
+          <ComposerAssist inputRef={inputRef} next={next} />
+          <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
+          <div className="flex items-end gap-1 px-2 py-1.5">
+            {/* The input and the ghost suggestion share one grid cell. */}
+            <div className="grid min-w-0 flex-1 [&>*]:min-w-0 [&>*]:[grid-area:1/1]" onClick={(event) => event.target === event.currentTarget && focusInput()}>
+              {input}
+              {next ? (
+                <div className="pointer-events-none max-h-28 overflow-hidden px-1.5 py-2 text-start text-[15px] leading-7 text-muted-foreground [overflow-wrap:anywhere]" dir={chatDir(next)}>
+                  <span>{next}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setText(next);
+                      focusInput();
+                    }}
+                    className="pointer-events-auto ms-2 whitespace-nowrap rounded-md border px-1.5 align-middle text-[11px] leading-5 hover:border-primary hover:text-foreground pointer-coarse:px-2.5 pointer-coarse:text-xs pointer-coarse:leading-6"
+                    aria-label={t("نوشتن پیشنهاد در کادر: {text}", { text: next })}
+                    title={t("پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود")}
+                  >
+                    {touch ? t("پذیرفتن") : "Tab"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <DictateButton value={composerText} setText={setText} focus={focusInput} size="size-5" />
+            {compact ? null : later}
+            {running ? (
+              <ComposerPrimitive.Cancel className={KC_SEND} data-stop="" title={t("توقف")}>
+                <Square className="size-3.5 fill-current" />
+              </ComposerPrimitive.Cancel>
+            ) : quotesOnly ? (
+              <button type="button" onClick={sendQuotes} className={KC_SEND} title={t("ارسال نقل‌قول‌ها")} aria-label={t("ارسال")}>
+                <CornerDownLeft className="size-4" />
+              </button>
+            ) : (
+              <ComposerPrimitive.Send className={KC_SEND} title={touch ? t("ارسال") : t("ارسال (Enter)")}>
+                <CornerDownLeft className="size-4" />
+              </ComposerPrimitive.Send>
+            )}
+          </div>
+        </ComposerPrimitive.Root>
+        {compact ? null : <div className="g-composer-bar mt-1 flex min-w-0 items-center gap-1">
+          <ComposerPrimitive.AddAttachment className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")} aria-label={t("افزودن تصویر")}>
+            <Plus className="size-4" />
+          </ComposerPrimitive.AddAttachment>
+          {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} /> : null}
+          <span className="flex-1" />
+          {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} compact /> : null}
+          {onEffortChange ? <EffortPicker effort={effort} model={model} agent={agent} onChange={onEffortChange} /> : null}
+          <FastToggle />
+        </div>}
+      </div>
+    );
+  }
+
   return (
     <>
     {top}
-    <ComposerPrimitive.Root className="composer-box rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
+    <ComposerPrimitive.Root ref={rootRef} className="composer-box g-composer rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
       {quotes.length ? (
         <div className="flex flex-col gap-1 px-2 pt-2">
           {quotes.map((q) => (
@@ -684,45 +1037,21 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           ))}
         </div>
       ) : null}
-      <ComposerAssist inputRef={inputRef} />
+      <ComposerAssist inputRef={inputRef} next={next} />
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
-        <ComposerPrimitive.AddAttachment className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")}>
+        <ComposerPrimitive.AddAttachment className="g-icon-btn mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")}>
           <ImagePlus className={hero ? "size-4" : "size-5"} />
         </ComposerPrimitive.AddAttachment>
-        <DictateButton value={composerText} setText={setText} focus={() => inputRef.current?.focus()} size={hero ? "size-4" : "size-5"} />
-        <LaterButton
-          text={composerText}
-          chatId={chatId}
-          options={{ repo: settings?.repo, model: settings?.model, agent: settings?.agent, mode: settings?.mode, effort: settings?.effort }}
-          disabled={quotes.length > 0}
-          disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ نقل‌قول را بردارید")}
-          size={hero ? "size-4" : "size-5"}
-          onSaved={() => {
-            setText("");
-            saveDraft(browserStorage(), chatId, "");
-          }}
-        />
-        <ComposerPrimitive.Input
-          ref={inputRef}
-          data-reload-safe=""
-          rows={1}
-          autoFocus
-          dir={isRtl ? "rtl" : "auto"}
-          submitMode={submitMode(touch)}
-          placeholder={running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agent} بپرس…", { agent: agentLabel })}
-          className={`scrollbar-thin min-w-0 flex-1 resize-none bg-transparent px-1 text-start outline-none placeholder:text-muted-foreground ${
-            hero
-              ? "max-h-12 min-h-10 py-2 text-sm leading-6"
-              : "max-h-[45vh] min-h-10 py-2 leading-7"
-          }`}
-        />
+        <DictateButton value={composerText} setText={setText} focus={focusInput} size={hero ? "size-4" : "size-5"} />
+        {later}
+        {input}
         <div className="mb-0.5 flex shrink-0 items-center gap-1">
           {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} icons /> : null}
           {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} icons /> : null}
           {onEffortChange ? <EffortPicker effort={effort} model={model} agent={agent} onChange={onEffortChange} /> : null}
           {running ? (
-            <ComposerPrimitive.Cancel className="flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
+            <ComposerPrimitive.Cancel data-stop="" className="g-send flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
               {hero ? (
                 <span className="agent-dots agent-dots-on-dark" aria-hidden><i /><i /><i /></span>
               ) : (
@@ -730,13 +1059,13 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               )}
             </ComposerPrimitive.Cancel>
           ) : quotesOnly ? (
-            <button type="button" onClick={sendQuotes} className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground" title={t("ارسال نقل‌قول‌ها")}>
+            <button type="button" onClick={sendQuotes} className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground" title={t("ارسال نقل‌قول‌ها")}>
               <ArrowUp className="size-5" />
             </button>
           ) : (
             // Send is the one filled (accent) button while it can send; empty, it is plain like the
             // microphone.
-            <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={t("ارسال")}>
+            <ComposerPrimitive.Send className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={t("ارسال")}>
               <ArrowUp className="size-5" />
             </ComposerPrimitive.Send>
           )}
@@ -752,6 +1081,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     </>
   );
 }
+
+// Karsara skin: a square send/stop the size of the icon buttons; its fill comes from the skin's
+// g-send rule (accent only while it can send).
+const KC_SEND = "g-send g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground disabled:opacity-50";
 
 function ComposerImage() {
   return (

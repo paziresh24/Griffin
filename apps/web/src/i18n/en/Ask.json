@@ -5,5 +5,7 @@
   "این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود.": "This question went unanswered; if you answer now, it goes as a new message.",
   "توضیح یا گزینهٔ دیگر…": "Details or another option…",
   "پاسخ…": "Answer…",
-  "ارسال پاسخ": "Send answer"
+  "ارسال پاسخ": "Send answer",
+  "{n} گزینه انتخاب شد؛ برای فرستادن، دکمهٔ ارسال را بزن.": "{n} selected; press Send to submit.",
+  "می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.": "You can pick several options; then press Send."
 }

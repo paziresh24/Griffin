@@ -68,5 +68,10 @@
   "واچر خاموش": "Watcher off",
   "رشته‌های باز": "Open threads",
   "پیامی نیست.": "No messages.",
-  "نام گروه جدید": "New group name"
+  "نام گروه جدید": "New group name",
+  "اتصالی ناقص است": "A connection is incomplete",
+  "محتوای دیده‌نشده": "Unseen content",
+  "علامت خوانده‌شده": "Mark as read",
+  "علامت خوانده‌نشده": "Mark as unread",
+  "باز کردن در تب جدید": "Open in new tab"
 }

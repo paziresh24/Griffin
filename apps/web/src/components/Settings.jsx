@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Bell, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, MessageSquare, Plus, RefreshCw, Send, ShieldOff, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
@@ -14,7 +14,9 @@ import { SecretsSection } from "./Secrets.jsx";
 import { ConfigSection } from "./Config.jsx";
 import { profileChanged } from "../profile.js";
 import { TokensSection } from "./Tokens.jsx";
+import { AppearanceSection } from "./Appearance.jsx";
 import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
+import { useSkin } from "../skin.js";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -32,7 +34,9 @@ const SECTIONS = [
   { id: "profile", label: t("نام شما"), icon: UserRound, title: t("نام شما"), description: t("پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.") },
   { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد و جواب می‌دهد.", { name: BRAND.name }) },
   { id: "notifications", label: t("اعلان‌ها"), icon: Bell, title: t("اعلان‌ها"), description: t("وقتی جواب آماده شد، سؤالی منتظر شماست یا کاری در پس‌زمینه گزارش داد، روی همین دستگاه خبر می‌رسد — حتی وقتی صفحه بسته است.") },
+  { id: "chat", label: t("گفتگو"), icon: MessageSquare, title: t("گفتگو"), description: t("رفتار کادر پیام و ادامهٔ کار؛ برای همهٔ گفتگوها و بی‌ری‌استارت.") },
   { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: t("فقط یادداشت‌های تأییدشده به قواعد همان ایجنت اضافه می‌شوند؛ بقیه اثری ندارند.") },
+  { id: "appearance", label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("پوستهٔ رابط روی همین مرورگر؛ روشن و تیره جداست و از دکمهٔ بالای صفحه عوض می‌شود. اسم {name} و لوگو با پوسته عوض نمی‌شود.", { name: BRAND.name }) },
   { id: "account", label: t("حساب"), icon: KeyRound, title: t("حساب"), description: t("نشست‌های ورود به گریفین.") },
 ];
 
@@ -57,10 +61,11 @@ export function SettingsPage({ onBack, onSection }) {
     try { localStorage.setItem("griffin.settings.section", id); } catch { /* private mode */ }
   };
   const current = SECTIONS.find((s) => s.id === section);
+  const karsara = useSkin() === "karsara";
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
-      <aside className="hidden w-60 shrink-0 flex-col border-e bg-card/50 sm:flex">
+      <aside className="g-settings-rail hidden w-60 shrink-0 flex-col border-e bg-card/50 sm:flex">
         <div className="flex items-center gap-2 px-4 pb-4 pt-[max(env(safe-area-inset-top),1rem)]">
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
             <ArrowRight className="size-4 rtl-mirror" />
@@ -80,7 +85,7 @@ export function SettingsPage({ onBack, onSection }) {
                   active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                 }`}
               >
-                {active ? <motion.span layoutId="settings-nav" className="absolute inset-y-1.5 start-0 w-0.5 rounded-full bg-primary" /> : null}
+                {active ? <motion.span layoutId="settings-nav" className="g-nav-bar absolute inset-y-1.5 start-0 w-0.5 rounded-full bg-primary" /> : null}
                 <Icon className={`size-4 ${active ? "text-primary" : ""}`} />
                 {label}
               </button>
@@ -90,19 +95,20 @@ export function SettingsPage({ onBack, onSection }) {
       </aside>
 
       <div className="scrollbar-thin min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-10">
+        <div className="g-settings-content mx-auto w-full max-w-2xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-10">
           <div className="mb-4 flex items-center gap-2 sm:hidden">
             <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
               <ArrowRight className="size-4 rtl-mirror" />
             </button>
             <h1 className="font-semibold">{t("تنظیمات")}</h1>
           </div>
-          <div className="scrollbar-none -mx-4 mb-6 flex gap-1.5 overflow-x-auto px-4 sm:hidden">
+          <div className="g-settings-strip scrollbar-none -mx-4 mb-6 flex gap-1.5 overflow-x-auto px-4 sm:hidden">
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setSection(id)}
+                aria-current={section === id ? "page" : undefined}
                 className={`press flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${
                   section === id ? "border-primary/40 bg-primary/10 font-medium text-foreground" : "text-muted-foreground"
                 }`}
@@ -112,13 +118,13 @@ export function SettingsPage({ onBack, onSection }) {
             ))}
           </div>
 
-          <motion.div key={section} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+          <motion.div key={section} initial={karsara ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
             {section === "connections" ? (
               <ConnectionsSection meta={current} />
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "tokens" ? <TokensSection /> : section === "notifications" ? <PushSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : section === "profile" ? <ProfileSection /> : <AccountSection />}
+                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "tokens" ? <TokensSection /> : section === "notifications" ? <PushSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : section === "profile" ? <ProfileSection /> : section === "chat" ? <ChatPrefsSection /> : section === "appearance" ? <AppearanceSection /> : <AccountSection />}
               </>
             )}
           </motion.div>
@@ -369,6 +375,62 @@ function IntegrationRow({ integration, onChange }) {
         ) : null}
       </AnimatePresence>
     </Item>
+  );
+}
+
+// «گفتگو»: the two chat switches, on top of /api/config — both are
+// live there, so no restart. An unset key follows the env, else on.
+const CHAT_PREFS = [
+  { key: "PROMPT_SUGGESTIONS", icon: Sparkles, title: t("پیشنهاد پیام بعدی"), subtitle: t("کم‌رنگ در کادر، Tab برای پذیرفتن؛ فقط Claude") },
+  { key: "AUTO_CONTINUE", icon: RefreshCw, title: t("ادامهٔ خودکار بعد از سقف"), subtitle: t("با بازشدن سقف مصرف، حداکثر سه بار؛ پیام شما لغوش می‌کند") },
+];
+
+function ChatPrefsSection() {
+  const [settings, setSettings] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = useCallback(() => api("/api/config").then((d) => setSettings(d.settings || []), (e) => toast.error(e.message)), []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  const set = async (key, on) => {
+    setBusy(key);
+    try {
+      await api("/api/config", { method: "PATCH", body: { [key]: on ? "on" : "off" } });
+      await load();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (!settings) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
+  return (
+    <Group>
+      {CHAT_PREFS.map(({ key, icon, title, subtitle }) => {
+        const on = (settings.find((s) => s.key === key)?.effective || "on") !== "off";
+        return (
+          <Item
+            key={key}
+            icon={icon}
+            tint="bg-primary/12 text-primary"
+            title={title}
+            subtitle={subtitle}
+            trailing={
+              <Switch.Root
+                checked={on}
+                disabled={busy === key}
+                onCheckedChange={(checked) => set(key, checked)}
+                dir="ltr"
+                className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
+                aria-label={title}
+              >
+                <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
+              </Switch.Root>
+            }
+          />
+        );
+      })}
+    </Group>
   );
 }
 

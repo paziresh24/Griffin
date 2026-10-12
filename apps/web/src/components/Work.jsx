@@ -4,6 +4,7 @@ import { Brain, ChevronDown, Wrench } from "lucide-react";
 import { unwrapResult } from "../result.js";
 import { ToolCard, stepTitle } from "./Tool.jsx";
 import { locale, num, t } from "../i18n.js";
+import { useSkin } from "../skin.js";
 
 // Tools whose output is the answer itself; they stay visible outside the collapsed work log.
 const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", "ask_agent"]);
@@ -52,6 +53,7 @@ export function toolProps(part) {
 export function WorkLog({ run, parts, renderText, renderReasoning }) {
   const running = run.status === "running";
   const [open, setOpen] = useState(null);
+  const karsara = useSkin() === "karsara";
   const expanded = open ?? running;
   if (!parts.length) return null;
 
@@ -64,23 +66,52 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
     thoughts ? t("{n} فکر", { n: num(thoughts) }) : null,
   ].filter(Boolean).join(" · ");
   const current = running ? [...parts].reverse().find((p) => p.type === "tool") : null;
+  const currentTitle = current && !expanded ? (
+    stepTitle(current.name, current.args)
+      ? <span dir="auto" className="max-w-64 truncate text-xs opacity-70">{stepTitle(current.name, current.args)}</span>
+      : <span className="ltr max-w-48 truncate text-xs opacity-70">{current.name}</span>
+  ) : null;
+  const body = (part, i) => (
+    <div key={part.callId || `${part.type}-${i}`} className="relative">
+      {karsara ? null : <span className="absolute -start-[1.3rem] top-3 size-2 rounded-full border-2 border-background bg-border" />}
+      {part.type === "tool" ? (
+        <ToolCard {...toolProps(part)} />
+      ) : part.type === "reasoning" ? (
+        renderReasoning(part, run)
+      ) : (
+        <div className="py-1 text-sm text-muted-foreground">{renderText(part, run, true)}</div>
+      )}
+    </div>
+  );
+
+  // Karsara skin: a flat row (a ring while running, no icon box, no motion) and no timeline dots.
+  if (karsara) {
+    return (
+      <div className="my-2">
+        <button type="button" onClick={() => setOpen(!expanded)} aria-expanded={expanded} className="g-worklog-head flex items-center gap-2 rounded-md py-1 pe-2 text-sm text-muted-foreground hover:text-foreground">
+          {running ? <span className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/35 border-t-primary" aria-hidden /> : <Brain className="size-3.5" />}
+          <span>{summary}</span>
+          {currentTitle}
+          <ChevronDown className={`size-3.5 ${expanded ? "rotate-180" : ""}`} />
+        </button>
+        {expanded ? <div className="ms-2 mt-0.5 border-s ps-2">{parts.map(body)}</div> : null}
+      </div>
+    );
+  }
 
   return (
     <div className="my-2">
       <button
         type="button"
         onClick={() => setOpen(!expanded)}
-        className="group/work flex items-center gap-2 rounded-lg py-1 pe-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        aria-expanded={expanded}
+        className="g-worklog-head group/work flex items-center gap-2 rounded-lg py-1 pe-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <span className={`flex size-6 items-center justify-center rounded-md bg-muted transition-colors group-hover/work:bg-accent ${running ? "text-primary" : ""}`}>
           {running ? <Wrench className="size-3.5 animate-pulse" /> : <Brain className="size-3.5" />}
         </span>
         <span className={running ? "shimmer" : ""}>{summary}</span>
-        {current && !expanded ? (
-          stepTitle(current.name, current.args)
-            ? <span dir="auto" className="max-w-64 truncate text-xs opacity-70">{stepTitle(current.name, current.args)}</span>
-            : <span className="ltr max-w-48 truncate text-xs opacity-70">{current.name}</span>
-        ) : null}
+        {currentTitle}
         <motion.span animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }} className="flex">
           <ChevronDown className="size-3.5" />
         </motion.span>
@@ -95,20 +126,7 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
             transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
             className="overflow-hidden"
           >
-            <div className="ms-3 mt-1 border-s ps-4">
-              {parts.map((part, i) => (
-                <div key={part.callId || `${part.type}-${i}`} className="relative">
-                  <span className="absolute -start-[1.3rem] top-3 size-2 rounded-full border-2 border-background bg-border" />
-                  {part.type === "tool" ? (
-                    <ToolCard {...toolProps(part)} />
-                  ) : part.type === "reasoning" ? (
-                    renderReasoning(part, run)
-                  ) : (
-                    <div className="py-1 text-sm text-muted-foreground">{renderText(part, run, true)}</div>
-                  )}
-                </div>
-              ))}
-            </div>
+            <div className="ms-3 mt-1 border-s ps-4">{parts.map(body)}</div>
           </motion.div>
         ) : null}
       </AnimatePresence>

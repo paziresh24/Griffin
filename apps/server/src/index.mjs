@@ -390,6 +390,17 @@ function modelCandidates(chat) {
   }
   return list;
 }
+// chat_suggest: the named model must be one that account runs now (account null = the chat's own).
+async function checkSuggestModel(account, model, chat) {
+  const id = account || store.getAgentProfile(chat?.agent || DEFAULT_AGENT)?.provider || chat?.provider;
+  if (!kindOf(id)) return `unknown engine account "${id}"; accounts: ${accounts().map((a) => a.id).join(", ")}`;
+  if (!accountEnabled(id)) return `engine account "${id}" is turned off`;
+  if (!providerKey(id) && !demo) return `engine account "${id}" has no key`;
+  if (isLimited(id)) return `engine account "${id}" is at its plan limit until ${new Date(limitedUntil(id)).toISOString()}`;
+  const ids = (await models(id).catch(() => [])).map((m) => m.id);
+  if (ids.length && !ids.includes(model)) return `engine account "${id}" does not list model "${model}"; valid ids: ${ids.join(", ")}`;
+  return null;
+}
 const usableAccount = (id) => accountEnabled(id) && !isLimited(id) && (Boolean(providerKey(id)) || demo);
 function routeModel(chat) {
   const list = modelCandidates(chat);
@@ -488,7 +499,7 @@ const runner = createRunner({
     const rootChatId = store.rootChatId(chat.id);
     const unattended = ["scheduler", "ops"].includes(rootCaller) || Boolean(store.getChat(rootChatId)?.job_id);
     // Suggest a chat / mark a chapter (chat-tools.mjs): only in chats the owner is reading.
-    if (rootCaller === "owner" && !unattended) Object.assign(customTools, createChatTools({ store, chatId: chat.id, isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo) }));
+    if (rootCaller === "owner" && !unattended) Object.assign(customTools, createChatTools({ store, chatId: chat.id, isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo), checkModel: checkSuggestModel }));
     let filtered = filterToolsByProfile(customTools, profile, { caller });
     // Irreversible calls in any chain not rooted in the owner need the owner's yes (in code). The
     // question reaches them in Telegram wherever the chain started, so a peer chain asks too
@@ -623,7 +634,10 @@ store.bus.on("chats", (change) => {
   const chat = store.getChat(change.chatId);
   if (!chat?.archived || !chat.repo || !(chat.worktree_path || parkedTrees(REPOS_ROOT, chat.id).length)) return;
   cleaning.add(chat.id);
-  cleanupChatWorktree({ reposRoot: REPOS_ROOT, repo: chat.repo, chatId: chat.id })
+  releaseChatRuns(chat.id)
+    .then((stopped) => stopped
+      ? cleanupChatWorktree({ reposRoot: REPOS_ROOT, repo: chat.repo, chatId: chat.id })
+      : { removed: false, reason: "اجرای چت یا چت کناری‌اش متوقف نشد" })
     .then((result) => {
       if (result.removed) store.updateChat(chat.id, { worktreePath: null });
       else if (result.reason) store.appendEvent(chat.id, null, "note", { text: `worktree نگه داشته شد: ${result.reason}` });
@@ -631,6 +645,19 @@ store.bus.on("chats", (change) => {
     .catch((error) => console.error(`[worktree] cleanup ${chat.id}: ${error.message}`))
     .finally(() => cleaning.delete(chat.id));
 });
+// Side chats run in the parent's worktree, so before the tree is checked or removed every side
+// chat is stopped, then the parent. False when a run did not stop.
+async function releaseChatRuns(chatId) {
+  const ids = [...store.listSideChats(chatId).map((side) => side.id), chatId];
+  for (const id of ids) {
+    if (runner.isActive(id)) await runner.cancel(id).catch((error) => console.error(`[worktree] stop ${id}: ${error.message}`));
+  }
+  for (const id of ids) {
+    for (let waited = 0; runner.isActive(id) && waited < 30_000; waited += 250) await new Promise((r) => setTimeout(r, 250));
+    if (runner.isActive(id)) return false;
+  }
+  return true;
+}
 // Owner chats on a worktree that sat idle for CHAT_IDLE_DAYS (default 3; 0 = off) go to the archive
 // every 6 hours, which gives their worktree back when nothing would be lost (the listener above).
 const CHAT_IDLE_MS = Number(genv("CHAT_IDLE_DAYS", "3")) * 86_400_000;
@@ -669,8 +696,10 @@ const folderSwitch = {
         canMove: () => !folderBusy(chat),
         onSwitched: ({ parked }) => {
           store.updateChat(chat.id, { repo, worktreePath: null });
-          store.setKv(`repomove:${chat.id}`, { from: chat.repo, to: repo, parked, at: new Date().toISOString() });
-          store.appendEvent(chat.id, null, "note", { text: `گفتگو از ${chat.repo} به ${repo} رفت${parked ? `؛ کار قبلی دست‌نخورده در ${parked} ماند` : ""}.` });
+          const note = store.appendEvent(chat.id, null, "note", { text: `گفتگو از ${chat.repo} به ${repo} رفت${parked ? `؛ کار قبلی دست‌نخورده در ${parked} ماند` : ""}.` });
+          // noteId: a rewind may not cut back past the switch (app.mjs), or the chat would read as on
+          // the old repo while repomove says it moved.
+          store.setKv(`repomove:${chat.id}`, { from: chat.repo, to: repo, parked, at: new Date().toISOString(), noteId: note?.id ?? null });
         },
       });
     } catch (error) {
@@ -1460,8 +1489,8 @@ if (serveWeb) {
       c.res.headers.set("cache-control", c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
     }
   });
-  app.use("/assets/*", serveStatic({ root: WEB_DIST }));
-  app.use("/*", serveStatic({ root: WEB_DIST }));
+  app.use("/assets/*", serveStatic({ root: WEB_DIST, precompressed: true }));
+  app.use("/*", serveStatic({ root: WEB_DIST, precompressed: true }));
   app.get("*", serveStatic({ path: path.join(WEB_DIST, "index.html") }));
 } else {
   app.get("/", (c) => c.json({ griffin: "headless", ui: false, api: "/api", mcp: "/mcp" }));

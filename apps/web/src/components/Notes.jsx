@@ -22,9 +22,10 @@ function useNow(everyMs = 30_000) {
   return now;
 }
 
-const menu = "pop z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-1.5 text-sm shadow-xl";
-const row = "flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-start text-[13px] hover:bg-muted disabled:opacity-50";
-const btn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
+const menu = "g-menu pop z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-1.5 text-sm shadow-xl";
+const row = "g-menu-row flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-start text-[13px] hover:bg-muted disabled:opacity-50";
+const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
+const btn = `g-btn ${plainBtn}`;
 
 /** The «when» list: no time, 15 min … tomorrow at this time (each with its clock time), or a chosen one. */
 function WhenMenu({ onPick, busy = false, title = t("کِی اجرا شود؟") }) {
@@ -33,7 +34,7 @@ function WhenMenu({ onPick, busy = false, title = t("کِی اجرا شود؟") 
   const [value, setValue] = useState(() => toLocalInput(Date.now() + 60 * 60_000));
   return (
     <div className="flex flex-col gap-0.5" dir={isRtl ? "rtl" : "ltr"}>
-      <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">{title}</p>
+      <p className="g-menu-title px-2 pb-1 text-[11px] font-medium text-muted-foreground">{title}</p>
       {LATER_CHOICES.map((choice) => {
         const at = choice.at(now);
         return (
@@ -45,8 +46,8 @@ function WhenMenu({ onPick, busy = false, title = t("کِی اجرا شود؟") 
       })}
       {custom ? (
         <div className="mt-1 flex items-center gap-1 px-2">
-          <input type="datetime-local" className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-[13px]" dir="ltr" value={value} min={toLocalInput(now)} onChange={(event) => setValue(event.target.value)} />
-          <button type="button" className="press rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50" disabled={busy || !fromLocalInput(value)} onClick={() => onPick(fromLocalInput(value))}>
+          <input type="datetime-local" className="g-input min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-[13px]" dir="ltr" value={value} min={toLocalInput(now)} onChange={(event) => setValue(event.target.value)} />
+          <button type="button" className="g-btn g-btn-primary press rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50" disabled={busy || !fromLocalInput(value)} onClick={() => onPick(fromLocalInput(value))}>
             {t("ذخیره")}
           </button>
         </div>
@@ -84,7 +85,7 @@ export function LaterButton({ text, chatId = null, options = {}, disabled = fals
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
+          className="g-icon-btn mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
           disabled={disabled || empty}
           title={disabled ? disabledTitle : t("ارسال نکن؛ برای بعد نگه دار")}
           aria-label={t("بعداً")}
@@ -117,10 +118,10 @@ export function SidebarNotes({ refreshKey, onNavigate }) {
   if (!items.length) return null;
   return (
     <section className="mb-2" aria-label={t("یادداشت‌ها")}>
-      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground">
+      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground">
         <ChevronDown className={`size-3 shrink-0 transition-transform ${expanded ? "" : "-rotate-90 rtl:rotate-90"}`} />
         <span className="flex-1 text-start">{t("یادداشت‌ها")}</span>
-        <span className="tabular-nums">{num(items.length)}</span>
+        <span className="g-tag tabular-nums">{num(items.length)}</span>
       </button>
       {expanded ? (
         <ul className="flex flex-col gap-1 px-1">
@@ -155,28 +156,28 @@ function NoteItem({ note, now, working, onNavigate }) {
     if (window.confirm(t("این یادداشت حذف شود؟"))) guard(notesStore.remove(note.id));
   };
   return (
-    <li className={`rounded-lg border px-2.5 py-1.5 ${open ? "bg-muted/50" : ""}`}>
+    <li className={`g-note-item rounded-lg border px-2.5 py-1.5 ${open ? "bg-muted/50" : ""}`} data-open={open ? "true" : undefined}>
       <button type="button" className="block w-full min-w-0 text-start" onClick={() => setOpen(!open)} aria-expanded={open}>
         <p className={`text-[13px] font-medium ${open ? "whitespace-pre-wrap" : "line-clamp-2"}`} dir={textDir(note.text)}>
           {open ? note.text : noteTitle(note)}
         </p>
-        <p className={`truncate text-xs ${note.runAt ? "text-primary" : "text-muted-foreground"}`}>
+        <p className={`truncate text-xs ${note.runAt ? "g-note-when text-primary" : "text-muted-foreground"}`}>
           {note.runAt ? <AlarmClock className="inline size-3 align-[-1px]" /> : null} {noteWhen(note, now)} · {noteTarget(note)}
         </p>
         {failed ? <p className="text-xs text-bad" dir="auto">{t("اجرا نشد: {error}", { error: note.error })}</p> : null}
       </button>
       {open && editing ? (
         <div className="mt-1 flex flex-col gap-1">
-          <textarea className="rounded-md border bg-background px-2 py-1 text-[13px]" dir={textDir(draft)} value={draft} onChange={(event) => setDraft(event.target.value)} rows={4} autoFocus />
+          <textarea className="g-input rounded-md border bg-background px-2 py-1 text-[13px]" dir={textDir(draft)} value={draft} onChange={(event) => setDraft(event.target.value)} rows={4} autoFocus />
           <div className="flex gap-1">
             <button type="button" className={btn} disabled={working || !draft.trim()} onClick={saveText}>{t("ذخیره")}</button>
-            <button type="button" className={btn} onClick={() => { setDraft(note.text); setEditing(false); }}>{t("انصراف")}</button>
+            <button type="button" className={`g-text-btn ${plainBtn}`} onClick={() => { setDraft(note.text); setEditing(false); }}>{t("انصراف")}</button>
           </div>
         </div>
       ) : null}
       {open && !editing ? (
         <div className="mt-1 flex flex-wrap items-center gap-1">
-          <button type="button" className="press rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50" disabled={working} onClick={run}>
+          <button type="button" className="g-btn g-btn-primary press rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50" disabled={working} onClick={run}>
             {failed ? t("دوباره اجرا") : t("اجرا الان")}
           </button>
           <Popover.Root open={timeOpen} onOpenChange={setTimeOpen}>
@@ -190,7 +191,7 @@ function NoteItem({ note, now, working, onNavigate }) {
             </Popover.Portal>
           </Popover.Root>
           <button type="button" className={btn} disabled={working} onClick={() => { setDraft(note.text); setEditing(true); }}>{t("ویرایش")}</button>
-          <button type="button" className={btn} disabled={working} onClick={remove}>{t("حذف")}</button>
+          <button type="button" className={`g-text-btn ${plainBtn}`} disabled={working} onClick={remove}>{t("حذف")}</button>
         </div>
       ) : null}
     </li>

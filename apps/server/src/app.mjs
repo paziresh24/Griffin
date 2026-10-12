@@ -1,5 +1,6 @@
 import { COVERAGE_CALLER, coverageOwnerNote } from "./integrations/coverage.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
+import { usageByModel } from "@griffin/timeline";
 import { autoTitle } from "./titles.mjs";
 import { servingHeaders } from "./media.mjs";
 import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
@@ -48,6 +49,8 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     suggestion: (id) => runner.suggestion?.(id) ?? null,
     limitResumeAt: (id) => runner.limitResumeAt?.(id) ?? null,
     fastState: (id) => runner.fastState?.(id) ?? null,
+    // Parked on a question only the owner answers (in memory: asks keyed by the chain's root).
+    waitingForOwner: (id) => asks?.audienceOf?.(id) === "owner",
   };
   const knownAgent = (id) => Boolean(id && (store.getAgentProfile?.(id) || AGENTS[id]));
 
@@ -380,10 +383,26 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     return c.text(text);
   });
 
-  app.get("/api/chats/:id", (c) => {
+  app.get("/api/chats/:id", async (c) => {
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
-    return c.json({ chat: publicChat(store, chat, childChatsByParent(store).get(chat.id)), active: runner.isActive(chat.id) });
+    // Tokens per model only here, not in the list: summed from the cached fold (the same one the
+    // timeline route serves; a warm entry reads only events after it, by events_chat).
+    const usage = usageByModel((await timelines.get(chat.id)).timeline.messages);
+    return c.json({ chat: { ...publicChat(store, chat, childChatsByParent(store).get(chat.id)), usage }, active: runner.isActive(chat.id) });
+  });
+
+  // Context gauge (engine-agnostic): the last run's prompt tokens over the window.
+  // ponytail: one window for every model (GRIFFIN_CONTEXT_WINDOW, default 200k); a per-model table
+  // when models with other windows are in use. «خلاصه‌سازی» is the existing /compact command.
+  app.get("/api/chats/:id/context", async (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    const last = (await timelines.get(chat.id)).timeline.messages.findLast((m) => m.role === "assistant" && m.usage?.context);
+    const window = Number(process.env.GRIFFIN_CONTEXT_WINDOW) || 200_000;
+    if (!last) return c.json({ available: false, used: 0, window, percent: 0 });
+    const used = Number(last.usage.context) || 0;
+    return c.json({ available: true, used, window, percent: Math.min(100, Math.round((used / window) * 100)), model: last.model || null });
   });
 
   app.patch("/api/chats/:id", async (c) => {
@@ -635,6 +654,8 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const eventId = Number(body.eventId);
     if (!Number.isInteger(eventId) || eventId <= 0) return c.json({ error: "eventId required" }, 400);
     const edited = typeof body.text === "string" ? body.text.trim() : "";
+    const moved = store.getKv(`repomove:${chat.id}`);
+    if (moved?.noteId && eventId <= moved.noteId) return c.json({ error: "این گفتگو بعد از آن پیام به ریپوی دیگری رفته؛ برگشت به قبل از آن ممکن نیست" }, 409);
     store.rewindChat(chat.id, eventId);
     if (!edited) return c.json({ ok: true });
     const input = parseMessage({ ...body, text: edited });
@@ -1038,6 +1059,7 @@ function publicChat(store, chat, children = null) {
     // the fast-mode switch and what Claude Code last said of it.
     suggestion: chat.archived ? null : live?.suggestion(chat.id) ?? null,
     limitResumeAt: live?.limitResumeAt(chat.id) ?? null,
+    waitingForOwner: Boolean(live?.waitingForOwner(chat.id)),
     fast: fastWanted(store, chat.id),
     fastState: live?.fastState(chat.id) ?? null,
     createdAt: chat.created_at,

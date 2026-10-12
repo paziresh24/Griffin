@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { Popover, Tooltip } from "radix-ui";
 import { Command } from "cmdk";
 import { AnimatePresence, motion } from "motion/react";
-import { Brain, Check, ChevronsUpDown, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
-import { usePolling } from "../api.js";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
+import { api, usePolling } from "../api.js";
+import { useSkin } from "../skin.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
-import { t } from "../i18n.js";
+import { isRtl, num, t } from "../i18n.js";
 
 const MODES = [
   { value: "agent", label: t("ایجنت"), icon: InfinityIcon, hint: t("خودش کار را انجام می‌دهد: ابزارها را صدا می‌زند و نتیجه می‌آورد") },
@@ -17,6 +18,28 @@ const PROVIDERS = [
   { value: "cursor", label: "Cursor", hint: t("ایجنت Cursor (مدل‌های حساب Cursor)") },
   { value: "claude", label: "Claude", hint: t("Claude Agent SDK مستقیم از Anthropic") },
 ];
+
+// The doctor's report, shared by every composer and the new-chat card. It makes a real call per
+// engine, so it is asked at most once per 15 minutes per page.
+let doctorCache = { at: 0, promise: null };
+export function loadDoctor() {
+  if (!doctorCache.promise || Date.now() - doctorCache.at > 15 * 60_000) doctorCache = { at: Date.now(), promise: api("/api/doctor").catch(() => null) };
+  return doctorCache.promise;
+}
+export function useDoctor() {
+  const [report, setReport] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    loadDoctor().then((r) => alive && setReport(r));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return report;
+}
+// Engine accounts whose key the provider refused (doctor cause bad_key): an amber dot in the model picker.
+const badKeys = (report) => new Set((report?.engines || []).filter((e) => e.cause === "bad_key").map((e) => e.id));
+const BadKeyDot = () => <span className="size-1.5 shrink-0 rounded-full bg-amber-500" role="img" aria-label={t("کلید این موتور رد شده است")} title={t("کلید این موتور رد شده است")} />;
 
 export function AgentGlyph({ id, className = "size-8" }) {
   const meta = agentMeta(id);
@@ -35,6 +58,8 @@ export function AgentGlyph({ id, className = "size-8" }) {
 
 export function ModeToggle({ mode, onChange, compact = false, icons = false }) {
   const [expanded, setExpanded] = useState(false);
+  const karsara = useSkin() === "karsara";
+  if (karsara) return <ModeMenu mode={mode} onChange={onChange} />;
   const visible = icons && !expanded ? MODES.filter((m) => m.value === mode) : MODES;
 
   return (
@@ -112,6 +137,43 @@ export function ModeToggle({ mode, onChange, compact = false, icons = false }) {
   );
 }
 
+// Karsara skin: the mode as a text menu «ایجنت ▾», each option with its description.
+function ModeMenu({ mode, onChange }) {
+  const [open, setOpen] = useState(false);
+  const current = MODES.find((m) => m.value === mode) || MODES[0];
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button type="button" className="g-text-btn inline-flex shrink-0 items-center gap-1 px-1 text-[13px] text-muted-foreground hover:text-foreground" aria-label={t("حالت: {label}", { label: current.label })} title={t("حالت اجرا — از منو انتخاب کنید")}>
+          {current.label}
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" side="top" sideOffset={8} collisionPadding={16} className="g-menu pop z-50 w-64 rounded-xl border bg-card p-1 shadow-xl" dir={isRtl ? "rtl" : "ltr"}>
+          {MODES.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              onClick={() => {
+                onChange(m.value);
+                setOpen(false);
+              }}
+              className="g-menu-row flex w-full items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted"
+            >
+              <span className="min-w-0">
+                <span className="block text-[13px]">{m.label}</span>
+                <span className="block text-xs text-muted-foreground">{m.hint}</span>
+              </span>
+              {mode === m.value ? <Check className="mt-0.5 size-3.5 shrink-0 text-primary" /> : null}
+            </button>
+          ))}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 /** Wide rectangular agent switcher — shell chrome, not a tiny chat-header pill. */
 export function AgentPicker({ agent, onChange, locked = false, className = "" }) {
   const data = usePolling("/api/agents", 5 * 60_000);
@@ -154,7 +216,7 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
           type="button"
           disabled={locked}
           title={locked ? t("تا پایان کار فعلی نمی‌شود ایجنت را عوض کرد") : t("انتخاب ایجنت")}
-          className={`press flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl border bg-background px-3 text-start transition-colors hover:border-primary/50 data-[state=open]:border-primary/60 data-[state=open]:bg-accent/40 disabled:cursor-default disabled:opacity-80 ${className}`}
+          className={`g-agent-picker press flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl border bg-background px-3 text-start transition-colors hover:border-primary/50 data-[state=open]:border-primary/60 data-[state=open]:bg-accent/40 disabled:cursor-default disabled:opacity-80 ${className}`}
           aria-label={t("ایجنت")}
           style={{ boxShadow: open ? `0 0 0 1px ${meta.color}44` : undefined }}
         >
@@ -245,160 +307,250 @@ export function ProviderPicker({ provider = "cursor", onChange, compact = false,
   );
 }
 
-// One picker for every provider (2026-10-08): a pick is "<provider>:<model>" and moves only this
-// chat; "auto" = the agent's default from the agents page.
+// Engine accounts (label, on/off, key, limit) for the model menu. GET /api/providers probes every
+// account, so it is read only when a menu opens, at most once a minute per page.
+let accountsCache = { at: 0, promise: null };
+function loadAccounts() {
+  if (!accountsCache.promise || Date.now() - accountsCache.at > 60_000) {
+    accountsCache = { at: Date.now(), promise: api("/api/providers").then((d) => d?.providers || []).catch(() => []) };
+  }
+  return accountsCache.promise;
+}
+const KIND_NAME = { cursor: "Cursor", claude: "Claude", openai: "OpenAI-compatible" };
+const kindOfAccount = (id) => String(id || "").split("-")[0];
+function accountName(id, accounts) {
+  const account = accounts.find((a) => a.id === id);
+  if (account?.label) return account.label;
+  if (PROVIDER_META[id]) return PROVIDER_META[id].label;
+  const kind = kindOfAccount(id);
+  return `${KIND_NAME[kind] || kind} · ${String(id).slice(kind.length + 1)}`;
+}
+function accountTag(account) {
+  if (!account) return null;
+  if (!account.enabled) return t("خاموش");
+  if (!account.hasKey) return t("بی‌کلید");
+  if (account.limitedUntil) return t("سقف پر");
+  return null;
+}
+const SHOWN_PER_ACCOUNT = 8;
+
+// The model menu: this account's models first — «خودکار» (the agent's priority list),
+// the account's default tagged, keys 1–9 pick — and every other account behind «مدل‌های بیشتر».
+// A pick is "<account>:<model>" and moves only this chat; "" = the agent's default.
 export function ModelPicker({ model, onChange, agent = "griffin", compact = false, icons = false }) {
   const agentData = usePolling("/api/agents", 60_000);
   const profile = agentData?.agents?.find((a) => a.id === agent);
   const data = usePolling("/api/models?provider=all", 10 * 60_000);
   const models = (data?.models || []).filter((m) => m.id !== "default");
   const [open, setOpen] = useState(false);
-  const [pinnedProvider, pinnedId] = String(model || "").includes(":") ? model.split(/:(.*)/s) : [profile?.provider || "cursor", model];
-  const current = models.find((m) => m.provider === pinnedProvider && m.id === pinnedId);
-  const short = PROVIDER_META[pinnedProvider]?.short || pinnedProvider;
-  const label = model ? `${current?.name || pinnedId} · ${short}` : t("خودکار");
-  const showLabel = !icons || open;
-  const groups = Object.keys(PROVIDER_META).map((p) => [p, models.filter((m) => m.provider === p)]).filter(([, list]) => list.length);
+  const [view, setView] = useState({ kind: "models", account: null });
+  const [accounts, setAccounts] = useState([]);
+  const [typed, setTyped] = useState("");
+  const [filter, setFilter] = useState("");
+  const karsara = useSkin() === "karsara";
+  const bad = badKeys(useDoctor());
 
+  const [pinnedAccount, pinnedId] = String(model || "").includes(":") ? model.split(/:(.*)/s) : [profile?.provider || "cursor", model || ""];
+  const current = pinnedAccount;
+  const account = accounts.find((a) => a.id === current);
+  const nameOf = (accountId, id) => models.find((m) => m.provider === accountId && m.id === id)?.name || id;
+  const name = model ? nameOf(pinnedAccount, pinnedId) : t("خودکار");
+  const browsing = view.account || current;
+  const browsingInfo = accounts.find((a) => a.id === browsing);
+  const listed = models.filter((m) => m.provider === browsing);
+  const needle = filter.trim().toLowerCase();
+  const rows = needle ? listed.filter((m) => `${m.name} ${m.id}`.toLowerCase().includes(needle)) : listed;
+  const defaultId = browsingInfo?.defaultModel || (browsing === profile?.provider ? profile?.model : "") || "";
+  const otherAccounts = [...new Set([...accounts.map((a) => a.id), ...models.map((m) => m.provider)])].filter((id) => id !== current);
+
+  const onOpenChange = (next) => {
+    setOpen(next);
+    if (next) {
+      setView({ kind: "models", account: null });
+      setFilter("");
+      setTyped("");
+      loadAccounts().then(setAccounts);
+    }
+  };
   const pick = (id) => {
     onChange(id);
     setOpen(false);
   };
+  const onKeyDown = (e) => {
+    if (view.kind !== "models" || e.target.tagName === "INPUT") return;
+    const n = Number(e.key);
+    if (n >= 1 && n <= Math.min(9, rows.length)) {
+      e.preventDefault();
+      pick(`${browsing}:${rows[n - 1].id}`);
+    }
+  };
+
+  const row = "g-menu-row flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted focus-visible:bg-muted focus-visible:outline-none";
+  const muted = "text-xs text-muted-foreground";
+  const tag = "shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground";
+  const divider = <div className="my-1 h-px bg-border" />;
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={open} onOpenChange={onOpenChange}>
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={t("مدل: {label}", { label })}
-          title={label}
-          className={`press flex h-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground ${
-            icons
-              ? showLabel
-                ? "max-w-44 gap-1 px-2.5 text-[11px]"
-                : "w-8"
-              : compact
-                ? "h-auto max-w-44 gap-1.5 px-2.5 py-1 text-[11px]"
-                : "h-auto max-w-48 gap-1.5 px-3 py-1.5 text-xs"
+          aria-label={t("مدل: {label}", { label: name })}
+          title={`${name} · ${accountName(current, accounts)}${bad.has(current) ? ` — ${t("کلید این موتور رد شده است")}` : ""}`}
+          className={`g-pill press flex shrink-0 items-center justify-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground data-[state=open]:text-foreground ${
+            karsara ? "" : `rounded-full bg-muted data-[state=open]:bg-accent ${icons ? "h-8 max-w-40 px-2.5 text-[11px]" : compact ? "max-w-44 px-2.5 py-1 text-[11px]" : "max-w-48 px-3 py-1.5 text-xs"}`
           }`}
         >
-          <Sparkles className="size-3.5 shrink-0 text-primary" />
-          {showLabel ? (
-            <>
-              <span className={`truncate ${model ? "ltr" : ""}`}>{label}</span>
-              <ChevronsUpDown className="size-3 shrink-0 opacity-60" />
-            </>
-          ) : null}
+          {bad.has(current) ? <BadKeyDot /> : null}
+          {karsara ? null : <Sparkles className="size-3.5 shrink-0 text-primary" />}
+          <span className={`truncate ${model ? "ltr" : ""}`}>{name}</span>
+          {karsara ? null : <ChevronsUpDown className="size-3 shrink-0 opacity-60" />}
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-80 overflow-hidden rounded-xl border bg-card shadow-xl">
-          <Command loop className="flex flex-col">
-            <Command.Input autoFocus placeholder={t("جستجوی مدل…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
-            <Command.List className="scrollbar-thin max-h-96 overflow-y-auto p-1">
-              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">{t("مدلی پیدا نشد")}</Command.Empty>
-              <ModelItem
-                id=""
-                name={t("خودکار")}
-                note={`${t("پیش‌فرض ایجنت")}${profile ? ` (${PROVIDER_META[profile.provider]?.short || profile.provider}${profile.model ? ` · ${profile.model}` : ""})` : ""}`}
-                selected={!model}
-                onSelect={pick}
-              />
-              {groups.map(([provider, list]) => (
-                <Command.Group
-                  key={provider}
-                  heading={PROVIDER_META[provider]?.label || provider}
-                  className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:text-muted-foreground"
+        <Popover.Content align="end" side="top" sideOffset={8} onKeyDown={onKeyDown} className="g-menu pop z-50 max-h-[70vh] w-72 overflow-y-auto rounded-xl border bg-card p-1 shadow-xl">
+          {view.kind === "accounts" ? (
+            <>
+              <button type="button" className={`${row} ${muted}`} onClick={() => setView({ kind: "models", account: null })}>
+                <ChevronRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
+                <span className="flex-1">{t("مدل‌های {name}", { name: accountName(current, accounts) })}</span>
+              </button>
+              {divider}
+              {otherAccounts.map((id) => {
+                const info = accounts.find((a) => a.id === id);
+                const own = models.filter((m) => m.provider === id);
+                const label = accountTag(info);
+                return (
+                  <div key={id}>
+                    <button type="button" className={`${row} ${muted}`} onClick={() => { setFilter(""); setView({ kind: "models", account: id }); }} title={label ? `${accountName(id, accounts)} — ${label}` : accountName(id, accounts)}>
+                      <span className="min-w-0 flex-1 truncate">{accountName(id, accounts)}</span>
+                      {bad.has(id) ? <BadKeyDot /> : null}
+                      {label ? <span className={tag}>{label}</span> : null}
+                      <ChevronLeft className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
+                    </button>
+                    {own.slice(0, SHOWN_PER_ACCOUNT).map((m) => (
+                      <button key={m.id} type="button" className={row} onClick={() => pick(`${id}:${m.id}`)}>
+                        <span className="ltr min-w-0 flex-1 truncate text-start">{m.name}</span>
+                      </button>
+                    ))}
+                    {own.length > SHOWN_PER_ACCOUNT ? (
+                      <button type="button" className={`${row} ${muted}`} onClick={() => { setFilter(""); setView({ kind: "models", account: id }); }}>
+                        <span className="flex-1">{t("همه ({n})", { n: num(own.length) })}</span>
+                        <ChevronLeft className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {otherAccounts.length ? null : <p className="px-2.5 py-3 text-center text-xs text-muted-foreground">{t("موتور دیگری نیست؛ از تنظیمات ← موتورها اضافه کن.")}</p>}
+            </>
+          ) : (
+            <>
+              {browsing !== current ? (
+                <>
+                  <button type="button" className={`${row} ${muted}`} onClick={() => setView({ kind: "accounts", account: null })}>
+                    <ChevronRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
+                    <span className="flex-1 truncate">{accountName(browsing, accounts)}</span>
+                    {accountTag(browsingInfo) ? <span className={tag}>{accountTag(browsingInfo)}</span> : null}
+                  </button>
+                  {divider}
+                </>
+              ) : (
+                <button type="button" className={row} onClick={() => pick("")}>
+                  <span className="min-w-0 flex-1">
+                    <span className="block">{t("خودکار")}</span>
+                    <span className={`block truncate ${muted}`}>{profile ? t("به ترتیب اولویت ایجنت ({engine})", { engine: `${accountName(profile.provider, accounts)}${profile.model ? ` · ${profile.model}` : ""}` }) : t("به ترتیب اولویت ایجنت")}</span>
+                  </span>
+                  {!model ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+                </button>
+              )}
+              {listed.length > 12 ? (
+                <input dir="ltr" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("جستجوی مدل…")} aria-label={t("جستجوی مدل")} className="g-input mx-1 my-1 w-[calc(100%-0.5rem)] rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none" />
+              ) : null}
+              {rows.map((m, i) => {
+                const selected = Boolean(model) && pinnedAccount === browsing && pinnedId === m.id;
+                return (
+                  <button key={m.id} type="button" className={row} onClick={() => pick(`${browsing}:${m.id}`)}>
+                    <span className="ltr min-w-0 flex-1 truncate text-start">{m.name}</span>
+                    {m.id === defaultId ? <span className={tag}>{t("پیش‌فرض")}</span> : null}
+                    {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+                    {i < 9 && !needle ? <kbd className="w-4 shrink-0 text-center font-sans text-[11px] text-muted-foreground">{num(i + 1)}</kbd> : null}
+                  </button>
+                );
+              })}
+              {listed.length && !rows.length ? <p className="px-2.5 py-2 text-xs text-muted-foreground">{t("مدلی با این نام نیست.")}</p> : null}
+              {!listed.length ? <p className="px-2.5 py-2 text-xs text-muted-foreground">{accountTag(browsingInfo) ? t("این موتور {state} است.", { state: accountTag(browsingInfo) }) : t("فهرست مدل این موتور در دسترس نیست.")}</p> : null}
+              {kindOfAccount(browsing) === "openai" ? (
+                <form
+                  className="px-1 py-1"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (typed.trim()) pick(`${browsing}:${typed.trim()}`);
+                  }}
                 >
-                  {list.map((m) => (
-                    <ModelItem
-                      key={`${provider}:${m.id}`}
-                      id={`${provider}:${m.id}`}
-                      name={m.name}
-                      selected={pinnedProvider === provider && pinnedId === m.id && Boolean(model)}
-                      onSelect={pick}
-                    />
-                  ))}
-                </Command.Group>
-              ))}
-            </Command.List>
-          </Command>
+                  <input dir="ltr" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={t("شناسهٔ مدل، مثلاً {example}", { example: "z-ai/glm-4.6" })} aria-label={t("شناسهٔ مدل")} className="g-input w-full rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none" />
+                </form>
+              ) : null}
+              {divider}
+              <button type="button" className={row} onClick={() => setView({ kind: "accounts", account: null })}>
+                <span className="flex-1">{t("مدل‌های بیشتر")}</span>
+                <ChevronLeft className="size-3.5 text-muted-foreground rtl:rotate-0 ltr:rotate-180" />
+              </button>
+            </>
+          )}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
   );
 }
 
-// How hard the model thinks, per chat. Claude takes all five levels; OpenAI-style endpoints (GLM)
-// get low/medium/high (the server maps xhigh/max to high); Cursor ignores it.
-const EFFORTS = [
-  { id: "", name: t("خودکار"), note: t("پیش‌فرض ایجنت یا موتور") },
-  { id: "low", name: t("کم"), note: t("سریع و ارزان") },
-  { id: "medium", name: t("متوسط") },
-  { id: "high", name: t("زیاد") },
-  { id: "xhigh", name: t("خیلی زیاد"), note: t("فقط Claude") },
-  { id: "max", name: t("حداکثر"), note: t("فقط Claude؛ پرمصرف") },
-];
+// How hard the model thinks, per chat (a text button and a plain list). Claude takes
+// all five levels; OpenAI-style endpoints (GLM) get low/medium/high; Cursor ignores it.
+const EFFORT_LABELS = { low: t("کم"), medium: t("متوسط"), high: t("زیاد"), xhigh: t("بسیار زیاد"), max: t("بیشینه") };
 
 export function EffortPicker({ effort = "", model = "", agent = "griffin", onChange }) {
   const agentData = usePolling("/api/agents", 60_000);
   const profile = agentData?.agents?.find((a) => a.id === agent);
-  const provider = String(model || "").includes(":") ? model.split(":")[0] : profile?.provider;
+  const account = String(model || "").includes(":") ? model.split(":")[0] : profile?.provider;
+  const kind = kindOfAccount(account);
   const [open, setOpen] = useState(false);
-  if (provider === "cursor") return null;
-  const current = EFFORTS.find((e) => e.id === (effort || "")) || EFFORTS[0];
+  const karsara = useSkin() === "karsara";
+  if (!account || kind === "cursor") return null;
+  const levels = kind === "claude" ? ["low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high"];
+  const label = effort ? EFFORT_LABELS[effort] || effort : t("تلاش پیش‌فرض");
+  const pick = (value) => {
+    onChange(value);
+    setOpen(false);
+  };
+  const row = "g-menu-row flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted";
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={t("میزان فکر: {name}", { name: current.name })}
-          title={t("میزان فکر: {name}", { name: current.name })}
-          className="press flex h-8 shrink-0 items-center gap-1 rounded-full bg-muted px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
+          aria-label={t("تلاش: {label}", { label })}
+          title={t("میزان فکر کردن مدل")}
+          className={`g-text-btn inline-flex shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground ${karsara ? "px-1 text-[13px]" : "h-8 rounded-full bg-muted px-2.5 text-[11px] data-[state=open]:bg-accent"}`}
         >
-          <Brain className="size-3.5 shrink-0 text-primary" />
-          {effort ? <span>{current.name}</span> : null}
+          {label}
+          <ChevronsUpDown className="size-3 shrink-0 opacity-60" />
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={8} className="pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 shadow-xl">
-          <p className="px-2.5 pb-1 pt-1.5 text-[11px] text-muted-foreground">{t("میزان فکر کردن مدل")}</p>
-          {EFFORTS.filter((e) => provider === "claude" || !["xhigh", "max"].includes(e.id)).map((e) => (
-            <button
-              key={e.id || "auto"}
-              type="button"
-              onClick={() => {
-                onChange(e.id);
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block">{e.name}</span>
-                {e.note ? <span className="block text-xs text-muted-foreground">{e.note}</span> : null}
-              </span>
-              {(effort || "") === e.id ? <Check className="size-4 shrink-0 text-primary" /> : null}
+        <Popover.Content align="end" side="top" sideOffset={8} className="g-menu pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 shadow-xl">
+          <button type="button" onClick={() => pick("")} className={row}>
+            {t("تلاش پیش‌فرض")}
+            {!effort ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
+          </button>
+          {levels.map((level) => (
+            <button key={level} type="button" onClick={() => pick(level)} className={row}>
+              {EFFORT_LABELS[level]}
+              {effort === level ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
             </button>
           ))}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
-  );
-}
-
-function ModelItem({ id, name, note, selected, onSelect }) {
-  return (
-    <Command.Item
-      value={`${name} ${id}`}
-      onSelect={() => onSelect(id)}
-      className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm data-[selected=true]:bg-muted"
-    >
-      <span className="min-w-0 flex-1">
-        <span className={`block truncate text-start ${id ? "ltr" : ""}`}>{name}</span>
-        {note ? <span className="block truncate text-xs text-muted-foreground">{note}</span> : null}
-      </span>
-      {selected ? <Check className="size-4 shrink-0 text-primary" /> : null}
-    </Command.Item>
   );
 }
 

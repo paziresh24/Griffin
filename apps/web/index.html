@@ -6,6 +6,10 @@
     <meta name="theme-color" content="#1a120c" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <script>
+      // Skin before first paint (skin.js switches it later): no flash of the other look.
+      try { var s = localStorage.getItem("griffin.skin"); document.documentElement.dataset.skin = s === "karsara" ? s : "griffin"; } catch (e) { document.documentElement.dataset.skin = "griffin"; }
+    </script>
     <title>گریفین</title>
   </head>
   <body>

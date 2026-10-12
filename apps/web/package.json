@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/precompress.mjs",
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {

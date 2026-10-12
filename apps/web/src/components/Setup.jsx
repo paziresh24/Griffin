@@ -11,7 +11,7 @@ import { ClaudeSignin } from "./Providers.jsx";
 
 export const FLOWS = {
   first: { title: t("راه‌اندازی"), steps: ["welcome", "engine", "name", "telegram", "done"] },
-  engine: { title: t("موتور هوش مصنوعی"), steps: ["engine", "done"] },
+  engine: { title: t("افزودن موتور"), steps: ["engine", "done"] },
   proxy: { title: t("پراکسی خروجی"), steps: ["proxy", "done"] },
   name: { title: t("نام دستیار"), steps: ["name", "done"] },
   telegram: { title: t("ربات تلگرام یا بله"), steps: ["telegram", "done"] },
@@ -24,18 +24,18 @@ export function setupFlowFromHash(hash = window.location.hash) {
 }
 
 const ENGINES = [
-  { id: "claude-sub", provider: "claude", label: t("Claude — اشتراک Pro/Max"), hint: t("با اکانت Claude وارد شو؛ {name} توکن بلندمدت را خودش می‌گیرد و نگه می‌دارد.", { name: BRAND.name }), placeholder: "sk-ant-oat…" },
-  { id: "claude-api", provider: "claude", label: t("Claude — کلید API"), hint: t("از console.anthropic.com → API keys."), placeholder: "sk-ant-api…" },
-  { id: "openai", provider: "openai", preset: "openai", label: "OpenAI", hint: t("از platform.openai.com → API keys."), placeholder: "sk-…", model: "gpt-4o-mini" },
-  { id: "openrouter", provider: "openai", preset: "openrouter", label: "OpenRouter", hint: t("یک کلید برای صدها مدل؛ مدل را مثل provider/model بنویس."), placeholder: "sk-or-…", model: "" },
-  { id: "ollama", provider: "openai", preset: "ollama", label: t("Ollama (روی همین سیستم)"), hint: t("بدون کلید. در Docker با --add-host=host.docker.internal:host-gateway اجرا کن."), noKey: true, model: "llama3.1" },
-  { id: "custom", provider: "openai", label: t("سرویس سازگار با OpenAI"), hint: t("هر endpoint با /chat/completions (Z.ai، vLLM، LM Studio، …)."), placeholder: t("کلید"), model: "", custom: true },
-  { id: "cursor", provider: "cursor", label: "Cursor", hint: t("از cursor.com → Settings → API keys."), placeholder: "key_…" },
+  { id: "claude-sub", provider: "claude", label: t("Claude — اشتراک Pro/Max"), blurb: t("با اکانت Claude وارد شو"), hint: t("با اکانت Claude وارد شو؛ {name} توکن بلندمدت را خودش می‌گیرد و نگه می‌دارد.", { name: BRAND.name }), placeholder: "sk-ant-oat…" },
+  { id: "claude-api", provider: "claude", label: t("Claude — کلید API"), blurb: t("پرداخت به ازای مصرف"), hint: t("از console.anthropic.com → API keys."), placeholder: "sk-ant-api…" },
+  { id: "openai", provider: "openai", preset: "openai", label: "OpenAI", blurb: t("GPT با کلید API"), hint: t("از platform.openai.com → API keys."), placeholder: "sk-…", model: "gpt-4o-mini" },
+  { id: "openrouter", provider: "openai", preset: "openrouter", label: "OpenRouter", blurb: t("صدها مدل با یک کلید"), hint: t("یک کلید برای صدها مدل؛ مدل را مثل provider/model بنویس."), placeholder: "sk-or-…", model: "" },
+  { id: "ollama", provider: "openai", preset: "ollama", label: "Ollama", blurb: t("مدل محلی، بدون کلید"), hint: t("بدون کلید. در Docker با --add-host=host.docker.internal:host-gateway اجرا کن."), noKey: true, model: "llama3.1" },
+  { id: "custom", provider: "openai", label: t("سرویس سازگار با OpenAI"), blurb: t("Z.ai، vLLM، LM Studio، …"), hint: t("هر endpoint با /chat/completions (Z.ai، vLLM، LM Studio، …)."), placeholder: t("کلید"), model: "", custom: true },
+  { id: "cursor", provider: "cursor", label: "Cursor", blurb: t("کلید API کرسر"), hint: t("از cursor.com → Settings → API keys."), placeholder: "key_…" },
 ];
 
 const CAUSE = {
   no_key: t("کلیدی ذخیره نشد."),
-  bad_key: t("کلید رد شد — دوباره کپی کن (بدون فاصله). توکن اشتراک Claude با sk-ant-oat شروع می‌شود و باید گزینهٔ «اشتراک» را بزنی."),
+  bad_key: t("کلید رد شد — دوباره کپی کن (بدون فاصله). برای اشتراک Claude (توکن sk-ant-oat…) گزینهٔ «اشتراک Pro/Max» را بزن."),
   region: t("این سرویس از IP این سرور جواب نمی‌دهد (محدودیت کشور). یک پراکسی خروجی تنظیم کن و دوباره تست کن."),
   network: t("سرور به این سرویس نمی‌رسد (DNS/فیلتر/فایروال). پراکسی خروجی یا آدرس را چک کن."),
   quota: t("کلید درست است ولی اعتبار/سهمیه‌اش تمام شده."),
@@ -58,7 +58,9 @@ export function SetupPage({ flow = "first", onClose }) {
   const next = () => setIndex((i) => Math.min(i + 1, steps.length - 1));
   const finish = async () => {
     if (flow === "first") await api("/api/setup/done", { method: "POST" }).catch(() => {});
-    onClose();
+    // A single wizard opened from Settings (or a doctor finding) goes back there.
+    if (flow !== "first") window.location.hash = "/settings";
+    else onClose();
   };
 
   return (
@@ -101,11 +103,18 @@ function Welcome({ onNext }) {
   );
 }
 
+// Picks an engine, puts a key (or a Claude sign-in) on an account and tests it for real. The base
+// account of that kind is used while it has no key; otherwise a new account is made, so adding a
+// second Claude or an OpenRouter next to Z.ai never overwrites the one that works.
 function EngineStep({ onNext, moveDefault }) {
   const [choice, setChoice] = useState(null);
+  const [label, setLabel] = useState("");
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
+  const [models, setModels] = useState([]);
+  const [useForMain, setUseForMain] = useState(moveDefault);
+  const [account, setAccount] = useState(null); // { id, kind } once made or picked
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const engine = ENGINES.find((e) => e.id === choice);
@@ -113,64 +122,105 @@ function EngineStep({ onNext, moveDefault }) {
   const pick = (e) => {
     setChoice(e.id);
     setModel(e.model ?? "");
+    setModels([]);
     setResult(null);
+    if (account && account.kind !== e.provider) setAccount(null);
+  };
+
+  const resolveAccount = async () => {
+    if (account) return account.id;
+    const { providers } = await api("/api/providers");
+    const base = providers.find((p) => p.id === engine.provider);
+    let id;
+    if (base && !base.hasKey) {
+      id = base.id;
+      await api(`/api/providers/${id}`, { method: "PATCH", body: { enabled: true, ...(label.trim() ? { label: label.trim() } : {}) } });
+    } else {
+      ({ id } = await api("/api/providers", { method: "POST", body: { kind: engine.provider, label: label.trim() || engine.label, preset: engine.preset || "" } }));
+    }
+    setAccount({ id, kind: engine.provider });
+    return id;
   };
 
   const test = async () => {
     setBusy(true);
     setResult(null);
     try {
+      const id = await resolveAccount();
       const body = {};
       const apiKey = key.trim() || (engine.noKey ? "ollama" : "");
       if (apiKey) body.apiKey = apiKey;
       if (engine.preset) body.preset = engine.preset;
       if (engine.custom) body.baseUrl = baseUrl.trim();
-      if (engine.provider === "openai" && model.trim()) body.model = model.trim();
-      await api(`/api/providers/${engine.provider}`, { method: "PATCH", body });
-      await verify();
+      if (model.trim()) body.model = model.trim();
+      if (label.trim()) body.label = label.trim();
+      await api(`/api/providers/${id}`, { method: "PATCH", body });
+      await verify(id);
     } catch (e) {
       setResult({ ok: false, cause: "other", detail: e.message });
     }
     setBusy(false);
   };
 
-  // After a key or a browser sign-in: test it for real, then put the default agent on it.
-  const verify = async () => {
-    const r = await api(`/api/doctor/engine/${engine.provider}`);
+  // After a key or a browser sign-in: test it for real; on success list its models and, if asked,
+  // put the main agent on it.
+  const verify = async (id) => {
+    const r = await api(`/api/doctor/engine/${id}`);
     setResult(r);
-    if (r.ok) {
-      if (moveDefault) await api("/api/agents/griffin", { method: "PATCH", body: { provider: engine.provider } }).catch(() => {});
-      await api("/api/doctor/heal", { method: "POST" }).catch(() => {});
-    }
+    if (!r.ok) return;
+    if (useForMain) await api("/api/agents/griffin", { method: "PATCH", body: { provider: id } }).catch(() => {});
+    await api("/api/doctor/heal", { method: "POST" }).catch(() => {});
+    const list = await api(`/api/models?provider=${encodeURIComponent(id)}`).then((d) => d.models || []).catch(() => []);
+    setModels(list);
+  };
+
+  const saveModel = async (value) => {
+    setModel(value);
+    if (account && value) await api(`/api/providers/${account.id}`, { method: "PATCH", body: { model: value } }).catch((e) => toast.error(e.message));
   };
 
   return (
     <div className="space-y-4">
-      <h2 className="flex items-center gap-2 text-lg font-semibold"><Cpu className="size-5" /> {t("موتور هوش مصنوعی")}</h2>
-      <p className="text-sm text-muted-foreground">{t("ایجنت‌ها با این جواب می‌دهند. کلید رمزنگاری‌شده در سکرت‌منیجر همین سرور می‌ماند.")}</p>
+      <h2 className="flex items-center gap-2 text-lg font-semibold"><Cpu className="size-5" /> {t("کدام موتور؟")}</h2>
+      <p className="text-sm text-muted-foreground">{t("ایجنت‌ها با این فکر می‌کنند و جواب می‌دهند. کلید رمزنگاری‌شده روی همین سرور می‌ماند و جایی نمایش داده نمی‌شود.")}</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {ENGINES.map((e) => (
-          <button key={e.id} type="button" onClick={() => pick(e)} className={`press rounded-xl border p-3 text-start text-sm ${choice === e.id ? "border-primary bg-primary/10" : "hover:bg-muted/50"}`}>
-            {e.label}
+          <button key={e.id} type="button" onClick={() => pick(e)} className={`press rounded-xl border p-3 text-start ${choice === e.id ? "border-primary bg-primary/10" : "hover:bg-muted/50"}`}>
+            <span className="block text-sm font-medium">{e.label}</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">{e.blurb}</span>
           </button>
         ))}
       </div>
       {engine ? (
         <div className="space-y-3 rounded-2xl border bg-card p-4">
           <p className="text-xs leading-6 text-muted-foreground" dir="auto">{engine.hint}</p>
-          {engine.id === "claude-sub" ? <ClaudeSignin id="claude" onDone={() => verify().catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} /> : null}
+          <input className={field} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t("نام (اختیاری، مثلاً {engine} شخصی)", { engine: engine.label })} />
+          {engine.id === "claude-sub" ? <ClaudeSignin id={() => resolveAccount()} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} /> : null}
           {engine.id === "claude-sub" ? <p className="text-xs text-muted-foreground">{t("یا اگر توکن را از قبل داری:")}</p> : null}
           {engine.custom ? <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" /> : null}
           {engine.noKey ? null : <input className={field} dir="ltr" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={engine.placeholder} />}
-          {engine.provider === "openai" ? <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" /> : null}
+          {engine.provider === "openai" && !models.length ? <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" /> : null}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={useForMain} onChange={(e) => setUseForMain(e.target.checked)} className="size-4 accent-[var(--color-primary)]" />
+            {t("ایجنت اصلی از این موتور استفاده کند")}
+          </label>
           <button type="button" onClick={test} disabled={busy || (!engine.noKey && !key.trim()) || (engine.custom && !baseUrl.trim())} className={primary}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} {t("ذخیره و تست")}
           </button>
           {result ? <ProbeResult result={result} /> : null}
+          {result?.ok && models.length ? (
+            <label className="block">
+              <span className="mb-1 block text-xs text-muted-foreground">{t("مدل پیش‌فرض این موتور")}</span>
+              <select className={field} dir="ltr" value={model} onChange={(e) => saveModel(e.target.value)}>
+                <option value="">{t("پیش‌فرض سرویس")}</option>
+                {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+              </select>
+            </label>
+          ) : null}
           {result && !result.ok && (result.cause === "region" || result.cause === "network") ? <ProxyStep onSaved={test} inline /> : null}
         </div>
       ) : null}
-      {result?.ok ? <button type="button" onClick={onNext} className={primary}>{t("بعدی")} <ArrowLeft className="size-4 ltr:rotate-180" /></button> : null}
+      {result?.ok ? <button type="button" onClick={onNext} className={primary}>{moveDefault ? t("بعدی") : t("تمام")} <ArrowLeft className="size-4 ltr:rotate-180" /></button> : null}
     </div>
   );
 }

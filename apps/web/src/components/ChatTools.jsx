@@ -6,7 +6,7 @@ import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
 import { ModelPicker } from "./Controls.jsx";
 import { badgeText, canStartSuggestion, chatSuggestions, createSuggestionStore, openSuggestions, suggestionAnchor, suggestionView } from "../chat-tools.js";
-import { num, t } from "../i18n.js";
+import { isRtl, num, t } from "../i18n.js";
 
 // Suggested chats and chapters. One store for the whole app: the sidebar section,
 // the in-thread list and the cards in the thread stay in step.
@@ -39,13 +39,13 @@ async function startSuggestion(id, after) {
 
 const dismissSuggestion = (id) => suggestionStore.dismiss(id).catch(() => {});
 
-const btn = "press rounded-lg bg-primary px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50";
-const textBtn = "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50";
-const tag = "rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground";
+const btn = "g-btn press rounded-lg bg-primary px-2.5 py-1 text-xs text-primary-foreground disabled:opacity-50";
+const textBtn = "g-text-btn inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50";
+const tag = "g-tag rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground";
 
 function CountBadge({ count, className = "" }) {
   const text = badgeText(count);
-  return text ? <span className={`rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground ${className}`}>{text}</span> : null;
+  return text ? <span className={`g-badge rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground ${className}`}>{text}</span> : null;
 }
 
 // Before «شروع چت»: the repo as a tag, the model (changeable), and an optional note before or after the prompt.
@@ -70,7 +70,7 @@ function SuggestionEdits({ id, view, disabled }) {
       {noteOpen ? (
         <div className="flex min-w-0 flex-col gap-1">
           <textarea
-            className="min-h-14 w-full resize-y rounded-lg border bg-background px-2 py-1.5 text-sm outline-none"
+            className="g-input min-h-14 w-full resize-y rounded-lg border bg-background px-2 py-1.5 text-sm outline-none"
             dir="auto"
             rows={2}
             maxLength={2000}
@@ -131,7 +131,7 @@ export function SuggestionCard({ part, readOnly = false }) {
   const working = Boolean(busy[part.id]);
   const live = view.status === "open" && !readOnly;
   return (
-    <div id={part.id ? suggestionAnchor(part.id) : undefined} className={`my-2 flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 ${live ? "bg-card" : "text-muted-foreground"}`} dir="rtl">
+    <div id={part.id ? suggestionAnchor(part.id) : undefined} className={`g-box g-suggest my-2 flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 ${live ? "bg-card" : "text-muted-foreground"}`} data-status={view.status} dir={isRtl ? "rtl" : "ltr"}>
       <div className="flex min-w-0 items-center gap-2">
         <MessageSquarePlus className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(view.title)}>{view.title}</span>
@@ -164,7 +164,7 @@ export function SidebarSuggestions({ refreshKey, onNavigate }) {
   if (!open.length) return null;
   return (
     <section className="mb-2" aria-label={t("پیشنهادها")}>
-      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted">
+      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted">
         <span>{t("پیشنهادها")}</span>
         <CountBadge count={open.length} />
         <span className="flex-1" />
@@ -186,7 +186,7 @@ function SuggestionItem({ item, working, onNavigate, onGo = null, inThread = fal
   const [expanded, setExpanded] = useState(false);
   const view = suggestionView(item, undefined, item);
   return (
-    <li className="rounded-lg py-1 hover:bg-muted/50">
+    <li className="g-suggest-row rounded-lg py-1 hover:bg-muted/50">
       <div className="flex min-w-0 items-center gap-1.5 px-2.5">
         <div className="min-w-0 flex-1">
           {onGo ? (
@@ -212,8 +212,8 @@ function SuggestionItem({ item, working, onNavigate, onGo = null, inThread = fal
   );
 }
 
-const floatBtn = "relative flex size-8 items-center justify-center rounded-full border bg-card text-muted-foreground shadow hover:text-foreground";
-const menu = "pop z-50 flex max-h-[var(--radix-popover-content-available-height)] flex-col rounded-xl border bg-card shadow-xl";
+const floatBtn = "g-float-btn relative flex size-8 items-center justify-center rounded-full border bg-card text-muted-foreground shadow hover:text-foreground";
+const menu = "g-menu pop z-50 flex max-h-[var(--radix-popover-content-available-height)] flex-col rounded-xl border bg-card shadow-xl";
 
 /**
  * Beside the chapter list: this chat's open suggestions in one list. A tap on a title scrolls to
@@ -245,8 +245,8 @@ export function ChatSuggestions({ chatId }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={`${menu} w-[min(26rem,calc(100vw-1rem))]`} dir="rtl">
-          <p className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">{t("پیشنهادهای باز این چت ({n})", { n: num(mine.length) })}</p>
+        <Popover.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={`${menu} w-[min(26rem,calc(100vw-1rem))]`} dir={isRtl ? "rtl" : "ltr"}>
+          <p className="g-menu-title px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">{t("پیشنهادهای باز این چت ({n})", { n: num(mine.length) })}</p>
           <ul className="scrollbar-thin max-h-[60vh] min-h-0 overflow-y-auto pb-1">
             {mine.map((s) => (
               <SuggestionItem key={s.id} item={s} working={Boolean(busy[s.id])} onNavigate={() => setOpen(false)} onGo={canGo(s.id) ? go : null} inThread />
@@ -283,10 +283,10 @@ export function ChapterToc({ chapters = [] }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={`${menu} w-64 p-1`} dir="rtl">
-          <p className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">{t("فصل‌ها")}</p>
+        <Popover.Content side="top" align="start" sideOffset={6} collisionPadding={8} className={`${menu} w-64 p-1`} dir={isRtl ? "rtl" : "ltr"}>
+          <p className="g-menu-title px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">{t("فصل‌ها")}</p>
           {chapters.map((chapter) => (
-            <button key={chapter.id} type="button" className="flex w-full items-center rounded-lg px-2.5 py-1.5 text-sm hover:bg-muted" onClick={() => go(chapter.id)} title={chapter.summary || undefined}>
+            <button key={chapter.id} type="button" className="g-menu-row flex w-full items-center rounded-lg px-2.5 py-1.5 text-sm hover:bg-muted" onClick={() => go(chapter.id)} title={chapter.summary || undefined}>
               <span className="min-w-0 flex-1 truncate text-start" dir={textDir(chapter.title)}>{chapter.title}</span>
             </button>
           ))}

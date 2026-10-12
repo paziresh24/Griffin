@@ -4,6 +4,7 @@ import { quotePreview, quoteStore } from "../quotes.js";
 import { textDir } from "../dir.js";
 import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
+import { useSkin } from "../skin.js";
 
 // One waiting quote above the input. A click opens it in place: the quoted text and
 // the note are both editable, saved or cancelled before the message goes (Esc cancels; Enter in the
@@ -11,6 +12,7 @@ import { isRtl, t } from "../i18n.js";
 // the edit, so a send never carries the old quote.
 export function QuoteChip({ chatId, quote, onDone }) {
   const touch = useTouchPrimary();
+  const karsara = useSkin() === "karsara";
   const [draft, setDraft] = useState(null);
   const textBox = useRef(null);
   const closing = useRef(false);
@@ -86,7 +88,7 @@ export function QuoteChip({ chatId, quote, onDone }) {
     );
   }
   return (
-    <div className="group/quote flex items-start gap-1.5 rounded-lg bg-muted/60 px-2 py-1 text-xs">
+    <div className={`group/quote flex items-start gap-1.5 bg-muted/60 px-2 py-1 text-xs ${karsara ? "rounded-md border-s-2 border-primary" : "rounded-lg"}`}>
       <button
         type="button"
         onClick={() => setDraft({ text: quote.text, note: quote.note || "" })}
@@ -101,7 +103,7 @@ export function QuoteChip({ chatId, quote, onDone }) {
         </span>
         <Pencil className="mt-0.5 size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/quote:opacity-100 group-focus-within/quote:opacity-100 pointer-coarse:opacity-100" />
       </button>
-      <button type="button" onClick={() => quoteStore.remove(chatId, quote.id)} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted" aria-label={t("برداشتن نقل‌قول")}>
+      <button type="button" onClick={() => quoteStore.remove(chatId, quote.id)} className={`shrink-0 rounded text-muted-foreground hover:bg-muted ${karsara ? "flex size-5 items-center justify-center" : "p-0.5"}`} aria-label={t("برداشتن نقل‌قول")}>
         <X className="size-3" />
       </button>
     </div>

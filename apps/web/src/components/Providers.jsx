@@ -1,145 +1,132 @@
 import { useEffect, useState } from "react";
 import { Switch } from "radix-ui";
-import { Check, Cpu, KeyRound, Loader2, Pencil, Plus, Stethoscope, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, KeyRound, Loader2, Plus, Settings2, Stethoscope, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
-import { Group, Item } from "./SettingsParts.jsx";
 import { Pill } from "./Health.jsx";
-import { t, locale } from "../i18n.js";
+import { t, num, locale } from "../i18n.js";
 import { BRAND } from "../brand.js";
 import { ProbeResult } from "./Setup.jsx";
 
 export const KIND_LABEL = { cursor: "Cursor", claude: "Claude", openai: "OpenAI-compatible" };
 export const accountLabel = (p) => p.label || (p.id === p.kind ? KIND_LABEL[p.kind] || p.id : `${KIND_LABEL[p.kind] || p.kind} · ${p.id.slice(p.kind.length + 1)}`);
 
-// Settings → Engines: every engine account (a second Claude subscription, an OpenRouter key next
-// to Z.ai …), each with its own key, default model and an on/off switch. Keys go to the secret store.
+const KIND_BADGE = {
+  claude: { letter: "C", tone: "bg-[#d97757]/15 text-[#c4623f]" },
+  openai: { letter: "AI", tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
+  cursor: { letter: "▲", tone: "bg-foreground/10 text-foreground" },
+};
+
+// One plain sentence for where an account stands, and the pill tone that goes with it.
+function status(p) {
+  if (!p.enabled) return { tone: "off", pill: t("خاموش"), line: t("خاموش است؛ هیچ کاری به آن نمی‌رود.") };
+  if (!p.hasKey) return { tone: "bad", pill: t("وصل نیست"), line: p.kind === "claude" ? t("هنوز وارد اکانت Claude نشده‌ای یا کلیدی نگذاشته‌ای.") : t("کلید ندارد؛ «تنظیمات» را بزن و کلید را بگذار.") };
+  if (p.limitedUntil) return { tone: "warn", pill: t("سقف پر"), line: t("به سقف مصرف خورده؛ تا {time} کار به موتور بعدی می‌رود.", { time: new Date(p.limitedUntil).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }) }) };
+  if (p.health?.ok) return { tone: "ok", pill: t("آماده"), line: t("وصل است و جواب می‌دهد.") };
+  return { tone: "bad", pill: t("جواب نمی‌دهد"), line: t("وصل نمی‌شود؛ «تست» بزن تا علتش را بگوید.") };
+}
+
+// Settings → Engines: the accounts agents think with (a second Claude subscription, an OpenRouter
+// key next to another OpenAI-compatible one …). Adding one is the engine wizard (#/setup/engine); each card here shows where
+// the account stands in one line and opens its settings, a live test, or removal.
 export function ProvidersSection() {
   const [data, setData] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [adding, setAdding] = useState(false);
+  const [showOff, setShowOff] = useState(false);
   const load = () => api("/api/providers").then(setData).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
 
   if (!data) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
-
-  const toggle = async (p, enabled) => {
-    try {
-      await api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled } });
-      load();
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
-  const remove = async (p) => {
-    if (!window.confirm(t("حساب «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) }))) return;
-    try {
-      await api(`/api/providers/${p.id}`, { method: "DELETE" });
-      load();
-    } catch (e) {
-      toast.error(e.message);
-    }
-  };
+  const on = data.providers.filter((p) => p.enabled);
+  const off = data.providers.filter((p) => !p.enabled);
 
   return (
-    <div className="space-y-6">
-      <p className="px-1 text-xs leading-6 text-muted-foreground">
-        {t("هر ایجنت به ترتیبِ «مدل‌ها به ترتیب اولویت» (صفحهٔ ایجنت‌ها) روی اولین حسابِ روشن و سالم کار می‌کند؛ اگر حسابی به سقف خورد، کار خودکار به حساب بعدی می‌رود.")}
-      </p>
-      {data.providers.map((p) => (
-        <Group
-          key={p.id}
-          title={accountLabel(p)}
-          action={
-            <span className="flex items-center gap-2">
-              {p.enabled ? <Pill state={p.health?.ok && p.hasKey ? "ok" : "bad"} title={p.health?.ok ? `${t("سالم")}${p.health.ms ? ` · ${p.health.ms}ms` : ""}` : p.health?.error || ""}>{!p.hasKey ? t("بی‌کلید") : p.limitedUntil ? t("سقف پر") : p.health?.ok ? t("سالم") : t("خطا")}</Pill> : <Pill state="off">{t("خاموش")}</Pill>}
-              <Switch.Root checked={p.enabled} onCheckedChange={(v) => toggle(p, v)} className="relative h-5 w-9 rounded-full bg-muted data-[state=checked]:bg-primary" aria-label={t("روشن/خاموش")}>
-                <Switch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white transition-transform data-[state=checked]:translate-x-[18px] rtl:data-[state=checked]:-translate-x-[18px]" />
-              </Switch.Root>
-            </span>
-          }
-        >
-          {editing === p.id ? (
-            <EditRow provider={p} presets={data.presets} onDone={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />
-          ) : (
-            <>
-              <Item
-                icon={Cpu}
-                title={t("مدل پیش‌فرض")}
-                subtitle={p.defaultModel || "—"}
-                trailing={
-                  <>
-                    <button type="button" onClick={() => setEditing(p.id)} className="press rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t("ویرایش")}><Pencil className="size-4" /></button>
-                    {p.removable ? <button type="button" onClick={() => remove(p)} className="press rounded-lg p-1.5 text-muted-foreground hover:bg-bad/10 hover:text-bad" aria-label={t("حذف")}><Trash2 className="size-4" /></button> : null}
-                  </>
-                }
-              />
-              {p.baseUrl != null ? <Item title={t("آدرس سرویس")} subtitle={p.baseUrl || t("پیش‌فرض")} /> : null}
-              <Item icon={KeyRound} title={t("کلید")} subtitle={p.hasKey ? (p.keyIn === "secrets" ? t("در سکرت‌منیجر {name}", { name: BRAND.name }) : t("از فایل/متغیر محیطی قدیمی")) : t("تنظیم نشده")} trailing={p.hasKey ? <Check className="size-4 text-ok" /> : <X className="size-4 text-bad" />} />
-              {p.limitedUntil ? (
-                <Item
-                  title={t("سقف مصرف")}
-                  subtitle={t("تا {time} کنار گذاشته شده", { time: new Date(p.limitedUntil).toLocaleString(locale) })}
-                  trailing={<button type="button" onClick={() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { clearLimit: true } }).then(load)} className="press rounded-lg border px-2 py-1 text-xs">{t("برداشتن")}</button>}
-                />
-              ) : null}
-              <Item title={t("ایجنت‌ها")} subtitle={p.agents.length ? p.agents.map((a) => t(a.label) + (a.model ? ` · ${a.model}` : "")).join(t("، ")) : t("هیچ ایجنتی از این حساب استفاده نمی‌کند")} />
-              {p.models.length ? <Item title={t("مدل‌های موجود ({n})", { n: p.models.length })} subtitle={p.models.slice(0, 12).map((m) => m.name).join(t("، ")) + (p.models.length > 12 ? " …" : "")} /> : null}
-            </>
-          )}
-        </Group>
-      ))}
-      {adding ? (
-        <AddAccount kinds={data.kinds} presets={data.presets} onDone={(id) => { setAdding(false); load(); if (id) setEditing(id); }} />
-      ) : (
-        <button type="button" onClick={() => setAdding(true)} className="press inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm">
-          <Plus className="size-4" /> {t("افزودن حساب (مثلاً اکانت دوم Claude)")}
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
+        <p className="min-w-0 flex-1 text-sm leading-7 text-muted-foreground">
+          {t("موتورها حساب‌هایی‌اند که ایجنت‌ها با آن‌ها فکر می‌کنند. اگر یکی به سقف بخورد یا جواب ندهد، کار خودکار به بعدی می‌رود؛ ترتیبش را در صفحهٔ «ایجنت‌ها» بچین.")}
+        </p>
+        <button type="button" onClick={() => { window.location.hash = "/setup/engine"; }} className="press inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground sm:self-auto">
+          <Plus className="size-4" /> {t("افزودن موتور")}
         </button>
-      )}
-    </div>
-  );
-}
-
-function AddAccount({ kinds, presets, onDone }) {
-  const [kind, setKind] = useState("claude");
-  const [label, setLabel] = useState("");
-  const [preset, setPreset] = useState("");
-  const [busy, setBusy] = useState(false);
-  const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm";
-  const create = async () => {
-    setBusy(true);
-    try {
-      const { id } = await api("/api/providers", { method: "POST", body: { kind, label: label.trim(), preset: kind === "openai" ? preset : "" } });
-      if (kind === "openai" && preset) await api(`/api/providers/${id}`, { method: "PATCH", body: { preset } });
-      onDone(id);
-    } catch (e) {
-      toast.error(e.message);
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="space-y-3 rounded-2xl border bg-card p-4">
-      <select className={field} value={kind} onChange={(e) => setKind(e.target.value)}>
-        {kinds.map((k) => <option key={k} value={k}>{KIND_LABEL[k] || k}</option>)}
-      </select>
-      {kind === "openai" ? (
-        <select className={field} value={preset} onChange={(e) => setPreset(e.target.value)}>
-          <option value="">{t("— سفارشی —")}</option>
-          {presets.map((pr) => <option key={pr.id} value={pr.id}>{t(pr.label)}</option>)}
-        </select>
-      ) : null}
-      <input className={field} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t("نام (مثلاً Claude شخصی)")} />
-      <div className="flex gap-2">
-        <button type="button" onClick={create} disabled={busy} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} {t("بساز و کلیدش را بگذار")}
-        </button>
-        <button type="button" onClick={() => onDone(null)} className="press rounded-lg border px-3 py-2 text-sm">{t("انصراف")}</button>
       </div>
+      {on.length ? on.map((p) => <EngineCard key={p.id} p={p} presets={data.presets} reload={load} />) : (
+        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{t("هیچ موتور روشنی نیست؛ ایجنت‌ها نمی‌توانند جواب بدهند. «افزودن موتور» را بزن.")}</p>
+      )}
+      {off.length ? (
+        <div>
+          <button type="button" onClick={() => setShowOff(!showOff)} className="press inline-flex items-center gap-1 px-1 text-xs text-muted-foreground">
+            <ChevronDown className={`size-3.5 transition-transform ${showOff ? "" : "-rotate-90 rtl:rotate-90"}`} /> {t("خاموش‌ها ({n})", { n: num(off.length) })}
+          </button>
+          {showOff ? <div className="mt-2 space-y-3">{off.map((p) => <EngineCard key={p.id} p={p} presets={data.presets} reload={load} />)}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function EditRow({ provider, presets, onDone, onCancel }) {
+function EngineCard({ p, presets, reload }) {
+  const [open, setOpen] = useState(false);
+  const [probe, setProbe] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const s = status(p);
+  const badge = KIND_BADGE[p.kind] || KIND_BADGE.openai;
+  const act = (fn) => async () => {
+    try {
+      await fn();
+      reload();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+  const test = async () => {
+    setTesting(true);
+    setProbe(null);
+    setProbe(await api(`/api/doctor/engine/${p.id}`).catch((e) => ({ ok: false, cause: "other", detail: e.message })));
+    setTesting(false);
+  };
+  const remove = act(async () => {
+    if (!window.confirm(t("موتور «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) }))) return;
+    await api(`/api/providers/${p.id}`, { method: "DELETE" });
+  });
+  const button = "press inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted";
+
+  return (
+    <section className={`rounded-2xl border bg-card ${p.enabled ? "" : "opacity-75"}`}>
+      <div className="flex items-start gap-3 p-4">
+        <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl text-sm font-bold ${badge.tone}`} aria-hidden>{badge.letter}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-sm font-semibold" dir="auto">{accountLabel(p)}</h3>
+            <Pill state={s.tone} title={p.health?.ok ? `${t("سالم")}${p.health.ms ? ` · ${p.health.ms}ms` : ""}` : p.health?.error || ""}>{s.pill}</Pill>
+          </div>
+          <p className="mt-1 text-xs leading-6 text-muted-foreground">{s.line}</p>
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>{t("مدل:")} <span className="ltr font-mono text-foreground">{p.defaultModel || t("پیش‌فرض")}</span></span>
+            <span>{p.agents.length ? t("{n} ایجنت: {list}", { n: num(p.agents.length), list: p.agents.map((a) => t(a.label) + (a.model ? ` · ${a.model}` : "")).join(t("، ")) }) : t("هیچ ایجنتی رویش نیست")}</span>
+          </p>
+        </div>
+        <Switch.Root checked={p.enabled} onCheckedChange={(v) => act(() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled: v } }))()} className="relative mt-1 h-5 w-9 shrink-0 rounded-full bg-muted data-[state=checked]:bg-primary" aria-label={t("روشن/خاموش")}>
+          <Switch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white transition-transform data-[state=checked]:translate-x-[18px] rtl:data-[state=checked]:-translate-x-[18px]" />
+        </Switch.Root>
+      </div>
+      {p.limitedUntil ? (
+        <div className="mx-4 mb-3 flex items-center gap-2 rounded-lg bg-warn/10 px-3 py-2 text-xs">
+          <span className="flex-1">{t("اگر سقف زودتر باز شده، دوباره امتحانش کن.")}</span>
+          <button type="button" onClick={act(() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { clearLimit: true } }))} className={button}>{t("دوباره امتحان کن")}</button>
+        </div>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2.5">
+        <button type="button" onClick={() => setOpen(!open)} className={button} aria-expanded={open}><Settings2 className="size-3.5" /> {t("تنظیمات")}</button>
+        <button type="button" onClick={test} disabled={testing || !p.enabled} className={`${button} disabled:opacity-50`}>{testing ? <Loader2 className="size-3.5 animate-spin" /> : <Stethoscope className="size-3.5" />} {t("تست")}</button>
+        {p.removable ? <button type="button" onClick={remove} className={`${button} ms-auto text-bad hover:bg-bad/10`}><Trash2 className="size-3.5" /> {t("حذف")}</button> : null}
+      </div>
+      {probe ? <div className="px-4 pb-3"><ProbeResult result={probe} /></div> : null}
+      {open ? <EditEngine provider={p} presets={presets} onDone={() => { setOpen(false); reload(); }} onCancel={() => setOpen(false)} /> : null}
+    </section>
+  );
+}
+
+function EditEngine({ provider, presets, onDone, onCancel }) {
   const [label, setLabel] = useState(provider.label || "");
   const [model, setModel] = useState(provider.defaultModel || "");
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || "");
@@ -150,7 +137,7 @@ function EditRow({ provider, presets, onDone, onCancel }) {
   const [probe, setProbe] = useState(null);
   const isOpenai = provider.kind === "openai";
 
-  const save = async ({ test = false } = {}) => {
+  const save = async () => {
     setSaving(true);
     setProbe(null);
     try {
@@ -162,14 +149,13 @@ function EditRow({ provider, presets, onDone, onCancel }) {
       }
       if (apiKey.trim()) body.apiKey = apiKey.trim();
       await api(`/api/providers/${provider.id}`, { method: "PATCH", body });
-      if (test) {
-        const r = await api(`/api/doctor/engine/${provider.id}`);
-        setProbe(r);
-        setSaving(false);
-        if (!r.ok) return;
+      const r = await api(`/api/doctor/engine/${provider.id}`);
+      setProbe(r);
+      setSaving(false);
+      if (r.ok) {
+        toast.success(t("ذخیره شد و جواب داد"));
+        onDone();
       }
-      toast.success(t("ذخیره شد"));
-      onDone();
     } catch (e) {
       toast.error(e.message);
       setSaving(false);
@@ -177,74 +163,77 @@ function EditRow({ provider, presets, onDone, onCancel }) {
   };
 
   const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm";
+  const labelText = "mb-1 block text-xs text-muted-foreground";
   return (
-    <div className="space-y-3 p-4">
-      <label className="block">
-        <span className="mb-1 block text-xs text-muted-foreground">{t("نام")}</span>
-        <input className={field} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={KIND_LABEL[provider.kind]} />
-      </label>
-      {isOpenai ? (
+    <div className="space-y-3 border-t bg-muted/20 p-4">
+      <div className="grid gap-3 sm:grid-cols-2">
         <label className="block">
-          <span className="mb-1 block text-xs text-muted-foreground">{t("سرویس آماده")}</span>
-          <select className={field} value={preset} onChange={(e) => { const id = e.target.value; setPreset(id); const pr = presets.find((x) => x.id === id); if (pr) setBaseUrl(pr.baseUrl); }}>
-            <option value="">{t("— سفارشی —")}</option>
-            {presets.map((pr) => <option key={pr.id} value={pr.id}>{t(pr.label)}</option>)}
-          </select>
+          <span className={labelText}>{t("نام")}</span>
+          <input className={field} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={KIND_LABEL[provider.kind]} />
         </label>
-      ) : null}
-      {isOpenai ? (
         <label className="block">
-          <span className="mb-1 block text-xs text-muted-foreground">{t("آدرس سرویس (base URL)")}</span>
-          <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+          <span className={labelText}>{t("مدل پیش‌فرض")}</span>
+          <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} list={`m-${provider.id}`} placeholder={provider.defaultModel || "model"} />
+          <datalist id={`m-${provider.id}`}>{provider.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>
         </label>
-      ) : null}
-      <label className="block">
-        <span className="mb-1 block text-xs text-muted-foreground">{t("مدل پیش‌فرض")}</span>
-        <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} list={`m-${provider.id}`} placeholder={provider.defaultModel || ""} />
-        <datalist id={`m-${provider.id}`}>{provider.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</datalist>
-      </label>
-      {isOpenai ? (
+        {isOpenai ? (
+          <label className="block">
+            <span className={labelText}>{t("سرویس")}</span>
+            <select className={field} value={preset} onChange={(e) => { const id = e.target.value; setPreset(id); const pr = presets.find((x) => x.id === id); if (pr) setBaseUrl(pr.baseUrl); }}>
+              <option value="">{t("آدرس دلخواه")}</option>
+              {presets.map((pr) => <option key={pr.id} value={pr.id}>{t(pr.label)}</option>)}
+            </select>
+          </label>
+        ) : null}
+        {isOpenai ? (
+          <label className="block">
+            <span className={labelText}>{t("آدرس سرویس")}</span>
+            <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+          </label>
+        ) : null}
+        {isOpenai ? (
+          <label className="block">
+            <span className={labelText}>{t("میزان فکر کردن")}</span>
+            <select className={field} value={effort} onChange={(e) => setEffort(e.target.value)}>
+              <option value="">{t("پیش‌فرض سرویس")}</option>
+              <option value="low">{t("کم (سریع‌تر، ارزان‌تر)")}</option>
+              <option value="medium">{t("متوسط")}</option>
+              <option value="high">{t("زیاد (کندتر، دقیق‌تر)")}</option>
+            </select>
+          </label>
+        ) : null}
         <label className="block">
-          <span className="mb-1 block text-xs text-muted-foreground">{t("عمق استدلال")}</span>
-          <select className={field} value={effort} onChange={(e) => setEffort(e.target.value)}>
-            <option value="">{t("پیش‌فرض سرویس")}</option>
-            <option value="low">{t("کم")}</option>
-            <option value="medium">{t("متوسط")}</option>
-            <option value="high">{t("زیاد")}</option>
-          </select>
+          <span className={labelText}>{provider.kind === "claude" ? t("کلید API یا توکن اشتراک") : t("کلید API")}</span>
+          <input className={field} dir="ltr" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={provider.hasKey ? t("خالی بگذار تا همان کلید بماند") : t("کلید را بگذار")} autoComplete="off" />
         </label>
-      ) : null}
-      <label className="block">
-        <span className="mb-1 block text-xs text-muted-foreground">
-          {provider.kind === "claude" ? t("کلید API یا توکن اشتراک (claude setup-token → sk-ant-oat…)") : t("کلید API")} {provider.hasKey ? t("(خالی = بدون تغییر)") : ""}
-        </span>
-        <input className={field} dir="ltr" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={provider.hasKey ? "••••••••" : t("کلید را بگذار")} autoComplete="off" />
-      </label>
+      </div>
       {provider.kind === "claude" ? <ClaudeSignin id={provider.id} onDone={onDone} /> : null}
+      {provider.hasKey && provider.keyIn === "legacy" ? <p className="text-xs text-muted-foreground">{t("کلید فعلی از فایل قدیمی سرور خوانده می‌شود؛ با گذاشتن کلید این‌جا به سکرت‌منیجر {name} می‌رود.", { name: BRAND.name })}</p> : null}
       {probe ? <ProbeResult result={probe} /> : null}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => save({ test: true })} disabled={saving} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
-          {saving ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} {t("ذخیره و تست")}
+        <button type="button" onClick={save} disabled={saving} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+          {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {t("ذخیره و تست")}
         </button>
-        <button type="button" onClick={() => save()} disabled={saving} className="press inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm">
-          <Check className="size-4" /> {t("فقط ذخیره")}
-        </button>
-        <button type="button" onClick={onCancel} className="press rounded-lg border px-3 py-2 text-sm">{t("انصراف")}</button>
+        <button type="button" onClick={onCancel} className="press rounded-lg border px-3 py-2 text-sm">{t("بستن")}</button>
       </div>
     </div>
   );
 }
 
 // Sign in with a Claude subscription without leaving the page: Griffin runs Claude's own
-// `setup-token`, the owner opens the address, signs in and pastes the code shown there.
+// `setup-token`, the owner opens the address, signs in and pastes the code shown there. `id` may be
+// a function that makes the account first (the engine wizard creates it only when sign-in starts).
 export function ClaudeSignin({ id, onDone }) {
+  const [target, setTarget] = useState(null);
   const [url, setUrl] = useState(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const start = async () => {
     setBusy(true);
     try {
-      const r = await api(`/api/providers/${id}/signin`, { method: "POST" });
+      const account = typeof id === "function" ? await id() : id;
+      const r = await api(`/api/providers/${account}/signin`, { method: "POST" });
+      setTarget(account);
       setUrl(r.url);
       window.open(r.url, "_blank", "noopener");
     } catch (e) {
@@ -255,9 +244,9 @@ export function ClaudeSignin({ id, onDone }) {
   const submit = async () => {
     setBusy(true);
     try {
-      await api(`/api/providers/${id}/signin/code`, { method: "POST", body: { code: code.trim() } });
+      await api(`/api/providers/${target}/signin/code`, { method: "POST", body: { code: code.trim() } });
       toast.success(t("حساب Claude وصل شد"));
-      onDone();
+      onDone(target);
     } catch (e) {
       toast.error(e.message);
       setBusy(false);

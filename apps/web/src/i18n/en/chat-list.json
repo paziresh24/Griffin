@@ -1,0 +1,18 @@
+{
+  "خوانده‌نشده اول": "Unread first",
+  "خوانده‌شده / نشده": "Read / unread",
+  "بر اساس تاریخ": "By date",
+  "بر اساس مخزن": "By repository",
+  "بر اساس مدل": "By model",
+  "خوانده‌نشده": "Unread",
+  "منتظر پاسخ شما": "Waiting for you",
+  "خوانده‌شده": "Read",
+  "امروز": "Today",
+  "دیروز": "Yesterday",
+  "{n} روز اخیر": "Last {n} days",
+  "قدیمی‌تر": "Older",
+  "بدون مخزن": "No repository",
+  "در حال اجرا ({n})": "Running ({n})",
+  "الان": "now",
+  "{n} ماه": "{n} mo"
+}
