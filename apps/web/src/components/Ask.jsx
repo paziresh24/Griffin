@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, CircleHelp, Loader2, Send } from "lucide-react";
 import { api, useRoute } from "../api.js";
 import { t } from "../i18n.js";
+import { holdReload } from "../new-version.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
 // run continues. If the run is already over, the same answer is sent as a follow-up message.
@@ -21,6 +22,7 @@ export function AskCard({ args = {}, result, isError, status }) {
     if (!picks.length && !text.trim()) return;
     setSending(true);
     setError(null);
+    const releaseReload = holdReload();
     try {
       const response = await api(`/api/chats/${chatId}/answer`, {
         method: "POST",
@@ -30,6 +32,7 @@ export function AskCard({ args = {}, result, isError, status }) {
     } catch (caught) {
       setError(caught.message);
     } finally {
+      releaseReload();
       setSending(false);
     }
   }

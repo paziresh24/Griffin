@@ -23,10 +23,16 @@ export function eventsFromUpdate(update) {
       return [{ type: "tool.done", data: { ...toolData(update), result: redactResult(nameOf(update), clip(update.toolCall?.result ?? null)) } }];
     case "turn-ended":
       return update.usage ? [{ type: "usage", data: clip(update.usage) }] : [];
+    // The engine took a steered message into its next request: the thread places it there.
+    case "user-message-appended":
+      return [{ type: "user.read", data: {} }];
     case "summary-started":
       return [{ type: "run.phase", data: { phase: "summarizing" } }];
+    case "checkpoint":
+      // Claude: the session entry this run ended on, so a fork can start from this reply.
+      return update.lastMessageId ? [{ type: "checkpoint", data: { lastMessageId: update.lastMessageId, sessionId: update.sessionId ?? null } }] : [];
     default:
-      // token-delta, step-*, shell-output-delta, tool-call-delta, user-message-appended:
+      // token-delta, step-*, shell-output-delta, tool-call-delta, fast-mode (the runner keeps it):
       // not needed for the timeline.
       return [];
   }

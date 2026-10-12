@@ -20,6 +20,10 @@ export function createJobs({
   store,
   runner,
   deliver = async () => [],
+  // canRun(job) false = the engine this job's agent would run on is unreachable (egress/Xray down):
+  // the due job keeps its overdue nextAt and fires once as catch-up when the engine answers again,
+  // instead of failing. Default true so tests and proxy-less setups stay unchanged.
+  canRun = async () => true,
   log = console,
   tickMs = 30_000,
   now = () => new Date(),
@@ -28,6 +32,8 @@ export function createJobs({
   const running = new Map(); // jobId -> { chatId, jobRunId }
   let timer = null;
   let stopped = false;
+  const held = new Set(); // due jobs waiting for their engine to come back
+  let tickInFlight = null;
 
   function schedule(job, from = now()) {
     const next = job.enabled ? nextTriggerAt(job.triggerType, job.trigger, from) : null;
@@ -101,7 +107,7 @@ export function createJobs({
     return store.listJobRuns(job.id, 1)[0];
   }
 
-  function tick() {
+  async function tick() {
     const at = now();
     for (const job of store.listJobs()) {
       if (!job.enabled || running.has(job.id)) continue;
@@ -111,9 +117,32 @@ export function createJobs({
         continue;
       }
       if (new Date(job.nextAt) > at) continue;
-      schedule(job, at);
+      // Gate before advancing nextAt: while the engine is unreachable the job stays overdue, so the
+      // first healthy tick fires one catch-up (same as a restart after downtime).
+      let ready = true;
+      try {
+        ready = Boolean(await canRun(job));
+      } catch (error) {
+        ready = false;
+        log.warn?.(`[jobs] canRun ${job.id}: ${error.message}`);
+      }
+      if (!ready) {
+        if (!held.has(job.id)) log.warn?.(`[jobs] «${job.name}» موعدش رسیده ولی موتورش در دسترس نیست؛ نگه داشته شد`);
+        held.add(job.id);
+        continue;
+      }
+      if (held.delete(job.id)) log.info?.(`[jobs] موتور «${job.name}» برگشت؛ اجرای جاماندهٔ آن شروع شد`);
+      const current = store.getJob(job.id);
+      if (!current?.enabled || running.has(job.id) || !current.nextAt || new Date(current.nextAt) > at) continue;
+      schedule(current, at);
       execute(store.getJob(job.id), "schedule").catch((error) => log.error?.(`[jobs] ${job.id}: ${error.message}`));
     }
+  }
+
+  // One tick at a time: a health probe can take seconds, the interval must not stack them.
+  function tickSafe() {
+    if (!tickInFlight) tickInFlight = tick().finally(() => (tickInFlight = null));
+    return tickInFlight;
   }
 
   return {
@@ -125,6 +154,7 @@ export function createJobs({
     },
 
     isRunning: (jobId) => running.has(jobId),
+    isHeld: (jobId) => held.has(jobId),
     get: (jobId) => store.getJob(jobId),
 
     create(input) {
@@ -143,8 +173,8 @@ export function createJobs({
       return store.deleteJob(id) > 0;
     },
 
-    view: (job) => view(store, job, running),
-    list: () => store.listJobs().map((job) => view(store, job, running)),
+    view: (job) => view(store, job, running, held),
+    list: () => store.listJobs().map((job) => view(store, job, running, held)),
     runs: (jobId, limit) => store.listJobRuns(jobId, limit),
     kinds: triggerKinds,
 
@@ -163,12 +193,12 @@ export function createJobs({
         schedule(job);
       }
       timer = setInterval(() => {
-        if (!stopped) tick();
+        if (!stopped) tickSafe().catch((error) => log.error?.(`[jobs] tick: ${error.message}`));
       }, tickMs);
       timer.unref?.();
     },
 
-    tick,
+    tick: tickSafe,
 
     stop() {
       stopped = true;
@@ -234,11 +264,12 @@ function summarize(store, chatId) {
   return parts.join(" · ") || null;
 }
 
-function view(store, job, running) {
+function view(store, job, running, held) {
   const last = store.lastJobRun(job.id);
   return {
     ...job,
     running: running.has(job.id),
+    held: held.has(job.id),
     description: describeTrigger(job.triggerType, job.trigger),
     lastRun: last,
   };

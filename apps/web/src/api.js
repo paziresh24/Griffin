@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { applyEvent, emptyTimeline } from "@griffin/timeline";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { emptyTimeline } from "@griffin/timeline";
 import { createTimelineMemo } from "./timeline-memo.js";
+import { keepOpen } from "./stream-keeper.js";
+import { catchUpTimeline, openTimeline } from "./timeline-stream.js";
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -24,31 +26,42 @@ export async function api(path, { method = "GET", body } = {}) {
 
 // Chat list, refreshed whenever the server says something changed.
 export function useChats() {
-  const [state, setState] = useState({ chats: [], archived: [], loading: true });
+  const [state, setState] = useState({ chats: [], archived: [], groups: [], loading: true });
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
-        const [active, archived] = await Promise.all([api("/api/chats"), api("/api/chats?archived=1")]);
-        if (alive) setState({ chats: active.chats, archived: archived.chats, loading: false });
+        // The owner's chat groups ride along: a group change emits the same list event.
+        const [active, archived, groups] = await Promise.all([
+          api("/api/chats"),
+          api("/api/chats?archived=1"),
+          api("/api/groups").catch(() => null),
+        ]);
+        // A failed groups read keeps the last list: an empty one would drop a chosen group silently.
+        if (alive) setState((s) => ({ chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, loading: false }));
       } catch {
         if (alive) setState((s) => ({ ...s, loading: false }));
       }
     };
     load();
-    const source = new EventSource("/api/stream");
-    source.addEventListener("chats", load);
-    source.onopen = load;
+    // A stream the browser gave up on (a 502 during a deploy) is reopened (stream-keeper.js).
+    const keeper = keepOpen({
+      open: () => {
+        const source = new EventSource("/api/stream");
+        source.addEventListener("chats", load);
+        return source;
+      },
+      onOpen: load,
+      onState: () => {},
+    });
     return () => {
       alive = false;
-      source.close();
+      keeper.stop();
     };
   }, []);
   return state;
 }
 
-// One chat's timeline. EventSource resends Last-Event-ID on reconnect, and the server replays
-// only newer events, so nothing is duplicated or lost.
 // Rewind/edit deletes events the SSE stream can't un-append, so the view must refetch.
 export function reloadTimeline() {
   window.dispatchEvent(new Event("griffin:reload-timeline"));
@@ -57,13 +70,18 @@ export function reloadTimeline() {
 const EMPTY = emptyTimeline();
 const memo = createTimelineMemo();
 
-// A chat opened before in this tab is shown from memory at once (timeline-memo.js) while the
-// server is asked for anything newer.
+export { catchUpTimeline };
+
+// One chat's timeline (timeline-stream.js does the work). Every (re)connect of the stream asks
+// for events after the last one it holds, and the server replays only newer ones, so nothing is
+// duplicated or lost; a stream the browser gave up on is reopened. A chat opened before in this
+// tab is shown from memory at once (timeline-memo.js) while the server is asked for anything newer.
 export function useTimeline(chatId) {
   const [state, setState] = useState({ chatId: null, timeline: EMPTY, connection: "idle" });
   const [reloadKey, setReloadKey] = useState(0);
-  const buffer = useRef([]);
   const reloaded = useRef(0);
+  const openRef = useRef(null);
+  const reconnect = useCallback(() => openRef.current?.retryNow(), []);
 
   useEffect(() => {
     const bump = () => setReloadKey((k) => k + 1);
@@ -78,68 +96,32 @@ export function useTimeline(chatId) {
       reloaded.current = reloadKey;
       memo.forget(chatId);
     }
-    const remembered = memo.recall(chatId);
-    let current = remembered?.timeline || emptyTimeline();
-    let rev = remembered?.rev || null;
-    let connection = remembered ? "refreshing" : "loading";
-    let source = null;
     let alive = true;
-    let frame = 0;
-    const show = () => {
-      if (!alive) return;
-      memo.remember(chatId, current, rev);
-      setState({ chatId, timeline: current, connection });
-    };
-    const flush = () => {
-      frame = 0;
-      const events = buffer.current;
-      buffer.current = [];
-      current = events.reduce(applyEvent, current);
-      show();
-    };
-    const setConnection = (next) => {
-      connection = next;
-      show();
-    };
-    const listen = () => {
-      setConnection("connecting");
-      source = new EventSource(`/api/chats/${chatId}/stream?after=${current.lastEventId || 0}`);
-      source.addEventListener("event", (message) => {
-        buffer.current.push(JSON.parse(message.data));
-        // batch token bursts into one render per frame
-        if (!frame) frame = requestAnimationFrame(flush);
-      });
-      source.onopen = () => setConnection("live");
-      source.onerror = () => setConnection(source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
-    };
-    show();
-    // The whole history arrives folded in one response; only newer events are streamed. With a
-    // remembered copy the server answers {unchanged} unless something is newer.
-    const have = remembered ? `?have=${current.lastEventId}&rev=${encodeURIComponent(rev)}` : "";
-    api(`/api/chats/${chatId}/timeline${have}`)
-      .then((answer) => {
+    openRef.current = openTimeline({
+      chatId,
+      remembered: memo.recall(chatId),
+      api,
+      win: window,
+      doc: document,
+      onShow: ({ timeline, rev, connection }) => {
         if (!alive) return;
-        if (answer.timeline) {
-          current = answer.timeline;
-          rev = answer.rev || null;
-        }
-        listen();
-      })
-      .catch(() => alive && listen());
+        memo.remember(chatId, timeline, rev);
+        setState({ chatId, timeline, connection });
+      },
+    });
     return () => {
       alive = false;
-      if (frame) cancelAnimationFrame(frame);
-      buffer.current = [];
-      source?.close();
+      openRef.current?.stop();
+      openRef.current = null;
     };
   }, [chatId, reloadKey]);
 
   // Until the effect for a newly chosen chat has run, state still belongs to the previous one:
   // show the remembered copy (or nothing), never another chat's thread.
-  if (!chatId) return { timeline: EMPTY, connection: "idle" };
-  if (state.chatId === chatId) return { timeline: state.timeline, connection: state.connection };
+  if (!chatId) return { timeline: EMPTY, connection: "idle", reconnect };
+  if (state.chatId === chatId) return { timeline: state.timeline, connection: state.connection, reconnect };
   const remembered = memo.recall(chatId);
-  return { timeline: remembered?.timeline || EMPTY, connection: remembered ? "refreshing" : "loading" };
+  return { timeline: remembered?.timeline || EMPTY, connection: remembered ? "refreshing" : "loading", reconnect };
 }
 
 export function usePolling(path, intervalMs) {
@@ -174,8 +156,14 @@ function subscribeHash(callback) {
 // "#/settings" and "#/jobs" are pages that replace the thread.
 export function usePageRoute() {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
-  const match = /^#\/(settings|jobs|agents|telegram|incidents|peers|workbench|setup(?:\/\w+)?)$/.exec(hash);
+  const match = /^#\/(settings|jobs|agents|telegram(?:\/[0-9a-f-]{36})?|incidents|peers|workbench|setup(?:\/\w+)?)$/.exec(hash);
   return match ? match[1].split("/")[0] : null;
+}
+
+// "#/telegram/<personId>": that person's mother chat.
+export function useTelegramPerson() {
+  const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
+  return /^#\/telegram\/([0-9a-f-]{36})$/.exec(hash)?.[1] || null;
 }
 
 export function useRoute() {

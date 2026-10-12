@@ -36,6 +36,7 @@ export function createMcpHandler({ tasks, version = "dev", record = () => {}, lo
     griffin_reply: (peer, a) => tasks.reply(peer, a),
     griffin_cancel: (peer, a) => tasks.cancel(peer, a),
     griffin_tasks: (peer, a) => tasks.list(peer, a),
+    griffin_limits: (peer, a) => tasks.limits(peer, a),
   };
 
   // One line per call, plus a row the owner can read on the peers page. Argument values stay out

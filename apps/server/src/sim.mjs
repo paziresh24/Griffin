@@ -10,7 +10,8 @@ import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
 const SIDE_EFFECTS = new Set([
   "telegram_send", "knowledge_write", "jobs_create", "jobs_update", "jobs_delete", "jobs_run",
   "incident_update", "incident_ack", "arvan_cache_purge", "nsin_cache_purge", "agent_tools_enable",
-  "agent_tools_disable", "agent_settings_set", "peer_invite", "gitlab_propose",
+  "agent_tools_disable", "agent_settings_set", "peer_invite", "gitlab_propose", "chat_send", "related_chat_send",
+  "chat_suggest", "chat_dismiss_suggestion",
 ]);
 
 const text = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });

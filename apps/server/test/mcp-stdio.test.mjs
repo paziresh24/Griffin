@@ -20,6 +20,6 @@ test("stdio bridge introspects without a server and explains a missing one", asy
   await new Promise((r) => child.on("close", r));
   const byId = Object.fromEntries(lines.map((l) => JSON.parse(l)).map((m) => [m.id, m]));
   assert.equal(byId[1].result.serverInfo.name, "griffin");
-  assert.deepEqual(byId[2].result.tools.map((t) => t.name), ["griffin_send", "griffin_wait", "griffin_reply", "griffin_cancel", "griffin_tasks"]);
+  assert.deepEqual(byId[2].result.tools.map((t) => t.name), ["griffin_send", "griffin_wait", "griffin_reply", "griffin_cancel", "griffin_limits", "griffin_tasks"]);
   assert.match(byId[3].error.message, /GRIFFIN_URL/);
 });

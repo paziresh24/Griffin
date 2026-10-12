@@ -97,6 +97,11 @@ export function secretAdminBackdoor(name, args = {}) {
   if (name === "pg_query" && (/infisical/i.test(String(a.name || "")) || String(a.database || "").toLowerCase() === "infisical")) return BACKDOOR_REASON;
   if ((name === "kube_secret" || name === "kube_exec" || name === "kube_copy_secret") && (String(a.namespace || "").toLowerCase() === "infisical" || /instance-admin|bootstrap/i.test(String(a.name || "")))) return BACKDOOR_REASON;
   if ((name === "debug_exec" || name === "ssh_exec") && SECRET_ADMIN_SHELL.test(String(a.command || a.cmd || ""))) return BACKDOOR_REASON;
+  // A git server's pre-receive hook may reject a push that deletes many files unless the push says
+  // allow-mass-delete. That escape hatch is the owner's own, by hand — never an agent's.
+  if ((name === "debug_exec" || name === "ssh_exec") && /allow-mass-delete/i.test(String(a.command || a.cmd || ""))) {
+    return "push با allow-mass-delete (دور زدن گارد حذف انبوه گیت‌لب) فقط کار دستی خود Owner است؛ اگر حذف انبوه لازم است همین را دقیق به او بگو.";
+  }
   return null;
 }
 

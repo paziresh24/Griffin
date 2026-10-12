@@ -18,6 +18,7 @@ export const MCP_TOOLS = [
         message: { type: "string", description: "What you need, with all the context Griffin needs." },
         contextId: { type: "string", description: "Continue an earlier conversation (its previous task must be finished)." },
         agent: { type: "string", description: "Optional specialist: griffin (default), platform, arvan-ban, nsin-ban." },
+        model: { type: "string", description: "Optional model (\"account:model\") for a new conversation or to switch one; must be one of your allowedModels from griffin_limits. Default: the owner's choice for you." },
         messageId: { type: "string", description: "Idempotency key: resending the same messageId returns the same task." },
         waitSec: { type: "number", description: "Seconds to wait for a result before returning (default 10; up to 55 when the client accepts SSE, else 12)." },
       },
@@ -51,6 +52,13 @@ export const MCP_TOOLS = [
     name: "griffin_cancel",
     description: "Cancel a running task.",
     inputSchema: { type: "object", properties: { taskId: TASK_ID }, required: ["taskId"], additionalProperties: false },
+  },
+  {
+    name: "griffin_limits",
+    description:
+      "Your limits on this Griffin: default and allowed models, the token caps per rolling hour and day with what you have used, " +
+      "and at most 2 open requests per agent. A request over a cap is not run; you get the owner's message saying when to try again.",
+    inputSchema: { type: "object", properties: { agent: { type: "string", description: "Optional agent id (default: griffin)." } }, additionalProperties: false },
   },
   {
     name: "griffin_tasks",

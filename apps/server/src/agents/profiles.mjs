@@ -38,6 +38,12 @@ export const APP_TOOL_NAMES = [
   "incident_update",
   "incident_ack",
   "incident_history",
+  // A colleague's own conversation only, through its quota (related.mjs).
+  "chat_list",
+  "chat_send",
+  "chat_suggest",
+  "chat_dismiss_suggestion",
+  "chat_chapter",
   ...SELF_MGMT_TOOLS,
 ];
 

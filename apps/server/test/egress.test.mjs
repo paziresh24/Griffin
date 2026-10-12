@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import tls from "node:tls";
-import { connectTunnel, installCursorEgress, isCursorHost } from "../src/egress.mjs";
+import { egressDown, connectTunnel, installCursorEgress, isCursorHost } from "../src/egress.mjs";
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
@@ -79,4 +79,12 @@ test("tls.connect to Cursor goes through the proxy; other hosts do not", async (
     tls.connect = original;
     proxy.close();
   }
+});
+
+test("egressDown: only a probe with no HTTP answer counts; a status or a missing key does not", () => {
+  assert.equal(egressDown({ ok: false, error: "timeout", ms: 8000 }), true);
+  assert.equal(egressDown({ ok: false, error: "ECONNREFUSED" }), true);
+  assert.equal(egressDown({ ok: false, status: 403 }), false, "region deny / 5xx is an answer, not a dead path");
+  assert.equal(egressDown({ ok: true, status: 200 }), false);
+  assert.equal(egressDown({ ok: false, error: "no anthropic api key" }), false, "a setup gap never holds jobs");
 });

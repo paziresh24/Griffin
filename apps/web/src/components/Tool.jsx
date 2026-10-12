@@ -62,6 +62,8 @@ const TOOLS = {
   mikrotik_set_enabled: { icon: Router, label: t("فعال/غیرفعال قاعدهٔ میکروتیک"), subtitle: (a) => `${a.path} ${a.id} ${a.enabled ? "on" : "off"}`, open: true },
   mikrotik_remove: { icon: Router, label: t("حذف از میکروتیک"), subtitle: (a) => `${a.path} ${a.id}`, open: true },
   debug_exec: { icon: Terminal, label: t("دستور روی سرور debug"), subtitle: (a) => a.command },
+  ssh_exec: { icon: Terminal, label: t("دستور روی سرور"), subtitle: (a) => a.command },
+  mikrotik_exec: { icon: Router, label: t("کنسول میکروتیک"), subtitle: (a) => a.command },
   kube_secret: { icon: KeyRound, label: t("خواندن Secret کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
   infisical_get: { icon: KeyRound, label: t("خواندن از Infisical"), subtitle: (a) => a.name, open: true },
   gitlab_projects: { icon: GitBranch, label: t("پروژه‌های GitLab"), subtitle: (a) => a.search },
@@ -426,13 +428,32 @@ function taskFinalText(steps) {
   return last;
 }
 
+// A command step reads like Claude Desktop: the row is a plain sentence — the model's own (Claude
+// Bash's `description`, or the `intent` a guarded call carries), else where the command ran — and the
+// raw command waits in the opened body. Running or failed, the command stays on the row too.
+const SHELL_PLACES = {
+  debug_exec: (a) => (a.host && a.host !== "sandbox" ? t("دستور روی {host}", { host: a.host }) : t("دستور در سندباکس")),
+  ssh_exec: (a) => (a.host ? t("دستور روی {host}", { host: a.host }) : t("دستور روی سرور")),
+  kube_exec: (a) => (a.pod ? t("دستور داخل پاد {pod}", { pod: a.pod }) : t("دستور داخل پاد")),
+  mikrotik_exec: (a) => (a.router ? t("کنسول میکروتیک {router}", { router: a.router }) : t("کنسول میکروتیک")),
+  Bash: () => t("دستور"),
+};
+
+export function stepTitle(toolName, args) {
+  const place = SHELL_PLACES[toolName];
+  if (!place) return null;
+  const own = [args?.description, args?.intent].find((v) => typeof v === "string" && v.trim());
+  return own ? own.replace(/\s+/g, " ").trim() : place(args || {});
+}
+
 function GenericToolCard({ toolName, args = {}, result, isError, status }) {
   const meta = TOOLS[toolName] || { icon: Server, label: toolName };
   const running = status?.type === "running" || result === undefined;
   const [open, setOpen] = useState(null);
   const expanded = open ?? (!result?.cancelled && (isError || (!running && Boolean(meta.open))));
   const Icon = meta.icon;
-  const subtitle = safe(() => meta.subtitle?.(args));
+  const plain = stepTitle(toolName, args);
+  const subtitle = plain ? (running || isError ? args.command : "") : safe(() => meta.subtitle?.(args));
 
   return (
     <div className={`my-2 overflow-hidden rounded-lg border bg-card ${isError ? "border-bad/50" : ""}`}>
@@ -442,7 +463,11 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
         className="flex w-full items-center gap-2 px-3 py-2 text-start text-sm hover:bg-muted/60"
       >
         <Icon className="size-4 shrink-0 text-muted-foreground" />
-        <span className={`shrink-0 font-medium ${running ? "shimmer" : ""}`}>{meta.label}</span>
+        {plain ? (
+          <span dir="auto" className={`min-w-0 truncate font-medium ${running ? "shimmer" : ""}`} title={args.command ? `${plain}\n${args.command}` : plain}>{plain}</span>
+        ) : (
+          <span className={`shrink-0 font-medium ${running ? "shimmer" : ""}`}>{meta.label}</span>
+        )}
         {subtitle ? <span className="ltr min-w-0 truncate font-mono text-xs text-muted-foreground">{subtitle}</span> : null}
         <span className="ms-auto flex shrink-0 items-center gap-2">
           {result?.source ? <SourceBadge source={result.source} attempts={result.attempts} /> : null}
@@ -499,6 +524,15 @@ export function SourceBadge({ source, attempts }) {
 }
 
 function ToolBody({ toolName, args, result, isError }) {
+  // The row shows only the sentence, so a failed command keeps the command above the error.
+  if (isError && stepTitle(toolName, args) && args.command) {
+    return (
+      <div className="space-y-1">
+        <Code text={args.command} />
+        <ErrorBody result={result} />
+      </div>
+    );
+  }
   if (isError) return <ErrorBody result={result} />;
   // Any tool may return a file; show it the same way everywhere.
   if (result?.media?.mediaId && toolName !== "s3_get") {
@@ -588,7 +622,16 @@ function ToolBody({ toolName, args, result, isError }) {
         </div>
       );
     case "debug_exec":
-      return <Code text={[result?.stdout, result?.stderr].filter(Boolean).join("\n")} />;
+    case "ssh_exec":
+    case "kube_exec":
+    case "mikrotik_exec":
+    case "Bash":
+      return (
+        <div className="space-y-1">
+          <Code text={args.command} />
+          <Code text={typeof result === "string" ? result : result?.output ?? [result?.stdout, result?.stderr].filter(Boolean).join("\n")} />
+        </div>
+      );
     case "mikrotik_print":
       return <Table rows={result?.items} footer={result?.truncated ? t("{n} مورد (بریده شد)", { n: num(result?.total ?? 0) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
     case "mikrotik_ping":

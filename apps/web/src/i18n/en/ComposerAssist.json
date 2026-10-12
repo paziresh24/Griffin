@@ -1,0 +1,9 @@
+{
+  "فرمان‌ها": "Commands",
+  "سقف مصرف پر شد؛ ساعت {time} خودکار ادامه می‌دهد.": "Usage limit reached; continues by itself at {time}.",
+  "لغو ادامهٔ خودکار": "Cancel auto-continue",
+  "Tab یا لمس: در کادر نوشته می‌شود؛ فقط با ارسال شما فرستاده می‌شود": "Tab or tap: it goes into the box; it is sent only when you send it",
+  "حالت سریع Claude: فقط روی Opus، از مصرف اضافهٔ حساب": "Claude fast mode: Opus only, billed to the account's extra usage",
+  "سریع": "Fast",
+  "ادامه در گفتگوی تازه از اینجا": "Continue in a new conversation from here"
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Bell, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, Plus, RefreshCw, Send, ShieldOff, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
@@ -12,6 +12,9 @@ import { ProvidersSection } from "./Providers.jsx";
 import { DoctorSection } from "./Doctor.jsx";
 import { SecretsSection } from "./Secrets.jsx";
 import { ConfigSection } from "./Config.jsx";
+import { profileChanged } from "../profile.js";
+import { TokensSection } from "./Tokens.jsx";
+import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -21,11 +24,14 @@ const KIND_META = {
 
 const SECTIONS = [
   { id: "doctor", label: t("سلامت"), icon: Stethoscope, title: t("سلامت و تعمیر خودکار"), description: t("چک زنده‌ی موتورها، ایجنت‌ها، ران‌ها و اتصال‌ها؛ تعمیر با یک کلیک؛ و ویزاردهای راه‌اندازی.") },
-  { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت"), description: t("مدل‌ها، کارگزار ابزارها، دریافت هشدار و مسیرهای کلاستر.") },
+  { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت"), description: t("مدل‌ها، کارگزار ابزارها، منابع سرور، دریافت هشدار و مسیرهای کلاستر.") },
+  { id: "tokens", label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن هر نوبت از همهٔ گفتگوها، روزبه‌روز و به تفکیک مدل و گفتگو.") },
   { id: "providers", label: t("موتورها"), icon: Cpu, title: t("موتورها و مدل‌ها"), description: t("پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.") },
   { id: "secrets", label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌منیجر"), description: t("کلیدها و توکن‌هایی که موتورها و ابزارها لازم دارند — رمزنگاری‌شده روی همین سرور، هرگز نمایش داده نمی‌شوند.") },
   { id: "config", label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.") },
+  { id: "profile", label: t("نام شما"), icon: UserRound, title: t("نام شما"), description: t("پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.") },
   { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد و جواب می‌دهد.", { name: BRAND.name }) },
+  { id: "notifications", label: t("اعلان‌ها"), icon: Bell, title: t("اعلان‌ها"), description: t("وقتی جواب آماده شد، سؤالی منتظر شماست یا کاری در پس‌زمینه گزارش داد، روی همین دستگاه خبر می‌رسد — حتی وقتی صفحه بسته است.") },
   { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: t("فقط یادداشت‌های تأییدشده به قواعد همان ایجنت اضافه می‌شوند؛ بقیه اثری ندارند.") },
   { id: "account", label: t("حساب"), icon: KeyRound, title: t("حساب"), description: t("نشست‌های ورود به گریفین.") },
 ];
@@ -39,8 +45,13 @@ const readSection = () => {
   }
 };
 
-export function SettingsPage({ onBack }) {
+export function SettingsPage({ onBack, onSection }) {
   const [section, setSectionState] = useState(readSection);
+  // The open section names the browser tab (tab-title.js).
+  useEffect(() => {
+    onSection?.(SECTIONS.find((s) => s.id === section)?.label || "");
+    return () => onSection?.("");
+  }, [section, onSection]);
   const setSection = (id) => {
     setSectionState(id);
     try { localStorage.setItem("griffin.settings.section", id); } catch { /* private mode */ }
@@ -107,13 +118,97 @@ export function SettingsPage({ onBack }) {
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : <AccountSection />}
+                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "tokens" ? <TokensSection /> : section === "notifications" ? <PushSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : section === "profile" ? <ProfileSection /> : <AccountSection />}
               </>
             )}
           </motion.div>
         </div>
       </div>
     </div>
+  );
+}
+
+// Web Push on this device. The permission prompt fires only from this tap, never on
+// page load. The lock screen shows the chat title and one short, redacted line.
+function PushSection() {
+  const [status, setStatus] = useState("checking"); // checking | unsupported | off | on | busy
+  const [issue, setIssue] = useState(null);
+
+  const refresh = useCallback(async () => {
+    const problem = pushSupportIssue();
+    if (problem) {
+      setIssue(problem);
+      setStatus("unsupported");
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      setStatus((await registration.pushManager.getSubscription()) ? "on" : "off");
+    } catch {
+      setStatus("off");
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const enable = async () => {
+    setStatus("busy");
+    try {
+      if ((await Notification.requestPermission()) !== "granted") {
+        toast.error(t("اجازهٔ اعلان داده نشد"));
+        setStatus("off");
+        return;
+      }
+      const { publicKey } = await api("/api/push/key");
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+      await api("/api/push/subscribe", { method: "POST", body: subscriptionToJSON(subscription) });
+      toast.success(t("اعلان‌ها روشن شد"));
+      setStatus("on");
+    } catch (error) {
+      toast.error(error.message || t("روشن کردن اعلان نشد"));
+      setStatus("off");
+    }
+  };
+
+  const disable = async () => {
+    setStatus("busy");
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await api("/api/push/subscribe", { method: "DELETE", body: { endpoint: subscription.endpoint } }).catch(() => {});
+        await subscription.unsubscribe();
+      }
+      setStatus("off");
+    } catch (error) {
+      toast.error(error.message || t("خاموش کردن اعلان نشد"));
+      setStatus("on");
+    }
+  };
+
+  return (
+    <Group>
+      <Item
+        icon={Bell}
+        tint="bg-primary/12 text-primary"
+        title={t("اعلان روی این دستگاه")}
+        subtitle={status === "unsupported" ? issue : status === "on" ? t("روشن") : status === "checking" || status === "busy" ? "…" : t("خاموش")}
+        trailing={
+          <Switch.Root
+            checked={status === "on"}
+            disabled={status === "checking" || status === "busy" || status === "unsupported"}
+            onCheckedChange={(checked) => (checked ? enable() : disable())}
+            dir="ltr"
+            className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
+            aria-label={t("اعلان‌ها")}
+          >
+            <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
+          </Switch.Root>
+        }
+      />
+    </Group>
   );
 }
 
@@ -274,6 +369,55 @@ function IntegrationRow({ integration, onChange }) {
         ) : null}
       </AnimatePresence>
     </Item>
+  );
+}
+
+// The owner's name at the foot of the sidebar (GET/PUT /api/profile). Telegram's name and photo come
+// by themselves once the account is connected; a name typed here wins, and an empty one goes back to it.
+function ProfileSection() {
+  const [profile, setProfile] = useState(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api("/api/profile").then((p) => (setProfile(p), setName(p.typedName || "")), (e) => toast.error(e.message));
+  }, []);
+  const save = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const next = await api("/api/profile", { method: "PUT", body: { name } });
+      setProfile(next);
+      setName(next.typedName || "");
+      profileChanged(next);
+      toast.success(t("ذخیره شد"));
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const changed = profile && name.trim() !== (profile.typedName || "");
+  return (
+    <form onSubmit={save} className="flex flex-wrap items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm">
+      {profile?.photo ? (
+        <img src={profile.photo} alt="" className="size-10 shrink-0 rounded-full object-cover" onError={() => setProfile({ ...profile, photo: null })} />
+      ) : (
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary"><UserRound className="size-5" /></span>
+      )}
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={60}
+        dir="auto"
+        disabled={!profile || busy}
+        placeholder={profile?.telegramName || t("نام شما")}
+        aria-label={t("نام شما")}
+        className="min-w-0 flex-1 rounded-xl border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+      />
+      <button type="submit" disabled={!changed || busy} className="press rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm disabled:opacity-50">
+        {busy ? <Loader2 className="size-4 animate-spin" /> : t("ذخیره")}
+      </button>
+    </form>
   );
 }
 

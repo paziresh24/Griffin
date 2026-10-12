@@ -78,5 +78,21 @@
   "سکرت‌منیجر": "Secret store",
   "کلیدها و توکن‌هایی که موتورها و ابزارها لازم دارند — رمزنگاری‌شده روی همین سرور، هرگز نمایش داده نمی‌شوند.": "Keys and tokens the engines and tools need — encrypted on this server, never shown.",
   "پیکربندی": "Configuration",
-  "تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.": "Settings that used to need an environment variable and a redeploy — now here, with a restart from this page."
+  "تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.": "Settings that used to need an environment variable and a redeploy — now here, with a restart from this page.",
+  "مدل‌ها، کارگزار ابزارها، منابع سرور، دریافت هشدار و مسیرهای کلاستر.": "Models, tool broker, server resources, alert intake and cluster paths.",
+  "مصرف توکن": "Token usage",
+  "توکن هر نوبت از همهٔ گفتگوها، روزبه‌روز و به تفکیک مدل و گفتگو.": "Tokens of every turn across all chats, day by day, by model and by chat.",
+  "نام شما": "Your name",
+  "پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.": "Shown at the foot of the chat list. If your Telegram account is connected, its name and photo come automatically; a name you type here replaces the Telegram name. Leave it empty to keep the Telegram name.",
+  "اعلان‌ها": "Notifications",
+  "وقتی جواب آماده شد، سؤالی منتظر شماست یا کاری در پس‌زمینه گزارش داد، روی همین دستگاه خبر می‌رسد — حتی وقتی صفحه بسته است.": "When an answer is ready, a question is waiting for you or background work reports back, this device gets a notification — even with the page closed.",
+  "اجازهٔ اعلان داده نشد": "Notification permission was not granted",
+  "اعلان‌ها روشن شد": "Notifications turned on",
+  "روشن کردن اعلان نشد": "Could not turn notifications on",
+  "خاموش کردن اعلان نشد": "Could not turn notifications off",
+  "اعلان روی این دستگاه": "Notifications on this device",
+  "روشن": "On",
+  "خاموش": "Off",
+  "ذخیره شد": "Saved",
+  "ذخیره": "Save"
 }

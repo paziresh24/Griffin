@@ -8,18 +8,28 @@ import { EFFORTS, effortOf, splitModel } from "./providers/ids.mjs";
 import { randomBytes } from "node:crypto";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { BusyError, keptIds } from "./runner.mjs";
+import { BusyError, fastWanted, keptIds, ownerTyped, setFastWanted } from "./runner.mjs";
 import { branchName } from "./worktrees.mjs";
+import { thirdPartyKey } from "./related.mjs";
 import { materializeTaskChat } from "./tasks.mjs";
 import { PERSONA } from "./persona.mjs";
+import { explainRun } from "./why.mjs";
+import { aggregateTokenUsage, ownerTimeZone, tokenUsageSince, TOKEN_USAGE_MAX_DAYS } from "./token-usage.mjs";
+import { promptSha, publicSuggestion, settleSuggestion, SUGGEST_NOTE_MAX, withOwnerNote } from "./chat-tools.mjs";
 
 const MAX_TEXT = 20_000;
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BASE64 = 7_000_000; // ~5 MB
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
-export function createApp({ store, runner, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", movedHosts = [], publicUrl = "" }) {
+// What publicChat asks the runner about a chat (set by createApp): Claude's suggested next message,
+// the auto-continue time and fast mode.
+let live = null;
+
+// onNoteRun(note, { chat } | { error }): a timed note («بعداً») ran or failed; the server tells the owner.
+export function createApp({ store, runner, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, folderSwitch = null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", movedHosts = [], publicUrl = "", onNoteRun = null }) {
   const app = new Hono();
+  const sendingByClientId = new Map(); // "<chatId>:<clientId>" -> the send still in flight
 
   // The public name moved (GRIFFIN_OLD_HOSTS → GRIFFIN_PUBLIC_URL): a browser on an old
   // name gets a permanent redirect. Only GET/HEAD — MCP clients and Telegram webhooks POST and do not
@@ -34,6 +44,11 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       return next();
     });
   }
+  live = {
+    suggestion: (id) => runner.suggestion?.(id) ?? null,
+    limitResumeAt: (id) => runner.limitResumeAt?.(id) ?? null,
+    fastState: (id) => runner.fastState?.(id) ?? null,
+  };
   const knownAgent = (id) => Boolean(id && (store.getAgentProfile?.(id) || AGENTS[id]));
 
   app.get("/healthz", (c) =>
@@ -133,33 +148,236 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     return c.json({ chats: store.listChatsBySource({ archived }).map(withChildren) });
   });
 
-  app.post("/api/chats", async (c) => {
-    const body = await readJson(c);
-    const input = parseMessage(body);
-    if (input.error) return c.json({ error: input.error }, 400);
+  // The owner's chat groups, in their order. A group holds chats only through chats.group_id.
+  const groupName = (value) => (typeof value === "string" ? value.trim().slice(0, 60) : "");
+  app.get("/api/groups", (c) => c.json({ groups: store.listGroups() }));
+  app.post("/api/groups", async (c) => {
+    const name = groupName((await readJson(c)).name);
+    if (!name) return c.json({ error: "name required" }, 400);
+    return c.json({ group: store.createGroup(name) }, 201);
+  });
+  app.patch("/api/groups/:id", async (c) => {
+    if (!store.getGroup(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const name = groupName((await readJson(c)).name);
+    if (!name) return c.json({ error: "name required" }, 400);
+    return c.json({ group: store.renameGroup(c.req.param("id"), name) });
+  });
+  app.delete("/api/groups/:id", (c) => {
+    if (!store.deleteGroup(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // A new chat's settings as the composer sent them: { error } or what createChatWith takes.
+  // Shared by POST /api/chats and a note («بعداً») that starts a new chat.
+  const newChatSettings = (body) => {
     const agent = typeof body.agent === "string" && knownAgent(body.agent) ? body.agent : DEFAULT_AGENT;
     const profile = store.getAgentProfile?.(agent);
     // sim: a dry-run chat (sim.mjs) — optionally as a colleague's thread (caller team, unlinked).
     const sim = body.sim === true;
-    const chat = store.createChat({
-      title: typeof body.title === "string" && body.title ? body.title : titleFrom(input.text),
-      model: typeof body.model === "string" && body.model ? body.model : profile?.model || null,
-      mode: body.mode === "plan" ? "plan" : "agent",
-      agent,
-      provider: normalizeProvider(splitModel(body.model)?.provider || profile?.provider),
-      sim,
-      caller: sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
-    });
-    if (effortOf(body.effort)) store.updateChat(chat.id, { effort: effortOf(body.effort) });
     // The repo is fixed before the first run makes the chat's worktree. No repo field = the default
     // repo for an owner chat; "" = none.
     const repo = typeof body.repo === "string" ? body.repo : !sim ? defaultRepo() : null;
-    if (repo) {
-      if (!isValidRepo(repo)) return c.json({ error: "unknown repo" }, 400);
-      store.updateChat(chat.id, { repo });
-    }
+    if (repo && !isValidRepo(repo)) return { error: "unknown repo" };
+    // «+» on a group's heading: the new chat starts in that group.
+    const groupId = typeof body.groupId === "string" && body.groupId ? body.groupId : null;
+    if (groupId && !store.getGroup(groupId)) return { error: "unknown group" };
+    return {
+      fields: {
+        model: typeof body.model === "string" && body.model ? body.model : profile?.model || null,
+        mode: body.mode === "plan" ? "plan" : "agent",
+        agent,
+        provider: normalizeProvider(splitModel(body.model)?.provider || profile?.provider),
+        sim,
+        caller: sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
+      },
+      effort: effortOf(body.effort),
+      repo: repo || null,
+      groupId,
+    };
+  };
+  const createChatWith = (settings, title) => {
+    const chat = store.createChat({ title, ...settings.fields });
+    if (settings.effort) store.updateChat(chat.id, { effort: settings.effort });
+    if (settings.repo) store.updateChat(chat.id, { repo: settings.repo });
+    if (settings.groupId) store.updateChat(chat.id, { groupId: settings.groupId });
+    return store.getChat(chat.id);
+  };
+
+  app.post("/api/chats", async (c) => {
+    const body = await readJson(c);
+    const input = parseMessage(body);
+    if (input.error) return c.json({ error: input.error }, 400);
+    const settings = newChatSettings(body);
+    if (settings.error) return c.json({ error: settings.error }, 400);
+    const chat = createChatWith(settings, typeof body.title === "string" && body.title ? body.title : titleFrom(input.text));
     const sent = await runner.send(chat.id, input);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
+  });
+
+  // The owner's text in a colleague's thread goes framed as the owner's note to that colleague —
+  // only true when the chat is linked; an unlinked team chat (a simulation) takes the text as-is.
+  const ownerFramed = (chat, input) =>
+    chat.caller === COVERAGE_CALLER && input.text && store.linksForChat(chat.id).length
+      ? { ...input, text: coverageOwnerNote(store.getPerson?.(chat.person_id)?.display_name, input.text) }
+      : input;
+
+  // --- Notes («بعداً»): the owner writes a message now and sends it later — by hand,
+  // or at a time chosen relative to now. Into an existing chat (queued behind its run if one is
+  // active) or as the first message of a new chat with the composer's settings.
+  const NOTE_OPTION_KEYS = ["repo", "model", "agent", "mode", "effort", "groupId"];
+  const noteOptions = (raw) => {
+    if (!raw || typeof raw !== "object") return {};
+    const picked = {};
+    for (const key of NOTE_OPTION_KEYS) if (typeof raw[key] === "string") picked[key] = raw[key].slice(0, 200);
+    return picked;
+  };
+  // undefined = not given; null = no time; else the normalized ISO time, or { error }.
+  const parseRunAt = (value) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === "") return null;
+    const at = typeof value === "string" || typeof value === "number" ? new Date(value) : null;
+    if (!at || Number.isNaN(at.getTime())) return { error: "invalid runAt" };
+    if (at.getTime() < Date.now() - 60_000) return { error: "runAt is in the past" };
+    return at.toISOString();
+  };
+  const publicNote = (row) =>
+    row && {
+      id: row.id,
+      text: row.text,
+      chatId: row.chat_id || null,
+      chatTitle: row.chat_title || null,
+      runAt: row.run_at || null,
+      status: row.status,
+      error: row.error || null,
+      startedChatId: row.started_chat_id || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+
+  /** Runs one note (claimed first, so it runs once). Returns { note, chat } or { error, status, note? }. */
+  const runNote = async (id, { scheduled = false } = {}) => {
+    const row = store.getNote(id);
+    if (!row) return { error: "not found", status: 404 };
+    if (!store.claimNote(row.id)) return { error: `already ${row.status}`, status: 409 };
+    let created = null;
+    // A timed note tells the owner (Telegram) that it ran — or that it did not; one run by hand does not.
+    const tell = (note, outcome) =>
+      scheduled && note ? Promise.resolve().then(() => onNoteRun?.(note, outcome)).catch((failure) => console.error(`[notes] onNoteRun: ${failure.message}`)) : null;
+    const fail = async (error, status = 400) => {
+      // A new chat made for this attempt goes with it: a retry makes its own, never a second one.
+      if (created) store.deleteChat(created.id);
+      const note = publicNote(store.finishNote(row.id, { error }));
+      await tell(note, { error });
+      return { error, status, note };
+    };
+    try {
+      let chat;
+      if (row.chat_id) {
+        chat = store.getChat(row.chat_id);
+        if (!chat) return await fail("چتِ مقصد دیگر وجود ندارد", 404);
+        // Through the runner, not the messages route: the owner is not typing now, so a note never
+        // answers an open question. "queue" waits behind an active run, else starts one.
+        await runner.send(chat.id, { ...ownerFramed(chat, { text: row.text, images: [] }), intent: "queue" });
+      } else {
+        const settings = newChatSettings(row.options ? JSON.parse(row.options) : {});
+        if (settings.error) return await fail(settings.error);
+        chat = created = createChatWith(settings, titleFrom(row.text));
+        await runner.send(chat.id, { text: row.text, images: [] });
+      }
+      const note = publicNote(store.finishNote(row.id, { startedChatId: chat.id }));
+      const fresh = store.getChat(chat.id);
+      await tell(note, { chat: fresh });
+      return { note, chat: publicChat(store, fresh) };
+    } catch (error) {
+      return await fail(error instanceof BusyError ? "چت مشغول بود؛ دوباره اجرا کنید" : String(error?.message || error), 409);
+    }
+  };
+
+  app.notes = {
+    run: runNote,
+    /** Runs every open note whose time has come; returns the ids it ran (or tried to). The server ticks this. */
+    async runDue(nowMs = Date.now()) {
+      const ran = [];
+      for (const id of store.dueNotes(new Date(nowMs).toISOString())) {
+        const result = await runNote(id, { scheduled: true });
+        if (result.error && !result.note) continue; // deleted, or a click got there first
+        ran.push(id);
+      }
+      return ran;
+    },
+  };
+
+  app.get("/api/notes", (c) => c.json({ notes: store.listNotes().map(publicNote) }));
+
+  app.post("/api/notes", async (c) => {
+    const body = await readJson(c);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text) return c.json({ error: "text required" }, 400);
+    if (text.length > MAX_TEXT) return c.json({ error: "text too long" }, 400);
+    const chatId = typeof body.chatId === "string" && body.chatId ? body.chatId : null;
+    if (chatId && !store.getChat(chatId)) return c.json({ error: "chat not found" }, 404);
+    const runAt = parseRunAt(body.runAt);
+    if (runAt?.error) return c.json({ error: runAt.error }, 400);
+    let options = null;
+    if (!chatId) {
+      options = noteOptions(body.options);
+      // Checked now, so a wrong choice is refused while the owner is still looking.
+      const settings = newChatSettings(options);
+      if (settings.error) return c.json({ error: settings.error }, 400);
+    }
+    return c.json({ note: publicNote(store.createNote({ text, chatId, options, runAt: runAt ?? null })) }, 201);
+  });
+
+  app.patch("/api/notes/:id", async (c) => {
+    const row = store.getNote(c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    const body = await readJson(c);
+    const patch = {};
+    if (body.text !== undefined) {
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!text) return c.json({ error: "text required" }, 400);
+      if (text.length > MAX_TEXT) return c.json({ error: "text too long" }, 400);
+      patch.text = text;
+    }
+    const runAt = parseRunAt(body.runAt);
+    if (runAt?.error) return c.json({ error: runAt.error }, 400);
+    if (runAt !== undefined) patch.runAt = runAt;
+    const updated = store.updateNote(row.id, patch);
+    if (!updated) return c.json({ error: `already ${row.status}` }, 409);
+    return c.json({ note: publicNote(updated) });
+  });
+
+  app.delete("/api/notes/:id", (c) => {
+    if (!store.deleteNote(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/notes/:id/run", async (c) => {
+    const result = await runNote(c.req.param("id"));
+    if (result.error) return c.json({ error: result.error, ...(result.note ? { note: result.note } : {}) }, result.status);
+    return c.json(result, 201);
+  });
+
+  // «چرا؟» (why.mjs): how one reply came about, from that run's events, the review/guard decisions
+  // recorded meanwhile, and the manifest its session started with. Bounded reads only.
+  app.get("/api/chats/:id/runs/:runId/why", (c) => {
+    const chatId = c.req.param("id");
+    const run = store.getRun(c.req.param("runId"));
+    if (!run || run.chat_id !== chatId) return c.json({ error: "not found" }, 404);
+    const events = store.runEvents(run.id);
+    const lastId = events.at(-1)?.id ?? Number.MAX_SAFE_INTEGER;
+    const manifestEvent = store.latestManifestEvent(chatId, lastId);
+    const manifest = manifestEvent?.data || null;
+    const approvals = store.approvalsBetween(chatId, run.started_at, run.ended_at || new Date().toISOString());
+    return c.json({ ...explainRun(events, { approvals, manifest }), manifest });
+  });
+
+  app.get("/api/blobs/:hash", (c) => {
+    const hash = c.req.param("hash");
+    if (!/^[0-9a-f]{64}$/.test(hash)) return c.json({ error: "invalid hash" }, 400);
+    const text = store.getBlob(hash);
+    if (text == null) return c.json({ error: "not found" }, 404);
+    return c.text(text);
   });
 
   app.get("/api/chats/:id", (c) => {
@@ -176,10 +394,16 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (typeof body.title === "string" && body.title.trim()) patch.title = body.title.trim().slice(0, 120);
     if (typeof body.pinned === "boolean") patch.pinned = body.pinned;
     if (typeof body.archived === "boolean") patch.archived = body.archived;
+    if (body.groupId === null) patch.groupId = null;
+    else if (typeof body.groupId === "string") {
+      if (!store.getGroup(body.groupId)) return c.json({ error: "unknown group" }, 400);
+      patch.groupId = body.groupId;
+    }
     if (body.mode === "agent" || body.mode === "plan") patch.mode = body.mode;
-    // A chat's repo changes only until its worktree exists (the first run makes it).
+    // A chat's repo changes here only until its worktree exists (the first run makes it); after
+    // that it moves with POST /api/chats/:id/folder.
     if ("repo" in body) {
-      if (chat.worktree_path) return c.json({ error: "this chat already works in its own worktree; start a new chat for another repo" }, 409);
+      if (chat.worktree_path) return c.json({ error: "this chat already works in its own worktree; move it with /folder" }, 409);
       if (body.repo && !isValidRepo(body.repo)) return c.json({ error: "unknown repo" }, 400);
       patch.repo = body.repo || null;
     }
@@ -195,6 +419,11 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       }
     }
     if ("effort" in body) patch.effort = effortOf(body.effort);
+    // Fast mode (Claude, Opus only, billed from extra usage): the chat's switch, from its next run.
+    if (typeof body.fast === "boolean" && ownerTyped(store, chat)) {
+      setFastWanted(store, chat.id, body.fast);
+      store.bus.emit("chats", { type: "live", chatId: chat.id });
+    }
     if (typeof body.personId === "string" && body.personId.trim()) patch.personId = body.personId.trim();
     if (typeof body.agent === "string" && knownAgent(body.agent) && body.agent !== chat.agent) {
       if (runner.isActive(chat.id)) return c.json({ error: "busy" }, 409);
@@ -212,6 +441,34 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     return c.json({ chat: publicChat(store, store.updateChat(chat.id, patch)) });
   });
 
+  // Moving an open chat to another repo («تغییر پوشه» after a confirmation that says
+  // what stays behind). GET ?repo= says what a move would leave behind; POST { repo } moves. The old
+  // tree is set aside untouched, never deleted. Owner chats with a repo of their own only.
+  const folderRequest = (c, repo) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return { response: c.json({ error: "not found" }, 404) };
+    if (!folderSwitch) return { response: c.json({ error: "not available" }, 501) };
+    if (chat.side_of || chat.parent_chat_id || (chat.caller || "owner") !== "owner" || !chat.repo) {
+      return { response: c.json({ error: "this chat has no folder of its own" }, 400) };
+    }
+    const target = typeof repo === "string" ? repo.trim() : "";
+    if (!target || !isValidRepo(target)) return { response: c.json({ error: "unknown repo" }, 400) };
+    if (target === chat.repo) return { response: c.json({ error: "already on this repo" }, 400) };
+    return { chat, target };
+  };
+  app.get("/api/chats/:id/folder", async (c) => {
+    const { response, chat, target } = folderRequest(c, c.req.query("repo"));
+    return response || c.json(await folderSwitch.preview(chat, target));
+  });
+  app.post("/api/chats/:id/folder", async (c) => {
+    const { response, chat, target } = folderRequest(c, (await readJson(c)).repo);
+    if (response) return response;
+    const outcome = await folderSwitch.apply(chat, target);
+    if (outcome.error === "busy") return c.json({ error: "busy" }, 409);
+    if (outcome.error) return c.json({ error: outcome.error }, 500);
+    return c.json({ chat: publicChat(store, store.getChat(chat.id)), parked: outcome.parked });
+  });
+
   app.post("/api/chats/:id/messages", async (c) => {
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
@@ -219,22 +476,52 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const input = parseMessage(body);
     if (input.error) return c.json({ error: input.error }, 400);
     const intent = ["send", "queue", "steer"].includes(body.intent) ? body.intent : "send";
+    // The page's id for this message: a resend (its answer was lost to a restart or a 502) is
+    // answered without storing the message again; a copy still in flight shares its answer.
+    const clientId = typeof body.clientId === "string" && CLIENT_ID.test(body.clientId) ? body.clientId : null;
+    const key = clientId && `${chat.id}:${clientId}`;
+    if (clientId && store.userEventIdByClientId?.(chat.id, clientId)) return c.json({ delivered: "duplicate" });
+    if (key && sendingByClientId.has(key)) {
+      const first = await sendingByClientId.get(key).catch(() => null);
+      if (!first) return c.json({ error: "retry" }, 503);
+      return first.status < 300 ? c.json({ delivered: "duplicate" }) : c.json(first.body, first.status);
+    }
+    store.keepJobChat?.(chat.id);
+    // The owner moved on: the chat no longer continues by itself after the plan limit resets.
+    runner.cancelLimitResume?.(chat.id);
+    // «/compact» on the OpenAI-compatible engine (Claude Code has its own): the next run starts a
+    // fresh session seeded with the conversation's text only — tool calls and results drop out.
+    if (/^\s*\/compact\s*$/.test(input.text || "") && !input.images?.length && runner.engineOf?.(chat) === "openai") {
+      if (runner.isActive(chat.id)) return c.json({ error: "busy" }, 409);
+      store.setAgentId(chat.id, null);
+      addTurn(store, chat.id, input.text.trim(), "گفتگو فشرده شد: نوبت بعد با متن گفتگو (بدون ابزارها و نتیجه‌هایشان) از نو شروع می‌شود.");
+      return c.json({ delivered: "compacted" }, 202);
+    }
     // The run is parked on a question to the owner: a typed message answers it instead of waiting
     // in the queue for the answer the owner believes they just gave. Not a "/" command.
     if (asks?.isWaiting(chat.id) && !input.images?.length && !/^\s*\/\S/.test(input.text || "") && asks.answer(chat.id, { answer: input.text })) {
-      store.appendEvent(chat.id, null, "user", { text: input.text, images: 0, intent: "steer" });
+      // With the run's id: the thread shows it under the question, not under the final answer.
+      store.appendEvent(chat.id, runner.runIdOf?.(chat.id) ?? null, "user", { text: input.text, images: 0, intent: "steer", ...(clientId ? { clientId } : {}) });
       return c.json({ delivered: "answer" }, 202);
     }
+    // The owner's own message starting a fresh run moves this chat on from a colleague's text
+    // (related.mjs chat_send last hop); a queued/steered one or a "/" command leaves the mark.
+    if (!runner.isActive(chat.id) && !/^\s*\/\S/.test(input.text || "")) store.deleteKv?.(thirdPartyKey(chat.id));
     try {
-      // The note says "this goes to the colleague on Telegram" — only true when the chat is linked.
-      // An unlinked team chat (a simulation) takes the text as-is.
-      const framed = chat.caller === COVERAGE_CALLER && input.text && store.linksForChat(chat.id).length
-        ? { ...input, text: coverageOwnerNote(store.getPerson?.(chat.person_id)?.display_name, input.text) }
-        : input;
-      return c.json(await runner.send(chat.id, { ...framed, intent }), 202);
-    } catch (error) {
-      if (error instanceof BusyError) return c.json({ error: "busy" }, 409);
-      throw error;
+      const framed = ownerFramed(chat, input);
+      const sending = (async () => {
+        try {
+          return { status: 202, body: await runner.send(chat.id, { ...framed, intent, clientId }) };
+        } catch (error) {
+          if (error instanceof BusyError) return { status: 409, body: { error: "busy" } };
+          throw error;
+        }
+      })();
+      if (key) sendingByClientId.set(key, sending);
+      const answer = await sending;
+      return c.json(answer.body, answer.status);
+    } finally {
+      if (key) sendingByClientId.delete(key);
     }
   });
 
@@ -287,6 +574,54 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (parent.effort) store.updateChat(chat.id, { effort: parent.effort });
     const sent = await runner.send(chat.id, input);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
+  });
+
+  // Chats an agent suggested with chat_suggest. Nothing runs until the owner starts one.
+  app.get("/api/suggestions", (c) => {
+    const status = c.req.query("status") || null;
+    if (status && !["open", "started", "dismissed"].includes(status)) return c.json({ error: "invalid status" }, 400);
+    return c.json({ suggestions: store.listSuggestions({ status }).map(publicSuggestion) });
+  });
+
+  // Starts the suggested chat: its prompt as the first message, on the suggestion's repo and model.
+  // The owner may change the model on the card and add a note before or after the prompt; the
+  // client sends back the hash of the prompt it showed, so only that prompt can run.
+  app.post("/api/suggestions/:id/start", async (c) => {
+    const row = store.getSuggestion(c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    if (row.status !== "open") return c.json({ error: `already ${row.status}` }, 409);
+    const body = await readJson(c);
+    const seen = typeof body.promptSha === "string" ? body.promptSha : "";
+    if (!seen) return c.json({ error: "promptSha is required" }, 400);
+    if (seen !== promptSha(row.prompt)) return c.json({ error: "the prompt changed since it was shown; reload and read it again" }, 409);
+    if (row.repo && !isValidRepo(row.repo)) return c.json({ error: "invalid repo" }, 400);
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    if (note.length > SUGGEST_NOTE_MAX) return c.json({ error: `note is longer than ${SUGGEST_NOTE_MAX} characters` }, 400);
+    // "" = the owner picked «خودکار» on the card; absent = the suggested model.
+    const model = typeof body.model === "string" ? body.model.slice(0, 200) : row.model || "";
+    const profile = store.getAgentProfile?.(DEFAULT_AGENT);
+    const chat = store.createChat({
+      title: row.title,
+      model: model || profile?.model || null,
+      agent: DEFAULT_AGENT,
+      provider: normalizeProvider(splitModel(model)?.provider || profile?.provider),
+    });
+    if (row.repo) store.updateChat(chat.id, { repo: row.repo });
+    // Claimed before the run starts: a double click starts one chat, not two.
+    if (!settleSuggestion(store, row.id, "started", chat.id)) {
+      store.deleteChat(chat.id);
+      return c.json({ error: "already started" }, 409);
+    }
+    const sent = await runner.send(chat.id, { text: withOwnerNote(row.prompt, note, body.notePosition), images: [] });
+    return c.json({ chat: publicChat(store, store.getChat(chat.id)), suggestion: publicSuggestion(store.getSuggestion(row.id)), ...sent }, 201);
+  });
+
+  app.post("/api/suggestions/:id/dismiss", (c) => {
+    const row = store.getSuggestion(c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    if (row.status === "started") return c.json({ error: "already started" }, 409);
+    if (row.status === "open") settleSuggestion(store, row.id, "dismissed");
+    return c.json({ suggestion: publicSuggestion(store.getSuggestion(row.id)) });
   });
 
   // Rewind: truncate the chat back to a user message (eventId), then optionally re-ask with edited
@@ -343,6 +678,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const selected = Array.isArray(body.selected) ? body.selected.map(String).slice(0, 6) : [];
     const answer = [selected.join("، "), typeof body.text === "string" ? body.text.trim() : ""].filter(Boolean).join(" — ").slice(0, 4000);
     if (!answer) return c.json({ error: "empty answer" }, 400);
+    store.keepJobChat?.(chat.id);
     if (asks?.answer(chat.id, { answer, selected })) return c.json({ delivered: "tool" });
     if (asks && runner.isActive(chat.id)) {
       // The card is visible but the agent has not started waiting yet: hold the answer for it instead
@@ -400,6 +736,77 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
     return c.json({ charts: store.listCharts(chat.id) });
+  });
+
+  // «لغو» on the auto-continue row: only the wait for the limit ends, nothing else stops.
+  app.delete("/api/chats/:id/limit-resume", (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    runner.cancelLimitResume?.(chat.id);
+    return c.json({ ok: true });
+  });
+
+  // The composer's «/» list: Griffin's own commands, and on Claude its session's commands and skills.
+  // Also the engine of the chat's next run (routing is too costly to run for every chat in the list).
+  app.get("/api/commands", (c) => {
+    const chat = store.getChat(c.req.query("chat") || "");
+    const engine = chat ? runner.engineOf?.(chat) : null;
+    const local = [
+      { name: "clear", description: "گفتگوی تازه", argumentHint: "", local: true },
+      ...(engine === "openai" ? [{ name: "compact", description: "فشرده کردن گفتگو: نوبت بعد فقط با متن گفتگو شروع می‌شود", argumentHint: "", local: true }] : []),
+    ];
+    const own = engine === "claude" ? runner.commandsFor?.(chat) || [] : [];
+    return c.json({ engine, commands: [...own, ...local.filter((l) => !own.some((o) => o.name === l.name))] });
+  });
+
+  // «ادامه در گفتگوی تازه از اینجا»: a new chat holding this chat's conversation up to the end of one
+  // of its runs, in the same working folder. The turns are copied in (shown, and the seed of an
+  // OpenAI-engine session); a Claude run's session is forked too (SDK forkSession) so Claude keeps
+  // its full context.
+  app.post("/api/chats/:id/fork", async (c) => {
+    const parent = store.getChat(c.req.param("id"));
+    if (!parent) return c.json({ error: "not found" }, 404);
+    if (!ownerTyped(store, parent)) return c.json({ error: "owner's main chats only" }, 403);
+    const body = await readJson(c);
+    const runId = typeof body.runId === "string" ? body.runId : "";
+    let endId = 0;
+    let finished = false;
+    let mark = null;
+    for (const event of store.allEvents(parent.id)) {
+      if (event.runId !== runId) continue;
+      endId = event.id;
+      if (event.type === "run.finished") finished = true;
+      if (event.type === "checkpoint") mark = event.data;
+    }
+    if (!endId) return c.json({ error: "unknown reply" }, 404);
+    if (!finished) return c.json({ error: "busy" }, 409);
+    const chat = store.createChat({
+      title: `انشعاب: ${parent.title || ""}`.slice(0, 120),
+      model: parent.model || null,
+      mode: "agent",
+      agent: parent.agent || DEFAULT_AGENT,
+      provider: normalizeProvider(parent.provider),
+    });
+    // Same folder (index.mjs agentOptions): Claude Code keeps the forked session by working folder.
+    store.setKv(`fork-of:${chat.id}`, parent.id);
+    store.updateChat(chat.id, {
+      ...(parent.effort ? { effort: parent.effort } : {}),
+      ...(parent.repo ? { repo: parent.repo, worktreePath: parent.worktree_path || null } : {}),
+    });
+    for (const turn of store.priorTurns(parent.id, { throughId: endId })) {
+      if (turn.role === "user") store.appendEvent(chat.id, null, "user", { text: turn.content, images: 0 });
+      else addTurn(store, chat.id, null, turn.content);
+    }
+    if (mark?.lastMessageId) {
+      try {
+        const sessionId = await runner.forkSession?.(store.getChat(chat.id), { sessionId: mark.sessionId || parent.agent_id, upToMessageId: mark.lastMessageId });
+        if (sessionId) store.setAgentId(chat.id, sessionId);
+      } catch (error) {
+        // The copied turns still seed a fresh session.
+        console.error(`[fork] ${parent.id} → ${chat.id}: ${error?.message || error}`);
+      }
+    }
+    return c.json({ chat: publicChat(store, store.getChat(chat.id)) }, 201);
   });
 
   app.post("/api/chats/:id/cancel", async (c) => {
@@ -524,6 +931,15 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
   });
 
   app.get("/api/usage", async (c) => c.json(await usage()));
+  // Token consumption over time, by model and by chat (Settings → «مصرف توکن»); spans every chat, so
+  // owner-only like the rest of /api/*.
+  app.get("/api/usage/tokens", (c) => {
+    const asked = Number(c.req.query("days"));
+    const days = Number.isInteger(asked) && asked >= 1 ? Math.min(asked, TOKEN_USAGE_MAX_DAYS) : 30;
+    const now = new Date();
+    const timeZone = ownerTimeZone();
+    return c.json({ range: days, timeZone, ...aggregateTokenUsage(store.usageRows(tokenUsageSince({ days, now })), { days, now, timeZone }) });
+  });
 
   app.onError((error, c) => {
     console.error("[http]", error);
@@ -555,6 +971,9 @@ async function readJson(c) {
     return {};
   }
 }
+
+// A page's message id: a short plain token (crypto.randomUUID or its fallback).
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 function parseMessage(body) {
   const text = typeof body.text === "string" ? body.text.trim() : "";
@@ -604,6 +1023,7 @@ function publicChat(store, chat, children = null) {
     ownerKey: chat.owner_key || null,
     ownerLabel: chat.owner_label || null,
     parentChatId: chat.parent_chat_id || null,
+    personId: chat.person_id || null,
     sideOf: chat.side_of || null,
     // The repo it works on, its own branch, and the worktree once the first run made it.
     repo: chat.repo || null,
@@ -611,8 +1031,15 @@ function publicChat(store, chat, children = null) {
     // Kept messages waiting for «ارسال دوباره» (oldest first); the thread's retry notice follows it.
     kept: keptIds(store, chat.id),
     pinned: Boolean(chat.pinned),
+    groupId: chat.group_id || null,
     archived: Boolean(chat.archived),
     runStatus: chat.run_status || null,
+    // Claude's suggested next message; when it continues by itself after the plan limit resets (ms);
+    // the fast-mode switch and what Claude Code last said of it.
+    suggestion: chat.archived ? null : live?.suggestion(chat.id) ?? null,
+    limitResumeAt: live?.limitResumeAt(chat.id) ?? null,
+    fast: fastWanted(store, chat.id),
+    fastState: live?.fastState(chat.id) ?? null,
     createdAt: chat.created_at,
     updatedAt: chat.updated_at,
     ...(children?.length
@@ -629,6 +1056,16 @@ function publicChat(store, chat, children = null) {
         }
       : {}),
   };
+}
+
+// A finished turn added outside a run: the owner's text (when given) and a short answer.
+function addTurn(store, chatId, userText, answer) {
+  if (userText) store.appendEvent(chatId, null, "user", { text: userText, images: 0 });
+  const runId = store.startRun(chatId);
+  store.appendEvent(chatId, runId, "run.started", {});
+  store.appendEvent(chatId, runId, "text", { text: answer });
+  store.appendEvent(chatId, runId, "run.finished", { status: "finished" });
+  store.finishRun(chatId, runId, "finished");
 }
 
 function sendMedia(c, media) {

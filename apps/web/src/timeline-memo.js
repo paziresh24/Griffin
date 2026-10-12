@@ -25,10 +25,16 @@ export function createTimelineMemo(keep = KEEP) {
 //   loading      the history is on its way and there is nothing to show yet
 //   refreshing   a remembered copy is on screen while the server is asked for newer events
 //   connecting   the history is shown and the live stream is opening
-//   live | reconnecting | closed
-// The text is the Persian i18n key; the header shows it through t().
+//   live | reconnecting | restored (stream-keeper.js)
+// A lost stream is never a bare "disconnected": it says what happens and that nothing typed is
+// lost, with a button that tries at once. The texts are Persian i18n keys; the header shows them
+// through t().
+export const RECONNECTING_TEXT = "اتصال لحظه‌ای قطع شد؛ دوباره وصل می‌شوم — پیام‌هایت محفوظ است"; // i18n-ignore
+export const RETRY_NOW_LABEL = "تلاش دوباره"; // i18n-ignore
+
 export function connectionNotice(connection) {
   if (connection === "loading") return { text: "بارگذاری…", tone: "muted" }; // i18n-ignore
-  if (connection === "reconnecting" || connection === "closed") return { text: "قطع", tone: "warn" }; // i18n-ignore
+  if (connection === "reconnecting") return { text: RECONNECTING_TEXT, tone: "warn", action: RETRY_NOW_LABEL };
+  if (connection === "restored") return { text: "وصل شد", tone: "ok" }; // i18n-ignore
   return null;
 }

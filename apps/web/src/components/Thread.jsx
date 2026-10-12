@@ -17,16 +17,27 @@ import { pickSuggestions } from "../suggestions.js";
 import { locale, num, t, isRtl } from "../i18n.js";
 import { toast } from "sonner";
 import { api, reloadTimeline } from "../api.js";
-import { RESTORE_EVENT, useRuntimeChat } from "../runtime.jsx";
-import { quotePreview, quoteStore } from "../quotes.js";
+import { RESTORE_EVENT, editSend, retrySend, useRuntimeChat } from "../runtime.jsx";
+import { FAILED_LABEL, SENDING_LABEL, SENT_LABEL } from "../outbox.js";
+import { quoteStore } from "../quotes.js";
 import { SelectionActions } from "./SelectionActions.jsx";
+import { QuoteChip } from "./QuoteChip.jsx";
+import { ComposerAssist, ForkButton } from "./ComposerAssist.jsx";
 import { submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
+import { holdReload } from "../new-version.js";
+import { LaterButton } from "./Notes.jsx";
+import { WhyButton, WhyPanel } from "./Why.jsx";
+import { answerItems, chapterAnchor } from "../chat-tools.js";
+import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./ChatTools.jsx";
 
 const ChatContext = createContext({ chatId: null, readOnly: false });
 
 const plugins = { code };
+// Code blocks stay compact: copy only. Tables keep download (CSV) and fullscreen — a wide table is
+// unreadable inside the chat column.
+const controls = { code: { copy: true, download: false }, table: { copy: true, download: true, fullscreen: true } };
 
 export function Thread({
   header,
@@ -99,6 +110,7 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
           <ThreadPrimitive.ScrollToBottom className="absolute -top-10 left-1/2 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border bg-card shadow disabled:invisible">
             <ArrowDown className="size-4" />
           </ThreadPrimitive.ScrollToBottom>
+          <ThreadTools />
           {runInfo}
           <Composer {...composerProps} variant="dock" />
         </ThreadPrimitive.ViewportFooter>
@@ -177,6 +189,14 @@ function chatDir(value) {
   return textDir(value) === "ltr" ? "ltr" : "rtl";
 }
 
+// A message sent while a run was busy: waiting, then it reached the agent (started) or a Stop or
+// a delete cleared it before it ran (dropped).
+const QUEUE_LABELS = {
+  waiting: t("در صف؛ بعد از کار فعلی اجرا می‌شود"),
+  started: t("از صف اجرا شد"),
+  dropped: t("از صف کنار رفت؛ اجرا نشد"),
+};
+
 function UserMessage() {
   const { chatId, readOnly } = useContext(ChatContext);
   const custom = useAuiState((s) => s.message.metadata?.custom);
@@ -187,7 +207,7 @@ function UserMessage() {
     return (Array.isArray(parts) ? parts : []).map((p) => (typeof p === "string" ? p : p?.text || "")).join("\n");
   });
   const dir = chatDir(text);
-  const label = custom?.intent === "queue" ? t("در صف؛ بعد از کار فعلی اجرا می‌شود") : custom?.intent === "steer" ? t("وسط کار به ایجنت رسید") : null;
+  const label = custom?.intent === "queue" ? QUEUE_LABELS[custom.queueState] || QUEUE_LABELS.waiting : custom?.intent === "steer" ? t("وسط کار به ایجنت رسید") : null;
   // message.id is `u<eventId>`; rewind truncates the chat back to this event.
   const eventId = typeof messageId === "string" && messageId.startsWith("u") ? Number(messageId.slice(1)) : null;
   const canEdit = chatId && eventId && !readOnly;
@@ -245,13 +265,37 @@ function UserMessage() {
       </div>
       {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
+      {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} /> : null}
     </MessagePrimitive.Root>
   );
 }
 
+// A message still on its way (outbox.js): its state, and on a failure «ارسال دوباره» / «ویرایش».
+function SendState({ state, clientId }) {
+  if (state === "failed") {
+    return (
+      <span className="mt-1 flex items-center gap-2 text-xs text-bad">
+        {FAILED_LABEL}
+        <button type="button" onClick={() => retrySend(clientId)} className="press rounded-md px-1.5 py-0.5 underline hover:bg-bad/10">{t("ارسال دوباره")}</button>
+        <button type="button" onClick={() => editSend(clientId)} className="press rounded-md px-1.5 py-0.5 text-muted-foreground underline hover:bg-muted">{t("ویرایش")}</button>
+      </span>
+    );
+  }
+  return (
+    <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+      {state === "sending" ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} {state === "sending" ? SENDING_LABEL : SENT_LABEL}
+    </span>
+  );
+}
+
 function AssistantMessage() {
+  const { readOnly } = useContext(ChatContext);
   const run = useAuiState((s) => s.message.metadata?.custom?.run);
-  const { work, answer } = useMemo(() => splitRun(run?.parts || []), [run]);
+  const { work, answer } = useMemo(() => {
+    const split = splitRun(run?.parts || []);
+    // Chapter dividers sit among the answer parts in the run's order; suggestion cards close it.
+    return { work: split.work, answer: answerItems(run?.parts, split.answer, split.other) };
+  }, [run]);
   if (!run) return null;
   const running = run.status === "running";
   const textStatus = (part) => ({ type: running && part === run.parts.at(-1) ? "running" : "complete" });
@@ -266,13 +310,29 @@ function AssistantMessage() {
       {answer.map((part, i) =>
         part.type === "tool" ? (
           <ToolCard key={part.callId || i} {...toolProps(part)} />
+        ) : part.type === "suggestion" ? (
+          <SuggestionCard key={`s${part.id || i}`} part={part} readOnly={readOnly} />
+        ) : part.type === "chapter" ? (
+          <ChapterDivider key={`c${i}`} id={chapterAnchor(run.id, run.parts.indexOf(part))} part={part} />
         ) : (
           <MarkdownText key={`t${i}`} text={part.text} status={textStatus(part)} />
         ),
       )}
-      <RunFooter run={run} />
+      {/* Continued under the owner's message (a later piece of the same run): one footer, at its end. */}
+      {run.continued ? null : <RunFooter run={run} />}
       <KeptActions />
     </MessagePrimitive.Root>
+  );
+}
+
+// Over the composer: the chapter list and this chat's open suggestions (each hidden while empty).
+function ThreadTools() {
+  const { chatId, chapters } = useRuntimeChat();
+  return (
+    <div className="absolute -top-10 start-3 flex items-center gap-2">
+      <ChapterToc chapters={chapters} />
+      <ChatSuggestions chatId={chatId} />
+    </div>
   );
 }
 
@@ -306,7 +366,7 @@ function MarkdownText({ text, status, compact = false }) {
   const dir = chatDir(text);
   return (
     <div className={`sd-block ${compact ? "leading-7" : "leading-8"} [&_pre]:my-2`} dir={dir}>
-      <Streamdown dir={dir} plugins={plugins} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
+      <Streamdown dir={dir} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
         {text}
       </Streamdown>
     </div>
@@ -343,14 +403,19 @@ function compactTokens(n) {
 }
 
 function RunFooter({ run }) {
+  const { chatId } = useContext(ChatContext);
+  const [why, setWhy] = useState(false);
   if (!run) return null;
   const copyable = run.status !== "running";
+  // «چرا؟» once the reply is done; a shared page has no chat id (and no session to ask with).
+  const explainable = Boolean(chatId && run.runId && run.status !== "running");
   const seconds = run.endedAt && run.startedAt ? Math.max(1, Math.round((new Date(run.endedAt) - new Date(run.startedAt)) / 1000)) : null;
   const model = run.model && run.status !== "running" ? run.model : null;
   const done = run.status !== "running";
   const answeredAt = done && run.endedAt ? formatAnsweredAt(run.endedAt) : null;
 
   return (
+    <>
     <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
       {run.status === "running" ? <RunPhase phase={run.phase} /> : null}
       {run.status === "error" ? (
@@ -404,9 +469,13 @@ function RunFooter({ run }) {
             <MessagePrimitive.If copied><Check className="size-3.5 text-ok" /></MessagePrimitive.If>
             <MessagePrimitive.If copied={false}><Copy className="size-3.5" /></MessagePrimitive.If>
           </ActionBarPrimitive.Copy>
+          {explainable ? <WhyButton open={why} onToggle={() => setWhy(!why)} /> : null}
+          <ForkButton run={run} />
         </ActionBarPrimitive.Root>
       ) : null}
     </div>
+    {explainable && why ? <WhyPanel chatId={chatId} runId={run.runId} /> : null}
+    </>
   );
 }
 
@@ -441,6 +510,9 @@ function browserStorage() {
 let sttConfigured = null; // null = not asked yet
 function DictateButton({ value, setText, focus, size }) {
   const [state, setState] = useState("idle"); // idle | recording | working
+  // A recording or its transcription in progress holds a new version's reload off.
+  const busy = state !== "idle";
+  useEffect(() => (busy ? holdReload() : undefined), [busy]);
   const [elapsed, setElapsed] = useState(0);
   const latest = useRef(value);
   latest.current = value;
@@ -565,7 +637,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   const { value: composerText, setText } = unstable_useComposerInput();
   // What was being typed in this chat comes back after a reload or a look at another chat
   // (draft.js). The composer is mounted once per chat, so this runs once per chat.
-  const { boxId: chatId, sendQuotes } = useRuntimeChat();
+  const { boxId: chatId, sendQuotes, settings } = useRuntimeChat();
   const boxText = useRef(composerText);
   boxText.current = composerText;
   // A message that did not reach the server returns to this box, above what was typed since.
@@ -583,6 +655,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   // Quotes added with «به گفتگو» wait folded above the input and join the message when it is sent.
   const quotes = useSyncExternalStore(quoteStore.subscribe, () => quoteStore.get(chatId));
   const quotesOnly = quotes.length > 0 && !composerText.trim();
+  // Attached pictures live only in this page: a new version waits for them to be sent or removed.
+  const hasAttached = useAuiState((s) => (s.composer.attachments?.length || 0) > 0);
+  useEffect(() => (hasAttached ? holdReload() : undefined), [hasAttached]);
   const draftSkip = useRef(true);
   useEffect(() => {
     const draft = loadDraft(browserStorage(), chatId);
@@ -605,27 +680,32 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       {quotes.length ? (
         <div className="flex flex-col gap-1 px-2 pt-2">
           {quotes.map((q) => (
-            <div key={q.id} className="flex items-start gap-1.5 rounded-lg bg-muted/60 px-2 py-1 text-xs">
-              <Quote className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1" dir="auto" title={q.text}>
-                <span className="line-clamp-1 text-muted-foreground">{quotePreview(q.text)}</span>
-                {q.note ? <span className="line-clamp-1">{q.note}</span> : null}
-              </span>
-              <button type="button" onClick={() => quoteStore.remove(chatId, q.id)} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted" aria-label={t("برداشتن نقل‌قول")}>
-                <X className="size-3" />
-              </button>
-            </div>
+            <QuoteChip key={q.id} chatId={chatId} quote={q} onDone={() => inputRef.current?.focus()} />
           ))}
         </div>
       ) : null}
+      <ComposerAssist inputRef={inputRef} />
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
         <ComposerPrimitive.AddAttachment className="mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")}>
           <ImagePlus className={hero ? "size-4" : "size-5"} />
         </ComposerPrimitive.AddAttachment>
         <DictateButton value={composerText} setText={setText} focus={() => inputRef.current?.focus()} size={hero ? "size-4" : "size-5"} />
+        <LaterButton
+          text={composerText}
+          chatId={chatId}
+          options={{ repo: settings?.repo, model: settings?.model, agent: settings?.agent, mode: settings?.mode, effort: settings?.effort }}
+          disabled={quotes.length > 0}
+          disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ نقل‌قول را بردارید")}
+          size={hero ? "size-4" : "size-5"}
+          onSaved={() => {
+            setText("");
+            saveDraft(browserStorage(), chatId, "");
+          }}
+        />
         <ComposerPrimitive.Input
           ref={inputRef}
+          data-reload-safe=""
           rows={1}
           autoFocus
           dir={isRtl ? "rtl" : "auto"}
@@ -654,7 +734,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               <ArrowUp className="size-5" />
             </button>
           ) : (
-            <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-30" title={t("ارسال")}>
+            // Send is the one filled (accent) button while it can send; empty, it is plain like the
+            // microphone.
+            <ComposerPrimitive.Send className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={t("ارسال")}>
               <ArrowUp className="size-5" />
             </ComposerPrimitive.Send>
           )}

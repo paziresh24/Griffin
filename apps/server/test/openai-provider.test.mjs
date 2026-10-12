@@ -278,12 +278,16 @@ describe("openai-compatible provider", () => {
       return { raw: true };
     });
     const agent = providerFor(baseUrl).create({ cwd, customTools: slow });
-    const run = await agent.send("start", { onDelta: () => {} });
+    const updates = [];
+    const run = await agent.send("start", { onDelta: ({ update }) => updates.push(update.type) });
     while (!release) await new Promise((r) => setTimeout(r, 5));
     assert.equal(await run.steer("also check the replica"), "complete_delivered");
     release();
     const result = await run.wait();
     assert.equal(result.status, "finished");
+    // The thread places the message where the engine read it: after the tool round, before the reply.
+    const read = updates.indexOf("user-message-appended");
+    assert.ok(read > updates.lastIndexOf("tool-call-completed") && read < updates.indexOf("text-delta"));
     const roles = mock.requests.at(-1).body.messages.map((m) => m.role);
     assert.deepEqual(roles, ["system", "user", "assistant", "tool", "user"]);
     assert.match(JSON.stringify(mock.requests.at(-1).body.messages.at(-1).content), /also check the replica/);

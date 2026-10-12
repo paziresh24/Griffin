@@ -337,13 +337,14 @@ export function createTools({
 
     kube_copy_secret: {
       description:
-        "Copy a Secret between clusters (or to another name) without exposing its values — e.g. a DR replica that needs the primary cluster's <db>-ca, <db>-replication and <db>-app. Same namespace on both sides; refuses to overwrite an existing target unless replace=true. Returns only key names.",
+        "Copy a Secret between clusters/namespaces/names without exposing its values — e.g. a DR replica that needs the primary cluster's <db>-ca, or a shared gateway wildcard-tls → an owner namespace. Default target namespace is the source's; set toNamespace to copy across namespaces. Refuses to overwrite an existing target unless replace=true (replace deletes and recreates, so a different Secret type is fine). Returns only key names.",
       inputSchema: {
         type: "object",
         properties: {
           fromCluster: cluster,
           toCluster: cluster,
-          namespace: k8sName("namespace (same on both clusters)"),
+          namespace: k8sName("source namespace"),
+          toNamespace: k8sName("target namespace (default: same as source)"),
           name: k8sName("source secret name"),
           targetName: k8sName("target secret name (default: same)"),
           replace: { type: "boolean", description: "overwrite an existing target secret" },
@@ -362,9 +363,10 @@ export function createTools({
         const from = requireCluster({ cluster: args.fromCluster });
         const to = requireCluster({ cluster: args.toCluster });
         const namespace = requiredName(args.namespace, "namespace");
+        const targetNs = args.toNamespace ? requiredName(args.toNamespace, "target namespace") : namespace;
         const name = requiredName(args.name, "secret name");
         const targetName = args.targetName ? requiredName(args.targetName, "target secret name") : name;
-        if (from === to && targetName === name) throw new ToolInputError("source and target are the same secret");
+        if (from === to && targetNs === namespace && targetName === name) throw new ToolInputError("source and target are the same secret");
         const source = (await kube.publicRequest(from, `/api/v1/namespaces/${namespace}/secrets/${name}`)).body;
         if (!source || source.notFound || !source.data) throw new ToolInputError(`secret ${namespace}/${name} not found on ${from}`);
         let data = source.data;
@@ -383,13 +385,13 @@ export function createTools({
           );
           if (!rewritten.length) throw new ToolInputError(`host "${from}" does not appear in ${namespace}/${name}`);
         }
-        const existing = await kube.publicRequest(to, `/api/v1/namespaces/${namespace}/secrets/${targetName}`);
+        const existing = await kube.publicRequest(to, `/api/v1/namespaces/${targetNs}/secrets/${targetName}`);
         const manifest = {
           apiVersion: "v1",
           kind: "Secret",
           metadata: {
             name: targetName,
-            namespace,
+            namespace: targetNs,
             labels: { "app.kubernetes.io/managed-by": "griffin-copy-secret" },
             annotations: { "griffin/copied-from": `${from}/${namespace}/${name}`, "griffin/copied-at": new Date().toISOString() },
           },
@@ -399,15 +401,17 @@ export function createTools({
         if (rewritten.length) manifest.metadata.annotations["griffin/rewrite-host"] = `${args.rewriteHost.from}->${args.rewriteHost.to}`;
         let action;
         if (existing.notFound) {
-          await kube.publicWrite(to, `/api/v1/namespaces/${namespace}/secrets`, { method: "POST", body: manifest });
+          await kube.publicWrite(to, `/api/v1/namespaces/${targetNs}/secrets`, { method: "POST", body: manifest });
           action = "created";
         } else {
-          if (!args.replace) throw new ToolInputError(`secret ${namespace}/${targetName} already exists on ${to} (pass replace=true to overwrite)`);
-          manifest.metadata.resourceVersion = existing.body?.metadata?.resourceVersion;
-          await kube.publicWrite(to, `/api/v1/namespaces/${namespace}/secrets/${targetName}`, { method: "PUT", body: manifest });
+          if (!args.replace) throw new ToolInputError(`secret ${targetNs}/${targetName} already exists on ${to} (pass replace=true to overwrite)`);
+          // Delete + recreate rather than PUT: a Secret's `type` is immutable, so overwriting an
+          // empty/Opaque placeholder with a kubernetes.io/tls cert would be rejected by a PUT.
+          await kube.publicWrite(to, `/api/v1/namespaces/${targetNs}/secrets/${targetName}`, { method: "DELETE", body: { kind: "DeleteOptions", apiVersion: "v1" } });
+          await kube.publicWrite(to, `/api/v1/namespaces/${targetNs}/secrets`, { method: "POST", body: manifest });
           action = "replaced";
         }
-        return { action, from: `${from}/${namespace}/${name}`, to: `${to}/${namespace}/${targetName}`, type: manifest.type, keys: Object.keys(source.data), rewritten, source: "public-api" };
+        return { action, from: `${from}/${namespace}/${name}`, to: `${to}/${targetNs}/${targetName}`, type: manifest.type, keys: Object.keys(source.data), rewritten, source: "public-api" };
       },
     },
 

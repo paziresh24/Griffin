@@ -1,0 +1,21 @@
+{
+  "ریپوی پیشنهادشده روی سرور نیست": "The suggested repo is not on the server",
+  "متن پیشنهاد عوض شده؛ صفحه را تازه کن و دوباره بخوان": "The suggestion's text changed; reload and read it again",
+  "این پیشنهاد قبلاً شروع شده": "This suggestion was already started",
+  "چت شروع نشد: {reason}": "The chat did not start: {reason}",
+  "خطای نامعلوم": "Unknown error",
+  "+ تذکر": "+ Note",
+  "تذکری که همراه پرامپت فرستاده شود": "A note to send along with the prompt",
+  "تذکر": "Note",
+  "جای تذکر": "Note position",
+  "اول پرامپت": "Before the prompt",
+  "آخر پرامپت": "After the prompt",
+  "متن کامل": "Full text",
+  "شروع چت": "Start chat",
+  "پیشنهادها": "Suggestions",
+  "از: {title}": "From: {title}",
+  "پیشنهادهای باز این چت": "This chat's open suggestions",
+  "پیشنهادهای باز این چت ({n})": "This chat's open suggestions ({n})",
+  "فهرست فصل‌ها": "Chapters list",
+  "فصل‌ها": "Chapters"
+}

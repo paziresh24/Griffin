@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Brain, ChevronDown, Wrench } from "lucide-react";
 import { unwrapResult } from "../result.js";
-import { ToolCard } from "./Tool.jsx";
+import { ToolCard, stepTitle } from "./Tool.jsx";
 import { locale, num, t } from "../i18n.js";
 
 // Tools whose output is the answer itself; they stay visible outside the collapsed work log.
@@ -15,19 +15,26 @@ const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", 
 const isResult = (part) =>
   part.type === "tool" && RESULT_TOOLS.has(part.name) && !(part.name === "ask_owner" && part.status !== "running");
 
+// The part types this renderer can draw. Any other type (a `suggestion` card, a `chapter` divider,
+// or one added later) has no text and no tool fields: it is returned apart in `other` for the
+// thread to draw (chat-tools.js answerItems), and otherwise not shown.
+const DRAWN_PARTS = new Set(["text", "reasoning", "tool"]);
+
 export function splitRun(parts) {
+  const visible = (parts || []).filter((part) => DRAWN_PARTS.has(part?.type));
+  const other = (parts || []).filter((part) => part && !DRAWN_PARTS.has(part.type));
   let lastWork = -1;
-  parts.forEach((part, i) => {
+  visible.forEach((part, i) => {
     if (part.type === "tool" && !isResult(part)) lastWork = i;
   });
   const work = [];
   const answer = [];
-  parts.forEach((part, i) => {
+  visible.forEach((part, i) => {
     if (isResult(part)) answer.push(part);
     else if (part.type === "reasoning" || i <= lastWork) work.push(part);
     else answer.push(part);
   });
-  return { work, answer };
+  return { work, answer, other };
 }
 
 export function toolProps(part) {
@@ -69,7 +76,11 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
           {running ? <Wrench className="size-3.5 animate-pulse" /> : <Brain className="size-3.5" />}
         </span>
         <span className={running ? "shimmer" : ""}>{summary}</span>
-        {current && !expanded ? <span className="ltr max-w-48 truncate text-xs opacity-70">{current.name}</span> : null}
+        {current && !expanded ? (
+          stepTitle(current.name, current.args)
+            ? <span dir="auto" className="max-w-64 truncate text-xs opacity-70">{stepTitle(current.name, current.args)}</span>
+            : <span className="ltr max-w-48 truncate text-xs opacity-70">{current.name}</span>
+        ) : null}
         <motion.span animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }} className="flex">
           <ChevronDown className="size-3.5" />
         </motion.span>

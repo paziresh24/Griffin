@@ -65,6 +65,24 @@ export function createQuoteStore(storage) {
       set(chatId, [...get(chatId), quote].slice(-MAX_QUOTES));
       return quote;
     },
+    // The owner's edit of a waiting quote, in place. A quote cannot be emptied (× removes it), and
+    // one already sent is not brought back.
+    update(chatId, id, { text, note = "" }) {
+      const clean = String(text || "").trim();
+      const list = get(chatId);
+      const at = list.findIndex((q) => q.id === id);
+      if (!clean || at < 0) return null;
+      const quote = { ...list[at], text: clean, note: String(note || "").trim() };
+      if (quote.text !== list[at].text || quote.note !== (list[at].note || "")) set(chatId, list.map((q, i) => (i === at ? quote : q)));
+      return quote;
+    },
+    // After a send: take out the quotes it carried, but not one edited meanwhile — the message held
+    // the old version, so the edit waits for the next one.
+    removeSent(chatId, sent) {
+      const delivered = new Set(sent);
+      const next = get(chatId).filter((q) => !delivered.has(q));
+      if (next.length !== get(chatId).length) set(chatId, next);
+    },
     remove(chatId, ids) {
       const drop = new Set([].concat(ids));
       const next = get(chatId).filter((q) => !drop.has(q.id));

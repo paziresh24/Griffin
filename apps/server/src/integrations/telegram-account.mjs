@@ -172,16 +172,68 @@ export function createAccountLogin({ proxy, load = gram, now = Date.now }) {
   };
 }
 
-// Running account: Saved Messages ⇄ Platform-Ban, teammate coverage, and a client for agent tools.
-export function createAccountChannel({ integration, bridge, proxy, load = gram, log = console }) {
+// Who the assistant watches: the owner's per-person switch (person.access.watch), else everyone
+// marked «team».
+export const watching = (person) => (typeof person?.access?.watch === "boolean" ? person.access.watch : person?.category === "team");
+
+// Running account: Saved Messages ⇄ the assistant, teammate coverage, and a client for agent tools.
+export function createAccountChannel({ integration, bridge, proxy, load = gram, log = console, now = Date.now, profileReadLimitMs = 60_000 }) {
   const { session, apiId, apiHash } = JSON.parse(integration.secret);
   const status = { state: "starting", lastError: null, username: integration.settings.me?.username || null };
   let client = null;
   let meId = null;
+  // The owner's own name and small profile photo, for the foot of the sidebar (profile.mjs). Read
+  // in the background on start, again once a good read is an hour old (a failed or stuck one after
+  // a few minutes). gramjs has no download timeout, so a read is given up after profileReadLimitMs.
+  // `gen` numbers each read and `landed` is the newest one that wrote, so a read given up that lands
+  // late never overwrites a newer one.
+  const profile = { name: integration.settings.me?.name || null, photo: null, at: 0, ok: false, pending: null, gen: 0, landed: 0 };
+  function readProfile(me = null) {
+    if (profile.pending) return profile.pending;
+    const gen = ++profile.gen;
+    profile.at = now();
+    profile.ok = false;
+    let timer = null;
+    let pending = null;
+    // Cleared in the same step the read ends (or is given up), so the next ask can start a new one.
+    const done = () => {
+      clearTimeout(timer);
+      if (profile.pending === pending) profile.pending = null;
+    };
+    const limit = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        done();
+        log.error?.(`[telegram-account] profile: no answer from Telegram in ${profileReadLimitMs} ms; given up`);
+        resolve();
+      }, profileReadLimitMs);
+      timer.unref?.();
+    });
+    const read = (async () => {
+      const who = me || (await client.getMe());
+      const name = [who.firstName, who.lastName].filter(Boolean).join(" ");
+      if (name && gen > profile.landed) profile.name = name;
+      const bytes = await client.downloadProfilePhoto(who, { isBig: false });
+      if (gen > profile.landed) {
+        profile.landed = gen;
+        if (name) profile.name = name;
+        profile.photo = Buffer.isBuffer(bytes) && bytes.length ? bytes : null;
+      }
+      if (gen === profile.gen) profile.ok = true;
+      done();
+    })().catch((error) => {
+      done();
+      log.error?.(`[telegram-account] profile: ${error?.message ?? String(error)}`);
+    });
+    pending = profile.pending = Promise.race([read, limit]);
+    return pending;
+  }
   const sentByUs = new Set(); // ids of messages we sent (Saved Messages or coverage)
   const statusByChat = new Map(); // externalChat -> { id, text, at }
   const questionByChat = new Map(); // externalChat -> message id of the currently-open ask_owner question
   const pendingReplyTo = new Map(); // peer key -> Telegram message id to reply to on next text deliver
+  let routeByHand = null; // set once connected (needs the live client)
+  let drainPickups = null;
+  let pickupTimer = null;
 
   async function resolveTarget(target) {
     if (target === "me") return "me";
@@ -334,6 +386,18 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     markSent(id) {
       if (id != null) sentByUs.add(id);
     },
+    profile: () => ({ name: profile.name, photo: profile.photo }),
+    // The profile, read again first when stale. Waits (at most `ms`) only while no photo is held
+    // yet, so a slow or stuck Telegram never holds the page and a refresh serves the old photo.
+    async profileReady(ms = 3_000) {
+      if (client && status.state === "polling" && now() - profile.at > (profile.ok ? 60 : 5) * 60_000) readProfile();
+      if (profile.pending && !profile.photo) {
+        let timer = null;
+        await Promise.race([profile.pending, new Promise((resolve) => (timer = setTimeout(resolve, ms)))]);
+        clearTimeout(timer);
+      }
+      return channel.profile();
+    },
 
     async start() {
       const { TelegramClient, StringSession, NewMessage } = await load();
@@ -348,6 +412,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       meId = String(me.id);
       status.username = me.username || null;
       status.state = "polling";
+      // Not awaited: a slow or refused download must not hold the channel back.
+      readProfile(me);
 
       const recentHistory = async (key) => {
         try {
@@ -444,75 +510,148 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         threadRuns.set(key, recent);
         return true;
       };
-      const handleThreadMessage = async (key, person, text, message, from, images = [], { called = false } = {}) => {
+      // Open threads with a peer (several at once). A bridge without thread_links (older tests)
+      // only knows "covered or not": one thread with no id, fed through the peer's linked chat.
+      const openThreads = (key) =>
+        bridge.openThreads ? bridge.openThreads(integration.id, key) : bridge.isCovered(integration.id, key) ? [{ id: null, title: "" }] : [];
+      const tag = (person, ids, data) => {
+        const list = (ids || []).filter((x) => x != null);
+        if (person?.id && list.length) bridge.tagPersonMessages?.(person.id, list, data);
+      };
+      const feedThread = async (key, person, name, text, message, from, images, threadId, ids) => {
+        if (!threadBrake(key)) {
+          log.info?.(`[telegram-account] thread brake peer=${key}`);
+          return;
+        }
+        if (from === "teammate" && message.id) pendingReplyTo.set(String(key), Number(message.id));
+        if (from === "teammate") pickUp(key, message.id);
+        await bridge.receive(integration.id, key, {
+          text: from === "owner" ? threadOwnerPrompt({ name, text }) : threadInboundPrompt({ name, text }),
+          images,
+          caller: COVERAGE_CALLER,
+          ...(threadId ? { chatId: threadId } : {}),
+        });
+        if (threadId) tag(person, ids || [message.id], { threadId });
+      };
+      const newThread = async (key, person, name, text, message, from, images, { topic = "", reason = "", fresh = true, ids = null } = {}) => {
+        const history = await recentHistory(key);
+        const started = await bridge.startCoverage(integration.id, key, {
+          name,
+          username: person?.username || null,
+          personId: person?.id || null,
+          fresh,
+          title: `🧵 ${name}: ${topic || String(text).replace(/\s+/g, " ").slice(0, 40)}`,
+        });
+        threadRuns.set(key, [Date.now()]);
+        if (message.id && from === "teammate") pendingReplyTo.set(String(key), Number(message.id));
+        pickUp(key, message.id);
+        await sendPlain("me", `${MARK}رشته با «${name}» باز شد${topic ? `: ${topic}` : ""} — ${reason}\nبستن: در همان چت /agent off`);
+        await bridge.receive(integration.id, key, {
+          text: threadStartPrompt({ name, history, message: text, from, topic }),
+          images,
+          caller: COVERAGE_CALLER,
+          ...(started?.chatId ? { chatId: started.chatId } : {}),
+        });
+        if (started?.chatId) tag(person, ids || [message.id], { threadId: started.chatId });
+        return started;
+      };
+
+      // Timed pickup (person.access.pickupEvery, minutes): the person's messages wait and are routed
+      // together once the window ends, instead of a run per message (owner 2026-10-12). Kept in kv so
+      // a restart does not lose them.
+      // ponytail: a batch carries text only; photos sent during the window are not attached.
+      const PICKUP = `pickup:${integration.id}`;
+      const queuePickup = (key, person, text, message, every) => {
+        const all = bridge.getKv?.(PICKUP) || {};
+        const batch = all[key] || { due: Date.now() + every * 60_000, items: [] };
+        batch.items.push({ id: message.id ?? null, text, at: Date.now() });
+        all[key] = batch;
+        bridge.setKv?.(PICKUP, all);
+        tag(person, [message.id], { queued: batch.due });
+        log.info?.(`[telegram-account] pickup queued peer=${key} items=${batch.items.length} due=${new Date(batch.due).toISOString()}`);
+      };
+      drainPickups = async () => {
+        const all = bridge.getKv?.(PICKUP) || {};
+        const due = Object.entries(all).filter(([, b]) => b.due <= Date.now());
+        if (!due.length) return;
+        for (const [key] of due) delete all[key];
+        bridge.setKv?.(PICKUP, all);
+        for (const [key, batch] of due) {
+          const person = bridge.personByExternal?.(key);
+          if (!person || !watching(person)) continue;
+          const ids = batch.items.map((i) => i.id).filter((x) => x != null);
+          tag(person, ids, { queued: null });
+          const text = batch.items.map((i) => i.text).join("\n");
+          await handleThreadMessage(key, person, text, { id: batch.items.at(-1)?.id ?? null }, "teammate", [], { scheduled: true, ids });
+        }
+      };
+
+      const handleThreadMessage = async (key, person, text, message, from, images = [], { called = false, scheduled = false, ids = null } = {}) => {
         const name = person?.display_name || (await peerLabel(client, key));
-        if (bridge.isCovered(integration.id, key)) {
-          if (from === "teammate" && ownerHolds(key) && !wantsGriffin(text)) {
-            log.info?.(`[telegram-account] thread hold peer=${key} — the owner took this conversation`);
-            return;
-          }
-          // Locked: every message in the chat, either side, feeds the open thread.
-          if (!threadBrake(key)) {
-            log.info?.(`[telegram-account] thread brake peer=${key}`);
-            return;
-          }
-          if (from === "teammate" && message.id) pendingReplyTo.set(String(key), Number(message.id));
-          if (from === "teammate") pickUp(key, message.id);
-          await bridge.receive(integration.id, key, {
-            text: from === "owner" ? threadOwnerPrompt({ name, text }) : threadInboundPrompt({ name, text }),
-            images,
-            caller: COVERAGE_CALLER,
-          });
+        const open = openThreads(key);
+        if (open.length && from === "teammate" && ownerHolds(key) && !wantsGriffin(text)) {
+          log.info?.(`[telegram-account] thread hold peer=${key} — the owner took this conversation`);
+          return;
+        }
+        const every = Number(person?.access?.pickupEvery) || 0;
+        if (every > 0 && from === "teammate" && !scheduled && !called && !wantsGriffin(text)) {
+          queuePickup(key, person, text, message, every);
           return;
         }
         // The owner is in this conversation: leave it to them unless the teammate calls Griffin.
-        if (from === "teammate" && ownerPresent(key) && !wantsGriffin(text)) {
+        if (!open.length && from === "teammate" && ownerPresent(key) && !wantsGriffin(text)) {
           log.info?.(`[telegram-account] thread skip peer=${key} — owner is in the conversation`);
           return;
         }
-        // A second message while the first is being classified («سلام» then the real request) used
+        // A second message while the first is being routed («سلام» then the real request) used
         // to be dropped; keep the latest and look at it once the first is done.
         if (threadBusy.has(key)) {
-          threadQueued.set(key, { person, text, message, from, images, called });
+          threadQueued.set(key, { person, text, message, from, images, called, scheduled, ids });
           return;
         }
         threadBusy.add(key);
         try {
           const history = await recentHistory(key);
-          const reopen = from === "teammate" && wantsGriffin(text);
-          const decision = reopen || called
+          const explicit = called || (from === "teammate" && wantsGriffin(text));
+          // Every message is routed: one of the open threads, a new thread, or (nothing open) nothing.
+          const decision = !open.length && explicit
             ? { start: true, topic: "", reason: called ? "called in a group" : "reopened with «گریفین»" }
-            : await bridge.classifyThread({ history: history.slice(0, -1), message: text, from, name });
-          log.info?.(`[telegram-account] thread ${decision.start ? "OPEN" : "skip"} peer=${key} from=${from} — ${decision.reason || ""}`);
+            : await bridge.classifyThread({ history: history.slice(0, -1), message: text, from, name, threads: open.filter((t) => t.id) });
+          log.info?.(`[telegram-account] thread ${decision.start ? "NEW" : open.length ? `→ ${decision.thread || "latest"}` : "skip"} peer=${key} from=${from} — ${decision.reason || ""}`);
           // The classifier fails closed; a colleague's request must not vanish with it.
-          if (!decision.start && /^jev (error|http)/.test(decision.reason || "") && from === "teammate") {
+          if (!open.length && !decision.start && /^jev (error|http)/.test(decision.reason || "") && from === "teammate") {
             await sendPlain("me", `${MARK}پیام «${name}» را نتوانستم بسنجم (${decision.reason}). اگر کار است، روی همان پیام ریپلای کن و /agent بزن.\n«${String(text).slice(0, 200)}»`);
           }
-          if (!decision.start) return;
-          await bridge.startCoverage(integration.id, key, {
-            name,
-            username: person?.username || null,
-            personId: person?.id || null,
-            fresh: !reopen,
-            title: `🧵 ${name}: ${decision.topic || String(text).replace(/\s+/g, " ").slice(0, 40)}`,
-          });
-          threadRuns.set(key, [Date.now()]);
-          if (message.id && from === "teammate") pendingReplyTo.set(String(key), Number(message.id));
-          pickUp(key, message.id);
-          await sendPlain("me", `${MARK}رشته با «${name}» باز شد${decision.topic ? `: ${decision.topic}` : ""} — ${decision.reason || ""}\nبستن: در همان چت /agent off`);
-          await bridge.receive(integration.id, key, {
-            text: threadStartPrompt({ name, history, message: text, from, topic: decision.topic }),
-            images,
-            caller: COVERAGE_CALLER,
-          });
+          if (decision.start) {
+            // «گریفین» with nothing open continues the last thread; anything else is a new one.
+            await newThread(key, person, name, text, message, from, images, { topic: decision.topic, reason: decision.reason || "", fresh: !(explicit && !called && !open.length), ids });
+          } else if (open.length) {
+            const target = open.find((t) => t.id && t.id === decision.thread) || open[0];
+            await feedThread(key, person, name, text, message, from, images, target.id, ids);
+          }
         } finally {
           threadBusy.delete(key);
           const queued = threadQueued.get(key);
           if (queued) {
             threadQueued.delete(key);
-            await handleThreadMessage(key, queued.person, queued.text, queued.message, queued.from, queued.images, { called: queued.called });
+            await handleThreadMessage(key, queued.person, queued.text, queued.message, queued.from, queued.images, { called: queued.called, scheduled: queued.scheduled, ids: queued.ids });
           }
         }
+      };
+
+      // The owner moves a message from the mother chat (web UI) into a thread, or opens one from it.
+      routeByHand = async (person, entry, target) => {
+        const key = String(person.external_id);
+        const name = person.display_name || key;
+        const from = entry.direction === "out" ? "owner" : "teammate";
+        const message = { id: /^\d+$/.test(String(entry.id)) ? Number(entry.id) : null };
+        if (!target) {
+          const started = await newThread(key, person, name, entry.text, message, from, [], { reason: "از وب", ids: [entry.id] });
+          return { chatId: started?.chatId || null };
+        }
+        threadRuns.delete(key);
+        await feedThread(key, person, name, entry.text, message, from, [], target, [entry.id]);
+        return { chatId: target };
       };
 
       // If updates were missed (session blip / competing client), pick up recent /agent.
@@ -590,7 +729,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           // can be switched off with settings.threads = false (then the older paths below apply).
           const threadDm = Boolean(
             key && person && !message.isGroup && !message.isChannel && !entity?.bot &&
-            person.category === "team" && person.access?.enabled !== false &&
+            watching(person) && person.access?.enabled !== false &&
             bridge.integration?.(integration.id)?.settings?.threads !== false,
           );
 
@@ -632,7 +771,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           // under an alert, 2026-10-08): an explicit call, no classifier. Only these messages reach the
           // thread — a busy group's other traffic never feeds it.
           const settings = bridge.integration?.(integration.id)?.settings || {};
-          if (key && person && message.isGroup && message.mentioned && !message.out && person.category === "team" &&
+          if (key && person && message.isGroup && message.mentioned && !message.out && watching(person) &&
               person.access?.enabled !== false && settings.threads !== false) {
             const who = message.sender || (await message.getSender?.().catch(() => null));
             if (who?.bot) return;
@@ -707,6 +846,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         }
       };
       client.addEventHandler((event) => onMessage(event.message), new NewMessage({}));
+      pickupTimer = setInterval(() => drainPickups?.().catch((error) => log.error?.(`[telegram-account] pickup: ${error.message}`)), 30_000);
+      pickupTimer.unref?.();
 
       // A teammate's DM that arrived while the account was down (dead session, restart, network)
       // never produced an update. After reconnecting, pass the unrecorded ones from the last day
@@ -799,7 +940,13 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       }
     },
 
+    async routeByHand(person, entry, target) {
+      if (!routeByHand) throw new Error("اکانت تلگرام هنوز وصل نشده");
+      return routeByHand(person, entry, target);
+    },
+
     stop() {
+      clearInterval(pickupTimer);
       client?.disconnect().catch(() => {});
       client = null;
       status.state = "stopped";

@@ -130,6 +130,8 @@ policy brings it back. Paths, ports, the broker socket, `OWNER_NAME` and `TZ` st
 | `GRIFFIN_OPENAI_BASE_URL`, `GRIFFIN_OPENAI_MODEL`, `GRIFFIN_OPENAI_REASONING_EFFORT` | any OpenAI-compatible chat/completions endpoint as a third engine |
 | `GRIFFIN_SELF_HEAL` | `off` keeps the doctor's report (Settings → Health) but stops its automatic fixes |
 | `GRIFFIN_ASSISTANT_NAME`, `GRIFFIN_ASSISTANT_LATIN` | the assistant's name (what people call it, how it signs); otherwise the setup wizard's choice in `<data>/persona.json`, default Griffin |
+| `GRIFFIN_CHAT_IDLE_DAYS` | owner chats on a repo worktree that sat idle this many days go to the archive (default `3`, `0` = off) |
+| `GRIFFIN_PUSH_SUBJECT` | contact for Web Push (`mailto:` or URL); defaults to `GRIFFIN_PUBLIC_URL`. Push notifications need HTTPS |
 | `GRIFFIN_REVIEW` | `on` sends every change-making tool call to two independent reviewer models before it runs |
 | `GRIFFIN_AUTH=off`, `GRIFFIN_DEMO=1` | local development only — never in production |
 

@@ -690,6 +690,7 @@ export function createOpenAIProvider({
                 if (!completion.text && !completion.usage && !completion.reasoning) throw new Error("empty completion from openai endpoint");
                 session.messages.push({ role: "assistant", content: completion.text || "" });
                 if (!abort.signal.aborted && takeSteered()) {
+                  await emit({ type: "user-message-appended" });
                   await emit({ type: "text-delta", text: "\n\n" });
                   continue;
                 }
@@ -732,7 +733,10 @@ export function createOpenAIProvider({
               }
               if (abort.signal.aborted) throw new Error("cancelled");
               committed = session.messages.length;
-              if (takeSteered()) continue;
+              if (takeSteered()) {
+                await emit({ type: "user-message-appended" });
+                continue;
+              }
               if (!errorNudged && errorRun >= errorStreak) {
                 errorNudged = true;
                 errorRun = 0;

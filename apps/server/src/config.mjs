@@ -10,6 +10,8 @@ export const CONFIG_SCHEMA = [
   { key: "OPS_MODE", label: "اتاق عملیات هشدارها", options: ["off", "record", "critical", "shadow"], live: false },
   { key: "SELF_HEAL", label: "تعمیر خودکار هر ۱۵ دقیقه", options: ["on", "off"], live: false },
   { key: "REVIEW", label: "بازبینی دوگانهٔ تغییرها قبل از اجرا", options: ["on", "off"], live: true },
+  { key: "AUTO_CONTINUE", label: "ادامهٔ خودکار گفتگو بعد از بازشدن سقف مصرف (حداکثر سه بار پشت هم؛ هر پیام شما لغوش می‌کند؛ پیش‌فرض روشن)", options: ["on", "off"], live: true },
+  { key: "PROMPT_SUGGESTIONS", label: "پیشنهاد پیام بعدی در کادر (فقط Claude؛ Tab برای پذیرفتن؛ هر پیشنهاد کمی از سهم مصرف می‌برد؛ پیش‌فرض روشن)", options: ["on", "off"], live: true },
   { key: "TEAM_PROVIDER", label: "رشته‌های همکاران: حساب موتور", kind: "account", live: true },
   { key: "TEAM_MODEL", label: "رشته‌های همکاران: مدل", live: true },
   { key: "TEAM_EFFORT", label: "رشته‌های همکاران: میزان فکر", options: ["", "low", "medium", "high", "xhigh", "max"], live: true },
