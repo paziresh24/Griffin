@@ -160,6 +160,9 @@ const SIGNED = new RegExp(`^([\\s\\S]*?—\\s*${SIGNATURE_RE})(?=[ \\t]*(?:\\n|$
 const OLD_NAME_TAIL = new RegExp(`—\\s*(?:ایجنت\\s*)?(?:${CALL_RE})\\s*$`, "u");
 const ENDS_SIGNED = new RegExp(`—\\s*${SIGNATURE_RE}\\s*$`, "u");
 
+// Sent by the assistant (ends with its sign-off), not typed by the owner.
+export const signedByAgent = (text) => ENDS_SIGNED.test(String(text ?? "").trimEnd());
+
 export function withAgentFooter(text) {
   // Whatever the model writes after its own signature is a note to itself (a «(… only the owner
   // knows)» aside reached a colleague, 2026-10-07) — it never goes out.

@@ -57,11 +57,13 @@ test("usage tokens: OpenAI prompt includes its cache, Anthropic input gets its c
   assert.equal(usageTokens({ input_tokens: 10, cache_read_input_tokens: 80, cache_creation_input_tokens: 5, output_tokens: 5 }), 100);
 });
 
-test("a new colleague gets default caps on every agent; owner's PUT validates models, budget and texts", () => {
+test("a new colleague has no token cap by default; owner's PUT validates models, budget and texts", () => {
   const { store, cleanup } = setup();
   try {
     const settings = peerSettings(store.getAgentProfile("griffin"), "peer:alice");
-    assert.deepEqual(settings.budget, { hourly: 5_000_000, daily: 20_000_000 });
+    assert.deepEqual(settings.budget, { hourly: null, daily: null });
+    // A cap the owner sets for one colleague still counts.
+    assert.deepEqual(mergeLimits({}, { budget: { hourly: 1_000 } }).entry.budget, { hourly: 1_000, daily: null });
     assert.deepEqual(settings.models, []);
     assert.match(settings.messages.overBudget, /\{retryAt\}/);
     assert.match(mergeLimits({}, { models: ["nope"] }).error, /unknown model/);

@@ -1,4 +1,5 @@
 import { COVERAGE_CALLER, coverageOwnerNote } from "./integrations/coverage.mjs";
+import { isGlobalChat, motherInfo } from "./integrations/mother.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
 import { usageByModel } from "@griffin/timeline";
 import { autoTitle } from "./titles.mjs";
@@ -13,6 +14,7 @@ import { BusyError, fastWanted, keptIds, ownerTyped, setFastWanted } from "./run
 import { branchName } from "./worktrees.mjs";
 import { thirdPartyKey } from "./related.mjs";
 import { materializeTaskChat } from "./tasks.mjs";
+import { buildInbox, removeOwnerTask } from "./inbox.mjs";
 import { PERSONA } from "./persona.mjs";
 import { explainRun } from "./why.mjs";
 import { aggregateTokenUsage, ownerTimeZone, tokenUsageSince, TOKEN_USAGE_MAX_DAYS } from "./token-usage.mjs";
@@ -49,8 +51,9 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     suggestion: (id) => runner.suggestion?.(id) ?? null,
     limitResumeAt: (id) => runner.limitResumeAt?.(id) ?? null,
     fastState: (id) => runner.fastState?.(id) ?? null,
-    // Parked on a question only the owner answers (in memory: asks keyed by the chain's root).
-    waitingForOwner: (id) => asks?.audienceOf?.(id) === "owner",
+    // Parked on a question only the owner answers (in memory: asks keyed by the chain's root) —
+    // any open one, not only the queue head.
+    waitingForOwner: (id) => Boolean(asks?.ownerWaiting?.(id) ?? asks?.audienceOf?.(id) === "owner"),
   };
   const knownAgent = (id) => Boolean(id && (store.getAgentProfile?.(id) || AGENTS[id]));
 
@@ -151,6 +154,17 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     return c.json({ chats: store.listChatsBySource({ archived }).map(withChildren) });
   });
 
+  // Everything waiting for the owner, from every chain, for the main page (inbox.mjs).
+  app.get("/api/inbox", (c) => c.json(buildInbox({ store, asks })));
+
+  // A chore the assistant left him: done or let go, it leaves the board either way.
+  app.post("/api/inbox/chores/:id", async (c) => {
+    const { action } = await readJson(c);
+    if (action !== "done" && action !== "dismiss") return c.json({ error: "action must be done or dismiss" }, 400);
+    if (!removeOwnerTask(store, c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
+  });
+
   // The owner's chat groups, in their order. A group holds chats only through chats.group_id.
   const groupName = (value) => (typeof value === "string" ? value.trim().slice(0, 60) : "");
   app.get("/api/groups", (c) => c.json({ groups: store.listGroups() }));
@@ -218,9 +232,10 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
   });
 
   // The owner's text in a colleague's thread goes framed as the owner's note to that colleague —
-  // only true when the chat is linked; an unlinked team chat (a simulation) takes the text as-is.
+  // only true when the chat is linked (or a mother chat, linked or not yet); an unlinked team chat (a
+  // simulation) takes the text as-is.
   const ownerFramed = (chat, input) =>
-    chat.caller === COVERAGE_CALLER && input.text && store.linksForChat(chat.id).length
+    chat.caller === COVERAGE_CALLER && input.text && (motherInfo(store, chat.id) || store.linksForChat(chat.id).length)
       ? { ...input, text: coverageOwnerNote(store.getPerson?.(chat.person_id)?.display_name, input.text) }
       : input;
 
@@ -384,8 +399,12 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
   });
 
   app.get("/api/chats/:id", async (c) => {
-    const chat = store.getChat(c.req.param("id"));
-    if (!chat) return c.json({ error: "not found" }, 404);
+    const row = store.getChat(c.req.param("id"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    // getChat has no run columns; the latest run (runs_chat index) gives a chat opened outside the
+    // list — a sub-agent, a thread, an old job run — its runStatus, so its error bar shows.
+    const last = store.db.prepare("SELECT status, started_at FROM runs WHERE chat_id = ? ORDER BY started_at DESC LIMIT 1").get(row.id);
+    const chat = { ...row, run_status: last?.status ?? null, run_started_at: last?.started_at ?? null };
     // Tokens per model only here, not in the list: summed from the cached fold (the same one the
     // timeline route serves; a warm entry reads only events after it, by events_chat).
     const usage = usageByModel((await timelines.get(chat.id)).timeline.messages);
@@ -544,16 +563,46 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     }
   });
 
-  // «ارسال دوباره»: the oldest kept message (a run that failed before anything reached the owner) goes again.
-  app.post("/api/chats/:id/retry", (c) => {
+  // «دوباره»: the kept message goes again; with nothing kept, a failed last run is asked to continue.
+  app.post("/api/chats/:id/retry", async (c) => {
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
     try {
-      return c.json(runner.retry(chat.id), 202);
+      const kept = runner.retry(chat.id);
+      if (kept?.status !== "nothing-kept") return c.json(kept, 202);
+      const last = store.db.prepare("SELECT status, error FROM runs WHERE chat_id = ? ORDER BY started_at DESC LIMIT 1").get(chat.id);
+      if (last?.status !== "error") return c.json(kept, 202);
+      runner.cancelLimitResume?.(chat.id);
+      const text = `کار قبلی با خطا قطع شد${last.error ? `: «${String(last.error).slice(0, 200)}»` : ""}. از همان‌جا که ماند ادامه بده.`;
+      return c.json({ ...(await runner.send(chat.id, { ...ownerFramed(chat, { text, images: [] }), intent: "send" })), delivered: "continue" }, 202);
     } catch (error) {
       if (error instanceof BusyError) return c.json({ error: "busy" }, 409);
       throw error;
     }
+  });
+
+  // «حل شد»: the owner handled this chat's failure — its kept messages and the desk's failed card go,
+  // and it stops reading as an error (runStatusOf) until its next run.
+  app.post("/api/chats/:id/resolve", (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    if (runner.isActive(chat.id)) return c.json({ error: "busy" }, 409);
+    runner.cancelLimitResume?.(chat.id);
+    for (const keptId of keptIds(store, chat.id)) runner.dropKept?.(chat.id, keptId);
+    const waiting = store.getKv("tgwaiting");
+    if (Array.isArray(waiting)) {
+      const left = waiting.filter((w) => !(w.kind === "failed" && w.chatId === chat.id));
+      if (left.length < waiting.length) {
+        store.setKv("tgwaiting", left);
+        for (const w of waiting) {
+          if (left.includes(w) || store.getKv(`tgstate:${w.personId}`)?.state !== "failed") continue;
+          store.setKv(`tgstate:${w.personId}`, { state: "no_reply", line: "حل شد", at: new Date().toISOString() });
+        }
+      }
+    }
+    store.setKv(`resolved:${chat.id}`, new Date().toISOString());
+    store.bus.emit("chats", { type: "updated", chatId: chat.id });
+    return c.json({ ok: true });
   });
 
   // «حذف»: drops one kept message, named by its stable id (chat.kept), without sending it.
@@ -561,6 +610,24 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
     if (!runner.dropKept(chat.id, c.req.param("keptId"))) return c.json({ error: "not kept" }, 404);
+    store.bus.emit("chats", { type: "updated", chatId: chat.id });
+    return c.json({ ok: true });
+  });
+
+  // «حذف»/«ویرایش» on a «در صف» message (its user event id, web QueuePeek): it leaves the queue and
+  // never runs; user.queue «removed» takes it off the thread. 404 when it is not waiting; 409
+  // «merged» when it waits merged with others in one kept message (its «حذف» drops them together).
+  app.delete("/api/chats/:id/queue/:eventId", (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    let removed;
+    try {
+      removed = runner.unqueue(chat.id, c.req.param("eventId"));
+    } catch (error) {
+      if (error?.code === "merged") return c.json({ error: "merged" }, 409);
+      throw error;
+    }
+    if (!removed) return c.json({ error: "not queued" }, 404);
     store.bus.emit("chats", { type: "updated", chatId: chat.id });
     return c.json({ ok: true });
   });
@@ -696,17 +763,30 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
     const body = await readJson(c);
+    const askId = typeof body.askId === "string" && /^[a-f0-9]{6,16}$/i.test(body.askId) ? body.askId.toLowerCase() : null;
     const selected = Array.isArray(body.selected) ? body.selected.map(String).slice(0, 6) : [];
     const answer = [selected.join("، "), typeof body.text === "string" ? body.text.trim() : ""].filter(Boolean).join(" — ").slice(0, 4000);
     if (!answer) return c.json({ error: "empty answer" }, 400);
     store.keepJobChat?.(chat.id);
-    if (asks?.answer(chat.id, { answer, selected })) return c.json({ delivered: "tool" });
+    // A card that names its question answers exactly that one. If it is no longer open it was
+    // answered elsewhere (Telegram, another tab) or its run ended: no hold, no follow-up message,
+    // so a stale card can never start a duplicate run.
+    if (askId) {
+      if (asks?.answer(chat.id, { answer, selected, askId })) return c.json({ delivered: "tool" });
+      return c.json({ error: "این سؤال دیگر باز نیست", gone: true }, 409);
+    }
+    const asked = typeof body.question === "string" ? body.question : null;
+    if (asks?.answer(chat.id, { answer, selected, question: asked })) return c.json({ delivered: "tool" });
     if (asks && runner.isActive(chat.id)) {
-      // The card is visible but the agent has not started waiting yet: hold the answer for it instead
-      // of queueing a duplicate message. If the run ends without asking, the runner sends it as a message.
-      const ready = await asks.waitForQuestion(chat.id, { timeoutMs: 15_000, stillActive: () => runner.isActive(chat.id) });
-      if (ready && asks.answer(chat.id, { answer, selected })) return c.json({ delivered: "tool" });
-      if (runner.isActive(chat.id)) {
+      // The card is visible but its tool has not started waiting yet (the engine calls it after a
+      // round trip, or after slower tools of the same round): wait for exactly this question — even
+      // while another question of the chain is open — instead of queueing a duplicate message.
+      const ready = await asks.waitForQuestion(chat.id, { timeoutMs: 15_000, question: asked, stillActive: () => runner.isActive(chat.id) });
+      if (ready && asks.answer(chat.id, { answer, selected, question: asked })) return c.json({ delivered: "tool" });
+      // Hold it for the question only while nothing is open on the chain: with another one open,
+      // this card's own question is gone (stopped, answered elsewhere) and its answer is the
+      // follow-up message the card promised — never held for the chain's next question.
+      if (runner.isActive(chat.id) && !asks.isWaiting(chat.id)) {
         asks.holdEarly(chat.id, { answer, selected, question: body.question });
         return c.json({ delivered: "held" });
       }
@@ -915,31 +995,45 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     });
   });
 
-  // Chat list changes (new chat, run started/finished, rename) for the sidebar.
+  // Chat list changes (new chat, run started/finished, rename) for the sidebar, and changes of
+  // what waits for the owner (Telegram drafts, kept messages, notes, todo steps) for his main page.
   app.get("/api/stream", (c) =>
     streamSSE(c, async (stream) => {
       let wake = null;
-      let dirty = false;
-      const onChange = () => {
-        dirty = true;
+      let dirtyChats = false;
+      let dirtyInbox = false;
+      const onChats = () => {
+        dirtyChats = true;
         wake?.();
       };
-      store.bus.on("chats", onChange);
+      const onInbox = () => {
+        dirtyInbox = true;
+        wake?.();
+      };
+      store.bus.on("chats", onChats);
+      store.bus.on("inbox", onInbox);
       stream.onAbort(() => wake?.());
       try {
         while (!stream.aborted) {
           await waitFor(15_000, (resolve) => (wake = resolve));
           wake = null;
           if (stream.aborted) break;
-          if (dirty) {
-            dirty = false;
-            await stream.writeSSE({ event: "chats", data: "changed" });
-          } else {
+          if (!dirtyChats && !dirtyInbox) {
             await stream.writeSSE({ event: "ping", data: "" });
+            continue;
+          }
+          if (dirtyChats) {
+            dirtyChats = false;
+            await stream.writeSSE({ event: "chats", data: "changed" });
+          }
+          if (dirtyInbox) {
+            dirtyInbox = false;
+            await stream.writeSSE({ event: "inbox", data: "changed" });
           }
         }
       } finally {
-        store.bus.off("chats", onChange);
+        store.bus.off("chats", onChats);
+        store.bus.off("inbox", onInbox);
       }
     }),
   );
@@ -1026,6 +1120,15 @@ function childChatsByParent(store, { perParent = 30 } = {}) {
   return map;
 }
 
+// «حل شد»: the owner marked this chat's failure handled (kv resolved:<chat>, an ISO time). It covers
+// runs that started before it; the next run starts later and shows its own status.
+function runStatusOf(store, chat) {
+  const status = chat.run_status || null;
+  if (status !== "error") return status;
+  const at = store.getKv?.(`resolved:${chat.id}`);
+  return typeof at === "string" && at > (chat.run_started_at || "") ? "resolved" : status;
+}
+
 function publicChat(store, chat, children = null) {
   if (!chat) return null;
   const agentId = chat.agent || DEFAULT_AGENT;
@@ -1045,6 +1148,8 @@ function publicChat(store, chat, children = null) {
     ownerLabel: chat.owner_label || null,
     parentChatId: chat.parent_chat_id || null,
     personId: chat.person_id || null,
+    mother: chat.caller === COVERAGE_CALLER && Boolean(motherInfo(store, chat.id)),
+    global: isGlobalChat(store, chat.id),
     sideOf: chat.side_of || null,
     // The repo it works on, its own branch, and the worktree once the first run made it.
     repo: chat.repo || null,
@@ -1054,7 +1159,8 @@ function publicChat(store, chat, children = null) {
     pinned: Boolean(chat.pinned),
     groupId: chat.group_id || null,
     archived: Boolean(chat.archived),
-    runStatus: chat.run_status || null,
+    runStatus: runStatusOf(store, chat),
+    runStartedAt: chat.run_started_at || null,
     // Claude's suggested next message; when it continues by itself after the plan limit resets (ms);
     // the fast-mode switch and what Claude Code last said of it.
     suggestion: chat.archived ? null : live?.suggestion(chat.id) ?? null,
@@ -1071,7 +1177,7 @@ function publicChat(store, chat, children = null) {
             id: child.id,
             title: child.title,
             agent: child.agent || DEFAULT_AGENT,
-            runStatus: child.run_status || null,
+            runStatus: runStatusOf(store, child),
             createdAt: child.created_at,
             updatedAt: child.updated_at,
           })),

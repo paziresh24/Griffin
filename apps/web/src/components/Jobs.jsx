@@ -260,7 +260,7 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
   return (
     <Dialog.Root open={Boolean(job)} onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_150ms]" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] overlay" />
         <Dialog.Content className="pop fixed left-1/2 top-1/2 z-50 max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border bg-card p-5 shadow-2xl">
           <div className="mb-4 flex items-center">
             <Dialog.Title className="font-semibold">{editing ? t("ویرایش جاب") : t("جاب جدید")}</Dialog.Title>

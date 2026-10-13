@@ -1,13 +1,14 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Popover } from "radix-ui";
+import { AnimatePresence, motion } from "motion/react";
 import { AlarmClock, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
-import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, toLocalInput } from "../notes.js";
+import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteError, noteTarget, noteTitle, noteWhen, toLocalInput, untilLabel } from "../notes.js";
 import { isRtl, num, t } from "../i18n.js";
 
-// One store for the whole app: the composer's «بعداً» and the sidebar list stay in step.
+// One store for the whole app: the card above the composer and the sidebar list stay in step.
 export const notesStore = createNotesStore(api);
 
 const useNotes = () => useSyncExternalStore(notesStore.subscribe, notesStore.getState);
@@ -59,46 +60,63 @@ function WhenMenu({ onPick, busy = false, title = t("کِی اجرا شود؟") 
 }
 
 /**
- * The composer's "later": keeps what is typed as a note instead of sending it — into this chat, or
- * (on the new-chat page) as the first message of a new chat with the composer's settings. A quiet
- * icon like the microphone: sending now is the default, later is the exception.
+ * Above the composer: what is scheduled for this chat (on the new-chat page, for a new chat), as a
+ * card tucked behind the box with only its top edge showing. A tap opens it upward, each note with
+ * its own actions (run now, another time, edit, delete).
  */
-export function LaterButton({ text, chatId = null, options = {}, disabled = false, disabledTitle = "", onSaved, size = "size-5" }) {
+export function ScheduledPeek({ chatId = null }) {
+  const { items, busy } = useNotes();
+  const now = useNow();
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const empty = !String(text || "").trim();
-  const save = async (atMs) => {
-    setBusy(true);
-    try {
-      await notesStore.create(noteBody({ text, chatId, atMs, options }));
-      setOpen(false);
-      onSaved?.();
-      toast.success(atMs ? t("یادداشت ذخیره شد؛ {time} اجرا می‌شود", { time: clockLabel(atMs) }) : t("یادداشت ذخیره شد؛ در «یادداشت‌ها» منتظر می‌ماند"));
-    } catch (error) {
-      toast.error(noteError(error));
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => {
+    notesStore.refresh();
+    const timer = setInterval(() => notesStore.refresh(), 60_000);
+    return () => clearInterval(timer);
+  }, [chatId]);
+  const mine = items.filter((note) => (chatId ? note.chatId === chatId : !note.chatId) && (note.runAt || note.status === "failed"));
+  const first = mine[0];
+  useEffect(() => {
+    if (!first) setOpen(false);
+  }, [first]);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          className="g-icon-btn mb-0.5 shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
-          disabled={disabled || empty}
-          title={disabled ? disabledTitle : t("ارسال نکن؛ برای بعد نگه دار")}
-          aria-label={t("بعداً")}
+    <AnimatePresence initial={false}>
+      {first ? (
+        <motion.div
+          key="peek"
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 16 }}
+          transition={{ type: "spring", stiffness: 420, damping: 34 }}
+          className="g-peek relative z-0 mx-3 -mb-3 rounded-t-xl border border-b-0 bg-muted px-3 pb-3.5 pt-1.5 text-xs"
         >
-          <AlarmClock className={size} />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={8} collisionPadding={16} className={menu}>
-          <WhenMenu busy={busy} onPick={save} />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full min-w-0 items-center gap-1.5 py-0.5 text-start text-muted-foreground hover:text-foreground">
+            <AlarmClock className="size-3.5 shrink-0 text-primary" />
+            <span className={`shrink-0 ${first.status === "failed" ? "text-bad" : "text-foreground"}`}>{first.status === "failed" ? t("اجرا نشد") : untilLabel(Date.parse(first.runAt), now)}</span>
+            <span className="min-w-0 flex-1 truncate" dir={textDir(first.text)}>
+              {noteTitle(first)}
+            </span>
+            {mine.length > 1 ? <span className="g-tag shrink-0 tabular-nums" dir="ltr">+{num(mine.length - 1)}</span> : null}
+            <ChevronDown className={`size-3.5 shrink-0 transition-transform duration-200 ${open ? "" : "rotate-180"}`} />
+          </button>
+          <AnimatePresence initial={false}>
+            {open ? (
+              <motion.ul
+                key="list"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.24, ease: [0.2, 0, 0, 1] }}
+                className="flex max-h-[40vh] flex-col gap-1 overflow-y-auto pt-1.5"
+              >
+                {mine.map((note) => (
+                  <NoteItem key={note.id} note={note} now={now} working={Boolean(busy[note.id])} />
+                ))}
+              </motion.ul>
+            ) : null}
+          </AnimatePresence>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

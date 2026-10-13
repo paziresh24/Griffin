@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
+import { clockLabel, exactTime } from "../elapsed.js";
 
 // External agents (MCP now, A2A later): who they are, their device tokens, what they may use,
 // what they asked for, and every gated (irreversible) call on record.
@@ -13,14 +14,7 @@ const MCP_URL = `${window.location.origin}/mcp`;
 const input = "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary";
 
 const time = (iso) => (iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "—");
-const ago = (iso) => {
-  if (!iso) return t("هرگز");
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 90) return t("{n} ثانیه پیش", { n: num(s) });
-  if (s < 5400) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
-  if (s < 172800) return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
-  return t("{n} روز پیش", { n: num(Math.round(s / 86400)) });
-};
+const ago = (iso) => (iso ? clockLabel(iso) : t("هرگز"));
 
 const TASK_STATE = {
   submitted: ["bg-muted-foreground", t("در صف")],
@@ -195,7 +189,7 @@ function PeerCard({ user, catalog, defaults, onChange }) {
               <button key={t.id} type="button" onClick={() => navigate(t.chatId)} className="press flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start text-xs hover:bg-muted">
                 <span className={`size-2 shrink-0 rounded-full ${dot}`} />
                 <span className="min-w-0 flex-1 truncate" dir="auto">{t.title || t.id}</span>
-                <span className="shrink-0 text-muted-foreground">{label} · {ago(t.updatedAt)}</span>
+                <span className="shrink-0 text-muted-foreground">{label} · <span title={exactTime(t.updatedAt)}>{ago(t.updatedAt)}</span></span>
               </button>
             );
           })}
@@ -216,7 +210,7 @@ function PeerCard({ user, catalog, defaults, onChange }) {
                 <span className="ltr inline-block font-mono">{c.tool || c.method}{c.arg_keys ? `(${c.arg_keys})` : ""}</span>
                 {c.detail ? <div className="ltr truncate text-start text-muted-foreground" title={c.detail}>{c.detail}</div> : null}
               </div>
-              <span className="shrink-0 text-muted-foreground">{ago(c.at)}</span>
+              <span className="shrink-0 text-muted-foreground" title={exactTime(c.at)}>{ago(c.at)}</span>
             </div>
           ))}
           {calls.every((c) => c.method !== "tools/call") ? (
@@ -248,7 +242,7 @@ function ClientRow({ userId, client, onChange }) {
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/40 px-3 py-2 text-xs ${revoked || expired ? "opacity-50" : ""}`}>
       <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate" dir="auto">{client.label}</span>
-      <span className="text-muted-foreground">{t("آخرین اتصال: {when}", { when: ago(client.last_used_at) })}</span>
+      <span className="text-muted-foreground" title={exactTime(client.last_used_at)}>{t("آخرین اتصال: {when}", { when: ago(client.last_used_at) })}</span>
       {client.expires_at ? <span className="text-muted-foreground">{t("انقضا: {when}", { when: time(client.expires_at) })}</span> : null}
       {revoked ? (
         <span className="text-bad">{t("باطل‌شده")}</span>

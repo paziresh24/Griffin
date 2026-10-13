@@ -2,7 +2,8 @@
 // Shared by the server (final text, tests) and the web UI (live view).
 //
 // Event: { id, runId, type, data, at }
-//   user           { text, intent?, tracked? }  intent: queue | steer (sent while a run was busy)
+//   user           { text, intent?, tracked?, from? }  intent: queue | steer (sent while a run was busy);
+//                  from { kind, name, personId }: not the owner's own words (a colleague in a mother chat)
 //   user.queue     { userEventId, state }   that queued message started (reached the agent) | dropped
 //   user (cont.)   { clientId? }            with the run's id: steered into that run (or the typed answer to its question)
 //   user.read      {}                        the engine took the steered message(s) into its next request
@@ -21,6 +22,7 @@
 //   usage          { inputTokens, outputTokens, ... }
 //   run.started    { retry? }                 a «ارسال دوباره» of a kept message
 //   run.finished   { status, error?, undelivered? }  finished | error | cancelled; undelivered = message kept for retry
+//   tg.note        { kind, name, personId, chatId, text, sent, state, by }  a Telegram desk note -> message {role:"note"}
 
 export function emptyTimeline() {
   return { messages: [], lastEventId: 0 };
@@ -44,9 +46,12 @@ function reduceMessages(messages, event) {
     // A «در صف» message from before user.queue existed settles by what followed it (see settleLegacy).
     const behind = messages[findRun(messages, null)]?.runId ?? null;
     const legacy = data.intent === "queue" && !data.tracked ? { legacyBehind: behind } : {};
-    const user = { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, at: event.at, ...legacy, ...(data.clientId ? { clientId: data.clientId } : {}) };
+    const user = { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, at: event.at, ...legacy, ...(data.clientId ? { clientId: data.clientId } : {}), ...(data.from ? { from: data.from } : {}) };
     return event.runId ? placeMidRun(messages, user, event) : [...messages, user];
   }
+  // A note of the Telegram desk (a mother chat's report, the owner's own Telegram line): a message
+  // of its own, never part of a run.
+  if (event.type === "tg.note") return [...messages, { ...data, id: `n${event.id}`, role: "note", at: event.at }];
   // A queued message reached the agent or was dropped: its «در صف» label follows.
   if (event.type === "user.queue") {
     const at = messages.findIndex((m) => m.id === `u${data.userEventId}`);

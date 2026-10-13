@@ -14,5 +14,8 @@
   "بدون مخزن": "No repository",
   "در حال اجرا ({n})": "Running ({n})",
   "الان": "now",
-  "{n} ماه": "{n} mo"
+  "{n} ماه": "{n} mo",
+  "وضعیت (منتظر شما و در حال کار اول)": "Status (waiting for you and working first)",
+  "خطادار": "Failed",
+  "منتظر پاسخ شما ({n})": "Waiting for you ({n})"
 }

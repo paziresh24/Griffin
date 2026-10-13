@@ -9,6 +9,7 @@ import {
   acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, pickCommand, shownNextStep, slashQuery,
 } from "../assist.js";
 import { isRtl, locale, t } from "../i18n.js";
+import { MENU } from "./Controls.jsx";
 
 // The open chat's record (App provides it): suggestion, auto-continue time, fast mode.
 // A side chat's thread is outside it and gets none of this.
@@ -116,13 +117,10 @@ export function ComposerAssist({ inputRef, next = null }) {
   }, [inputRef, setText]);
 
   if (!chat) return null;
-  const fastShown = !karsara && fastAllowed(chat, info);
-  const note = fastShown ? fastNote({ fast: chat.fast, fastState: chat.fastState, model: chat.model }) : null;
-  const setFast = () => api(`/api/chats/${chat.id}`, { method: "PATCH", body: { fast: !chat.fast } }).catch((e) => toast.error(e.message));
   const cancelResume = () => api(`/api/chats/${chat.id}/limit-resume`, { method: "DELETE" }).catch((e) => toast.error(e.message));
   const resumeShown = Boolean(chat.limitResumeAt) && !karsara;
   const nextShown = next && !karsara;
-  if (!list.length && !nextShown && !resumeShown && !fastShown) return null;
+  if (!list.length && !nextShown && !resumeShown) return null;
 
   return (
     <div className="flex flex-col gap-1 px-2 pt-2 text-xs">
@@ -160,22 +158,25 @@ export function ComposerAssist({ inputRef, next = null }) {
           <kbd className="shrink-0 rounded border px-1 text-[10px]">Tab</kbd>
         </button>
       ) : null}
-      {fastShown ? (
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={setFast}
-            aria-pressed={Boolean(chat.fast)}
-            title={t("حالت سریع Claude: فقط روی Opus، از مصرف اضافهٔ حساب")}
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${chat.fast ? "border-primary/40 bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted"}`}
-          >
-            <Zap className="size-3" /> {t("سریع")}
-          </button>
-          {note ? <span className="text-muted-foreground">{note}</span> : null}
-        </div>
-      ) : null}
     </div>
   );
+}
+
+// The fast switch flips at once; the chat record (the sidebar list) catches up a moment later, and a
+// failed save flips it back.
+function useFast(chat) {
+  const [mine, setMine] = useState(null);
+  const saved = Boolean(chat?.fast);
+  useEffect(() => setMine(null), [saved, chat?.id]);
+  const on = mine ?? saved;
+  const toggle = () => {
+    setMine(!on);
+    api(`/api/chats/${chat.id}`, { method: "PATCH", body: { fast: !on } }).catch((e) => {
+      setMine(null);
+      toast.error(e.message);
+    });
+  };
+  return [on, toggle];
 }
 
 // Claude's fast mode applies to the owner's own top-level chat only.
@@ -186,10 +187,9 @@ export function FastToggle() {
   const chat = useContext(ChatRecord);
   const info = useCommandInfo(chat?.id || null, chat?.model);
   const [open, setOpen] = useState(false);
+  const [on, toggle] = useFast(chat);
   if (!chat || !fastAllowed(chat, info)) return null;
-  const on = Boolean(chat.fast);
   const note = fastNote({ fast: on, fastState: chat.fastState, model: chat.model });
-  const toggle = () => api(`/api/chats/${chat.id}`, { method: "PATCH", body: { fast: !on } }).catch((e) => toast.error(e.message));
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -201,7 +201,7 @@ export function FastToggle() {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={8} collisionPadding={16} className="g-menu pop z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-3 shadow-xl" dir={isRtl ? "rtl" : "ltr"}>
+        <Popover.Content align="end" side="top" sideOffset={8} collisionPadding={16} className={`${MENU} p-3`} dir={isRtl ? "rtl" : "ltr"}>
           <div className="flex items-center justify-between gap-3">
             <span className="min-w-0">
               <span className="block text-[13px] font-medium">{t("سریع")}</span>
@@ -215,6 +215,28 @@ export function FastToggle() {
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+// Griffin skin: the same switch as a section at the foot of the model menu, like Claude's.
+export function FastSwitch() {
+  const chat = useContext(ChatRecord);
+  const info = useCommandInfo(chat?.id || null, chat?.model);
+  const [on, toggle] = useFast(chat);
+  if (!chat || !fastAllowed(chat, info)) return null;
+  const note = fastNote({ fast: on, fastState: chat.fastState, model: chat.model });
+  return (
+    <>
+      <div className="my-1 h-px bg-border" />
+      <p className="px-2.5 pt-1.5 text-xs text-muted-foreground">{t("حالت سریع")}</p>
+      <button type="button" role="switch" aria-checked={on} onClick={toggle} title={t("فقط Opus، از مصرف اضافهٔ حساب؛ از نوبت بعد اثر می‌کند")} className="g-menu-row flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted">
+        <span className="flex-1">{t("روشن کردن حالت سریع")}</span>
+        <span dir="ltr" className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${on ? "bg-primary" : "bg-muted-foreground/30"}`}>
+          <span className={`absolute top-0.5 size-4 rounded-full bg-background shadow transition-transform ${on ? "translate-x-[1.125rem]" : "translate-x-0.5"}`} />
+        </span>
+      </button>
+      {on && note ? <p className="px-2.5 pb-1 text-xs text-warn" dir="auto">{t("هنوز سریع نیست: {note}", { note })}</p> : null}
+    </>
   );
 }
 

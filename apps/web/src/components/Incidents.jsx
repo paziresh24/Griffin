@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
+import { clockLabel, exactTime } from "../elapsed.js";
 
 // Griffin's incident layer: alerts of every cluster grouped into incidents, plus human signals
 // (a teammate asking the owner). Shadow mode: Griffin triages in its ops room and records here.
@@ -16,13 +17,7 @@ const SEVERITY = {
 };
 
 const time = (iso) => (iso ? new Date(iso).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) : "—");
-const ago = (iso) => {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 90) return t("{n} ثانیه پیش", { n: num(s) });
-  if (s < 5400) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
-  return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
-};
+const ago = (iso) => (iso ? clockLabel(iso) : "—");
 
 const FILTERS = [
   ["open", t("باز")],
@@ -67,7 +62,7 @@ export function IncidentsPage({ onBack }) {
 
         {intake ? (
           <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border bg-card px-3 py-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><Radar className="size-3.5" /> {t("آخرین خواندن: {when}", { when: ago(intake.lastPollAt) })}</span>
+            <span className="flex items-center gap-1.5" title={exactTime(intake.lastPollAt)}><Radar className="size-3.5" /> {t("آخرین خواندن: {when}", { when: ago(intake.lastPollAt) })}</span>
             {Object.entries(intake.clusters || {}).map(([name, c]) => (
               <span key={name} className="flex items-center gap-1" title={c.ok ? c.source : c.error}>
                 <span className={`size-2 rounded-full ${c.ok ? "bg-ok" : "bg-bad"}`} />

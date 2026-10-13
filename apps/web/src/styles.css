@@ -329,7 +329,9 @@ body {
   50% { opacity: 0.85; transform: scale(1.05); }
 }
 
-/* Motion: tactile buttons, popovers that grow from their trigger, calm theme transition. */
+/* Motion: tactile buttons; menus, tooltips and dialogs that spring out of their trigger and fade
+   back into it (Radix keeps a closing one mounted until its pop-out ends); messages that rise in.
+   The spring is a linear() curve with a slight overshoot; older browsers keep the cubic-bezier. */
 @layer components {
   .press {
     transition-property: color, background-color, border-color, box-shadow, transform, opacity;
@@ -340,15 +342,138 @@ body {
     transform: scale(0.95);
   }
   .pop {
-    transform-origin: var(--radix-popover-content-transform-origin, var(--radix-tooltip-content-transform-origin, center));
-    animation: pop-in 160ms cubic-bezier(0.2, 0, 0, 1);
+    transform-origin: var(--radix-popper-transform-origin, center);
+    animation: pop-in 340ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation-timing-function: linear(0, 0.034 1.4%, 0.13 2.9%, 0.433 7.4%, 0.565 9.6%, 0.678 11.8%, 0.775 14.2%, 0.85 16.6%, 0.912 19.3%, 0.96 22.3%, 0.993 25.6%, 1.016 29.4%, 1.026 33.8%, 1.028 37.6%, 1.022 42.9%, 1.005 52.3%, 0.997 64.8%, 1);
   }
+  .pop[data-state="closed"] {
+    animation: pop-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+  .pop[data-side="top"] { --pop-dy: 6px; }
+  .pop[data-side="bottom"] { --pop-dy: -6px; }
+  .pop[data-side="left"] { --pop-dx: 6px; --pop-dy: 0px; }
+  .pop[data-side="right"] { --pop-dx: -6px; --pop-dy: 0px; }
+  .overlay { animation: fade-in 200ms ease-out; }
+  .overlay[data-state="closed"] { animation: fade-out 150ms ease-in forwards; }
+  .msg-in { animation: msg-in 380ms cubic-bezier(0.16, 1, 0.3, 1); }
 }
 
 @keyframes pop-in {
-  from { opacity: 0; transform: scale(0.96) translateY(-2px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translate(var(--pop-dx, 0px), var(--pop-dy, 4px)) scale(0.94); }
 }
+@keyframes pop-out {
+  to { opacity: 0; transform: translate(var(--pop-dx, 0px), var(--pop-dy, 4px)) scale(0.97); }
+}
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes msg-in { from { opacity: 0; transform: translateY(8px); } }
+
+/* Karsara's composer-bar readouts (ComposerStats.jsx, Karsara skin): the server's resources as two
+   or three tiny bars with their percents, and a ring for the context window; their popovers. */
+.kc-host-chip { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 6px; color: var(--muted-foreground); font-size: 11px; }
+.kc-host-chip:hover, .kc-host-chip[data-state="open"] { color: var(--foreground); background: var(--kc-chip, var(--muted)); }
+.kc-host-mini { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.kc-host-mini i { display: inline-flex; align-items: flex-end; width: 5px; height: 12px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--foreground) 10%, transparent); }
+.kc-host-mini i b { display: block; width: 100%; background: var(--primary); opacity: 0.75; transition: height 400ms cubic-bezier(0.2, 0, 0, 1); }
+.kc-usage-trigger { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; height: 26px; padding: 0 7px; border-radius: 999px; }
+.kc-usage-trigger:hover, .kc-usage-trigger[data-state="open"] { background: var(--kc-chip, var(--muted)); }
+.kc-usage-ring { width: 15px; height: 15px; transform: rotate(-90deg); fill: none; stroke-width: 2; }
+.kc-usage-ring circle { stroke: color-mix(in srgb, var(--muted-foreground) 45%, transparent); transition: stroke-dasharray 400ms cubic-bezier(0.2, 0, 0, 1); }
+.kc-usage-ring circle[data-fill] { stroke: var(--primary); stroke-linecap: round; }
+.kc-usage-ring[data-level="warn"] circle[data-fill] { stroke: var(--warn); }
+.kc-usage-ring[data-level="danger"] circle[data-fill] { stroke: var(--bad); }
+.kc-usage { width: min(20rem, calc(100vw - 32px)); padding: 12px 14px; font-size: 13px; }
+.kc-usage section { display: flex; flex-direction: column; gap: 6px; }
+.kc-usage-title { font-weight: 600; }
+.kc-usage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.kc-usage-num { color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kc-usage-limit { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+.kc-usage-bar { display: flex; height: 4px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--muted-foreground) 22%, transparent); direction: ltr; }
+.kc-usage-bar > span { height: 100%; background: var(--primary); transition: width 400ms cubic-bezier(0.2, 0, 0, 1); }
+.kc-usage-bar[data-level="warn"] > span { background: var(--warn); }
+.kc-usage-bar[data-level="danger"] > span { background: var(--bad); }
+.kc-note { color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+/* A narrow bar (a phone, a wide sidebar) keeps the host chip's bars and drops its numbers. */
+.g-composer-bar { container-type: inline-size; }
+@container (max-width: 600px) {
+  .kc-host-chip > .ltr { display: none; }
+}
+
+/* Effort panel (Controls.jsx EffortPanel), as in Claude: a quiet track that fills up to a white
+   thumb, a dot for each level and a tick for the recommended one. --f (0–1, spring-driven) is the
+   thumb's place, --at a mark's. Own classes so the Karsara skin's shadow resets leave it alone. */
+.effort-panel { --effort-inset: 13px; }
+.effort-track {
+  position: relative;
+  height: 24px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+  transition: background-color 160ms;
+}
+.effort-track:hover { background: color-mix(in srgb, var(--foreground) 10%, transparent); }
+.effort-track:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent); }
+.effort-track[data-dragging] { cursor: grabbing; }
+.effort-fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: calc(var(--effort-inset) + (100% - 2 * var(--effort-inset)) * var(--f, 0));
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.effort-rail { position: absolute; inset-block: 0; inset-inline: var(--effort-inset); }
+.effort-dot,
+.effort-tick,
+.effort-thumb {
+  position: absolute;
+  top: 50%;
+  inset-inline-start: calc(var(--at, 0) * 100%);
+}
+.effort-dot {
+  width: 4px;
+  height: 4px;
+  margin-top: -2px;
+  margin-inline-start: -2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+.effort-tick {
+  width: 2px;
+  height: 10px;
+  margin-top: -5px;
+  margin-inline-start: -1px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--foreground) 45%, transparent);
+}
+.effort-thumb {
+  inset-inline-start: calc(var(--f, 0) * 100%);
+  width: 16px;
+  height: 28px;
+  margin-top: -14px;
+  margin-inline-start: -8px;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 1px 2px rgb(0 0 0 / 0.2), 0 2px 8px rgb(0 0 0 / 0.14);
+  pointer-events: none;
+  transition: transform 200ms cubic-bezier(0.2, 0, 0, 1), box-shadow 200ms;
+}
+.effort-track:hover .effort-thumb { box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.24), 0 4px 12px rgb(0 0 0 / 0.18); }
+.effort-track[data-dragging] .effort-thumb {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 2px 4px rgb(0 0 0 / 0.24), 0 6px 18px rgb(0 0 0 / 0.22);
+}
+.effort-under {
+  position: absolute;
+  top: 0;
+  inset-inline-start: calc(var(--at, 0) * 100%);
+  display: flex;
+  justify-content: center;
+  width: 0;
+}
+.effort-under > span { white-space: nowrap; font-size: 12px; color: var(--muted-foreground); }
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
@@ -357,7 +482,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .press, .pop { animation: none; transition: none; }
+  .press, .pop, .pop[data-state="closed"], .overlay, .overlay[data-state="closed"], .msg-in { animation: none; transition: none; }
+  .effort-thumb { transition: none; }
 }
 
 /* Every composer/assistant-ui button gets the same feel without touching each one. */
@@ -479,8 +605,6 @@ html[dir="ltr"] .rtl-mirror { transform: scaleX(-1); }
 [data-skin="karsara"] .agent-dots i { display: none; }
 @keyframes karsara-spin { to { transform: rotate(360deg); } }
 [data-skin="karsara"] :is(.press, button):active:not(:disabled) { transform: none; }
-[data-skin="karsara"] .pop { animation: karsara-fade 120ms ease-out; }
-@keyframes karsara-fade { from { opacity: 0; } to { opacity: 1; } }
 [data-skin="karsara"] :focus-visible { outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent); outline-offset: 1px; }
 [data-skin="karsara"] :is(textarea, input):focus-visible { outline: none; }
 [data-skin="karsara"] :is(.shadow-xl, .shadow-lg) { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14) !important; }

@@ -14,7 +14,8 @@ const PAGE_TITLES = {
   agents: t("ایجنت‌ها"),
 };
 
-export function tabTitle({ page = null, section = "", chatId = null, chat = null, running = false } = {}) {
+// `needs`: how many things wait for the owner (the inbox) — «(۲) » in front, seen from any tab.
+export function tabTitle({ page = null, section = "", chatId = null, chat = null, running = false, needs = 0 } = {}) {
   const parts = [];
   if (page) {
     if (section) parts.push(section);
@@ -26,5 +27,5 @@ export function tabTitle({ page = null, section = "", chatId = null, chat = null
     parts.push(String(chat.title || "").trim() || t("گفتگوی جدید"));
   }
   const title = [...parts.filter(Boolean), BRAND.name].join(" · ");
-  return running ? `● ${title}` : title;
+  return `${needs > 0 ? `(${needs.toLocaleString("fa-IR")}) ` : ""}${running ? "● " : ""}${title}`;
 }

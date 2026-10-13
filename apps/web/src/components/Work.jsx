@@ -7,7 +7,8 @@ import { locale, num, t } from "../i18n.js";
 import { useSkin } from "../skin.js";
 
 // Tools whose output is the answer itself; they stay visible outside the collapsed work log.
-const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", "ask_agent"]);
+// send_to_person: every message that reached a colleague keeps its «📤» card in sight.
+const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "ask_owner", "ask_agent", "send_to_person"]);
 
 // Splits an assistant run into the work log (thinking, tool calls, narration between them) and the
 // answer (text after the last working tool, plus charts/files/questions wherever they appeared).

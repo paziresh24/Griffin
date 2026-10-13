@@ -52,5 +52,18 @@
   "بسیار زیاد": "Extra high",
   "بیشینه": "Max",
   "تلاش پیش‌فرض": "Default effort",
-  "تلاش: {label}": "Effort: {label}"
+  "تلاش: {label}": "Effort: {label}",
+  "همهٔ {n} مدل": "All {n} models",
+  "انتخاب مدل…": "Choose a model…",
+  "موتور دیگری نیست؛ از تنظیمات ← موتورها اضافه کنید.": "No other engine; add one in Settings → Engines.",
+  "تنظیمات ← موتورها": "Settings → Engines",
+  "{names} خاموش یا بی‌کلید": "{names}: off or without a key",
+  "تنظیم": "Set up",
+  "تلاش": "Effort",
+  "راهنمای تلاش": "About effort",
+  "هرچه بیشتر، مدل عمیق‌تر فکر می‌کند ولی کندتر و پرمصرف‌تر است. فقط برای همین گفتگو؛ «پیشنهادی» پیش‌فرض ایجنت است.": "Higher means the model thinks harder but is slower and uses more. For this chat only; “Recommended” is the agent's default.",
+  "سریع‌تر": "Faster",
+  "باهوش‌تر": "Smarter",
+  "میزان تلاش": "Effort level",
+  "پیشنهادی": "Recommended"
 }

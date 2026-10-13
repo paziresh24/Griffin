@@ -8,25 +8,29 @@ import { chatHistoryBlock, isNoReply, peerAgentPrompt, takeRate, derivePeerUserI
 import { answerStamp, deliverable, liveStatusLine } from "./format.mjs";
 import { OWNER, REQUESTER } from "../asks.mjs";
 import { ownerLabel } from "../guard.mjs";
-import { createAccountChannel, createAccountLogin, watching } from "./telegram-account.mjs";
+import { createAccountChannel, createAccountLogin } from "./telegram-account.mjs";
 import { chartMedia } from "../chart-image.mjs";
 import { normalizeProvider } from "../providers/ids.mjs";
 import { openWorkFor } from "../related.mjs";
 import { PERSONA } from "../persona.mjs";
+import { ensureGlobal, ensureMother, isGlobalChat, joinThread, migrateTelegramV2, migrateWatchEnables, motherInfo, syncMotherNames, watching } from "./mother.mjs";
+import { createDesk } from "./desk.mjs";
 
 // Bridges messenger channels (Telegram/Bale bots; Telegram account) to Griffin chats: incoming
 // messages become runs, finished runs and ask_owner questions go back to the linked messenger chat.
-// Team coverage (caller=team): answers go to the teammate; ask_owner confirmations go to the Owner's
+// Colleagues' chats (caller=team) go through the desk (desk.mjs): a mother chat never delivers its
+// final text — only send_to_person reaches the colleague; ask_owner confirmations go to the Owner's
 // Telegram bot so they are unmistakable — not buried in the owner's own Saved Messages.
-export function createIntegrations({ store, runner, timelines = null, asks, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, classifyThread = null, pendingWork = () => 0, log = console }) {
+export function createIntegrations({ store, runner, timelines = null, asks, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, pendingWork = () => 0, burstMs = 0, log = console }) {
   const channels = new Map(); // integrationId -> channel
-  const questions = new Map(); // chatId -> last ask_owner args (for button index → label)
   // Each ask_owner gets a short id embedded in Telegram callback_data so buttons cannot
   // answer a different chat's question (one bot → many concurrent coverage chats).
-  const pendingAsks = new Map(); // askId -> { chatId, owner, at }
-  // Where a chat's currently-open ask_owner question was delivered, so it can be deleted the
-  // moment it stops being open (answered anywhere, held, or the run ended) — only open
-  // questions should stay visible in Telegram.
+  // Each entry keeps its own question: two open asks on one root chat (two sub-agents asking at
+  // once) used to share one per-chat slot, so a tap on the first mapped onto the second's options.
+  const pendingAsks = new Map(); // askId -> { chatId, owner, at, question, fromAsks }
+  // Deliveries that came back without a message id (a channel that returns none): all we can do
+  // is ask that channel to delete its last question once nothing of the chat is open any more.
+  // Deliveries with an id are rows in ask:open below, closed one by one.
   const askTargets = new Map(); // chatId -> [{ integrationId, externalChat }]
   const endAfterRun = new Map(); // chatId -> { integrationId, peer, note }
   const lastStatusAt = new Map(); // chatId -> ms of last status push (debounce)
@@ -39,13 +43,11 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   function registerAsk(chatId, question, { owner = false } = {}) {
     const askId = question.askId || newAskId();
     const tagged = { ...question, askId };
-    questions.set(chatId, tagged);
-    pendingAsks.set(askId, { chatId, owner: Boolean(owner), at: Date.now() });
+    pendingAsks.set(askId, { chatId, owner: Boolean(owner), at: Date.now(), question: tagged, fromAsks: Boolean(question.askId) });
     return tagged;
   }
 
   function clearAsksForChat(chatId) {
-    questions.delete(chatId);
     for (const [askId, pending] of pendingAsks) {
       if (pending.chatId === chatId) pendingAsks.delete(askId);
     }
@@ -64,17 +66,24 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   };
   const saveOpenAsks = (rows) => store.setKv?.(OPEN_ASKS_KEY, rows.slice(-MAX_OPEN_ASKS));
 
-  function recordAskDelivery(chatId, integrationId, externalChat, { messageId = null, askId = null } = {}) {
-    const list = askTargets.get(chatId) || [];
-    list.push({ integrationId, externalChat: String(externalChat) });
-    askTargets.set(chatId, list);
-    if (messageId == null) return;
+  // `question` is the tagged question this delivery carried: its own text and id, not whatever the
+  // chat asked last — two sends in flight at once used to save the second's text on the first row.
+  function recordAskDelivery(chatId, integrationId, externalChat, sent, question) {
+    const messageId = sent?.message_id ?? sent?.id ?? null;
+    if (messageId == null) {
+      // Kept apart from the rows: a stale entry here once made a later close of this chat delete
+      // another chain's still-open question (the channel deletes its LAST question, not this one).
+      const list = askTargets.get(chatId) || [];
+      list.push({ integrationId, externalChat: String(externalChat) });
+      askTargets.set(chatId, list);
+      return;
+    }
     // The question text is kept so closing the message can leave it readable (with the answer
     // under it) instead of replacing it with a bare "answered".
-    const text = String(questions.get(chatId)?.question || "").slice(0, 3000);
+    const text = String(question?.question || "").slice(0, 3000);
     saveOpenAsks([
       ...openAsks().filter((row) => row.messageId !== messageId || row.externalChat !== String(externalChat)),
-      { chatId, integrationId, externalChat: String(externalChat), messageId, askId, text, at: Date.now() },
+      { chatId, integrationId, externalChat: String(externalChat), messageId, askId: question?.askId ?? null, text, at: Date.now() },
     ]);
   }
 
@@ -91,23 +100,26 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
 
   // A question stopped being open (answered from the UI, from Telegram, or the run ended):
   // delete the Telegram message so only genuinely open questions stay visible there.
-  function clearQuestion(chatId, { answer = null, cancelled = false } = {}) {
+  function clearQuestion(chatId, { answer = null, cancelled = false, askId = null } = {}) {
     const note = answer
       ? `✅ پاسخ: ${String(answer).slice(0, 200)}`
       : cancelled
         ? "⏹ کار متوقف شد؛ این سؤال دیگر باز نیست."
         : "✅ پاسخ ثبت شد.";
-    clearAsksForChat(chatId);
+    // One question of the chain closed (asks says which): only its row goes, the others stay tappable.
+    if (askId) pendingAsks.delete(String(askId));
+    else clearAsksForChat(chatId);
+    const rows = openAsks();
+    const mine = rows.filter((row) => row.chatId === chatId && (!askId || row.askId === askId));
+    if (mine.length) {
+      saveOpenAsks(rows.filter((row) => !mine.includes(row)));
+      for (const row of mine) closeDelivered(row, note);
+    }
+    if (askId) return;
+    // Nothing of the chat is open any more: deliveries without a message id get the channel's
+    // delete-your-last-question.
     const targets = askTargets.get(chatId);
     askTargets.delete(chatId);
-    const rows = openAsks();
-    const mine = rows.filter((row) => row.chatId === chatId);
-    if (mine.length) {
-      saveOpenAsks(rows.filter((row) => row.chatId !== chatId));
-      for (const row of mine) closeDelivered(row, note);
-      return;
-    }
-    // No recorded message id (older delivery): fall back to deleting the last one we remember.
     for (const t of targets || []) {
       channels.get(t.integrationId)?.deliver(t.externalChat, { clearQuestion: true }).catch(() => {});
     }
@@ -161,29 +173,34 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     ...channelFactories,
   };
 
-  function coverageMap(id) {
-    return { ...(store.getIntegration(id)?.settings?.coverage || {}) };
-  }
+  const personByExternal = (key) => store.findPerson(key);
 
-  function saveCoverage(id, coverage) {
-    store.updateIntegration(id, { settings: { coverage } });
+  // The person's standing orchestrator chat (mother.mjs), made on their first watched message.
+  async function motherChat(id, peer, { name, person = null } = {}) {
+    const profile = person?.id ? store.getPerson(person.id) : personByExternal(peer);
+    return ensureMother(store, {
+      integrationId: id,
+      key: String(peer),
+      person: profile,
+      name: name || profile?.display_name || String(peer),
+      agent: coverageAgent(profile, store),
+      model: store.getIntegration(id)?.settings?.model || null,
+    });
   }
-
-  function personByExternal(key) {
-    return store.listPersons({ source: "telegram" }).find((p) => p.external_id === String(key)) || null;
-  }
-
-  // Threads used to live in settings.coverage (one per peer); carry the open ones over once.
-  for (const integ of store.listIntegrations?.() || []) {
-    const legacy = integ.settings?.coverage || {};
-    if (!Object.keys(legacy).length) continue;
-    for (const [key, entry] of Object.entries(legacy)) {
-      if (entry?.chatId && store.getChat(entry.chatId)) {
-        store.addThreadMember({ chatId: entry.chatId, integrationId: integ.id, externalChat: key, personId: personByExternal(key)?.id || null });
-      }
-    }
-    store.updateIntegration(integ.id, { settings: { coverage: {} } });
-  }
+  const accountEntry = () => [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account") || null;
+  const desk = createDesk({
+    store, runner, timelines, pendingWork, burstMs, log, motherChat,
+    channelOf: (id) => channels.get(id),
+    accountChannel: () => accountEntry()?.[1] || null,
+  });
+  // Telegram v2, once: legacy threads close unless something still runs in them (mother.mjs).
+  migrateTelegramV2(store, {
+    isActive: (id) => runner.isActive(id) || Boolean(store.getKv(`runq:${id}`)),
+    isWaiting: (id) => Boolean(asks?.isWaiting?.(id)),
+  });
+  // Once: a watched person still blocked by the old «دسترسی» flag gets answered again.
+  const unblocked = migrateWatchEnables(store);
+  if (unblocked) log.info?.(`[telegram] ${unblocked} watched person(s) had the old access flag off — turned on`);
 
   /** Owner's personal Telegram user id (from the connected account). */
   // Nobody is watching a scheduler / ops-room / job chain: no owner question comes out of it.
@@ -247,13 +264,24 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     }
   }
 
-  async function answerChat(chatId, index, { by = OWNER } = {}) {
-    const question = questions.get(chatId);
+  // In the owner's own chats the person tapping the button is the owner, whichever bot chat it
+  // came from; only a teammate/peer chat answers as the requester.
+  const answererIn = (chatId, by) => (store.getChat(chatId)?.caller === OWNER ? OWNER : by);
+
+  // The answer to one delivered question (askId): its own options map the index to a label.
+  async function answerChat(chatId, index, { by = OWNER, askId = null } = {}) {
+    const entry = askId ? pendingAsks.get(String(askId)) : null;
+    const question = entry?.question;
     const label = question?.options?.[index]?.label;
     if (!chatId || !label) return false;
-    // In the owner's own chats the person tapping the button is the owner, whichever bot chat it
-    // came from; only a teammate/peer chat answers as the requester.
-    const answeredBy = store.getChat(chatId)?.caller === OWNER ? OWNER : by;
+    const answeredBy = answererIn(chatId, by);
+    // A question asks knows by id: settle exactly that one with its own options. ask.pending is
+    // written only once the tool is waiting, so there is nothing to wait for; a false (answered
+    // elsewhere) makes the bot say «این سؤال دیگر باز نیست» instead of sending a follow-up.
+    if (entry.fromAsks) {
+      pendingAsks.delete(String(askId));
+      return Boolean(asks?.answer(chatId, { answer: label, selected: [label], by: answeredBy, askId }));
+    }
     clearAsksForChat(chatId);
     if (runner.isActive(chatId)) await asks?.waitForQuestion?.(chatId, { stillActive: () => runner.isActive(chatId) });
     if (asks?.answer(chatId, { answer: label, selected: [label], by: answeredBy })) return true;
@@ -270,7 +298,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       const saved = store.upsertPerson({ integrationId: id, externalId, ...person });
       const roster = store.getIntegration(id)?.settings?.teamRoster || [];
       // Entries are display names or @usernames.
-      const keys = [saved?.display_name, saved?.username && `@${saved.username}`].filter(Boolean).map((k) => String(k).trim().toLowerCase());
+      const keys = [saved?.tg_name, saved?.display_name, saved?.username && `@${saved.username}`].filter(Boolean).map((k) => String(k).trim().toLowerCase());
       if (saved && saved.category === "unclassified" && roster.some((n) => keys.includes(String(n).trim().toLowerCase()))) {
         return store.updatePerson(saved.id, { category: "team" });
       }
@@ -302,152 +330,36 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       return true;
     },
 
-    // The owner took the conversation over: stop this thread's run AND its delegated subtasks
-    // (runner.cancel reaches children even when the parent's own turn already ended), so nothing
-    // finishes later and talks over him.
-    async handOver(id, externalChat) {
-      const chatId = store.linkedChat(id, externalChat);
-      if (!chatId) return false;
-      handedOver.add(chatId);
-      await runner.cancel(chatId).catch(() => {});
-      return true;
+    // Telegram v2: what happens to a colleague's message is the desk's (desk.mjs); the mother chat.
+    desk,
+    motherChat,
+
+    coverageName(_id, peer) {
+      return personByExternal(peer)?.display_name || null;
     },
 
-    // A peer is covered while any thread with them is open (several can be, owner 2026-10-12).
-    // settings.coverage is the pre-threads record, still read for chats that predate thread_links.
-    isCovered(id, peer) {
-      return store.openThreads(id, peer).length > 0 || Boolean(coverageMap(id)[String(peer)]);
-    },
-
-    openThreads(id, peer) {
-      return store.openThreads(id, peer).map((t) => ({ id: t.id, title: t.title }));
-    },
-
-    coverageName(id, peer) {
-      return personByExternal(peer)?.display_name || coverageMap(id)[String(peer)]?.name || null;
-    },
-
-    // Does the newest message in a teammate DM open a thread? (see threads.mjs). No classifier
-    // configured means no automatic threads.
-    async classifyThread(args) {
-      if (!classifyThread) return { start: false, reason: "no classifier" };
-      return classifyThread(args);
-    },
-
-    // fresh: a new thread gets its own chat (reopening with «گریفین» continues the last one).
-    async startCoverage(id, peer, { name, username = null, personId = null, fresh = false, title = null } = {}) {
-      const key = String(peer);
-      const integration = store.getIntegration(id);
-      const profile = personId
-        ? store.getPerson(personId)
-        : store.listPersons({ source: "telegram" }).find((p) => p.external_id === key) || null;
-      const agent = coverageAgent(profile, store);
-      let chatId = store.linkedChat(id, key);
-      const existing = chatId ? store.getChat(chatId) : null;
-      if (fresh || !existing || existing.caller !== COVERAGE_CALLER || existing.agent !== agent || existing.archived) {
-        const chat = store.createChat({
-          title: title || `/agent · ${name || key}`,
-          mode: "agent",
-          model: integration.settings.model || null,
-          caller: COVERAGE_CALLER,
-          agent,
-          personId: profile?.id || personId || null,
-        });
-        chatId = chat.id;
-      }
-      store.linkChat(id, key, chatId);
-      store.addThreadMember({ chatId, integrationId: id, externalChat: key, personId: profile?.id || personId || null });
-      return { name: name || key, username: username || null, chatId, fresh, title, startedAt: new Date().toISOString() };
-    },
-
-    // /agent off: every open thread with this peer stops for them (a grouped thread goes on for
-    // its other members).
-    async endCoverage(id, peer) {
-      const key = String(peer);
-      const coverage = coverageMap(id);
-      const legacy = coverage[key];
-      if (legacy) {
-        delete coverage[key];
-        saveCoverage(id, coverage);
-      }
-      const open = store.openThreads(id, key);
-      if (!open.length && !legacy) return null;
-      for (const thread of open) {
-        store.closeThread(thread.id, { integrationId: id, externalChat: key });
-        if (runner.isActive(thread.id)) await runner.cancel(thread.id).catch(() => {});
-      }
-      return { name: bridge.coverageName(id, key) || legacy?.name || key, chatId: open[0]?.id || legacy?.chatId || null };
-    },
-
-    // A thread is done (end_agent, or closed from the UI): close it for every member and point
-    // each member's chat at their next open thread, if any.
+    // A legacy (pre-v2) thread is done (end_agent, or closed from the UI): closed for every member.
+    // The person's pointer moves to their mother chat with their next message (desk.mjs).
     async closeThread(chatId, { cancel = false } = {}) {
       const members = store.threadMembers(chatId);
       store.closeThread(chatId);
-      for (const m of members) {
-        if (store.linkedChat(m.integration_id, m.external_chat) !== chatId) continue;
-        const next = store.openThreads(m.integration_id, m.external_chat)[0];
-        if (next) store.linkChat(m.integration_id, m.external_chat, next.id);
-      }
       if (cancel && runner.isActive(chatId)) await runner.cancel(chatId).catch(() => {});
       return members;
     },
 
-    // Fold one thread into another: same issue from more than one person (owner 2026-10-12).
-    // Members move over, their chats point at the target, the source closes, and the target hears
-    // who else is waiting on it.
-    async mergeThreads(fromId, intoId) {
-      if (!fromId || !intoId || fromId === intoId) throw new Error("دو رشتهٔ متفاوت لازم است");
-      const from = store.getChat(fromId);
-      const into = store.getChat(intoId);
-      if (!from || !into) throw new Error("رشته پیدا نشد");
-      const moved = store.threadMembers(fromId).filter((m) => !m.closed_at);
-      for (const m of moved) {
-        store.addThreadMember({ chatId: intoId, integrationId: m.integration_id, externalChat: m.external_chat, personId: m.person_id });
-        store.linkChat(m.integration_id, m.external_chat, intoId);
-      }
-      store.closeThread(fromId);
-      if (runner.isActive(fromId)) await runner.cancel(fromId).catch(() => {});
-      store.updateChat(fromId, { archived: true });
-      const names = store.threadMembers(intoId).filter((m) => !m.closed_at).map((m) => m.display_name || m.external_chat);
-      const recent = moved.flatMap((m) => (m.person_id ? store.listPersonMessages(m.person_id, 6).filter((x) => x.direction === "in").map((x) => `«${m.display_name || "همکار"}»: ${String(x.text).slice(0, 400)}`) : []));
-      const note = `[رشتهٔ «${from.title}» با این رشته یکی شد — همان مسئله. حالا این‌ها منتظر همین کارند: ${names.join("، ")}. جواب این رشته به همهٔ آن‌ها می‌رسد.]` +
-        (recent.length ? `\n\n${recent.join("\n")}` : "");
-      await runner.send(intoId, { text: note, images: [], intent: runner.isActive(intoId) ? "queue" : "send" }).catch((error) => log.error?.(`[integrations] merge note: ${error.message}`));
-      return { moved: moved.length, members: names };
-    },
+    personByExternal,
+    // id and Telegram name only, for passes over many dialogs (findPerson parses the whole history).
+    personLight: (key) => store.db.prepare("SELECT id, display_name AS tg_name FROM persons WHERE source = 'telegram' AND external_id = ?").get(String(key)) || null,
+    // Profile photos (telegram-account.mjs): the stored Telegram photo id, so one photo downloads once.
+    personPhotoVersion: (id) => store.personPhoto(id)?.photo_id ?? null,
+    setPersonPhoto: (id, photoId, data) => store.setPersonPhoto(id, photoId, data),
 
-    // The owner puts a person's message into a thread by hand (or starts a new one from it) from
-    // the mother chat. The account channel does the Telegram side (reply target, 👀).
-    async routeMessage(personId, messageId, target) {
-      const person = store.getPerson(personId);
-      const message = person?.history?.find((m) => String(m.id) === String(messageId));
-      if (!person || !message) throw new Error("پیام پیدا نشد");
-      const account = [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account");
-      if (!account) throw new Error("اکانت تلگرام وصل نیست");
-      const [id, channel] = account;
-      return channel.routeByHand(person, message, target === "new" ? null : String(target));
-    },
-
-    personByExternal(key) {
-      return personByExternal(key);
-    },
-    getKv: (key) => store.getKv(key),
-    setKv: (key, value) => store.setKv(key, value),
-    tagPersonMessages: (personId, ids, data) => store.tagPersonMessages(personId, ids, data),
-
-    // chatId: feed this thread (the routing decided), and make it the peer's current one.
-    async receive(id, externalChat, { text, images = [], caller = null, title = null, person = null, chatId: target = null } = {}) {
-      if (target) {
-        store.linkChat(id, externalChat, target);
-        store.addThreadMember({ chatId: target, integrationId: id, externalChat, personId: personByExternal(externalChat)?.id || null });
-      }
+    // Saved Messages and the bots: one owner chat per messenger chat.
+    async receive(id, externalChat, { text, images = [], title = null, person = null } = {}) {
       let chatId = store.linkedChat(id, externalChat);
       const existing = chatId ? store.getChat(chatId) : null;
-      const profile = person ? store.upsertPerson({ externalId: externalChat, ...person, data: { platform: "telegram", source: "account" } }) : store.listPersons({ source: "telegram" }).find((p) => p.external_id === String(externalChat)) || (person ? store.upsertPerson({ externalId: externalChat, ...person }) : null);
-      // A teammate's own message is already in their history (the account channel records it raw);
-      // the framed prompt built from it would only show up twice in the mother chat.
-      if (profile && text && caller !== COVERAGE_CALLER) store.addPersonMessage({ personId: profile.id, direction: "in", text, data: { chatId, caller: caller || "owner" } });
+      const profile = person ? store.upsertPerson({ externalId: externalChat, ...person, data: { platform: "telegram", source: "account" } }) : personByExternal(externalChat);
+      if (profile && text) store.addPersonMessage({ personId: profile.id, direction: "in", text, data: { chatId, caller: "owner" } });
       // A disabled profile is the owner's choice about this person; the person is never told so
       // (it used to reach the colleague as «این پروفایل فعلاً دسترسی فعال ندارد.»). Only the owner hears it.
       if (profile?.access?.enabled === false) {
@@ -464,8 +376,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           title: title || autoTitle(text),
           mode: "agent",
           model: integration.settings.model || null,
-          caller: caller || "owner",
-          agent: caller === COVERAGE_CALLER ? coverageAgent(profile, store) : undefined,
+          caller: "owner",
           personId: profile?.id || null,
         });
         chatId = chat.id;
@@ -556,14 +467,27 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       }
     },
 
-    // Returns true when the choice matched an open question on the linked chat.
+    // Returns true when the choice matched an open question on the linked chat (or was refused
+    // with a word to the sender: either way the digit is not a new message).
     async answer(id, externalChat, index, askId = null) {
       if (askId) {
         const pending = pendingAsks.get(String(askId));
         if (!pending || pending.owner) return false;
-        return answerChat(pending.chatId, index, { by: "requester" });
+        return answerChat(pending.chatId, index, { by: "requester", askId: String(askId) });
       }
-      return answerChat(store.linkedChat(id, externalChat), index, { by: "requester" });
+      // A bare number carries no ask: it is only an answer when exactly one question of this chat
+      // is open (one the sender may answer). With two, «1» used to take the newest question's label
+      // and settle the oldest — it could approve the wrong change. Never guess.
+      const chatId = store.linkedChat(id, externalChat);
+      const answeredBy = answererIn(chatId, "requester");
+      const open = chatId ? [...pendingAsks].filter(([, p]) => p.chatId === chatId && (answeredBy === OWNER || !p.owner)) : [];
+      if (open.length === 1) return answerChat(chatId, index, { by: "requester", askId: open[0][0] });
+      if (!open.length) return false;
+      const channel = channels.get(id);
+      // Saved Messages has no buttons: there the board answers it.
+      const how = channel?.kind === "telegram_account" ? "از «منتظر شما» در صفحهٔ اصلی جواب بدهید" : "دکمهٔ همان سؤال را بزنید";
+      await channel?.deliver(externalChat, { text: `چند سؤال باز است؛ ${how}.`, done: false }).catch(() => {});
+      return true;
     },
 
     // Agent called end_agent: close coverage after this run's reply is delivered.
@@ -576,11 +500,11 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       if (askId) {
         const pending = pendingAsks.get(String(askId));
         if (!pending?.owner) return false;
-        return answerChat(pending.chatId, index);
+        return answerChat(pending.chatId, index, { askId: String(askId) });
       }
       const open = openOwnerAsks();
       if (open.length !== 1) return false;
-      return answerChat(open[0][1].chatId, index);
+      return answerChat(open[0][1].chatId, index, { askId: open[0][0] });
     },
 
     openOwnerAskCount() {
@@ -591,8 +515,6 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   // A colleague's request whose run died (cancel / engine error) with nothing sent leaves the
   // colleague waiting and nobody aware: on 2026-10-10 a colleague's request was cancelled after
   // 15 minutes and sat silent for 26 hours. One line to the owner's bot closes that gap.
-  // The owner's own takeover (handOver) is not news to him.
-  const handedOver = new Set();
   async function tellOwnerUnanswered(chat, why) {
     if (!chat) return;
     await notifyOwner(`🔕 «${String(chat.title || "رشتهٔ همکار").slice(0, 80)}» بی‌جواب ماند (${String(why).slice(0, 120)}); به همکار چیزی نرفت.`, chat.id);
@@ -609,6 +531,9 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   }
 
   async function deliverRun(chatId, links, { heading = "" } = {}) {
+    // A mother chat never speaks by itself (R1): its final text is a report for the owner, and only
+    // send_to_person reaches the colleague (desk.mjs).
+    if (motherInfo(store, chatId)) return [];
     const { messages } = timelines ? (await timelines.get(chatId)).timeline : foldEvents(store.allEvents(chatId));
     const run = lastRun(messages); // a run split by an owner message mid-run, whole
     if (!run) return [];
@@ -645,7 +570,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     // not "⏹ stopped" or a half-written reply (2026-10-06: «⏹ متوقف شد» reached a colleague's bot).
     if (out.status === "cancelled" && !toOwner) {
       for (const link of links) channels.get(link.integration_id)?.deliver(link.external_chat, { clearStatus: true }).catch(() => {});
-      if (!handedOver.delete(chatId)) tellOwnerUnanswered(chat, "لغو شد").catch(() => {});
+      tellOwnerUnanswered(chat, "لغو شد").catch(() => {});
       return [];
     }
     let text = out.text;
@@ -718,12 +643,12 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       ensureBotPaired(bot.id, ownerId);
       bot.channel
         .deliver(ownerId, { question: tagged })
-        .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+        .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, sent, tagged))
         .catch(fail("bot"));
     } else if (account) {
       account[1]
         .deliver("me", { question: tagged })
-        .then((sent) => recordAskDelivery(chatId, account[0], "me", { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+        .then((sent) => recordAskDelivery(chatId, account[0], "me", sent, tagged))
         .catch(fail("account"));
     } else {
       log.error?.("[integrations] owner-ask: no telegram channel to reach Owner");
@@ -745,13 +670,15 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           channel.deliver(link.external_chat, { clearStatus: true }).catch(fail);
           channel
             .deliver(link.external_chat, { question: tagged })
-            .then((sent) => recordAskDelivery(chatId, link.integration_id, link.external_chat, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+            .then((sent) => recordAskDelivery(chatId, link.integration_id, link.external_chat, sent, tagged))
             .catch(fail);
         }
       };
       // A question for whoever asked goes back where they asked (a colleague's Telegram chat);
-      // over /mcp there is no link and peer-tasks surfaces it as input-required.
-      if (question.audience === REQUESTER) {
+      // over /mcp there is no link and peer-tasks surfaces it as input-required. A mother chat
+      // never speaks to the colleague except by send_to_person (R1): its threads' questions go to
+      // the owner like any other.
+      if (question.audience === REQUESTER && !motherInfo(store, chatId)) {
         if (links.length) toLinks();
         return;
       }
@@ -786,7 +713,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
             ensureBotPaired(bot.id, ownerId);
             bot.channel
               .deliver(ownerId, { question: tagged })
-              .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+              .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, sent, tagged))
               .catch(fail("bot-question"));
           } else if (account) {
             // Fallback only if no bot: Saved Messages (legacy).
@@ -795,7 +722,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
             }).catch(fail("me-alert"));
             account[1]
               .deliver("me", { question: tagged })
-              .then((sent) => recordAskDelivery(chatId, account[0], "me", { messageId: sent?.message_id ?? sent?.id ?? null, askId: tagged.askId }))
+              .then((sent) => recordAskDelivery(chatId, account[0], "me", sent, tagged))
               .catch(fail("me-question"));
           } else {
             log.error?.("[integrations] ask_owner: no bot or telegram account to reach Owner");
@@ -811,11 +738,11 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     // when the final answer goes out (owner 2026-10-07). It follows the work down the delegation
     // tree: a subtask's steps show in the root chat's line — the /agent run itself ends in a minute
     // and the delegated work runs ~20 more. A colleague's agent (peer:*) gets none: it would read
-    // the line as a message to answer.
+    // the line as a message to answer. Nor does a mother chat: only send_to_person speaks there (R5).
     const rootId = links.length ? chatId : store.rootChatId?.(chatId) || chatId;
     const statusLinks = rootId === chatId ? links : store.linksForChat(rootId).filter((l) => channels.has(l.integration_id));
     const rootCaller = String((rootId === chatId ? chat : store.getChat(rootId))?.caller || "");
-    const line = statusLinks.length && !rootCaller.startsWith("peer:") ? liveStatusLine(event) : null;
+    const line = statusLinks.length && !rootCaller.startsWith("peer:") && !motherInfo(store, rootId) ? liveStatusLine(event) : null;
     if (line && event.type !== "run.finished") {
       const now = Date.now();
       const prev = lastStatusAt.get(rootId) || 0;
@@ -838,7 +765,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           if (!pending) return;
           endAfterRun.delete(chatId);
           const members = await bridge.closeThread(chatId);
-          if (!members.length && !(await bridge.endCoverage(pending.integrationId, pending.peer))) return;
+          if (!members.length) return;
           const channel = channels.get(pending.integrationId);
           const note = pending.note ? ` — ${pending.note}` : "";
           const who = members.map((m) => m.display_name).filter(Boolean).join("، ") || bridge.coverageName(pending.integrationId, pending.peer) || pending.peer;
@@ -911,7 +838,9 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
 
   return {
     store,
+    runner,
     bridge,
+    desk,
     notifyOwner,
     channels,
     // Called (via asks.mjs's onSettled hook) the moment a question stops being open — deletes
@@ -928,6 +857,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       setInterval(() => watchAccounts().catch((error) => log.error?.(`[integrations] account watch: ${error.message}`)), 60_000).unref?.();
       // Questions delivered before this restart have no run behind them any more.
       setTimeout(() => sweepStaleAsks().catch(() => {}), 5_000).unref?.();
+      desk.start();
     },
 
     sweepStaleAsks,
@@ -1018,13 +948,17 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       for (const channel of channels.values()) if (channel.kind === "telegram_account") channel.markSent?.(id);
     },
 
-    markAccountSent(id) {
-      for (const channel of channels.values()) if (channel.kind === "telegram_account") channel.markSent?.(id);
+    // Another session wrote to a colleague from the owner's account (/api/telegram/send): the
+    // owner is in that conversation (R2/R3), like his own hand-typed line.
+    ownerWrote(peer, text) {
+      const id = accountEntry()?.[0];
+      if (id && peer) desk.ownerLine(id, String(peer), { text: String(text || ""), by: "session" });
     },
 
     stopAll() {
       for (const id of [...channels.keys()]) stopChannel(id);
       store.bus.off("event", onEvent);
+      desk.stop();
     },
   };
 }
@@ -1042,11 +976,12 @@ export async function accountProfileOf(channels) {
 // Tools that stop and wait for the owner, as a question a messenger can show.
 export function questionFromEvent(event) {
   if (event.type !== "ask.pending") return null;
-  const { question, options, multiSelect, audience } = event.data || {};
-  return question ? { question, options, multiSelect, audience: audience === REQUESTER ? REQUESTER : OWNER } : null;
+  const { question, options, multiSelect, audience, askId } = event.data || {};
+  return question ? { question, options, multiSelect, audience: audience === REQUESTER ? REQUESTER : OWNER, ...(askId ? { askId } : {}) } : null;
 }
 
-export function integrationRoutes(app, integrations) {
+// fillNames(ids): fa-names.mjs for those persons, in the background (index.mjs).
+export function integrationRoutes(app, integrations, { fillNames = null } = {}) {
   // Telegram posts here without a session cookie (public). Secret token is checked in the handler.
   app.post("/api/public/integrations/:id/webhook", async (c) => {
     const update = await c.req.json().catch(() => null);
@@ -1061,6 +996,18 @@ export function integrationRoutes(app, integrations) {
     persons: integrations.bridge.listPersons({ query: c.req.query("q") || "", category: c.req.query("category") || null })
       .map(({ history, history_json, access_json, meta_json, ...person }) => person),
   }));
+  // A person's Telegram profile photo. Only the current version's address is served (like the owner's
+  // photo in profile.mjs), so a changed picture never sits in the browser cache under a stale address.
+  app.get("/api/telegram/persons/:id/photo", (c) => {
+    const row = integrations.store.personPhoto(c.req.param("id"));
+    if (!row?.data || c.req.query("v") !== row.photo_id) return c.json({ error: "not found" }, 404);
+    return c.body(row.data, 200, {
+      "content-type": "image/jpeg",
+      "cache-control": "private, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; sandbox",
+    });
+  });
   app.get("/api/telegram/persons/:id/messages", (c) => c.json({ messages: integrations.bridge.listPersonMessages(c.req.param("id"), Math.min(Number(c.req.query("limit") || 200), 500)) }));
   app.get("/api/telegram/persons/:id/chats", (c) => {
     const chats = integrations.bridge.listPersonChats(c.req.param("id"), c.req.query("archived") === "1").map((chat) => ({
@@ -1071,34 +1018,28 @@ export function integrationRoutes(app, integrations) {
     }));
     return c.json({ chats });
   });
-  // Mother chats: one per person who wrote or has a thread, newest activity first (sidebar).
-  app.get("/api/telegram/mothers", (c) => {
+  // Telegram v2 (desk.mjs): who is watched and how each conversation stands — no message history.
+  app.get("/api/telegram/people", (c) => c.json({ people: integrations.desk.people() }));
+  // The global chat, what waits for the owner, and the open threads.
+  app.get("/api/telegram/feed", (c) => c.json(integrations.desk.feed()));
+  app.post("/api/telegram/global", (c) => c.json({ chatId: ensureGlobal(integrations.store) }));
+  app.post("/api/telegram/pause", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json({ paused: integrations.desk.setPaused(body.paused === true) });
+  });
+  app.post("/api/telegram/waiting/:id", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const result = await integrations.desk.act(c.req.param("id"), body.action);
+    return result.error ? c.json({ error: result.error }, result.status || 400) : c.json({ ok: true });
+  });
+  // A person's mother chat. Only for a watched person: the watcher is what makes one.
+  app.post("/api/telegram/persons/:id/mother", async (c) => {
     const { store } = integrations;
-    const mothers = integrations.bridge.listPersons({ source: "telegram" })
-      .map((p) => {
-        const threads = store.threadsForPerson(p.id);
-        const last = p.history.at(-1) || null;
-        if (!last && !threads.length) return null;
-        const open = threads.filter((t) => !t.closed);
-        return {
-          id: p.id,
-          name: p.display_name,
-          username: p.username || null,
-          category: p.category,
-          // Groups and channels have negative Telegram ids; the chat type is in meta when recorded.
-          group: String(p.external_id).startsWith("-") || ["group", "channel"].includes(p.meta?.chatType),
-          watch: watching(p),
-          pickupEvery: Number(p.access?.pickupEvery) || 0,
-          lastAt: last?.at || p.last_seen_at || null,
-          lastText: last ? String(last.text).slice(0, 120) : "",
-          lastDirection: last?.direction || null,
-          openThreads: open.length,
-          running: open.some((t) => t.run_status === "running"),
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
-    return c.json({ mothers });
+    const person = store.getPerson(c.req.param("id"));
+    if (!person) return c.json({ error: "پیدا نشد" }, 404);
+    if (!watching(person)) return c.json({ error: "واچر این شخص خاموش است" }, 409);
+    const chatId = await integrations.desk.setWatch(person.id, true);
+    return chatId ? c.json({ chatId }) : c.json({ error: "اکانت تلگرام وصل نیست" }, 404);
   });
   app.get("/api/telegram/persons/:id/threads", (c) => c.json({
     threads: integrations.store.threadsForPerson(c.req.param("id")).map((t) => ({
@@ -1106,33 +1047,37 @@ export function integrationRoutes(app, integrations) {
       members: t.members.map((m) => ({ personId: m.person_id, name: m.display_name || m.external_chat, closed: Boolean(m.closed_at) })),
     })),
   }));
-  app.get("/api/telegram/threads", (c) => c.json({
-    threads: integrations.store.allOpenThreads().map((t) => ({ id: t.id, title: t.title, updatedAt: t.updated_at, members: t.members.filter((m) => !m.closed_at).map((m) => m.display_name || m.external_chat) })),
-  }));
-  app.post("/api/telegram/persons/:id/route", async (c) => {
+  app.post("/api/telegram/threads/:id/join", async (c) => {
+    const { store, runner } = integrations;
     const body = await c.req.json().catch(() => ({}));
-    try {
-      return c.json(await integrations.bridge.routeMessage(c.req.param("id"), body.messageId, body.thread || "new"));
-    } catch (error) {
-      return c.json({ error: error.message }, 400);
-    }
+    const person = store.getPerson(String(body.person || ""));
+    if (!person) return c.json({ error: "شخص پیدا نشد" }, 404);
+    if (!watching(person)) return c.json({ error: "واچر این شخص خاموش است" }, 409);
+    const chatId = await integrations.desk.setWatch(person.id, true);
+    const result = await joinThread(store, runner, { thread: c.req.param("id"), chatId, name: person.display_name });
+    return result.error ? c.json({ error: result.error }, 404) : c.json({ ok: true });
   });
+  // A thread is closed: a v2 thread (a mother's delegated subtask) stops and owes no report; a legacy
+  // thread closes for its members and is archived, so it is not listed as open again.
   app.post("/api/telegram/threads/:id/close", async (c) => {
-    await integrations.bridge.closeThread(c.req.param("id"), { cancel: true });
-    return c.json({ ok: true });
-  });
-  app.post("/api/telegram/threads/:id/merge", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      return c.json(await integrations.bridge.mergeThreads(c.req.param("id"), String(body.into || "")));
-    } catch (error) {
-      return c.json({ error: error.message }, 400);
+    const { store, runner } = integrations;
+    const id = c.req.param("id");
+    const delegate = store.getKv(`delegate:${id}`);
+    if (delegate && ["running", "done"].includes(delegate.state)) {
+      store.setKv(`delegate:${id}`, { ...delegate, state: "reported", status: "cancelled" });
+      if (runner.isActive(id)) await runner.cancel(id).catch(() => {});
     }
+    await integrations.bridge.closeThread(id, { cancel: true });
+    if (delegate?.parent) integrations.desk.threadClosed(delegate.parent);
+    const chat = store.getChat(id);
+    if (!delegate && chat && !chat.archived && !motherInfo(store, id) && !isGlobalChat(store, id)) store.updateChat(id, { archived: true });
+    return c.json({ ok: true });
   });
   app.patch("/api/telegram/persons/:id", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const patch = {};
-    if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 120);
+    // The Persian name; an empty one hands it back to the automatic one (fa-names.mjs).
+    if (typeof body.name === "string") patch.name = body.name.trim().slice(0, 120);
     if (typeof body.category === "string") patch.category = body.category.trim().slice(0, 60) || "unclassified";
     if (body.access && typeof body.access === "object" && !Array.isArray(body.access)) {
       const access = { ...body.access };
@@ -1149,7 +1094,18 @@ export function integrationRoutes(app, integrations) {
       }
       patch.access = access;
     }
-    return c.json({ person: integrations.bridge.updatePerson(c.req.param("id"), patch) });
+    const before = integrations.store.getPerson(c.req.param("id"));
+    const updated = integrations.bridge.updatePerson(c.req.param("id"), patch);
+    if (!updated) return c.json({ error: "پیدا نشد" }, 404);
+    if ("name" in patch) syncMotherNames(integrations.store);
+    // Handed back to automatic: its Persian name now, not at the next half-hour pass.
+    if ("name" in patch && !updated.fa_name) fillNames?.([updated.id]);
+    // Watcher on makes the mother chat; off stops its run (desk.mjs). Only a real change is a watcher
+    // decision: the page sends the whole access object, so changing the pickup time also carries watch.
+    const changed = typeof patch.access?.watch === "boolean" && patch.access.watch !== watching(before);
+    const chatId = typeof patch.access?.watch === "boolean" ? await integrations.desk.setWatch(updated.id, patch.access.watch, { decided: changed }) : null;
+    const { history, history_json, ...person } = integrations.store.getPerson(updated.id);
+    return c.json({ person, chatId: chatId || null });
   });
   app.post("/api/integrations", async (c) => {
     const body = await c.req.json().catch(() => ({}));

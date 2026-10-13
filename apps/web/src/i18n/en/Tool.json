@@ -175,5 +175,19 @@
   "گردش‌کار": "Workflow",
   "مهارت": "Skill",
   "یافتن ابزار": "Find tool",
-  "پایان نقشه": "Finish plan"
+  "پایان نقشه": "Finish plan",
+  "کارهای منتظر صاحب": "Items waiting for the owner",
+  "کار برای شما": "Task for you",
+  "ترد تازه": "New thread",
+  "پیگیری ترد": "Thread follow-up",
+  "ترد‌های همه": "Everyone's threads",
+  "همان مسئله": "Same issue",
+  "📤 فرستادن به همکار": "📤 Send to colleague",
+  "✏️ ویرایش پیام فرستاده": "✏️ Edit sent message",
+  "🗑 برداشتن پیام فرستاده": "🗑 Remove sent message",
+  "سپردن به چت مادر": "Hand to the mother chat",
+  "فهرست افراد": "People list",
+  "گزارش‌ها": "Reports",
+  "توقف/ادامهٔ {name}": "Pause/resume {name}",
+  "ادامه": "Resume"
 }

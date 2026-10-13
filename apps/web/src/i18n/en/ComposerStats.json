@@ -1,0 +1,17 @@
+{
+  "منابع سرور: در دسترس نیست": "Server resources: unavailable",
+  "منابع سرور: پردازنده {cpu}٪، حافظه {mem}٪": "Server resources: CPU {cpu}%, memory {mem}%",
+  "منابع سرور: پردازنده {cpu}٪، حافظه {mem}٪، دیسک {disk}٪": "Server resources: CPU {cpu}%, memory {mem}%, disk {disk}%",
+  "منابع سرور": "Server resources",
+  "کارکرد {time}": "Up {time}",
+  "در دسترس نیست": "Unavailable",
+  "آزاد": "Free",
+  "بار سیستم": "Load average",
+  "مصرف: {n}٪ از پنجرهٔ زمینه": "Usage: {n}% of the context window",
+  "پنجرهٔ زمینه و سهمیهٔ پلن": "Context window and plan limits",
+  "پنجرهٔ زمینه": "Context window",
+  "پس از اولین پیام نمایش داده می‌شود": "Shown after the first message",
+  "پس از پیامِ بعدی نمایش داده می‌شود": "Shown after the next message",
+  "استفاده‌شده": "Used",
+  "موتور فعلی سهمیهٔ پلن گزارش نمی‌دهد.": "The current engine does not report plan limits."
+}

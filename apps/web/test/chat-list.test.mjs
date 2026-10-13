@@ -11,12 +11,25 @@ const chat = (id, extra = {}) => ({ id, title: id, updatedAt: "2026-10-07T10:00:
 const seen = (ids) => (c) => !ids.includes(c.id); // unread unless listed
 const shape = (sections) => sections.map((s) => [s.title, s.chats.map((c) => c.id)]);
 
-test("chatState: asking the owner outranks running, then error, unread, read", () => {
+test("chatState: asking the owner outranks running, then unread, read, error", () => {
   assert.equal(chatState(chat("a", { runStatus: "running" }), () => true).id, "running");
   assert.equal(chatState(chat("a", { runStatus: "running", waitingForOwner: true }), () => true).id, "ask");
   assert.equal(chatState(chat("a", { runStatus: "error" }), () => false).id, "error");
   assert.equal(chatState(chat("a"), () => true).id, "unread");
   assert.equal(chatState(chat("a"), () => false).id, "read");
+});
+
+test("chatState: a kept message is a failure, not a question; a running subtask or a plan-limit wait is still work", () => {
+  assert.equal(chatState(chat("a", { kept: ["k1"] }), () => false).id, "error");
+  assert.equal(chatState(chat("a", { kept: ["k1"] }), () => false).failed, true);
+  assert.equal(chatState(chat("a", { kept: [] }), () => false).id, "read");
+  assert.equal(chatState(chat("a", { children: [{ id: "c", runStatus: "running" }] }), () => false).id, "running");
+  assert.equal(chatState(chat("a", { children: [{ id: "c", runStatus: "finished" }] }), () => false).id, "read");
+  assert.equal(chatState(chat("a", { limitResumeAt: Date.now() + 60_000 }), () => false).id, "running");
+  // The plan limit kept the message: it goes again by itself at the reset, so it is work, not his.
+  assert.equal(chatState(chat("a", { runStatus: "error", kept: ["k1"], limitResumeAt: Date.now() + 60_000 }), () => true).id, "running");
+  assert.equal(chatState(chat("a", { kept: ["k1"], limitResumeAt: Date.now() + 60_000, waitingForOwner: true }), () => false).id, "ask");
+  assert.equal(chatState(chat("a", { runStatus: "running", waitingForOwner: true, children: [{ id: "c", runStatus: "running" }] }), () => false).id, "ask");
 });
 
 test("filters: unread, ask, running, error, pinned; the open chat stays", () => {
@@ -70,12 +83,86 @@ test("groups: state, date, repo, owner and the owner's own groups", () => {
   for (const id of ["none", "custom", "owner", "state", "read", "date", "agent", "repo", "model"]) assert.ok(GROUPS.some((g) => g.id === id), id);
 });
 
-test("ago: short relative time", () => {
-  const now = NOW.getTime();
-  assert.equal(ago(new Date(now - 20_000).toISOString(), now), "الان");
-  assert.equal(ago(new Date(now - 5 * 60_000).toISOString(), now), "۵ دقیقه");
-  assert.equal(ago(new Date(now - 3 * 3600_000).toISOString(), now), "۳ ساعت");
-  assert.equal(ago(new Date(now - 4 * 86400_000).toISOString(), now), "۴ روز");
+test("errors never lead: a failure sinks last seen or not (keeping its unread dot), a resolved one is read", () => {
+  const no = () => false;
+  assert.deepEqual(chatState({ runStatus: "error" }, no), { id: "error", label: "خطادار", unread: false, failed: true });
+  const unseen = chatState({ runStatus: "error" }, () => true);
+  assert.equal(unseen.id, "error");
+  assert.equal(unseen.unread, true);
+  assert.equal(unseen.failed, true);
+  const resolved = chatState({ runStatus: "resolved" }, no);
+  assert.equal(resolved.id, "read");
+  assert.equal(resolved.failed, false);
+
+  const list = [
+    chat("err-seen", { runStatus: "error" }),
+    chat("read"),
+    chat("err-new", { runStatus: "error" }),
+    chat("resolved", { runStatus: "resolved" }),
+    chat("unread"),
+    chat("run", { runStatus: "running" }),
+    chat("ask", { waitingForOwner: true }),
+    chat("kid-runs", { children: [{ id: "k", runStatus: "running" }] }),
+    chat("limit", { limitResumeAt: Date.now() + 60_000 }),
+  ];
+  const isUnread = (c) => ["err-new", "unread"].includes(c.id);
+  assert.deepEqual(filterChats(list, "error", isUnread).map((c) => c.id), ["err-seen", "err-new"]);
+  assert.deepEqual(shape(groupChats(list, "state", { isUnread })), [
+    ["منتظر پاسخ شما", ["ask"]],
+    ["در حال کار", ["run", "kid-runs", "limit"]],
+    ["خوانده‌نشده", ["unread"]],
+    ["خوانده‌شده", ["read", "resolved"]],
+    ["خطادار", ["err-seen", "err-new"]],
+  ]);
+  const stamped = list.map((c, i) => ({ ...c, updatedAt: new Date(Date.parse("2026-10-07T10:00:00.000Z") - i * 60_000).toISOString() }));
+  assert.deepEqual(sortChats(stamped, "state", isUnread).map((c) => c.id), ["ask", "run", "kid-runs", "limit", "unread", "read", "resolved", "err-seen", "err-new"]);
+  assert.ok(SORTS.some((s) => s.id === "state"));
+  assert.ok(!SORTS.some((s) => s.id === "running"));
+
+  const none = groupChats([chat("a"), chat("kept", { runStatus: "error", kept: ["k"] }), chat("kid", { children: [{ id: "k", runStatus: "running" }] })], "none");
+  assert.deepEqual(shape(none), [["در حال اجرا", ["kid"]], [null, ["a", "kept"]]]);
+
+  // SQLite («2026-10-07 11:00:00», UTC) and ISO stamps compare as times, not strings.
+  const mixed = [chat("iso", { updatedAt: "2026-10-07T10:00:00.000Z" }), chat("sqlite", { updatedAt: "2026-10-07 11:00:00" })];
+  assert.deepEqual(sortChats(mixed, "updated", no).map((c) => c.id), ["sqlite", "iso"]);
+});
+
+test("a failed run with a kept message, or an unseen failure, never leads any view", () => {
+  // The review's case: an error with a kept message from 08:00 beside a finished chat from 11:00.
+  const err = chat("err", { runStatus: "error", kept: ["k1"], updatedAt: "2026-10-07T08:00:00.000Z" });
+  const ok = chat("ok", { updatedAt: "2026-10-07T11:00:00.000Z" });
+  const no = () => false;
+  assert.equal(chatState(err, no).id, "error", "not «منتظر پاسخ شما»");
+  for (const sort of ["updated", "state", "unread", "title"]) {
+    assert.deepEqual(shape(groupChats(sortChats([err, ok], sort, no), "none", { isUnread: no })), [[null, ["ok", "err"]]], sort);
+  }
+  assert.deepEqual(sortChats([err, ok], "state", no).map((c) => c.id), ["ok", "err"]);
+  assert.deepEqual(shape(groupChats([err, ok], "state", { isUnread: no })), [["خوانده‌شده", ["ok"]], ["خطادار", ["err"]]]);
+  assert.deepEqual(filterChats([err, ok], "ask", no), []);
+  assert.deepEqual(filterChats([err, ok], "error", no).map((c) => c.id), ["err"]);
+
+  // Two failures he has not opened and one finished chat he has read: the read one still leads.
+  const err2 = chat("err2", { runStatus: "error", updatedAt: "2026-10-07T11:30:00.000Z" });
+  const newErr = (c) => c.id.startsWith("err");
+  assert.deepEqual(shape(groupChats([err2, err, ok], "state", { isUnread: newErr })), [["خوانده‌شده", ["ok"]], ["خطادار", ["err2", "err"]]]);
+  assert.deepEqual(sortChats([err2, err, ok], "state", newErr).map((c) => c.id), ["ok", "err2", "err"]);
+  assert.deepEqual(shape(groupChats([err2, ok], "none", { isUnread: newErr })), [[null, ["ok", "err2"]]]);
+  assert.equal(chatState(err2, newErr).unread, true, "the unread dot stays");
+
+  // A pinned failure stays pinned, after the pinned chats that are fine.
+  const pinErr = chat("pin-err", { runStatus: "error", pinned: true, updatedAt: "2026-10-07T11:59:00.000Z" });
+  const pin = chat("pin", { pinned: true });
+  assert.deepEqual(shape(groupChats([pinErr, pin, ok], "none", { isUnread: no })), [["سنجاق‌شده", ["pin", "pin-err"]], [null, ["ok"]]]);
+});
+
+test("ago: a row's time is a clock, not «۵ دقیقه» (exact time is the tooltip)", () => {
+  const now = new Date(2026, 9, 13, 14, 30).getTime();
+  const at = (d, h, m) => new Date(2026, 9, d, h, m).toISOString();
+  const clock = (h, m) => new Date(2026, 9, 13, h, m).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  assert.equal(ago(at(13, 14, 27), now), clock(14, 27));
+  assert.equal(ago(at(12, 9, 5), now), `دیروز ${clock(9, 5)}`);
+  assert.match(ago(at(1, 8, 0), now), new RegExp(`^\\S+ \\S+ ${clock(8, 0)}$`), "this year: day, month, clock");
+  assert.doesNotMatch(ago(at(13, 14, 27), now), /پیش|دقیقه/);
   assert.equal(ago("nonsense", now), "");
 });
 

@@ -7,5 +7,6 @@
   "پاسخ…": "Answer…",
   "ارسال پاسخ": "Send answer",
   "{n} گزینه انتخاب شد؛ برای فرستادن، دکمهٔ ارسال را بزن.": "{n} selected; press Send to submit.",
-  "می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.": "You can pick several options; then press Send."
+  "می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.": "You can pick several options; then press Send.",
+  "این سؤال دیگر باز نیست (جای دیگری جواب گرفت).": "This question is no longer open (it was answered elsewhere)."
 }

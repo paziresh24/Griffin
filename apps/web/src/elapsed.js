@@ -17,9 +17,24 @@ export function fullAgo(stamp, now = new Date()) {
   return t("{n} روز پیش", { n: num(days) });
 }
 
-// The exact local date and time, for the same tooltip.
+// The exact local date and time (weekday, date, seconds), for the tooltip on every time label.
 export function exactTime(stamp) {
   const at = stamp ? new Date(stamp) : null;
   if (!at || Number.isNaN(at.getTime())) return "";
-  return at.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
+  return at.toLocaleString(locale, { dateStyle: "full", timeStyle: "medium" });
+}
+
+// When, as a clock — the time itself, the exact one on hover — rather than «۳ دقیقه پیش»:
+// today «۱۴:۰۳», yesterday «دیروز ۱۴:۰۳», this year «۲۱ مهر ۱۴:۰۳», else «۲۱ مهر ۱۴۰۴».
+export function clockLabel(stamp, now = new Date()) {
+  const at = stamp ? new Date(stamp) : null;
+  if (!at || Number.isNaN(at.getTime())) return "";
+  const clock = at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (at.toDateString() === now.toDateString()) return clock;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (at.toDateString() === yesterday.toDateString()) return t("دیروز {clock}", { clock });
+  const year = (d) => d.toLocaleDateString(`${locale}-u-nu-latn`, { year: "numeric" });
+  const day = at.toLocaleDateString(locale, { day: "numeric", month: "long" });
+  return year(at) === year(now) ? `${day} ${clock}` : at.toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
 }

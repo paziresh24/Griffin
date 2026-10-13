@@ -273,10 +273,10 @@ test("ask_owner waits for the owner's answer; late answers become a message", as
     await until(() => asks.isWaiting(chat.id));
     assert.equal(runner.isActive(chat.id), true, "run stays active while the question waits");
 
-    const answered = await app.request(`/api/chats/${chat.id}/answer`, json({ selected: ["پروداکشن"], text: "فقط p24core" }));
+    const answered = await app.request(`/api/chats/${chat.id}/answer`, json({ selected: ["پروداکشن"], text: "فقط api-core" }));
     assert.deepEqual(await answered.json(), { delivered: "tool" });
     await until(() => !runner.isActive(chat.id));
-    assert.deepEqual(toolResults, [{ answered: true, answer: "پروداکشن — فقط p24core", selected: ["پروداکشن"] }]);
+    assert.deepEqual(toolResults, [{ answered: true, answer: "پروداکشن — فقط api-core", selected: ["پروداکشن"] }]);
 
     // Nobody is waiting any more: the answer is sent as a normal follow-up message.
     const late = await app.request(`/api/chats/${chat.id}/answer`, json({ question: "کدام کلاستر؟", text: "دی‌آر هم ببین" }));

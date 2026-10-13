@@ -6,10 +6,14 @@ import { holdReload } from "../new-version.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
 // run continues. If the run is already over, the same answer is sent as a follow-up message.
-export function AskCard({ args = {}, result, isError, status }) {
-  const chatId = useRoute();
+// The home-page board passes chatId/askId itself: an answer with an id settles exactly that
+// question, and a 409 means it was answered elsewhere (no follow-up message, no duplicate run).
+export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp = null, askId: askIdProp = null, onDone = null }) {
+  const routeChat = useRoute();
+  const chatId = chatIdProp || routeChat;
   const options = Array.isArray(args.options) ? args.options.filter((o) => o?.label) : [];
   const waiting = status?.type === "running" || result === undefined;
+  const askId = askIdProp || (waiting ? args.askId || null : null);
   const answered = result?.answered ? result : null;
   const [selected, setSelected] = useState([]);
   const [text, setText] = useState("");
@@ -26,11 +30,15 @@ export function AskCard({ args = {}, result, isError, status }) {
     try {
       const response = await api(`/api/chats/${chatId}/answer`, {
         method: "POST",
-        body: { question: args.question, selected: picks, text: text.trim() },
+        body: { question: args.question, selected: picks, text: text.trim(), ...(askId ? { askId } : {}) },
       });
       setSent(response.delivered === "tool" ? "tool" : response.delivered === "held" ? "held" : "message");
+      onDone?.();
     } catch (caught) {
-      setError(caught.message);
+      if (askId && caught.status === 409) {
+        setSent("gone");
+        onDone?.();
+      } else setError(caught.message);
     } finally {
       releaseReload();
       setSending(false);
@@ -55,7 +63,9 @@ export function AskCard({ args = {}, result, isError, status }) {
         </p>
       ) : sent ? (
         <p className="px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground">
-          {sent === "tool" ? t("پاسخ رسید؛ ادامه می‌دهد…") : sent === "held" ? t("پاسخ ثبت شد؛ همین که ایجنت به این سؤال برسد، ادامه می‌دهد.") : t("کار قبلاً تمام شده بود؛ پاسخ به‌عنوان پیام جدید فرستاده شد.")}
+          {sent === "gone"
+            ? t("این سؤال دیگر باز نیست (جای دیگری جواب گرفت).")
+            : sent === "tool" ? t("پاسخ رسید؛ ادامه می‌دهد…") : sent === "held" ? t("پاسخ ثبت شد؛ همین که ایجنت به این سؤال برسد، ادامه می‌دهد.") : t("کار قبلاً تمام شده بود؛ پاسخ به‌عنوان پیام جدید فرستاده شد.")}
         </p>
       ) : (
         <div className="space-y-2 px-3 pb-3 pt-2">

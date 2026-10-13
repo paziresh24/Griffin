@@ -393,107 +393,6 @@ test("telegram account: Saved Messages bridge ignores its own replies and maps n
   assert.equal(received.length, 1);
 });
 
-test("telegram account: /agent starts stand-in; agent intro run; /agent off kills", async () => {
-  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
-  const { COVERAGE_CALLER } = await import("../src/integrations/coverage.mjs");
-  let handler;
-  const outbox = [];
-  const fakeClient = {
-    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
-    addEventHandler: (fn) => { handler = fn; },
-    sendMessage: async (to, { message }) => { outbox.push({ to: String(to), message }); return { id: 700 + outbox.length }; },
-    editMessage: async () => {},
-    deleteMessages: async () => {},
-    getEntity: async () => ({ firstName: "علی", lastName: "تیم" }),
-    getDialogs: async () => [],
-    getMessages: async () => [],
-    disconnect: async () => {},
-  };
-  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
-  const covered = new Set();
-  const received = [];
-  const started = [];
-  const ended = [];
-  const bridge = {
-    receive: async (...a) => received.push(a),
-    answer: async () => false,
-    answerOwnerAsk: async () => false,
-    isCovered: (_id, peer) => covered.has(String(peer)),
-    coverageName: () => "علی تیم",
-    startCoverage: async (_id, peer, meta) => { covered.add(String(peer)); started.push(meta); return meta; },
-    endCoverage: async (_id, peer) => { covered.delete(String(peer)); ended.push(peer); return { name: "علی تیم" }; },
-  };
-  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
-  await channel.start();
-
-  await handler({ message: { out: true, chatId: 55n, peerId: { userId: 55n }, id: 1, message: "/agent" } });
-  assert.equal(started.length, 1);
-  assert.equal(received.length, 1);
-  assert.equal(received[0][2].caller, COVERAGE_CALLER);
-  assert.match(received[0][2].text, /معرفی|تاریخچه/);
-  assert.ok(outbox.some((m) => /\/agent برای «علی تیم»/.test(m.message)));
-  assert.ok(!outbox.some((m) => /از این لحظه پاسخ‌دهنده/.test(m.message)), "no canned announce to peer");
-
-  await handler({ message: { out: false, chatId: 55n, peerId: { userId: 55n }, id: 2, message: "دیسک پروداکشن پر شده" } });
-  assert.equal(received.length, 1, "peer inbound ignored in owner-only mode");
-
-  await handler({ message: { out: true, chatId: 55n, peerId: { userId: 55n }, id: 3, message: "/agent off" } });
-  assert.deepEqual(ended, ["55"]);
-  assert.ok(!outbox.some((m) => /کار ایجنت پلتفرم‌بان در این گفتگو تمام شد/.test(m.message)), "no canned end to peer");
-});
-
-test("telegram account: /agent as reply focuses that message and replies to it", async () => {
-  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
-  const { COVERAGE_CALLER } = await import("../src/integrations/coverage.mjs");
-  let handler;
-  const outbox = [];
-  const fakeClient = {
-    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
-    addEventHandler: (fn) => { handler = fn; },
-    sendMessage: async (to, opts) => { outbox.push({ to: String(to), message: opts.message, replyTo: opts.replyTo || null }); return { id: 900 + outbox.length }; },
-    editMessage: async () => {},
-    deleteMessages: async () => {},
-    getEntity: async () => ({ firstName: "Ahmadi", username: "aliahmadi" }),
-    getDialogs: async () => [],
-    getMessages: async () => [],
-    disconnect: async () => {},
-  };
-  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
-  const covered = new Set();
-  const received = [];
-  const bridge = {
-    receive: async (...a) => received.push(a),
-    answer: async () => false,
-    answerOwnerAsk: async () => false,
-    isCovered: (_id, peer) => covered.has(String(peer)),
-    coverageName: () => "Ahmadi",
-    startCoverage: async (_id, peer, meta) => { covered.add(String(peer)); return meta; },
-    endCoverage: async () => null,
-  };
-  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
-  await channel.start();
-
-  await handler({
-    message: {
-      out: true, chatId: 41026785n, peerId: { userId: 41026785n }, id: 10, message: "/agent",
-      replyTo: { replyToMsgId: 446436 },
-      getReplyMessage: async () => ({ id: 446436, message: "ماچ به لپت" }),
-    },
-  });
-  assert.equal(covered.has("41026785"), true);
-  assert.equal(received.length, 1);
-  assert.equal(received[0][2].caller, COVERAGE_CALLER);
-  assert.match(received[0][2].text, /ماچ به لپت/);
-  assert.match(received[0][2].text, /پیامی که باید جوابش را بدهی/);
-  assert.doesNotMatch(received[0][2].text, /معرفی کن/);
-
-  await channel.deliver("41026785", { text: "قربونتون ولی ایجنتیک 😁" });
-  const replied = outbox.find((m) => m.replyTo === 446436);
-  assert.ok(replied, `expected replyTo=446436 in ${JSON.stringify(outbox)}`);
-  assert.match(replied.message, /قربونتون/);
-  assert.match(replied.message, /— گریفین/);
-});
-
 test("Saved Messages: acts only when called by name; leaves notes and passwords alone", async () => {
   const { callToGriffin } = await import("../src/integrations/telegram-account.mjs");
   assert.equal(callToGriffin("گریفین فروش امروز چقدر بود؟"), "فروش امروز چقدر بود؟");
@@ -685,7 +584,7 @@ test("in a colleague's linked chat, approval goes to the Owner's bot and a clari
     });
     store.createPeerUser({ id: "maryam-sadeghi", label: "مریم صادقی" });
     const chat = store.createChat({ title: "peer", caller: "peer:maryam-sadeghi", agent: "griffin" });
-    store.linkChat(added.id, "91499258", chat.id);
+    store.linkChat(added.id, "10000004", chat.id);
 
     asks.tool(chat.id).execute({ question: "دسترسی n8n بدهم؟", options: [{ label: "بله" }, { label: "نه" }] });
     await until(() => bot.sent().some((c) => /دسترسی n8n بدهم/.test(c.body.text || "")));
@@ -696,155 +595,10 @@ test("in a colleague's linked chat, approval goes to the Owner's bot and a clari
     asks.requesterTool(chat.id).execute({ question: "ایمیلت چیه؟" });
     await until(() => bot.sent().some((c) => /ایمیلت چیه/.test(c.body.text || "")));
     const clarify = bot.sent().find((c) => /ایمیلت چیه/.test(c.body.text || ""));
-    assert.equal(String(clarify.body.chat_id), "91499258", "the clarification reaches the colleague");
+    assert.equal(String(clarify.body.chat_id), "10000004", "the clarification reaches the colleague");
   } finally {
     await cleanup();
   }
-});
-
-// 2026-09-24 (owner): teammate DMs thread themselves. Idle → a classifier decides; open → every
-// message, either side, feeds the thread; «گریفین» reopens; groups and non-team people never.
-test("telegram account: teammate DMs open, feed and reopen Griffin threads", async () => {
-  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
-  let handler;
-  const fakeClient = {
-    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
-    addEventHandler: (fn) => { handler = fn; },
-    sendMessage: async () => ({ id: 900 }), editMessage: async () => {}, deleteMessages: async () => {},
-    getEntity: async () => ({ firstName: "Karimi", username: "skarimi" }),
-    getDialogs: async () => [], getMessages: async () => [], disconnect: async () => {},
-    invoke: async (req) => { reactions.push([Number(req.msgId), req.reaction[0].emoticon]); },
-  };
-  const reactions = [];
-  const Api = { messages: { SendReaction: function (o) { Object.assign(this, o); } }, ReactionEmoji: function (o) { Object.assign(this, o); } };
-  const load = async () => ({ TelegramClient: function () { return fakeClient; }, Api, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
-  const covered = new Map();
-  const received = [];
-  const classified = [];
-  let category = "team";
-  const bridge = {
-    integration: () => ({ settings: {} }),
-    upsertPerson: async () => ({ id: "p1", display_name: "سارا کریمی", username: "skarimi", category }),
-    addPersonMessage: () => {},
-    receive: async (...a) => received.push(a),
-    answer: async () => false, answerOwnerAsk: async () => false,
-    isCovered: (_id, peer) => covered.has(String(peer)),
-    coverageName: () => "Karimi",
-    classifyThread: async (args) => { classified.push(args); return { start: /خرابه|درست کن/.test(args.message), topic: "پوش با توکن", reason: "request" }; },
-    startCoverage: async (_id, peer, meta) => { covered.set(String(peer), meta); return meta; },
-    endCoverage: async (_id, peer) => { covered.delete(String(peer)); return null; },
-    handOver: async (_id, peer) => { handedOver.push(String(peer)); return true; },
-  };
-  const handedOver = [];
-  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
-  await channel.start();
-  const dm = (id, text, out = false) => handler({ message: { out, chatId: 272188041n, peerId: { userId: 272188041n }, id, message: text } });
-
-  await dm(1, "سلام خوبی؟");
-  assert.equal(received.length, 0, "small talk opens nothing");
-  assert.equal(classified.at(-1).from, "teammate");
-
-  await dm(2, "پایپ‌لاین patient خرابه");
-  assert.equal(covered.has("272188041"), true, "a real request opens and locks a thread");
-  assert.equal(covered.get("272188041").fresh, true);
-  assert.match(covered.get("272188041").title, /پوش با توکن/);
-  assert.match(received.at(-1)[2].text, /رشتهٔ تازه/);
-
-  const before = classified.length;
-  await dm(3, "اشتباه نمیکنه؟");
-  // 2026-10-12: with a thread open, each message is routed — this thread, another open one, or new.
-  assert.equal(classified.length, before + 1, "inside a thread every message is routed");
-  // 2026-10-07: the colleague (and the owner) see Griffin picked it up — 👀, then 👍 when answered.
-  await new Promise((r) => setTimeout(r, 10));
-  assert.deepEqual(reactions.at(-1), [3, "👀"]);
-  await channel.deliver("272188041", { text: "دارم بررسی می‌کنم", done: false });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.deepEqual(reactions.at(-1), [3, "👀"], "a holding line while subtasks run is not done");
-  await channel.deliver("272188041", { text: "بررسی شد" });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.deepEqual(reactions.at(-1), [3, "👍"]);
-  assert.match(received.at(-1)[2].text, /^«سارا کریمی»: /);
-  assert.match(received.at(-1)[2].text, /اشتباه نمیکنه؟$/);
-
-  // 2026-10-06: the owner answering himself takes the thread over — Griffin's run and subtasks stop
-  // and the colleague's next messages do not wake it, unless they call «گریفین».
-  const fed = received.length;
-  await dm(4, "من خودم چکش کردم، توکنش مال کریمیه", true);
-  assert.equal(covered.has("272188041"), true, "the owner typing does not close the thread");
-  assert.deepEqual(handedOver, ["272188041"], "Griffin's work on it is stopped");
-  assert.equal(received.length, fed, "and nothing is fed to Griffin");
-  await dm(43, "مرسی، الان چک می‌کنم");
-  assert.equal(received.length, fed, "the colleague's reply to the owner does not wake Griffin");
-  await dm(44, "گریفین لاگش رو هم بیار");
-  assert.equal(received.length, fed + 1, "a direct «گریفین» still reaches it");
-  await dm(45, "بله، بهتون کمک میکنه", true);
-  assert.match(received.at(-1)[2].text, /در تلگرام به سارا کریمی»: بله/, "the owner handing work to Griffin reaches the thread");
-  assert.equal(handedOver.length, 1, "and is not a takeover");
-  covered.delete("272188041"); // Griffin closed it with end_agent
-
-  const asked = classified.length;
-  await dm(41, "سرور خرابه درست کن");
-  assert.equal(covered.has("272188041"), false, "while the owner is in the conversation, nothing opens");
-  assert.equal(classified.length, asked, "not even a classification");
-
-  await dm(42, "باشه، بزنم؟", true);
-  assert.equal(classified.length, asked, "the owner's own message never opens a thread");
-
-  await dm(5, "گریفین یه چیز دیگه هم هست");
-  assert.equal(covered.get("272188041").fresh, false, "«گریفین» reopens the last thread chat");
-
-  covered.clear();
-  category = "unclassified";
-  const n = received.length;
-  await dm(6, "سرور خرابه درست کن");
-  assert.equal(received.length, n, "people not marked team never get automatic threads");
-});
-
-// settings.autoThreads === false stops the automatic opening entirely (owner switch): no
-// classification, no new thread, even on an explicit «گریفین» call; a thread the owner opens by
-// hand (/agent) still feeds, and still closes with /agent off.
-test("telegram account: autoThreads=false keeps teammate DMs from opening threads", async () => {
-  const { createAccountChannel } = await import("../src/integrations/telegram-account.mjs");
-  let handler;
-  const fakeClient = {
-    connect: async () => {}, checkAuthorization: async () => true, getMe: async () => ({ id: 100, username: "owner" }),
-    addEventHandler: (fn) => { handler = fn; },
-    sendMessage: async () => ({ id: 900 }), editMessage: async () => {}, deleteMessages: async () => {},
-    getEntity: async () => ({ firstName: "Karimi", username: "skarimi" }),
-    getDialogs: async () => [], getMessages: async () => [], disconnect: async () => {},
-  };
-  const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
-  const covered = new Map();
-  const received = [];
-  const classified = [];
-  const settings = { autoThreads: false };
-  const bridge = {
-    integration: () => ({ settings }),
-    upsertPerson: async () => ({ id: "p1", display_name: "سارا کریمی", username: "skarimi", category: "team" }),
-    addPersonMessage: () => {},
-    receive: async (...a) => received.push(a),
-    answer: async () => false, answerOwnerAsk: async () => false,
-    isCovered: (_id, peer) => covered.has(String(peer)),
-    coverageName: () => "Karimi",
-    classifyThread: async (args) => { classified.push(args); return { start: true, topic: "پوش با توکن", reason: "request" }; },
-    startCoverage: async (_id, peer, meta) => { covered.set(String(peer), meta); return meta; },
-    endCoverage: async (_id, peer) => { covered.delete(String(peer)); return null; },
-  };
-  const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
-  await channel.start();
-  const dm = (id, text, out = false) => handler({ message: { out, chatId: 272188041n, peerId: { userId: 272188041n }, id, message: text } });
-
-  await dm(1, "سرور خرابه درست کن");
-  assert.equal(classified.length, 0, "autoThreads=false: no classification at all");
-  assert.equal(covered.has("272188041"), false, "autoThreads=false: a real request opens nothing");
-
-  await dm(2, "گریفین درستش کن");
-  assert.equal(covered.has("272188041"), false, "autoThreads=false: even an explicit «گریفین» call opens nothing");
-
-  covered.set("272188041", { name: "Karimi" }); // a thread the owner opened by hand
-  await dm(3, "جواب دادم، برو سراغ پوش");
-  assert.equal(received.length, 1, "autoThreads=false: an open thread still feeds");
-  assert.match(received[0][2].text, /سراغ پوش$/);
 });
 
 test("a colleague on the team roster is marked team on first contact", async () => {
@@ -882,13 +636,13 @@ test("a cancelled run says nothing to a colleague; the owner still sees it stopp
       store.appendEvent(chat.id, runId, "run.finished", { status });
     };
     const peer = store.createChat({ title: "peer", caller: "peer:sara-karimi", agent: "griffin" });
-    store.linkChat(added.id, "35131033", peer.id);
+    store.linkChat(added.id, "10000005", peer.id);
     const mine = store.createChat({ title: "mine", caller: "owner", agent: "griffin" });
     store.linkChat(added.id, "777", mine.id);
     run(peer, "cancelled");
     run(mine, "cancelled");
     await until(() => bot.sent().some((c) => String(c.body.chat_id) === "777" && /متوقف/.test(c.body.text || "")));
-    assert.equal(bot.sent().some((c) => String(c.body.chat_id) === "35131033" && c.body.text), false);
+    assert.equal(bot.sent().some((c) => String(c.body.chat_id) === "10000005" && c.body.text), false);
   } finally {
     await cleanup();
   }
@@ -902,7 +656,7 @@ test("an internal wake (subtask report, owner note) with open subtasks says noth
     const added = await integrations.addBot({ kind: "telegram_bot", token: "555:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
     // 2026-10-08: the owner's web note in a colleague thread is the same kind of internal wake.
     const cases = [
-      ["peer:sara-karimi", "35131033", "[گزارش خودکار زیرکارها] یکی تمام شد"],
+      ["peer:sara-karimi", "10000005", "[گزارش خودکار زیرکارها] یکی تمام شد"],
       ["team", "4242", coverageOwnerNote("رضا", "ادامه بده")],
     ];
     for (const [caller, external, trigger] of cases) {

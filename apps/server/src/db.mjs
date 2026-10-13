@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { DEFAULT_AGENT } from "./agents/registry.mjs";
 import { seedProfilesFromRegistry, unique } from "./agents/profiles.mjs";
 import { normalizeProvider } from "./providers/ids.mjs";
+import { nameOf } from "./profile.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS chats (
@@ -249,6 +250,8 @@ CREATE TABLE IF NOT EXISTS blobs (
 `;
 
 const now = () => new Date().toISOString();
+// The Persian name (persons.fa_name) wins wherever a person's name is read; Telegram's own stays as tg_name.
+const named = ({ fa_name, ...row }) => ({ ...row, tg_name: row.display_name, display_name: fa_name || row.display_name, fa_name: fa_name || null });
 // Bounded MCP call log: enough to debug a peer's client, never a growing archive.
 const PEER_CALLS_KEEP = 5_000;
 
@@ -345,6 +348,10 @@ export function openStore(file, { seedProvider } = {}) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "group_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN group_id TEXT");
   }
+  // A person's Persian name (fa-names.mjs or the owner) wins over Telegram's own, which keeps
+  // refreshing display_name underneath. Profile photos: one small JPEG per Telegram photo id.
+  if (!db.prepare("PRAGMA table_info(persons)").all().some((c) => c.name === "fa_name")) db.exec("ALTER TABLE persons ADD COLUMN fa_name TEXT");
+  db.exec("CREATE TABLE IF NOT EXISTS person_photos (person_id TEXT PRIMARY KEY, photo_id TEXT NOT NULL, data BLOB, at TEXT NOT NULL)");
   // A colleague's token caps walk its chats and their children on every request (peerUsageSince).
   db.exec("CREATE INDEX IF NOT EXISTS chats_parent ON chats(parent_chat_id)");
   // Which agent persona runs a scheduled job (immutable per run chat; editable on the job).
@@ -370,6 +377,12 @@ export function openStore(file, { seedProvider } = {}) {
   // One emitter for everything: "chat:<id>" carries events, "chats" carries list changes.
   const bus = new EventEmitter();
   bus.setMaxListeners(0);
+  // "inbox": what waits for the owner on his main page changed. One guard here covers every
+  // writer of these keys (the Telegram desk, the runner's kept messages, todo lists, chores)
+  // without each of them having to remember.
+  const inboxChanged = (key) => {
+    if (/^(tgwaiting$|ownertasks$|kept:|todo:)/.test(key)) bus.emit("inbox", { key });
+  };
 
   const q = {
     insertChat: db.prepare(
@@ -398,7 +411,7 @@ export function openStore(file, { seedProvider } = {}) {
           ELSE 'manual'
         END AS source,
         COALESCE(c.person_id, CASE WHEN c.caller LIKE 'peer:%' THEN c.caller END) AS owner_key,
-        COALESCE(p.display_name, pu.label, CASE WHEN c.caller LIKE 'peer:%' THEN substr(c.caller, 6) END) AS owner_label
+        COALESCE(p.fa_name, p.display_name, pu.label, CASE WHEN c.caller LIKE 'peer:%' THEN substr(c.caller, 6) END) AS owner_label
       FROM chats c
       LEFT JOIN persons p ON p.id = c.person_id
       LEFT JOIN peer_users pu ON c.caller = 'peer:' || pu.id
@@ -750,8 +763,8 @@ export function openStore(file, { seedProvider } = {}) {
           const text = String(event.data?.text || "").trim();
           if (text) turns.push({ role: "user", content: text, eventId: event.id });
           current = null;
-        } else if (event.type === "user.queue" && event.data?.state === "dropped") {
-          // A queued message a Stop or a delete dropped never reached the agent.
+        } else if (event.type === "user.queue" && (event.data?.state === "dropped" || event.data?.state === "removed")) {
+          // A queued message a Stop dropped, or the owner removed from the queue, never reached the agent.
           const at = turns.findIndex((t) => t.eventId === event.data.userEventId);
           if (at >= 0) turns.splice(at, 1);
         } else if (event.type === "text") {
@@ -1033,10 +1046,12 @@ export function openStore(file, { seedProvider } = {}) {
 
     setKv(key, value) {
       q.setKv.run(key, JSON.stringify(value));
+      inboxChanged(key);
     },
 
     deleteKv(key) {
       db.prepare("DELETE FROM kv WHERE key = ?").run(key);
+      inboxChanged(key);
     },
 
     // --- notes («بعداً»): the owner's own message, kept until it is run ---
@@ -1085,23 +1100,29 @@ export function openStore(file, { seedProvider } = {}) {
       sets.push("status = 'open'", "error = NULL", "updated_at = ?");
       args.push(now(), String(id || ""));
       const changes = db.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ? AND status IN ('open', 'failed')`).run(...args).changes;
+      if (changes) bus.emit("inbox", { type: "note" });
       return changes ? store.getNote(id) : null;
     },
 
     /** open|failed -> started, once: a double click or a tick racing a click runs it one time. */
     claimNote(id) {
-      return db.prepare("UPDATE notes SET status = 'started', error = NULL, updated_at = ? WHERE id = ? AND status IN ('open', 'failed')").run(now(), String(id || "")).changes > 0;
+      const claimed = db.prepare("UPDATE notes SET status = 'started', error = NULL, updated_at = ? WHERE id = ? AND status IN ('open', 'failed')").run(now(), String(id || "")).changes > 0;
+      if (claimed) bus.emit("inbox", { type: "note" });
+      return claimed;
     },
 
     /** Only the attempt that claimed it: a note deleted meanwhile stays deleted. */
     finishNote(id, { startedChatId = null, error = null } = {}) {
       if (error) db.prepare("UPDATE notes SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND status = 'started'").run(String(error).slice(0, 500), now(), id);
       else db.prepare("UPDATE notes SET started_chat_id = ?, updated_at = ? WHERE id = ? AND status = 'started'").run(startedChatId, now(), id);
+      bus.emit("inbox", { type: "note" });
       return store.getNote(id);
     },
 
     deleteNote(id) {
-      return db.prepare("UPDATE notes SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'").run(now(), String(id || "")).changes > 0;
+      const deleted = db.prepare("UPDATE notes SET status = 'deleted', updated_at = ? WHERE id = ? AND status != 'deleted'").run(now(), String(id || "")).changes > 0;
+      if (deleted) bus.emit("inbox", { type: "note" });
+      return deleted;
     },
 
     /** Open notes whose time has come (run_at <= atIso). */
@@ -1199,21 +1220,36 @@ export function openStore(file, { seedProvider } = {}) {
       db.prepare(`INSERT INTO persons (id, source, external_id, display_name, username, category, access_json, boundaries, notes, history_json, meta_json, last_seen_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, external_id) DO UPDATE SET display_name=excluded.display_name, username=excluded.username, updated_at=excluded.updated_at`)
-        .run(id, source, String(externalId), name || current?.display_name || String(externalId), username, category || current?.category || "unclassified", current?.access_json || "{}", current?.boundaries || "", current?.notes || "", JSON.stringify(history), JSON.stringify(data || {}), at, current?.created_at || at, at);
+        .run(id, source, String(externalId), name || current?.display_name || String(externalId), name ? username : (current?.username ?? username), category || current?.category || "unclassified", current?.access_json || "{}", current?.boundaries || "", current?.notes || "", JSON.stringify(history), JSON.stringify(data || {}), at, current?.created_at || at, at);
       return store.getPerson(id);
     },
     getPerson(id) {
       const row = db.prepare("SELECT * FROM persons WHERE id = ?").get(id);
-      return row && { ...row, access: JSON.parse(row.access_json), history: JSON.parse(row.history_json), meta: JSON.parse(row.meta_json || "{}") };
+      return row && named({ ...row, access: JSON.parse(row.access_json), history: JSON.parse(row.history_json), meta: JSON.parse(row.meta_json || "{}") });
     },
     listPersons({ source = null, query = "", category = null } = {}) {
-      const rows = db.prepare(`SELECT * FROM persons WHERE (? IS NULL OR source = ?) AND (? = '' OR display_name LIKE '%' || ? || '%' OR username LIKE '%' || ? || '%' OR external_id = ?) AND (? IS NULL OR category = ?) ORDER BY updated_at DESC`).all(source, source, query, query, query, query, category, category);
-      return rows.map((row) => ({ ...row, access: JSON.parse(row.access_json), history: JSON.parse(row.history_json), meta: JSON.parse(row.meta_json || "{}") }));
+      const rows = db.prepare(`SELECT * FROM persons WHERE (? IS NULL OR source = ?) AND (? = '' OR display_name LIKE '%' || ? || '%' OR fa_name LIKE '%' || ? || '%' OR username LIKE '%' || ? || '%' OR external_id = ?) AND (? IS NULL OR category = ?) ORDER BY updated_at DESC`).all(source, source, query, query, query, query, query, category, category);
+      return rows.map((row) => named({ ...row, access: JSON.parse(row.access_json), history: JSON.parse(row.history_json), meta: JSON.parse(row.meta_json || "{}") }));
+    },
+    // One person by Telegram id, without scanning (and parsing the history of) everyone.
+    findPerson(externalId, source = "telegram") {
+      const row = db.prepare("SELECT id FROM persons WHERE source = ? AND external_id = ?").get(source, String(externalId));
+      return row ? store.getPerson(row.id) : null;
+    },
+    // The person list without history_json: that column is up to 600 messages per person, and
+    // parsing it for ~100 people is what made the Telegram page slow.
+    listPersonsLight({ source = "telegram" } = {}) {
+      return db.prepare("SELECT id, source, external_id, display_name, fa_name, username, category, access_json, meta_json, last_seen_at, updated_at FROM persons WHERE source = ? ORDER BY updated_at DESC")
+        .all(source)
+        .map(({ access_json, meta_json, ...row }) => named({ ...row, access: JSON.parse(access_json || "{}"), meta: JSON.parse(meta_json || "{}") }));
     },
     updatePerson(id, patch = {}) {
       const current = store.getPerson(id); if (!current) return null;
-      const next = { ...current, ...patch, display_name: patch.name || patch.display_name || current.display_name, access: patch.access || current.access, history: patch.history || current.history, meta: patch.data || patch.meta || current.meta };
-      db.prepare("UPDATE persons SET display_name=?, username=?, category=?, access_json=?, boundaries=?, notes=?, history_json=?, meta_json=?, updated_at=? WHERE id=?").run(next.display_name, next.username || null, next.category || "unclassified", JSON.stringify(next.access), String(next.boundaries || ""), String(next.notes || ""), JSON.stringify(next.history), JSON.stringify(next.meta), now(), id);
+      // Only Telegram writes display_name (upsertPerson); a name from here is the Persian one, and an
+      // empty one hands the name back to fa-names.mjs. `current.display_name` already carries fa_name.
+      const faName = "name" in patch ? nameOf(patch.name) : current.fa_name;
+      const next = { ...current, ...patch, access: patch.access || current.access, history: patch.history || current.history, meta: patch.data || patch.meta || current.meta };
+      db.prepare("UPDATE persons SET fa_name=?, username=?, category=?, access_json=?, boundaries=?, notes=?, history_json=?, meta_json=?, updated_at=? WHERE id=?").run(faName || null, next.username || null, next.category || "unclassified", JSON.stringify(next.access), String(next.boundaries || ""), String(next.notes || ""), JSON.stringify(next.history), JSON.stringify(next.meta), now(), id);
       return store.getPerson(id);
     },
     addPersonMessage({ personId, externalMessageId = null, direction, text, data = {}, at = now() }) {
@@ -1225,20 +1261,24 @@ export function openStore(file, { seedProvider } = {}) {
       db.prepare("UPDATE persons SET history_json=?, last_seen_at=?, updated_at=? WHERE id=?").run(JSON.stringify(next), at, at, personId);
       bus.emit("person.message", { personId, direction, text: String(text), at });
     },
-    // Mark which thread a person's messages went to (the mother chat shows it).
-    tagPersonMessages(personId, ids, data) {
-      const p = store.getPerson(personId);
-      if (!p) return;
-      const want = new Set((ids || []).map(String));
-      const history = p.history.map((m) => (want.has(String(m.id)) ? { ...m, data: { ...(m.data || {}), ...data } } : m));
-      db.prepare("UPDATE persons SET history_json=? WHERE id=?").run(JSON.stringify(history), personId);
-      bus.emit("person.message", { personId, tagged: true });
-    },
 
     listPersonMessages(personId, limit = 200) {
       const p = store.getPerson(personId);
       const hist = p?.history || [];
       return hist.slice(-Math.max(0, Number(limit) || 200));
+    },
+
+    // A person's Telegram profile photo; data null = Telegram says there is none (photo_id "").
+    setPersonPhoto(personId, photoId, data) {
+      db.prepare(`INSERT INTO person_photos (person_id, photo_id, data, at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(person_id) DO UPDATE SET photo_id=excluded.photo_id, data=excluded.data, at=excluded.at`)
+        .run(String(personId), String(photoId ?? ""), data ?? null, now());
+    },
+    personPhoto(personId) {
+      return db.prepare("SELECT photo_id, data FROM person_photos WHERE person_id = ?").get(String(personId)) || null;
+    },
+    personPhotoIds() {
+      return new Map(db.prepare("SELECT person_id, photo_id FROM person_photos WHERE data IS NOT NULL").all().map((r) => [r.person_id, r.photo_id]));
     },
 
     // Integrations (Telegram/Bale bots, Telegram account). `secret` (bot token / session) never leaves the
@@ -1284,50 +1324,28 @@ export function openStore(file, { seedProvider } = {}) {
     },
 
     linksForChat(chatId) {
-      return db.prepare("SELECT integration_id, external_chat FROM integration_links WHERE chat_id = ? UNION SELECT integration_id, external_chat FROM thread_links WHERE chat_id = ?").all(chatId, chatId);
+      // A closed thread membership delivers nothing (Telegram v2: closed rows used to keep receiving).
+      return db.prepare("SELECT integration_id, external_chat FROM integration_links WHERE chat_id = ? UNION SELECT integration_id, external_chat FROM thread_links WHERE chat_id = ? AND closed_at IS NULL").all(chatId, chatId);
     },
 
-    addThreadMember({ chatId, integrationId, externalChat, personId = null }) {
-      db.prepare(`INSERT INTO thread_links (chat_id, integration_id, external_chat, person_id, closed_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)
-        ON CONFLICT(chat_id, integration_id, external_chat) DO UPDATE SET closed_at = NULL, person_id = COALESCE(excluded.person_id, thread_links.person_id)`)
-        .run(chatId, integrationId, String(externalChat), personId, now());
-    },
-
-    // Open threads of one Telegram peer, the one with the newest activity first.
-    openThreads(integrationId, externalChat) {
-      return db.prepare(`SELECT c.id, c.title, c.updated_at, r.status AS run_status FROM thread_links t JOIN chats c ON c.id = t.chat_id
-        LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-        WHERE t.integration_id = ? AND t.external_chat = ? AND t.closed_at IS NULL AND c.archived = 0 ORDER BY c.updated_at DESC`)
-        .all(integrationId, String(externalChat)).map((row) => ({ ...row }));
-    },
-
-    // Every thread a person is or was in (open first), with its members.
+    // Every legacy (pre-v2) thread a person is or was in, with its members; not their mother chat.
     threadsForPerson(personId) {
       const rows = db.prepare(`SELECT DISTINCT c.id, c.title, c.updated_at, c.archived, r.status AS run_status,
           (SELECT MIN(CASE WHEN t2.closed_at IS NULL THEN 0 ELSE 1 END) FROM thread_links t2 WHERE t2.chat_id = c.id) AS closed
         FROM chats c LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-        WHERE c.id IN (SELECT chat_id FROM thread_links WHERE person_id = ?) OR (c.person_id = ? AND c.caller = 'team')
+        WHERE (c.id IN (SELECT chat_id FROM thread_links WHERE person_id = ?) OR (c.person_id = ? AND c.caller = 'team'))
+          AND NOT EXISTS (SELECT 1 FROM kv WHERE kv.key = 'motherof:' || c.id)
         ORDER BY c.updated_at DESC LIMIT 200`).all(String(personId), String(personId));
       return rows.map((row) => ({ ...row, closed: row.closed !== 0 || Boolean(row.archived), members: store.threadMembers(row.id) }));
     },
 
     threadMembers(chatId) {
-      return db.prepare(`SELECT t.integration_id, t.external_chat, t.person_id, t.closed_at, p.display_name FROM thread_links t
+      return db.prepare(`SELECT t.integration_id, t.external_chat, t.person_id, t.closed_at, COALESCE(p.fa_name, p.display_name) AS display_name FROM thread_links t
         LEFT JOIN persons p ON p.id = t.person_id WHERE t.chat_id = ?`).all(chatId).map((row) => ({ ...row }));
     },
 
-    allOpenThreads() {
-      return db.prepare(`SELECT DISTINCT c.id, c.title, c.updated_at FROM thread_links t JOIN chats c ON c.id = t.chat_id
-        WHERE t.closed_at IS NULL AND c.archived = 0 ORDER BY c.updated_at DESC LIMIT 300`).all()
-        .map((row) => ({ ...row, members: store.threadMembers(row.id) }));
-    },
-
-    // The whole thread, or only one member's part of it (/agent off in that person's chat).
-    closeThread(chatId, member = null) {
-      if (member) {
-        return db.prepare("UPDATE thread_links SET closed_at = ? WHERE chat_id = ? AND integration_id = ? AND external_chat = ? AND closed_at IS NULL")
-          .run(now(), chatId, member.integrationId, String(member.externalChat)).changes;
-      }
+    // A legacy (pre-v2) thread is done: every member's row closes.
+    closeThread(chatId) {
       return db.prepare("UPDATE thread_links SET closed_at = ? WHERE chat_id = ? AND closed_at IS NULL").run(now(), chatId).changes;
     },
 

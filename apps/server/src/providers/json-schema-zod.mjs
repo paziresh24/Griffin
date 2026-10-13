@@ -20,6 +20,11 @@ function schemaToZod(schema) {
   if (Array.isArray(schema.enum) && schema.enum.length) {
     return z.enum(schema.enum.map(String));
   }
+  // type: ["integer", "string"] — one of them (an array once fell to «object» and every call failed).
+  if (Array.isArray(schema.type)) {
+    const each = schema.type.map((type) => schemaToZod({ ...schema, type }));
+    return each.length > 1 ? z.union(each) : each[0] || z.unknown();
+  }
   switch (schema.type) {
     case "string": {
       let s = z.string();

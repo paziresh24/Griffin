@@ -26,16 +26,20 @@ import { STT_DEFAULTS, sttRoutes } from "./stt.mjs";
 import { chatTreeState, cleanupChatWorktree, currentWorktree, ensureChatWorktree, isValidRepoName, listRepos, parkedTrees, shortId, sweepChatWorktrees, switchChatWorktree, worktreeCreationSettled } from "./worktrees.mjs";
 import { createRepoChatTools, repoRules } from "./repo-tools.mjs";
 import { createIntegrations, integrationRoutes } from "./integrations/manager.mjs";
-import { classifyThread } from "./integrations/threads.mjs";
 import { createJobs } from "./jobs/index.mjs";
 import { jobRoutes } from "./jobs/routes.mjs";
 import { createJobTools } from "./jobs/tools.mjs";
 import { createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
 import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
+import { createMotherTools, globalContext, isGlobalChat, motherContext, motherInfo, watchJoinedThreads } from "./integrations/mother.mjs";
+import { deliverable } from "./integrations/format.mjs";
+import { fillPersianNames } from "./integrations/fa-names.mjs";
 import { fenceBackdoors, guardTools, noteOwnerAnswer } from "./guard.mjs";
 import { reviewChanges } from "./review.mjs";
 import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHop, openWorkFor, relatedRules, thirdPartyKey } from "./related.mjs";
 import { createChatTools } from "./chat-tools.mjs";
+import { OWNER_TASK_TOOL, TODO_TOOL, offersOwnerTask, ownerTaskTool, todoWriteTool, watchTodos } from "./todos.mjs";
+import { inboxTool } from "./inbox.mjs";
 import { claudeOneShot } from "./providers/claude.mjs";
 import { createVerifier } from "./verify.mjs";
 import { allowsModel, peerSettings } from "./peer-limits.mjs";
@@ -170,6 +174,9 @@ const asks = createAsks({
   },
 });
 const peersHolder = { current: null };
+// Each run's step list (kv todo:<chat>) for the owner's board: native lists copied, cleared at run
+// end once no delegated subtask still owes a report.
+watchTodos(store, { pendingDelegates: (chatId) => peersHolder.current?.pendingDelegates(chatId) || 0 });
 const knowledge = createKnowledge({
   store,
   root: path.join(WORKSPACE, "knowledge"),
@@ -411,6 +418,7 @@ const runModel = routeModel;
 const runner = createRunner({
   store,
   runLabel: runModel,
+  annotate: (chatId) => integrationsHolder.current?.desk?.annotate(chatId) || null,
   onFinished: (chatId) => {
     maybeTitle(chatId);
     tasksHolder.current?.sweep().catch(() => {});
@@ -446,7 +454,11 @@ const runner = createRunner({
     // An answer held for a question the agent never got to: deliver it as a normal follow-up.
     if (leftover) setTimeout(() => runner.send(chatId, { text: `پاسخ من: ${leftover.answer}`, images: [], intent: runner.isActive(chatId) ? "queue" : "send" }).catch(() => {}), 0);
   },
-  onUserCancel: (chatId) => peersHolder.current?.cancelChildren(chatId, { includeDelegates: true }),
+  // An explicit stop also clears the chat's step list (kept while delegates ran): nothing is in progress.
+  onUserCancel: (chatId) => {
+    store.deleteKv(`todo:${chatId}`);
+    return peersHolder.current?.cancelChildren(chatId, { includeDelegates: true });
+  },
   isSoftBusy: (chatId) => Boolean(peersHolder.current?.hasChildren(chatId)),
   isBlocked: (chatId) => asks.isWaiting(chatId),
   providerFor: (chat) => providers[runModel(chat).provider] || providers[DEFAULT_PROVIDER],
@@ -491,7 +503,7 @@ const runner = createRunner({
       // A colleague's own conversation may tell an owner chat something (its quota decides).
       ...(isPeerCaller(caller) ? createPeerChatTools({ store, runner, chat }) : {}),
     };
-    Object.assign(customTools, createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id) }));
+    Object.assign(customTools, createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id), onSent: (peer, text) => integrations.ownerWrote(peer, text) }));
 
     const cwd = agentCwd(WORKSPACE, agent);
     const peers = store.listAgentProfiles().filter((p) => p.id !== agent);
@@ -515,6 +527,22 @@ const runner = createRunner({
         mode: unattended ? "refuse" : "ask",
       });
     }
+    // A person's mother chat orchestrates and never closes (integrations/mother.mjs); only
+    // send_to_person reaches the colleague, so no telegram_send and no ask_requester there.
+    const mother = caller === COVERAGE_CALLER ? motherInfo(store, chat.id) : null;
+    if (mother) {
+      delete filtered.telegram_send;
+      delete filtered[ASK_REQUESTER_TOOL];
+      Object.assign(filtered, createMotherTools({
+        store, runner, chatId: chat.id, name: mother.name,
+        sendToPerson: (text) => integrations.desk.sendToPerson(chat.id, text),
+        editSent: (id, text) => integrations.desk.editSent(chat.id, id, text),
+        deleteSent: (id) => integrations.desk.deleteSent(chat.id, id),
+      }));
+    }
+    // The global chat («🌐 … — همه»): the assistant's Telegram desk (integrations/desk.mjs).
+    const desk = !mother && caller === "owner" && isGlobalChat(store, chat.id);
+    if (desk) Object.assign(filtered, integrations.desk.globalTools());
     if (caller === COVERAGE_CALLER) {
       const peerLink = store.linksForChat(chat.id).find((l) => l.external_chat && l.external_chat !== "me") || null;
       const peerChat = peerLink?.external_chat || null;
@@ -527,6 +555,13 @@ const runner = createRunner({
     }
     // Every change, in every chain (owner's too), first needs two independent reviewers' yes.
     if (genv("DEMO") !== "1") filtered = reviewChanges(filtered, { chatId: chat.id, store, asks, reviewers: changeReviewers() });
+    // The owner's board (todos.mjs, inbox.mjs). One todo tool per engine: Claude has TodoWrite,
+    // Cursor updateTodos; decided per run, so a fallback to the OpenAI-compatible engine gets todo_write. A chore for the
+    // owner only where he reads the board (offersOwnerTask: his chains and colleagues' Telegram ones,
+    // never jobs, the ops room or a peer's /mcp chain); a rehearsal records it (sim.mjs).
+    if (kindOf(runModel(chat).provider) === PROVIDER_OPENAI) filtered[TODO_TOOL] = todoWriteTool({ store, chatId: chat.id });
+    if (agent === DEFAULT_AGENT && rootCaller === "owner" && !unattended) filtered.inbox_list = inboxTool({ store, asks });
+    if (offersOwnerTask({ rootCaller, unattended })) filtered[OWNER_TASK_TOOL] = ownerTaskTool({ store, chatId: rootChatId, agent });
 
 
     // A chat on a repo (a side chat or a fork: its main chat's) works in that chat's own worktree,
@@ -566,9 +601,9 @@ const runner = createRunner({
     if (store.getChat(rootChatId)?.sim) filtered = simulateTools(filtered);
 
     // Rules are built from the tools this run really has (after caller filtering and guards).
-    const ruleOptions = { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))) };
+    const ruleOptions = { agent, caller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))), mother: Boolean(mother) };
     installRules(cwd, ruleOptions);
-    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat));
+    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "");
     const seedMessages = chat.agent_id ? null : seedTurns(chat);
     // «چرا؟»: what this session starts with, kept on the chat (manifest.mjs). Never fails the run.
     try {
@@ -809,16 +844,17 @@ const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", "") });
 const integrations = createIntegrations({
   store, runner, timelines, asks, peerAuth, publicUrl: genv("PUBLIC_URL", ""), telegramProxy: parseProxy(genv("TELEGRAM_SOCKS")),
   pendingWork: (chatId) => peersHolder.current?.pendingDelegates(chatId) || 0,
-  // Jev decides whether a teammate DM opens a Griffin thread (threads.mjs); a one-shot completion
-  // is the fallback so one external-classifier outage never silences teammate replies.
-  classifyThread: (args) =>
-    classifyThread(args, {
-      apiKey: secrets.get("typesafe") || readSecret("TYPESAFE_API_KEY", "TYPESAFE_API_KEY_FILE", "typesafe.api-key"),
-      fallbackAsk: (prompt) => generateText(prompt, { effort: "low", timeoutMs: 20_000 }),
-    }),
+  // A burst of a colleague's messages waits this long after the latest one and becomes one turn.
+  burstMs: Number(genv("TG_BURST_SECONDS", "45")) * 1000,
 });
 integrationsHolder.current = integrations;
 if (genv("DEMO") !== "1") integrations.startAll();
+// Persian names for the Telegram page (fa-names.mjs): a minute after start, then every half hour.
+const fillNames = (ids = null) => fillPersianNames({ store, ids, generate: (p) => generateText(p, { timeoutMs: 60_000 }) }).catch((e) => console.error(`[fa-names] ${e.message}`));
+if (genv("DEMO") !== "1") {
+  setTimeout(fillNames, 60_000).unref?.();
+  setInterval(fillNames, 30 * 60_000).unref?.();
+}
 
 // Self-check and self-repair (doctor.mjs): agents on a dead engine move to one that answers and
 // come back when it heals; stuck runs are cancelled. First pass a minute after start, then every 15.
@@ -890,6 +926,13 @@ const intake = createIntake({
   onChanges: (changes, meta) => opsRoom.push(changes.filter((c) => c.kind === "escalated" || !incidents.isAcked(c.incident)), meta),
 });
 if (genv("DEMO") !== "1" && opsRoom.mode !== "off") intake.start();
+
+// A thread another person's mother chat joined reports there too (integrations/mother.mjs).
+watchJoinedThreads({
+  store,
+  runner,
+  finalTextOf: async (chatId) => deliverable((await timelines.get(chatId)).timeline.messages.findLast((m) => m.role === "assistant") || { parts: [] }).text,
+});
 
 // Human signals: a work DM from a teammate to the owner goes to the ops room as a TeamReport, so
 // Griffin can tell whether it already knew (a machine signal covered it) or it was a miss.
@@ -1308,7 +1351,8 @@ const app = createApp({
     // Owner-only: send from the owner's Telegram account through the one live client.
     api.post("/api/telegram/send", async (c) => {
       const body = await c.req.json().catch(() => ({}));
-      const tool = createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id) }).telegram_send;
+      // Another session wrote to a colleague: the owner is in that conversation now (desk.mjs).
+      const tool = createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id), onSent: (peer, text) => integrations.ownerWrote(peer, text) }).telegram_send;
       const result = await tool.execute({ chat: String(body.chat || ""), text: String(body.text || "") });
       const payload = JSON.parse(result.content?.[0]?.text || "{}");
       return c.json(payload, result.isError ? 400 : 200);
@@ -1472,7 +1516,7 @@ const app = createApp({
       if (!row) return c.json({ error: "not found" }, 404);
       return c.json({ incident: incidentView(row), log: incidents.logs(row.id, 100) });
     });
-    integrationRoutes(api, integrations);
+    integrationRoutes(api, integrations, { fillNames });
     profileRoutes(api, { store, telegramProfile: () => integrations.accountProfile() });
     jobRoutes(api, jobs, { targets: () => integrations.targets() });
   },

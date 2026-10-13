@@ -155,3 +155,33 @@ test("retry phase, manifest changes and per-model usage (each run once)", () => 
   const split = [...t.messages, { ...a, id: "ra~9" }];
   assert.deepEqual(usageByModel(split), { total: 175, byModel: [{ model: "glm-5.3", tokens: 120 }, { model: "sonnet", tokens: 55 }] });
 });
+
+// Telegram v2: a colleague's message in a mother chat says who wrote it; desk notes are messages of
+// their own that never disturb the run around them.
+test("tg.note folds into a note message; user.from is kept; runs and the final text are untouched", () => {
+  const t = foldEvents([
+    ev("user", { text: "«کریمی»: سلام", from: { kind: "colleague", name: "کریمی", personId: "p1" } }, null),
+    ev("run.started", {}, "m"),
+    ev("text", { text: "در حال بررسی" }, "m"),
+    ev("tg.note", { kind: "owner_line", name: "شما", text: "خودم جواب دادم", by: "owner", personId: "p1" }, null),
+    ev("tool.started", { callId: "s", name: "send_to_person", args: { text: "سلام" } }, "m"),
+    ev("tool.done", { callId: "s", name: "send_to_person", result: { status: "success" } }, "m"),
+    ev("text", { text: "کریمی سلام کرد؛ جواب دادم." }, "m"),
+    ev("run.finished", { status: "finished" }, "m"),
+    ev("tg.note", { kind: "report", name: "کریمی", state: "sent", sent: ["سلام"], text: "جواب دادم", id: "x", role: "user" }, null),
+  ]);
+  const [user, run, note, report] = t.messages;
+  assert.deepEqual(user.from, { kind: "colleague", name: "کریمی", personId: "p1" });
+  assert.equal(run.role, "assistant");
+  assert.equal(run.status, "finished");
+  assert.equal(note.role, "note");
+  assert.equal(note.kind, "owner_line");
+  assert.equal(note.by, "owner");
+  assert.match(note.id, /^n\d+$/);
+  assert.equal(report.role, "note", "data never overrides the note's own role or id");
+  assert.match(report.id, /^n\d+$/);
+  assert.deepEqual(report.sent, ["سلام"]);
+  assert.equal(t.messages.findLast((m) => m.role === "assistant"), run);
+  assert.equal(finalText(run), "کریمی سلام کرد؛ جواب دادم.");
+  assert.equal(foldEvents([ev("user", { text: "x" }, null)]).messages[0].from, undefined, "the owner's own message has no from");
+});

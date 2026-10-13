@@ -123,6 +123,7 @@ policy brings it back. Paths, ports, the broker socket, `OWNER_NAME` and `TZ` st
 | `GRIFFIN_BROKER_DATA` | the broker's own encrypted secret box (default `/broker-data`) |
 | `GRIFFIN_PUBLIC_URL` | absolute URL used in chart/file links sent to messengers |
 | `GRIFFIN_PROXY`, `CURSOR_PROXY`, `GRIFFIN_TELEGRAM_SOCKS` | egress (see `deploy/xray/`); without them, the proxy set in the setup wizard (`<data>/proxy.json`) is used |
+| `GRIFFIN_TG_BURST_SECONDS` | a burst of one colleague's Telegram messages waits this long after the latest one and becomes one turn (default `45`) |
 | `GRIFFIN_OPS_MODE` | incident ops room: `shadow` (LLM triage), `record` (group and show only), `off` |
 | `GRIFFIN_BUSINESS_SIGNAL` | optional JSON: the SQL table where your own job records business drops |
 | `GRIFFIN_PEER_SELF_SERVE` | optional text: what a colleague can do without Griffin on your install (their kubeconfig, your GitOps repo…), `{user}` = their id. Sent once to each colleague's agent and given to Griffin so it answers self-serviceable requests with commands, not work |

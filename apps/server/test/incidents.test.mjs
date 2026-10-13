@@ -67,8 +67,8 @@ test("a storm of the same alert is one incident with members", () => {
 
 test("per-cluster alerts and owner labels choose the key", () => {
   assert.equal(incidentKey(alert({ alertname: "TLSCertExpiringSoon", labels: { namespace: "x", instance: "a.example.com" } })), "dr|TLSCertExpiringSoon|");
-  assert.equal(incidentKey(alert({ alertname: "GatewayAppHttp5xxHigh", owner: "omid-rad", labels: { app_name: "patient" } })), "dr|GatewayAppHttp5xxHigh|omid-rad");
-  assert.equal(incidentKey(alert({ alertname: "SeaweedOwnerBucketHuge", severity: "critical", labels: { bucket: "salireza-sadr" } })), "dr|SeaweedOwnerBucketHuge|salireza-sadr");
+  assert.equal(incidentKey(alert({ alertname: "GatewayAppHttp5xxHigh", owner: "omid-rad", labels: { app_name: "webapp" } })), "dr|GatewayAppHttp5xxHigh|omid-rad");
+  assert.equal(incidentKey(alert({ alertname: "SeaweedOwnerBucketHuge", severity: "critical", labels: { bucket: "team-uploads" } })), "dr|SeaweedOwnerBucketHuge|team-uploads");
 });
 
 test("first poll is a silent baseline; later polls only report state changes", async () => {
@@ -192,14 +192,14 @@ test("a delegated child keeps its own caller's quota; the root caller only says 
 
 test("team DMs become one TeamReport per person per day; chit-chat and groups are ignored; tokens are redacted", async () => {
   const { isTeamReport, redact } = await import("../src/incidents/index.mjs");
-  const person = { category: "team", external_id: "165771140", meta: { chatType: "user" }, username: "arad", display_name: "Aboulfazl Rad Infra" };
-  assert.equal(isTeamReport({ ...person, external_id: "-5313573984", display_name: "Alerts channel" }, "🟡 PublicAdminEndpointDown on prod, down (1) registry"), false, "channels/groups have negative ids");
-  assert.equal(isTeamReport({ ...person, external_id: "8283552983", username: null, display_name: "فروش بات" }, "گزارش روزانهٔ فروش ویزیت آنلاین آماده شد"), false);
+  const person = { category: "team", external_id: "100000001", meta: { chatType: "user" }, username: "arad", display_name: "Sam Rad Infra" };
+  assert.equal(isTeamReport({ ...person, external_id: "-1000000002", display_name: "Alerts channel" }, "🟡 PublicAdminEndpointDown on prod, down (1) registry"), false, "channels/groups have negative ids");
+  assert.equal(isTeamReport({ ...person, external_id: "1000000003", username: null, display_name: "فروش بات" }, "گزارش روزانهٔ فروش آماده شد"), false);
   assert.equal(isTeamReport(person, "ممنون ❤️"), false);
   assert.equal(isTeamReport(person, "سلام، دیپلوی اپ ما روی دی‌آر sync نمی‌شود و ارور ImagePull می‌دهد"), true);
   assert.equal(isTeamReport({ ...person, meta: { chatType: "group" } }, "سلام، دیپلوی اپ ما روی دی‌آر sync نمی‌شود"), false);
   assert.equal(isTeamReport({ ...person, category: "unclassified" }, "سلام، دیپلوی اپ ما روی دی‌آر sync نمی‌شود"), false);
-  assert.equal(isTeamReport({ ...person, username: "p24alert_bot" }, "سلام، دیپلوی اپ ما روی دی‌آر sync نمی‌شود"), false);
+  assert.equal(isTeamReport({ ...person, username: "alerts_bot" }, "سلام، دیپلوی اپ ما روی دی‌آر sync نمی‌شود"), false);
   assert.match(redact("key: bwUEpjkqdqnPCMCqhhbbz6GXBvYocLWjzuug05akLBDsf7F ok"), /key: \[redacted\] ok/);
 
   const t = setup();

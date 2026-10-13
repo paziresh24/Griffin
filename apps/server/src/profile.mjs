@@ -13,7 +13,7 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 // MAX_CODE_POINTS in all (one "character" can carry endless combining marks).
 const MAX_RAW = 4_000;
 const MAX_CODE_POINTS = 160;
-function nameOf(value) {
+export function nameOf(value) {
   const flat = String(value ?? "").slice(0, MAX_RAW).replace(STRIP, " ").replace(/\s+/g, " ").trim();
   let out = "";
   let count = 0;
@@ -24,7 +24,7 @@ function nameOf(value) {
   return [...out].slice(0, MAX_CODE_POINTS).join("").trim() || null;
 }
 // Telegram profile photos are JPEG; anything else is not shown.
-const isJpeg = (bytes) => Buffer.isBuffer(bytes) && bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+export const isJpeg = (bytes) => Buffer.isBuffer(bytes) && bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 const versionOf = (photo) => crypto.createHash("sha1").update(photo).digest("hex").slice(0, 12);
 
 export function profileRoutes(app, { store, telegramProfile = () => null }) {

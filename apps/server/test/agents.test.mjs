@@ -6,7 +6,7 @@ import path from "node:path";
 import { AGENTS, CORE_TOOLS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents, resolveAgentId } from "../src/agents/registry.mjs";
 import { agentPayload } from "../src/agents/import.mjs";
 import { resolveEnabledTools } from "../src/agents/profiles.mjs";
-import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, VOICE, buildRules, identity, installRules, rulesFor } from "../src/prompt.mjs";
+import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, TASK_RULE, VOICE, buildRules, identity, installRules, rulesFor } from "../src/prompt.mjs";
 import { exampleAgent } from "./fixture-agents.mjs";
 
 const ALL = [
@@ -66,6 +66,7 @@ test("rules are the shared core plus this agent's own instructions", () => {
   assert.ok(text.startsWith(CORE_RULES));
   assert.ok(text.includes(DEFAULT_INSTRUCTIONS), "the default agent ships with instructions");
   assert.ok(text.includes(NEVER_DEAD_END));
+  assert.ok(text.includes(TASK_RULE), "every agent works in the task shape");
   assert.match(text, /never claim to be/, "the voice section fixes the identity");
   assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), text);
 
