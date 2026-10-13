@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { Switch } from "radix-ui";
 import { Check } from "lucide-react";
-import { Group } from "./SettingsParts.jsx";
+import { Group, Item } from "./SettingsParts.jsx";
 import { applySkin, readSkin } from "../skin.js";
 import { t } from "../i18n.js";
+import { NAV_ITEMS, NAV_PRESETS, NAV_STYLES, setNavPrefs, useNavPrefs } from "../sidebar-nav.js";
 
 // Preview colours are written out here: the skin tokens live on <html>, so a small card cannot
 // borrow the other skin's palette from CSS. Keep them in step with styles.css.
@@ -56,6 +58,7 @@ export function AppearanceSection() {
   const [skin, setSkin] = useState(readSkin);
   const dark = useDark();
   return (
+    <div className="space-y-6">
     <Group title={t("پوسته")}>
       <div role="radiogroup" aria-label={t("پوسته")} className="grid gap-3 p-3 sm:grid-cols-2">
         {SKINS.map((s) => {
@@ -81,6 +84,71 @@ export function AppearanceSection() {
           );
         })}
       </div>
+    </Group>
+    <SidebarNavPrefs />
+    </div>
+  );
+}
+
+// The sidebar's top sections: as rows or one row of icons, and which show (the rest under «بیشتر»).
+function SidebarNavPrefs() {
+  const prefs = useNavPrefs();
+  const shown = (id) => !prefs.hidden.includes(id);
+  const preset = NAV_PRESETS.find((p) => p.hidden.length === prefs.hidden.length && p.hidden.every((id) => prefs.hidden.includes(id)))?.id;
+  const chip = (active) =>
+    `press rounded-full border px-3 py-1 text-xs transition-colors ${active ? "border-primary/40 bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`;
+  return (
+    <Group
+      title={t("بخش‌های بالای منو")}
+      action={
+        <div className="flex gap-1.5">
+          {NAV_PRESETS.map((p) => (
+            <button key={p.id} type="button" onClick={() => setNavPrefs({ hidden: p.hidden })} className={chip(preset === p.id)}>
+              {p.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <div role="radiogroup" aria-label={t("شکل بخش‌ها")} className="grid grid-cols-2 gap-2 p-3">
+        {NAV_STYLES.map((style) => {
+          const active = prefs.style === style.id;
+          return (
+            <button
+              key={style.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => setNavPrefs({ style: style.id })}
+              className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">{style.label}</span>
+                <span className="block text-xs leading-5 text-muted-foreground">{style.note}</span>
+              </span>
+              {active ? <Check className="mt-0.5 size-4 shrink-0 text-primary" /> : null}
+            </button>
+          );
+        })}
+      </div>
+      {NAV_ITEMS.map((item) => (
+        <Item
+          key={item.id}
+          title={item.label}
+          subtitle={shown(item.id) ? t("در منو") : t("زیر «بیشتر»")}
+          trailing={
+            <Switch.Root
+              checked={shown(item.id)}
+              onCheckedChange={(on) => setNavPrefs({ hidden: on ? prefs.hidden.filter((id) => id !== item.id) : [...prefs.hidden, item.id] })}
+              dir="ltr"
+              className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
+              aria-label={t("{name} در منو", { name: item.label })}
+            >
+              <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
+            </Switch.Root>
+          }
+        />
+      ))}
     </Group>
   );
 }

@@ -2,9 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   coverageCommand,
-  coverageContextPrompt,
-  coverageIntroPrompt,
-  coverageReplyPrompt,
   coverageOwnerNote,
   createEndAgentTool,
   guardTeamTools,
@@ -26,25 +23,9 @@ test("coverageCommand: only /agent and /agent off", () => {
   assert.equal(coverageCommand("پلتفرم‌بان /agent"), null);
 });
 
-test("intro and coverage prompts tell the agent to speak for itself", () => {
-  const intro = coverageIntroPrompt("علی");
-  assert.match(intro, /علی/);
-  assert.match(intro, /معرفی/);
-  assert.match(intro, /ابزار صدا نزن/);
-  assert.match(intro, /Owner/);
-  const focus = coverageReplyPrompt("کریمی", "اشتباه نمیکنه؟", ["Owner: پوش با نام نویسندهٔ اشتباه — توکن @skarimi", "همکار: اشتباه نمیکنه؟"]);
-  assert.match(focus, /اشتباه نمیکنه؟/);
-  assert.match(focus, /توکن @skarimi/, "the conversation around the replied message is included");
-  assert.match(focus, /نپرس «کدوم پیام؟»/);
-  assert.doesNotMatch(focus, /قربونت/);
-  assert.match(focus, /پیدا نکردم/);
+test("the owner's web note in a colleague chat is framed for the agent, not the colleague", () => {
   const note = coverageOwnerNote("سارا کریمی", "پاسخ داد سارا");
   assert.match(note, /^«Owner از داخل گریفین — برای تو، نه برای سارا کریمی»: پاسخ داد سارا$/);
-  assert.doesNotMatch(focus, /معرفی کن/);
-  const ctx = coverageContextPrompt("احمدی", ["همکار: لاگ hook0 را چک کن", "Owner: /agent"]);
-  assert.match(ctx, /تاریخچه/);
-  assert.match(ctx, /hook0/);
-  assert.match(ctx, /نمی‌تواند مستقیم/);
 });
 
 test("end_agent tool notifies onEnd", async () => {
@@ -56,7 +37,7 @@ test("end_agent tool notifies onEnd", async () => {
 });
 
 test("destructive SQL is refused; normal select is not", () => {
-  assert.equal(isDestructiveSql("DROP DATABASE hami"), true);
+  assert.equal(isDestructiveSql("DROP DATABASE app"), true);
   assert.equal(isDestructiveSql("truncate table x"), true);
   assert.equal(isDestructiveSql("DELETE FROM users;"), true);
   assert.equal(isDestructiveSql("SELECT * FROM users LIMIT 10"), false);

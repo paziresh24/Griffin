@@ -54,9 +54,9 @@ test("looksAssistantSigned matches every colleague's assistant signature, not hu
 });
 
 test("derivePeerUserId is stable, charset-safe and prefers the username", () => {
-  assert.equal(derivePeerUserId({ username: "Msadeghi" }, "91499258"), "msadeghi");
+  assert.equal(derivePeerUserId({ username: "Msadeghi" }, "10000004"), "msadeghi");
   assert.equal(derivePeerUserId({ username: "R_Rezaei" }, "123"), "r-rezaei");
-  assert.equal(derivePeerUserId({ username: null, display_name: "مریم" }, "91499258"), "tg-91499258");
+  assert.equal(derivePeerUserId({ username: null, display_name: "مریم" }, "10000004"), "tg-10000004");
   assert.equal(derivePeerUserId({}, null), null);
 });
 
@@ -68,8 +68,8 @@ test("bindPeerAgentPerson registers the peer, grants the default quota and persi
   const peerAuth = createPeerAuth({ store });
   const integrations = createIntegrations({ store, runner: { send: async () => ({}), isActive: () => false, cancel: async () => {} }, asks: {}, peerAuth, log: {} });
   try {
-    const person = store.upsertPerson({ externalId: "91499258", name: "Maryam Sadeghi", username: "Msadeghi", data: { platform: "telegram" } });
-    const first = await integrations.bridge.bindPeerAgentPerson(person, "91499258");
+    const person = store.upsertPerson({ externalId: "10000004", name: "Maryam Sadeghi", username: "Msadeghi", data: { platform: "telegram" } });
+    const first = await integrations.bridge.bindPeerAgentPerson(person, "10000004");
     assert.equal(first.user, "msadeghi");
     assert.equal(first.created, true);
     assert.ok(store.getPeerUser("msadeghi"), "peer user registered");
@@ -77,7 +77,7 @@ test("bindPeerAgentPerson registers the peer, grants the default quota and persi
     assert.ok(callers["peer:msadeghi"], "default read-only quota granted");
     assert.equal(store.getPerson(person.id).access.peerAgent.user, "msadeghi", "binding persisted on the person");
     // Idempotent: second bind neither throws nor reports creation.
-    const second = await integrations.bridge.bindPeerAgentPerson(store.getPerson(person.id), "91499258");
+    const second = await integrations.bridge.bindPeerAgentPerson(store.getPerson(person.id), "10000004");
     assert.equal(second.user, "msadeghi");
     assert.equal(second.created, false);
   } finally {

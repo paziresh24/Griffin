@@ -10,5 +10,7 @@
   "حالت سریع: خاموش": "Fast mode: off",
   "هزینهٔ اضافه؛ فقط Opus. از نوبت بعد این گفتگو اثر می‌کند.": "Extra cost; Opus only. Takes effect from this chat's next turn.",
   "حالت سریع": "Fast mode",
-  "هنوز سریع نیست: {note}": "Not fast yet: {note}"
+  "هنوز سریع نیست: {note}": "Not fast yet: {note}",
+  "فقط Opus، از مصرف اضافهٔ حساب؛ از نوبت بعد اثر می‌کند": "Opus only, billed to the account's extra usage; takes effect from the next turn",
+  "روشن کردن حالت سریع": "Turn on fast mode"
 }

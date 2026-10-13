@@ -65,7 +65,7 @@ test("explainRun: tools merge, failures, a mid-run message, review decisions and
     { type: "tool.started", at: at(1), data: { callId: "1", name: "kube_get" } },
     { type: "tool.done", at: at(2), data: { callId: "1", name: "kube_get", result: { status: "success" } } },
     { type: "tool.done", at: at(3), data: { callId: "2", name: "kube_get", result: { status: "success" } } },
-    { type: "user", at: at(4), data: { text: "فقط مبین", intent: "steer" } },
+    { type: "user", at: at(4), data: { text: "فقط کلاستر اول", intent: "steer" } },
     { type: "tool.done", at: at(6), data: { callId: "3", name: "gitlab_mr", result: { status: "error", value: { content: [{ text: "denied" }] } } } },
     { type: "usage", at: at(7), data: { prompt_tokens: 1000, completion_tokens: 50 } },
     { type: "usage", at: at(8), data: { prompt_tokens: 1200, completion_tokens: 70 } },

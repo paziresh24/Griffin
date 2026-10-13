@@ -65,7 +65,7 @@ test("visualize stores a self-contained chart and returns only a summary", async
     const chat = store.createChat({ title: "mem" });
     const tool = visualizer.tool(chat.id);
     const out = await tool.execute({
-      title: "مصرف مموری p24core",
+      title: "مصرف مموری api-core",
       description: "پروداکشن، ۲۴ ساعت، GiB",
       datasets: [{ name: "mem", prometheus: { cluster: "prod", promql: "sum(x)", range: "24h", scale: GiB, unit: "GiB" } }],
       spec: { data: { name: "mem" }, mark: "line", encoding: { x: { field: "time", type: "temporal" }, y: { field: "value", type: "quantitative" } } },
@@ -82,7 +82,7 @@ test("visualize stores a self-contained chart and returns only a summary", async
 
     const app = createApp({ store, runner: { activeCount: () => 0 } });
     const fetched = await (await app.request(`/api/charts/${summary.chartId}`)).json();
-    assert.equal(fetched.chart.title, "مصرف مموری p24core");
+    assert.equal(fetched.chart.title, "مصرف مموری api-core");
     assert.equal((await (await app.request(`/api/chats/${chat.id}/charts`)).json()).charts.length, 1);
 
     const tooMany = createVisualizer({ store, fetchMetrics: async () => ({ series: Array.from({ length: 81 }, () => ({ labels: {}, points: [] })) }) });
@@ -95,7 +95,7 @@ test("visualize stores a self-contained chart and returns only a summary", async
 });
 
 test("a spec without named data is bound to the only dataset and gets the axis", () => {
-  // The exact spec the agent sent on 2026-09-14 for p24core memory (no "data").
+  // The exact spec the agent sent on 2026-09-14 for api-core memory (no "data").
   const spec = { mark: { type: "area", line: true }, encoding: { x: { field: "time", type: "temporal" }, y: { field: "value", type: "quantitative", title: "GiB" } } };
   const datasets = [{ name: "mem", domain: [0, 12.5], rows: [] }];
   assert.equal(bindSingleDataset(spec, datasets), true);

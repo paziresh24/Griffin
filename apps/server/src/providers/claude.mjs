@@ -5,12 +5,6 @@ import { createClaudeEventBridge } from "./claude-events.mjs";
 
 export const PROVIDER_CLAUDE = "claude";
 
-export const CLAUDE_MODELS = [
-  { id: "opus", name: "Claude Opus" },
-  { id: "sonnet", name: "Claude Sonnet" },
-  { id: "haiku", name: "Claude Haiku" },
-];
-
 // Map the short names the picker/env use to a full id the INSTALLED claude-agent-sdk accepts.
 // 2026-10-10: the Anthropic API stopped resolving bare "opus"/"sonnet" (404 "model: opus").
 // 2026-10-11: the bundled CLI rejects a model newer than itself ("does not support this model;
@@ -19,6 +13,30 @@ export const CLAUDE_MODELS = [
 // SDK 0.3.296 knows the 5-5 line.
 const MODEL_ALIAS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
 export const resolveModel = (id) => MODEL_ALIAS[String(id || "").toLowerCase()] || id;
+
+// Claude Code's own default effort per model — from the model catalog baked into the bundled CLI
+// (SDK 0.3.296: grep its binary for `default_effort`). It is what a turn uses when Griffin sends no
+// effort, so the effort panel marks it «پیشنهادی». A model missing here falls back to "high", as
+// Claude Code does. Bump with the SDK, like MODEL_ALIAS.
+const DEFAULT_EFFORT = {
+  "claude-opus-5-5": "medium",
+  "claude-sonnet-5-5": "medium",
+  "claude-haiku-5-5": "medium",
+  "claude-fable-5-1": "high",
+  "claude-fable-5": "high",
+  "claude-opus-5": "high",
+  "claude-sonnet-5": "high",
+  "claude-opus-4-8": "high",
+  "claude-opus-4-7": "xhigh",
+  "claude-mythos-5-1": "high",
+};
+export const defaultEffortOf = (id) => DEFAULT_EFFORT[resolveModel(id)] || "high";
+
+export const CLAUDE_MODELS = [
+  { id: "opus", name: "Claude Opus" },
+  { id: "sonnet", name: "Claude Sonnet" },
+  { id: "haiku", name: "Claude Haiku" },
+].map((m) => ({ ...m, defaultEffort: defaultEffortOf(m.id) }));
 
 // Built-ins Claude Code may use. No Bash: live ops go through typed broker/MCP tools.
 const BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"];
@@ -41,7 +59,8 @@ export function planWindows(windows) {
     .map(([key, w]) => ({ label: WINDOW_LABELS[key], percentage: Math.round(Number(w.utilization) * 100), resetAt: w.resetsAt ? w.resetsAt * 1000 : null }));
 }
 
-export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
+// queryImpl: the SDK's query (a test passes a fake Claude Code process).
+export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImpl = query } = {}) {
   // Last plan windows this account's runs saw (one subscription per account).
   const lastLimits = { windows: null, at: null };
   return {
@@ -64,7 +83,14 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
           },
           signal: AbortSignal.timeout(8_000),
         });
-        return { ok: response.ok || response.status === 401, status: response.status, ms: Date.now() - started };
+        // 401 is a rejected key (a valid setup-token answers 200 here, checked 2026-10-13); 429 is a
+        // working key that is busy.
+        return {
+          ok: response.ok || response.status === 429,
+          status: response.status,
+          ...(response.status === 401 ? { error: "کلید رد شد (401)" } : {}),
+          ms: Date.now() - started,
+        };
       } catch (error) {
         return {
           ok: false,
@@ -80,10 +106,10 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
       return { provider: PROVIDER_CLAUDE, windows: planWindows(lastLimits.windows), seenAt: lastLimits.at };
     },
     create(options) {
-      return makeAgent(null, options, { apiKey, defaultModel, lastLimits });
+      return makeAgent(null, options, { apiKey, defaultModel, lastLimits, queryImpl });
     },
     resume(sessionId, options) {
-      return makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits });
+      return makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits, queryImpl });
     },
     // A copy of a conversation up to one entry (SDK forkSession), written next to the source in
     // Claude Code's projects folder, so the fork must run in the same folder. Returns the new id.
@@ -95,10 +121,14 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet" } = {}) {
   };
 }
 
-function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {} }) {
+function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, queryImpl = query }) {
   // Stable id from the start so runner can persist agent_id before the first stream frame.
   let currentSessionId = sessionId || randomUUID();
   let started = Boolean(sessionId);
+  // The Claude Code process of the previous send. The runner calls the turn done at its «result», but
+  // the process lives on (the next-message suggestion comes after it); a queued turn started then got
+  // «Session ID … is already in use» (10 runs, 2026-10-08..12, each within a second of the turn before).
+  let last = null; // { closed: Promise, done, abort, resultAt }
 
   return {
     get agentId() {
@@ -141,91 +171,121 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {} }
 
       const modelId = resolveModel(sendOptions.model?.id || options.model?.id || defaultModel);
       const mode = sendOptions.mode === "plan" ? "plan" : "agent";
-      const prompt = toPrompt(message, () => currentSessionId);
       const allowedMcp = Object.keys(options.customTools || {}).map((name) => `mcp__griffin__${name}`);
-      const sessionOpts = started
-        ? { resume: currentSessionId }
-        : { sessionId: currentSessionId };
+      const prev = last;
+      let closeMe;
+      const me = { closed: new Promise((resolve) => (closeMe = resolve)), done: false, abort, resultAt: 0 };
+      last = me;
+      let gotAny = false;
+
+      // One Claude Code process per session at a time: wait for the previous one to exit. A turn that
+      // already gave its result only lingers for its suggestion (10 s); one the runner gave up on is
+      // stopped. Never waits forever.
+      async function afterPrevious() {
+        if (!prev || prev.done) return;
+        const within = (ms) => Promise.race([prev.closed, new Promise((resolve) => setTimeout(resolve, ms))]);
+        await within(prev.resultAt || prev.abort.signal.aborted ? 10_000 : 2_000);
+        if (prev.done) return;
+        prev.abort.abort();
+        await within(5_000);
+      }
+
+      async function attempt(resume) {
+        const q = queryImpl({
+          prompt: toPrompt(message, () => currentSessionId),
+          options: {
+            abortController: abort,
+            cwd: options.cwd,
+            model: modelId,
+            ...(sendOptions.effort ? { effort: sendOptions.effort } : {}),
+            // Claude Code's guess at the owner's next message, after the result (runner decides who gets one).
+            ...(sendOptions.onSuggestion ? { promptSuggestions: true } : {}),
+            // Fast mode is an SDK opt-in: only a settings value turns it on (billed from extra usage, Opus only).
+            ...(sendOptions.fast ? { settings: { fastMode: true } } : {}),
+            ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
+            permissionMode: mode === "plan" ? "plan" : "bypassPermissions",
+            includePartialMessages: true,
+            tools: BUILTIN_TOOLS,
+            allowedTools: [...BUILTIN_TOOLS, ...allowedMcp, "mcp__griffin__*"],
+            disallowedTools: ["Bash", "BashOutput", "KillShell", "NotebookEdit"],
+            mcpServers: mcp ? { griffin: mcp } : {},
+            strictMcpConfig: true,
+            // Rules come with the run, not from the shared workspace CLAUDE.md: concurrent chats of
+            // one agent rewrite that file, so a colleague thread could run on the owner's rules.
+            ...(options.rules
+              ? { systemPrompt: { type: "preset", preset: "claude_code", append: options.rules }, settingSources: [] }
+              : { settingSources: ["project"] }),
+            env: claudeAuthEnv(apiKey),
+          },
+        });
+        let commandsAsked = false;
+        for await (const msg of q) {
+          // The session exists from the process's first message: a later send resumes it.
+          gotAny = true;
+          started = true;
+          if (msg?.session_id) currentSessionId = msg.session_id;
+          // The composer's «/» list: asked once the engine answers, replaced when Claude Code says it changed.
+          if (sendOptions.onCommands) {
+            if (!commandsAsked && typeof q.supportedCommands === "function") {
+              commandsAsked = true;
+              Promise.resolve().then(() => q.supportedCommands()).then(sendOptions.onCommands).catch(() => {});
+            }
+            if (msg?.type === "system" && msg.subtype === "commands_changed") {
+              bestEffort(() => sendOptions.onCommands(msg.commands));
+              continue;
+            }
+          }
+          // Arrives after the result and is no turn of its own: handed over, never streamed.
+          if (msg?.type === "prompt_suggestion") {
+            bestEffort(() => sendOptions.onSuggestion?.(String(msg.suggestion ?? "")));
+            continue;
+          }
+          const info = msg?.type === "rate_limit_event" ? msg.rate_limit_info : null;
+          if (info?.status === "rejected" && !info.overageInUse) limit = info;
+          if (info?.unifiedWindows) Object.assign(lastLimits, { windows: info.unifiedWindows, at: new Date().toISOString() });
+          // An MCP server that fails to start leaves the model with built-ins only, silently — it then
+          // answers without any Griffin tool (2026-10-08). Stop the run with a clear error instead.
+          if (msg?.type === "system" && msg.subtype === "init" && mcp) {
+            const griffin = (msg.mcp_servers || []).find((server) => server.name === "griffin");
+            if (griffin?.status !== "connected") {
+              mcpDown = `ابزارهای گریفین به Claude نرسید (MCP: ${griffin?.status || "missing"})`;
+              console.error(`[claude] ${mcpDown}`);
+              abort.abort();
+              break;
+            }
+          }
+          for (const update of bridge.consume(msg)) {
+            await sendOptions.onDelta?.({ update });
+          }
+          if (msg?.type === "result") {
+            me.resultAt = Date.now();
+            // is_error wins over subtype: an expired login can arrive as "success" + is_error (seen in the wild).
+            const ok = msg.subtype === "success" && !msg.is_error;
+            const message = msg.result || msg.errors?.join?.("; ") || msg.subtype || "claude run failed";
+            finish({
+              status: abort.signal.aborted ? "cancelled" : ok ? "finished" : "error",
+              error: ok
+                ? null
+                : limit || /usage limit|rate limit|limit reached|hit your limit|unknown model|model code|not[_ ]?found|overloaded|\b429\b/i.test(message)
+                  ? { message, code: "plan_limit", resetsAt: limit?.resetsAt ? limit.resetsAt * 1000 : null }
+                  : sessionGone(message),
+            });
+          }
+        }
+      }
 
       (async () => {
         try {
           if (!apiKey) throw new Error("Anthropic API key missing");
-          const q = query({
-            prompt,
-            options: {
-              abortController: abort,
-              cwd: options.cwd,
-              model: modelId,
-              ...(sendOptions.effort ? { effort: sendOptions.effort } : {}),
-              // Claude Code's guess at the owner's next message, after the result (runner decides who gets one).
-              ...(sendOptions.onSuggestion ? { promptSuggestions: true } : {}),
-              // Fast mode is an SDK opt-in: only a settings value turns it on (billed from extra usage, Opus only).
-              ...(sendOptions.fast ? { settings: { fastMode: true } } : {}),
-              ...sessionOpts,
-              permissionMode: mode === "plan" ? "plan" : "bypassPermissions",
-              includePartialMessages: true,
-              tools: BUILTIN_TOOLS,
-              allowedTools: [...BUILTIN_TOOLS, ...allowedMcp, "mcp__griffin__*"],
-              disallowedTools: ["Bash", "BashOutput", "KillShell", "NotebookEdit"],
-              mcpServers: mcp ? { griffin: mcp } : {},
-              strictMcpConfig: true,
-              // Rules come with the run, not from the shared workspace CLAUDE.md: concurrent chats of
-              // one agent rewrite that file, so a colleague thread could run on the owner's rules.
-              ...(options.rules
-                ? { systemPrompt: { type: "preset", preset: "claude_code", append: options.rules }, settingSources: [] }
-                : { settingSources: ["project"] }),
-              env: claudeAuthEnv(apiKey),
-            },
-          });
-          let commandsAsked = false;
-          for await (const msg of q) {
-            if (msg?.session_id) currentSessionId = msg.session_id;
-            // The composer's «/» list: asked once the engine answers, replaced when Claude Code says it changed.
-            if (sendOptions.onCommands) {
-              if (!commandsAsked && typeof q.supportedCommands === "function") {
-                commandsAsked = true;
-                Promise.resolve().then(() => q.supportedCommands()).then(sendOptions.onCommands).catch(() => {});
-              }
-              if (msg?.type === "system" && msg.subtype === "commands_changed") {
-                bestEffort(() => sendOptions.onCommands(msg.commands));
-                continue;
-              }
-            }
-            // Arrives after the result and is no turn of its own: handed over, never streamed.
-            if (msg?.type === "prompt_suggestion") {
-              bestEffort(() => sendOptions.onSuggestion?.(String(msg.suggestion ?? "")));
-              continue;
-            }
-            const info = msg?.type === "rate_limit_event" ? msg.rate_limit_info : null;
-            if (info?.status === "rejected" && !info.overageInUse) limit = info;
-            if (info?.unifiedWindows) Object.assign(lastLimits, { windows: info.unifiedWindows, at: new Date().toISOString() });
-            // An MCP server that fails to start leaves the model with built-ins only, silently — it then
-            // answers without any Griffin tool (2026-10-08). Stop the run with a clear error instead.
-            if (msg?.type === "system" && msg.subtype === "init" && mcp) {
-              const griffin = (msg.mcp_servers || []).find((server) => server.name === "griffin");
-              if (griffin?.status !== "connected") {
-                mcpDown = `ابزارهای گریفین به Claude نرسید (MCP: ${griffin?.status || "missing"})`;
-                console.error(`[claude] ${mcpDown}`);
-                abort.abort();
-                break;
-              }
-            }
-            for (const update of bridge.consume(msg)) {
-              await sendOptions.onDelta?.({ update });
-            }
-            if (msg?.type === "result") {
-              // is_error wins over subtype: an expired login can arrive as "success" + is_error (seen in the wild).
-              const ok = msg.subtype === "success" && !msg.is_error;
-              const message = msg.result || msg.errors?.join?.("; ") || msg.subtype || "claude run failed";
-              finish({
-                status: abort.signal.aborted ? "cancelled" : ok ? "finished" : "error",
-                error: ok
-                  ? null
-                  : limit || /usage limit|rate limit|limit reached|hit your limit|unknown model|model code|not[_ ]?found|overloaded|\b429\b/i.test(message)
-                    ? { message, code: "plan_limit", resetsAt: limit?.resetsAt ? limit.resetsAt * 1000 : null }
-                    : sessionGone(message),
-              });
-            }
+          await afterPrevious();
+          try {
+            await attempt(started);
+          } catch (error) {
+            if (gotAny || abort.signal.aborted || !/already in use/i.test(String(error?.message || error))) throw error;
+            // Still held by a process that had not exited: once more, resuming it.
+            console.error(`[claude] session ${currentSessionId} in use — retrying once`);
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            await attempt(true);
           }
           if (mcpDown) finish({ status: "error", error: { message: mcpDown } });
           if (!settled) finish({ status: abort.signal.aborted ? "cancelled" : "finished" });
@@ -236,6 +296,8 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {} }
           });
         } finally {
           started = true;
+          me.done = true;
+          closeMe();
         }
       })();
 

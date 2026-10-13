@@ -35,5 +35,12 @@
   "این گفتگو به سقف مصرف خورد و بعد از بازشدن سقف خودش ادامه می‌دهد": "This chat hit the usage limit and will continue by itself once the limit resets",
   "ادامهٔ خودکار ساعت {at}": "Auto-continue at {at}",
   "تغییر پهنای فهرست گفتگوها": "Resize the chat list",
-  "بکشید تا پهنا عوض شود؛ دو بار کلیک: پهنای معمول": "Drag to resize; double-click: default width"
+  "بکشید تا پهنا عوض شود؛ دو بار کلیک: پهنای معمول": "Drag to resize; double-click: default width",
+  "{n} مورد منتظر شما": "{n} waiting for you",
+  "ترد‌ها ({n})": "Threads ({n})",
+  "پنل": "Panel",
+  "فقط به {name} می‌رسد": "Only {name} sees this",
+  "به {name} بگویید — برای {person} فرستاده نمی‌شود": "Tell {name} — this is not sent to {person}",
+  "به {name} بگویید…": "Tell {name}…",
+  "به {name} بگویید… (مثلاً: جواب خانم رضایی را بده)": "Tell {name}… (e.g. reply to Ms. Rezaei)"
 }

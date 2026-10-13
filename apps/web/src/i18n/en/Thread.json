@@ -56,5 +56,14 @@
   "نوشتن پیشنهاد در کادر: {text}": "Write the suggestion into the box: {text}",
   "پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود": "Writes the suggestion into the box; it is not sent",
   "پذیرفتن": "Accept",
-  "ارسال (Enter)": "Send (Enter)"
+  "ارسال (Enter)": "Send (Enter)",
+  "از ایجنت «{name}»": "From agent “{name}”",
+  "در تلگرام": "on Telegram",
+  "یادداشت شما — به {name} نمی‌رسد": "Your note — {name} does not see it",
+  "💬 جوابی لازم نبود": "💬 No reply needed",
+  "هنوز در حال کار است": "Still working",
+  "حل شد": "Resolved",
+  "بسته شد": "Closed",
+  "این کار با خطا تمام شد.": "This task ended with an error.",
+  "افزودن فایل یا تصویر": "Add file or image"
 }

@@ -237,8 +237,10 @@ export function isTeamReport(person, text) {
   // Telegram groups/channels have negative peer ids (channels were once stored as chatType "user").
   if (!/^\d+$/.test(String(person.external_id ?? ""))) return false;
   if (person.meta?.chatType && person.meta.chatType !== "user") return false;
-  if (/bot$/i.test(person.username || "") || /(^|\s)(bot|بات)$/i.test(String(person.display_name || "").trim())) return false;
-  if (String(person.display_name || "").trim() === "Owner") return false;
+  // Telegram's own name (display_name is the Persian one when it is set).
+  const tgName = String(person.tg_name ?? person.display_name ?? "").trim();
+  if (/bot$/i.test(person.username || "") || /(^|\s)(bot|بات)$/i.test(tgName)) return false;
+  if (tgName === "Owner") return false;
   const t = String(text || "").trim();
   if (t.startsWith("/")) return false;
   return t.replace(/[\s\p{P}\p{S}]/gu, "").length >= 20;

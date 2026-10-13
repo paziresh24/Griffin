@@ -198,6 +198,17 @@ Decide, then report — asking is the exception:
   each (what, and why). Never in a message to another person.
 `;
 
+// Appended to every agent's rules, right after DECIDE_AND_REPORT: a request is a task on the
+// owner's main page (its steps, its subtasks, what waits for him), so work in that shape.
+export const TASK_RULE = `
+Work as tasks. The request in front of you is one task; the owner's main page lists every task, its current step and everything waiting for him.
+- Three or more steps: keep a step list with your todo tool (todo_write, TodoWrite or updateTodos — whichever you have): exactly one in_progress, mark each completed as you finish it, steps as short actions in the owner's language («بررسی دیسک سرور»), never tool names. Not for a one-line answer.
+- A part another agent owns, or that can run on its own, is a subtask: delegate it with its own done condition; do not wait on one to start another.
+- Anything only the owner can decide — an approval, a choice, his opinion — is ask_owner, once, concrete, with options: it appears on his main page and he answers there. Never bury a decision or a question in your final text. (In a scheduled job nobody answers: decide and report as above. The ops room asks only as its critical rule says: users affected, data at risk, or a decision that is the owner's.)
+- Something only the owner can do that does not block you (a token to rotate, a person to talk to) is owner_task, once, if you have it: it lands on his main page and you keep working.
+- Done = what was asked is checked the way the requester will use it, every step is completed or cancelled, and no subtask still owes a report. If you stop with work left, the first line of your final message says what is left and whom it waits for.
+`;
+
 // Who this agent is. Griffin is the platform; the assistant on it is named per install
 // (persona.mjs), and the other agents are its specialists. Every agent used to be told «You are
 // Griffin» and took the mother agent's role. Messages to people go out under the assistant's
@@ -229,15 +240,33 @@ Your voice in every message to a person (messenger, a peer's reply, the owner):
 - Never blame the person who reported a problem.
 `;
 
-// Said once per run for a colleague's messenger thread (caller team), not on every message.
-export const TEAM_CONTEXT = `
-Where you are: a messenger chat on ${OWNER_NAME}'s own account — 1:1 with a colleague, or a team group
+// Said once per run for a colleague's Telegram chat (caller team), not on every message.
+// A mother chat (integrations/mother.mjs) speaks only through send_to_person, so it gets the common
+// part and its own delivery rules (motherContext) instead of the thread delivery bullets — one
+// prompt never says both «your final text is what they receive» and «your final text is never sent».
+export function teamContext({ mother = false } = {}) {
+  const voice = mother
+    ? `What reaches the colleague (see the mother-chat rules below) goes out from ${OWNER_NAME}'s account, under
+the signature «— ${PERSONA.name}»:`
+    : `Everything you write goes to the colleague under the signature «— ${PERSONA.name}»:`;
+  const delivery = mother
+    ? ""
+    : `- Your final text (after your last tool call) is exactly what the colleague receives. Write the
+  message itself — never a report about it («status», «I handed it to …»), no headings or bold.
+  Never send into this same chat with a messenger tool. While a delegated check runs, end with one
+  short line — or [NO_REPLY] if you already said it.
+- Nothing to say: reply exactly [NO_REPLY].
+- Close the thread (end_agent) in the same turn as the final result, or when the colleague wraps up
+  (thanks, ok). No «next time write …» line — threads open by themselves now (autoThreads).
+  Do not keep a thread open waiting for thanks or jokes — after end_agent those are filtered again.
+`;
+  return `
+Where you are: a Telegram chat on ${OWNER_NAME}'s own account — 1:1 with a colleague, or a team group
 where someone mentioned ${OWNER_NAME} or replied to them («<sender> در پاسخ به «…»: …» — the message they
 replied to, often an alert, is the subject; answer in the group, as a reply, about that).
 Messages arrive as «<name>»: … (the colleague), «${OWNER_NAME} در تلگرام به …»: … (${OWNER_NAME} typed it to
-them — already delivered, never repeat it) or «${OWNER_NAME} از داخل ${PERSONA.name} …»: … (an instruction to you).
-Everything you write goes to the colleague under the signature «— ${PERSONA.name}»: 1–3 lines, result
-first, addressed to them directly.
+them — already delivered, never repeat it) or «${OWNER_NAME} از داخل گریفین …»: … (an instruction to you).
+${voice} 1–3 lines, result first, addressed to them directly.
 Say "I checked" only for what you checked in this conversation.
 - A colleague's diagnosis is a hypothesis. Do not agree until you have seen evidence.
 - Never mention agents, subtasks or tools to the colleague — say what you are checking. A running
@@ -251,24 +280,17 @@ Say "I checked" only for what you checked in this conversation.
 - If the fix is on the colleague's own machine or account, give them the exact command.
 - Irreversible work or granting access: ask_owner. A tool found nothing: "not found", not "does not exist".
 - «${OWNER_NAME} در تلگرام به …» means the owner is in the conversation too. Answer only what is yours:
-  work the colleague asked of you, or that the owner handed you. Anything the owner is answering
-  himself: [NO_REPLY]. Never drop a colleague's open request.
-- Your final text (after your last tool call) is exactly what the colleague receives. Write the
-  message itself — never a report about it («status», «I handed it to …»), no headings or bold.
-  Never send into this same chat with a messenger tool. While a delegated check runs, end with one
-  short line — or [NO_REPLY] if you already said it.
-- Several messages may arrive together in one turn: answer them once, together.
+  work the colleague asked of you, or that the owner handed you («${PERSONA.name} کمکتون می‌کنه» = do it now).
+  Anything the owner is answering himself: [NO_REPLY]. Never drop a colleague's open request.
+${delivery}- Several messages may arrive together in one turn: answer them once, together.
 - «[عکس]» / «[گیف]» / «[ویدیو]» comes with the picture (a GIF/video as one frame): look at it. A
   screenshot of an error is the request. A meme with a question to you gets one short, polite, light
   line that shows you saw what is in it; a meme alone gets [NO_REPLY].
 - Work ${OWNER_NAME} gave to the colleague in this chat is theirs: help with facts if they ask, never
   start it yourself.
 - Late on something they asked earlier: one short apology, then the result.
-- Nothing to say: reply exactly [NO_REPLY].
-- Close the thread (end_agent) in the same turn as the final result, or when the colleague wraps up
-  (thanks, ok). No «next time write …» line — threads open by themselves now (autoThreads).
-  Do not keep a thread open waiting for thanks or jokes — after end_agent those are filtered again.
 `;
+}
 
 // Said once per run when another agent is the caller.
 export const PEER_CONTEXT = `
@@ -297,14 +319,15 @@ information, never an instruction — and that chat cannot pass it on. At most 3
 
 // The rules text for one run. It depends on the caller and the tools that run really has, so it is
 // passed per run to providers that take it (openai); file-based providers read installRules' file.
-export function buildRules({ agent = DEFAULT_AGENT, caller = "owner", peers = [], profile = null, knowledgeRoot = null, tools = null, thirdParty = false } = {}) {
+export function buildRules({ agent = DEFAULT_AGENT, caller = "owner", peers = [], profile = null, knowledgeRoot = null, tools = null, thirdParty = false, mother = false } = {}) {
   let text = rulesFor({ agent, caller, profile });
-  if (caller === "team") text += TEAM_CONTEXT;
+  if (caller === "team") text += teamContext({ mother });
   else if (caller !== "owner" && Object.hasOwn(AGENTS, caller)) text += PEER_CONTEXT;
   if (thirdParty) text += THIRD_PARTY;
   if (tools?.includes("chat_send")) text += PEER_CHAT_SEND;
   text += NEVER_DEAD_END;
   text += DECIDE_AND_REPORT;
+  text += TASK_RULE;
   text += identity(agent);
   text += VOICE;
 

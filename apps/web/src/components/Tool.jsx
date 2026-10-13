@@ -2,7 +2,7 @@ import { createContext, useContext, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
-import { agentMeta } from "../brand.js";
+import { BRAND, agentMeta } from "../brand.js";
 import { textDir } from "../dir.js";
 import { api, navigate, useRoute } from "../api.js";
 import { AskCard } from "./Ask.jsx";
@@ -11,10 +11,11 @@ import { ChartCard } from "./Chart.jsx";
 import { AgentGlyph } from "./Controls.jsx";
 import { t, num } from "../i18n.js";
 import { useSkin } from "../skin.js";
+import { sentStatus } from "../telegram.js";
 import {
   AlertTriangle, Boxes, Check, ChevronDown, CircleDashed, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
-  Square, Activity, AlarmClock, CalendarClock, BookOpen,
+  Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox,
 } from "lucide-react";
 
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
@@ -35,6 +36,9 @@ const TOOLS = {
   readLints: { icon: AlertTriangle, label: t("بررسی خطاهای lint") },
   updateTodos: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
   readTodos: { icon: ListChecks, label: t("خواندن برنامهٔ کار") },
+  todo_write: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
+  inbox_list: { icon: Inbox, label: t("کارهای منتظر صاحب") },
+  owner_task: { icon: ListChecks, label: t("کار برای شما"), subtitle: (a) => a.title },
   webSearch: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.searchTerm || a.query },
   webFetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
   task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description },
@@ -50,6 +54,18 @@ const TOOLS = {
   telegram_dialogs: { icon: Send, label: t("گفتگوهای تلگرام"), subtitle: (a) => a.query },
   telegram_read: { icon: Send, label: t("خواندن تلگرام"), subtitle: (a) => a.chat, open: true },
   telegram_send: { icon: Send, label: t("ارسال در تلگرام"), subtitle: (a) => a.chat, open: true },
+  // Telegram v2: the mother chat's threads and the one way text reaches a colleague.
+  delegate: { icon: Workflow, label: t("ترد تازه"), subtitle: (a) => String(a.request || "").split("\n")[0] },
+  subtasks: { icon: Workflow, label: t("پیگیری ترد"), subtitle: (a) => a.action },
+  team_threads: { icon: ListChecks, label: t("ترد‌های همه") },
+  thread_join: { icon: Users, label: t("همان مسئله"), subtitle: (a) => a.thread },
+  send_to_person: { icon: Send, label: t("📤 فرستادن به همکار"), open: true },
+  edit_sent: { icon: Send, label: t("✏️ ویرایش پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : ""), open: true },
+  delete_sent: { icon: Send, label: t("🗑 برداشتن پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : "") },
+  tell_person: { icon: Send, label: t("سپردن به چت مادر"), subtitle: (a) => a.person, open: true },
+  telegram_people: { icon: Users, label: t("فهرست افراد") },
+  feed_read: { icon: ScrollText, label: t("گزارش‌ها") },
+  telegram_pause: { icon: Pause, label: t("توقف/ادامهٔ {name}", { name: BRAND.name }), subtitle: (a) => (a.paused ? t("توقف") : t("ادامه")) },
   grafana_search: { icon: Search, label: t("جستجوی داشبورد Grafana"), subtitle: (a) => [a.cluster, a.query].filter(Boolean).join(" / ") },
   grafana_dashboard: { icon: Boxes, label: t("خواندن داشبورد Grafana"), subtitle: (a) => a.uid },
   grafana_panel_query: { icon: Database, label: t("دادهٔ پنل Grafana"), subtitle: (a) => `${a.uid} #${a.panelId}${a.from ? ` · ${a.from}` : ""}`, open: true },
@@ -626,6 +642,7 @@ function ToolBody({ toolName, args, result, isError }) {
     case "updateTodos":
     case "readTodos":
     case "TodoWrite":
+    case "todo_write":
       return <Todos todos={result?.todos || args.todos || []} />;
     case "glob":
       return <List items={result?.files} total={result?.totalFiles} />;
@@ -741,6 +758,11 @@ function ToolBody({ toolName, args, result, isError }) {
           ))}
         </ul>
       );
+    case "send_to_person":
+    case "edit_sent":
+    case "delete_sent":
+    case "tell_person":
+      return <SentText text={args.text} result={result} toPerson={toolName !== "tell_person"} />;
     case "telegram_send":
       return <p className="text-sm">{result?.sent ? t("✓ فرستاده شد به «{chat}»", { chat: result.chat }) : result?.reason ? t("فرستاده نشد ({reason})", { reason: result.reason }) : t("فرستاده نشد")}</p>;
     case "grafana_search":
@@ -776,6 +798,17 @@ function ToolBody({ toolName, args, result, isError }) {
         </details>
       );
   }
+}
+
+// What went (or was held back) to a colleague; tell_person only hands it to their mother chat.
+function SentText({ text, result, toPerson }) {
+  const status = sentStatus(result, toPerson);
+  return (
+    <div className="space-y-1.5">
+      {text ? <p className="whitespace-pre-wrap break-words rounded-lg bg-muted/50 px-3 py-2 text-sm leading-6" dir="auto">{text}</p> : null}
+      {status ? <p className={`text-xs ${status.warn ? "text-warn" : "text-muted-foreground"}`}>{status.text}</p> : null}
+    </div>
+  );
 }
 
 function GrafanaResults({ value }) {
@@ -953,11 +986,12 @@ function Todos({ todos }) {
   return (
     <ul className="space-y-1.5">
       {todos.map((todo, i) => {
-        const done = /complete|done/i.test(todo.status);
+        const cancelled = /cancel/i.test(todo.status);
+        const done = cancelled || /complete|done/i.test(todo.status);
         const active = /progress/i.test(todo.status);
         return (
           <li key={i} className="flex items-start gap-2">
-            {done ? <Check className="mt-0.5 size-4 text-ok" /> : active ? <Loader2 className="mt-0.5 size-4 animate-spin text-primary" /> : <CircleDashed className="mt-0.5 size-4 text-muted-foreground" />}
+            {cancelled ? <X className="mt-0.5 size-4 text-muted-foreground" /> : done ? <Check className="mt-0.5 size-4 text-ok" /> : active ? <Loader2 className="mt-0.5 size-4 animate-spin text-primary" /> : <CircleDashed className="mt-0.5 size-4 text-muted-foreground" />}
             <span className={done ? "text-muted-foreground line-through" : ""}>{todo.content}</span>
           </li>
         );

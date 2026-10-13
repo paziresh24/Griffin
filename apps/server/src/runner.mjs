@@ -6,7 +6,7 @@ import { maskText } from "./redact.mjs";
 // reached them (no text, no tool) is kept in the store's kv, oldest first, until a retry gets
 // through or the owner deletes it. A newer message joins the end of that FIFO, never jumps it.
 // After MAX_KEPT_RETRIES failed retries a kept message is no longer retried on its own and stops
-// holding newer ones back; «ارسال دوباره» and «حذف» still work.
+// holding newer ones back; «دوباره», «حل شد» and «بستن» still work.
 export const MAX_KEPT_RETRIES = 3;
 const keptKey = (chatId) => `kept:${chatId}`;
 export function keptList(store, chatId) {
@@ -115,12 +115,20 @@ export function createRunner({
   isBlocked = () => false,
   // Pause between two chats resumed after a boot (one at a time, not a burst on the engines).
   resumeGapMs = RESUME_GAP_MS,
+  // annotate(chatId) -> a line the model reads before this message (not shown as the message):
+  // in a Telegram mother chat, what the assistant already sent that person and is unanswered (desk.mjs).
+  annotate = () => null,
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
   // Keyed by provider + agentId: a chat whose routing moved engines (GLM → Claude for a colleague
   // thread) kept its old agent_id and got the cached GLM agent — Z.ai then 404'd "opus" (2026-10-11).
   const agents = new Map(); // `${provider.id}:${agentId}` -> SDKAgent
+  // The provider instance that made each cached agent. Saving an account's key or settings rebuilds
+  // its provider, and an agent made by the old one keeps the old key: a new Claude key went on
+  // failing with «Invalid API key» in every chat that had run once (2026-10-13). Such an agent is
+  // dropped and the session resumed with the new provider.
+  const madeBy = new WeakMap();
   let stopping = false; // shutdown() began: nothing new starts, cut turns are recorded for the next boot
 
   // A «در صف» message reached the agent (started) or will never run (dropped): its label follows
@@ -307,6 +315,7 @@ export function createRunner({
     const options = await agentOptions({ ...chat, agent_id: null });
     const provider = sdkFor(chat);
     const agent = await withRetry(() => provider.create(options));
+    madeBy.set(agent, provider);
     agents.set(agentKey(chat, agent.agentId), agent);
     store.setAgentId(chat.id, agent.agentId);
     return agent;
@@ -314,13 +323,16 @@ export function createRunner({
 
   async function agentFor(chat, { forceFresh = false } = {}) {
     if (forceFresh) return createFresh(chat);
-    if (chat.agent_id && agents.has(agentKey(chat, chat.agent_id))) return agents.get(agentKey(chat, chat.agent_id));
+    const cached = chat.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null;
+    if (cached && madeBy.get(cached) === sdkFor(chat)) return cached;
+    if (cached) agents.delete(agentKey(chat, chat.agent_id));
     const options = await agentOptions(chat);
     const provider = sdkFor(chat);
     try {
       const agent = chat.agent_id
         ? await withRetry(() => provider.resume(chat.agent_id, options))
         : await withRetry(() => provider.create(options));
+      madeBy.set(agent, provider);
       agents.set(agentKey(chat, agent.agentId), agent);
       if (agent.agentId !== chat.agent_id) store.setAgentId(chat.id, agent.agentId);
       return agent;
@@ -359,8 +371,24 @@ export function createRunner({
     }
   }
 
+  // The annotate line goes on when the turn starts (not when a message is queued, kept or resumed):
+  // what it says — the assistant's unanswered sends — may change while a message waits behind a turn.
+  function withNote(chatId, message) {
+    let note = null;
+    try {
+      note = annotate(chatId);
+    } catch (error) {
+      log.error?.(`[runner] annotate ${chatId}: ${error.message}`);
+    }
+    if (!note) return message;
+    return typeof message === "string" ? `${note}\n\n${message}` : { ...message, text: `${note}\n\n${message?.text || ""}` };
+  }
+
   async function execute(chatId, entry, message) {
     const { runId } = entry;
+    // Only what goes to the engine carries the note: a kept or fallback copy of this message is
+    // the plain one, and gets a fresh note when it runs again.
+    const sdkMessage = withNote(chatId, message);
     const emit = (type, data) => {
       entry.lastEventAt = Date.now();
       store.appendEvent(chatId, runId, type, data);
@@ -372,7 +400,7 @@ export function createRunner({
       const chat = store.getChat(chatId);
       emit("run.phase", { phase: "connecting" });
       const label = runLabel(chat);
-      const run = await startSdkRun(chat, message, {
+      const run = await startSdkRun(chat, sdkMessage, {
         ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}),
         ...(label.effort ? { effort: label.effort } : {}),
         mode: chat.mode === "plan" ? "plan" : "agent",
@@ -395,6 +423,9 @@ export function createRunner({
       });
       entry.run = run;
       store.setSdkRunId(runId, run.id);
+      // The engine has the turn: its «در صف» messages leave the waiting list now, not at the first
+      // text — a long think kept them «در صف» above the box while the agent worked on them.
+      reached(chatId, entry);
       if (entry.cancelRequested) await cancelSdkRun(run);
       const result = await run.wait();
       status = normalizeStatus(result.status, entry.cancelRequested);
@@ -420,19 +451,17 @@ export function createRunner({
         // Cut by our own stop (a deploy), not by the owner: the turn continues after the next boot.
         cont = Boolean(entry.cut) && status === "cancelled";
         if (cont) error = "به‌خاطر ری‌استارت سرور قطع شد — بعد از بالا آمدن ادامه می‌دهد";
-        // The queued messages this turn carries: they reached the agent, or a cancel dropped them
-        // before they did. Kept, retried elsewhere, or continued later, they are still waiting.
-        if (!keep && !cont && !entry.retryOnFallback) {
-          if (entry.run) reached(chatId, entry);
-          else markQueued(chatId, entry.turn.ids, "dropped");
-        }
+        // The queued messages this turn carries and the engine never got: a cancel dropped them.
+        // Kept, retried elsewhere, or continued later, they are still waiting.
+        if (!keep && !cont && !entry.retryOnFallback && !entry.run) markQueued(chatId, entry.turn.ids, "dropped");
         runq.save(chatId, cont ? entry.turn : null, entry.queue);
-        if (keep && !entry.keptId) kept.push(chatId, message, entry.turn.ids);
+        // entry.carried, not turn.ids: reached() emptied those when the engine accepted the turn.
+        if (keep && !entry.keptId) kept.push(chatId, message, entry.carried);
         if (keep && entry.keptId) {
           kept.update(chatId, entry.keptId, (k) => [{ ...k, fails: k.fails + 1 }]);
           if (kept.list(chatId).find((k) => k.id === entry.keptId)?.fails === MAX_KEPT_RETRIES) {
             entry.keptGaveUp = true;
-            emit("note", { text: `این پیام ${MAX_KEPT_RETRIES} بار به ایجنت نرسید؛ دیگر خودکار فرستاده نمی‌شود و پیام‌های تازه‌تر منتظرش نمی‌مانند. «ارسال دوباره» یا «حذف» را بزنید.` });
+            emit("note", { text: `این پیام ${MAX_KEPT_RETRIES} بار به ایجنت نرسید؛ دیگر خودکار فرستاده نمی‌شود و پیام‌های تازه‌تر منتظرش نمی‌مانند. «دوباره» یا «حل شد» (یا «بستن») را بزنید.` });
           }
         }
         // A retry that got an answer out: the kept message is delivered.
@@ -461,7 +490,7 @@ export function createRunner({
       // An automatic continue that moved engines is still that continue (its try count stays).
       const carry = limitTries.has(chatId);
       if (carry) autoSending.add(chatId);
-      const retryId = startRun(chatId, message, entry.queue.splice(0), { ids: entry.turn.ids, turnText: entry.turn.text, fallback: true });
+      const retryId = startRun(chatId, message, entry.queue.splice(0), { ids: entry.carried, turnText: entry.turn.text, fallback: true });
       if (carry) autoSending.delete(chatId);
       const next = active.get(chatId);
       if (next?.runId === retryId) next.retried = true;
@@ -509,7 +538,9 @@ export function createRunner({
     const runId = store.startRun(chatId);
     const chat = store.getChat(chatId);
     const text = turnText ?? (typeof message === "string" ? message : message?.text || "");
-    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId, turn: { text, ids } };
+    // carried: the «در صف» ids this turn holds, kept after reached() empties turn.ids, so a kept or
+    // fallback copy of the turn still carries them.
+    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId, turn: { text, ids }, carried: [...ids] };
     active.set(chatId, entry);
     persist(chatId, entry);
     if (suggestions.delete(chatId)) live(chatId);
@@ -536,13 +567,15 @@ export function createRunner({
   const api = {
     // intent: "send" (fails when busy), "queue" (after current run), "steer" (inject into current run)
     // clientId: the page's own id for this message (app.mjs de-duplicates resends by it).
-    async send(chatId, { text, images = [], intent = "send", clientId = null }) {
+    // from: who wrote it when it is not the owner ({ kind, name, personId }; a colleague's Telegram
+    // message in a mother chat) — kept on the user event so the page can say so.
+    async send(chatId, { text, images = [], intent = "send", clientId = null, from = null }) {
       const current = active.get(chatId);
       let effective = intent;
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
       const message = toSdkMessage({ text, images });
       if (current && stopping) effective = "queue";
-      const userData = { text, images: images.length, ...(current ? { intent: effective } : {}), ...(clientId ? { clientId } : {}) };
+      const userData = { text, images: images.length, ...(current ? { intent: effective } : {}), ...(clientId ? { clientId } : {}), ...(from ? { from } : {}) };
       // tracked: user.queue events settle this «در صف» label (older ones the timeline settles).
       const queueEvent = () => store.appendEvent(chatId, null, "user", { ...userData, intent: "queue", tracked: true }).id;
       store.deleteKv?.(resumesKey(chatId));
@@ -625,6 +658,9 @@ export function createRunner({
           const note = "لغو درخواست شد ولی SDK جواب نداد — محلی بسته شد";
           store.appendEvent(chatId, entry.runId, "run.finished", { status: "cancelled", error: note });
           store.finishRun(chatId, entry.runId, "cancelled", note);
+          // As the normal end does: the engine never took the turn, so what it carries is dropped
+          // (a kept retry's messages stay in the kept FIFO, still waiting).
+          if (!entry.run && !entry.keptId) markQueued(chatId, entry.turn.ids, "dropped");
           runq.save(chatId, null, entry.queue);
           active.delete(chatId);
           onCancel(chatId);
@@ -708,13 +744,41 @@ export function createRunner({
       return { runId: startKept(chatId, 0), delivered: "retry" };
     },
 
-    // «حذف»: drops one kept message by id without sending it.
-    dropKept(chatId, id) {
+    // Drops one kept message by id without sending it («حل شد» drops them all).
+    // state "removed": the owner took it out of the queue peek (unqueue), so it leaves the thread too.
+    dropKept(chatId, id, state = "dropped") {
       const before = kept.list(chatId).length;
       const item = kept.list(chatId).find((k) => k.id === id);
       kept.update(chatId, id, () => []);
-      if (item) markQueued(chatId, item.ids, "dropped");
+      if (item) markQueued(chatId, item.ids, state);
       return kept.list(chatId).length < before;
+    },
+
+    // «حذف»/«ویرایش» on a «در صف» message in the queue peek (by its user event id): it leaves the
+    // queue it waits in — the run's (and its runq copy), the one waiting for the next boot, or the
+    // kept FIFO — and never runs. Marked «removed», not «dropped»: the owner took it back, so the
+    // thread does not show it either (a Stop's «dropped» stays visible as «اجرا نشد»). False when
+    // it is not waiting: already started, dropped or removed, or carried by the turn in flight.
+    // Throws code "merged" for one merged with others into a kept item: it cannot leave alone.
+    unqueue(chatId, userEventId) {
+      const id = Number(userEventId);
+      const entry = active.get(chatId);
+      const waiting = entry ? null : runq.get(chatId);
+      const queue = entry ? entry.queue : waiting.queue;
+      const at = queue.findIndex((item) => item.id === id);
+      if (at >= 0) {
+        queue.splice(at, 1);
+        if (entry) persist(chatId, entry);
+        else runq.save(chatId, waiting.turn, queue);
+        markQueued(chatId, [id], "removed");
+        return true;
+      }
+      // ponytail: only a kept item that is this one message and not the retry running now; one
+      // merged from several has no parts left to split, and stays (its own «حذف» drops it whole).
+      const item = kept.list(chatId).find((k) => k.ids?.includes(id) && k.id !== entry?.keptId);
+      if (!item) return false;
+      if (item.ids.length > 1) throw Object.assign(new Error("merged with other queued messages into one kept message"), { code: "merged" });
+      return api.dropKept(chatId, item.id, "removed");
     },
 
     // In-band note to a live run (providers that support nudge: the model must answer it before
@@ -788,7 +852,6 @@ export function createRunner({
     const chat = store.getChat(chatId);
     // Materialized Cursor-task transcripts are read-only; a job run has its own trigger and timeout.
     if (!chat || chat.caller === "task") return void takeWaiting(chatId);
-    const { turn, queue } = runq.get(chatId);
     let continuing = cont && !chat.job_id;
     const count = store.getKv?.(resumesKey(chatId));
     const fresh = !count || Date.now() - count.at > 60 * 60_000;
@@ -805,6 +868,8 @@ export function createRunner({
       }
     }
     if (stopping || active.has(chatId) || !pending.has(chatId)) return;
+    // Read after the awaits: the owner may have taken a message back (unqueue) meanwhile.
+    const { turn, queue } = runq.get(chatId);
     if (continuing) {
       const text = turn?.text ?? lastUserPrompt(store, chatId); // no runq: cut by an older build
       const prompt = resumePrompt(text);

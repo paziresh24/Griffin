@@ -464,6 +464,33 @@ test("a chat whose provider changed does not reuse the other provider's cached a
   }
 });
 
+// 2026-10-13: a new Claude key was saved (the provider rebuilt), yet chats that had run once kept
+// failing with «Invalid API key» — their cached agent still carried the old key.
+test("a rebuilt provider (a new key) is used even where an agent was cached", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-rekey-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const engine = (key) => ({
+    id: "claude",
+    async create() { return { agentId: "same", async send() { sends.push(key); return { id: "r", supports: () => true, async cancel() {}, wait: async () => ({ status: "finished" }) }; } }; },
+    async resume() { return this.create(); },
+  });
+  let provider = engine("old-key");
+  const runner = createRunner({ store, providerFor: () => provider, agentOptions: () => ({}), log: {} });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "a", images: [] });
+    await until(() => !store.runningRuns().length && sends.length === 1);
+    provider = engine("new-key");
+    await runner.send(chat.id, { text: "b", images: [] });
+    await until(() => !store.runningRuns().length && sends.length === 2);
+    assert.deepEqual(sends, ["old-key", "new-key"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("kept messages: a run that fails before anything reached the owner keeps the message; FIFO, retry, delete", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-kept-"));
   const store = openStore(path.join(dir, "db.sqlite"));

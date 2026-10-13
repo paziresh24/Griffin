@@ -4,7 +4,8 @@ import { redactArgs, maskText } from "./redact.mjs";
 // Two-reviewer gate for risky changes. OPT-IN: off unless GRIFFIN_REVIEW=on (it costs two model
 // calls per gated change and needs two engines). Once one model decided alone to push a partial
 // clone to a shared GitOps repo's main branch and the repo was wiped. With the gate on, such a change
-// runs only after two independent models (ideally different vendors) approve it. A rejection in the owner's own chat asks the owner;
+// runs only after two independent models (ideally different vendors) approve it — a reviewer that
+// cannot answer (timeout/error) is no vote, not a veto: the one that did answer decides. A rejection in the owner's own chat asks the owner;
 // anywhere else it refuses. Reviewers see the request, the agent's recent reasoning and the exact
 // call — never a credential (args are redacted).
 
@@ -119,8 +120,36 @@ export function parseVerdict(text) {
     const verdict = String(v.verdict || "").toLowerCase() === "approve" ? "approve" : "reject";
     return { verdict, reason: String(v.reason || "").slice(0, 300) };
   } catch {
-    return { verdict: "reject", reason: "جواب بازبین قابل خواندن نبود" };
+    return { verdict: "none", reason: "جواب بازبین قابل خواندن نبود" };
   }
+}
+
+// One ask -> { verdict: "approve"|"reject"|"none" }. "none" = the reviewer could not answer
+// (timeout, error, unreadable reply) — never a veto (a reviewer timeout once blocked every
+// gitlab_propose of a chain and told the agent never to retry).
+async function askOnce(r, prompt, timeoutMs) {
+  let timer;
+  try {
+    const text = await Promise.race([
+      r.ask(prompt),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); }),
+    ]);
+    return parseVerdict(text);
+  } catch (error) {
+    return { verdict: "none", reason: `بازبینی انجام نشد (${String(error.message).slice(0, 80)})` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Retry once, then the reviewer's fallback model if it has one; still "none" -> the other reviewer decides.
+async function verdictOf(r, prompt, timeoutMs) {
+  let note;
+  for (const who of [r, r, r.fallback].filter(Boolean)) {
+    note = { label: who.label, ...(await askOnce(who, prompt, timeoutMs)) };
+    if (note.verdict !== "none") return note;
+  }
+  return { ...note, label: r.label };
 }
 
 function chainContext(store, chatId) {
@@ -195,39 +224,26 @@ export function reviewChanges(tools, { chatId, store, asks = null, reviewers = [
         let result = decided.get(key);
         if (!result || Date.now() - result.at > CACHE_MS) {
           const prompt = reviewPrompt({ ...ctx, tool: name, args: shown, change });
-          const notes = await Promise.all(
-            reviewers.map(async (r) => {
-              let timer;
-              try {
-                const text = await Promise.race([
-                  r.ask(prompt),
-                  new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), timeoutMs); }),
-                ]);
-                return { label: r.label, ...parseVerdict(text) };
-              } catch (error) {
-                return { label: r.label, verdict: "reject", reason: `بازبینی انجام نشد (${String(error.message).slice(0, 80)})` };
-              } finally {
-                clearTimeout(timer);
-              }
-            }),
-          );
-          result = { ok: notes.every((n) => n.verdict === "approve"), notes, at: Date.now() };
-          decided.set(key, result);
+          const notes = await Promise.all(reviewers.map((r) => verdictOf(r, prompt, timeoutMs)));
+          const rejected = notes.some((n) => n.verdict === "reject");
+          const answered = notes.some((n) => n.verdict !== "none");
+          result = { ok: answered && !rejected, rejected, notes, at: Date.now() };
+          if (answered) decided.set(key, result); // no verdict at all -> ask again next time
           log.info?.(`[review] ${chatId} ${name}: ${notes.map((n) => `${n.label}=${n.verdict}`).join(" ")}`);
         }
-        const summary = result.notes.map((n) => `${n.label}: ${n.verdict === "approve" ? "✅" : "⛔"} ${n.reason}`).join("\n");
-        store?.recordApproval?.({ chatId, caller: "review", tool: name, args: redactArgs(name, args), decision: result.ok ? "reviewed" : "review-rejected", detail: result.notes });
+        const summary = result.notes.map((n) => `${n.label}: ${{ approve: "✅", reject: "⛔" }[n.verdict] || "⚠️"} ${n.reason}`).join("\n");
+        store?.recordApproval?.({ chatId, caller: "review", tool: name, args: redactArgs(name, args), decision: result.ok ? "reviewed" : result.rejected ? "review-rejected" : "review-unanswered", detail: result.notes });
         if (result.ok) return inner(rawArgs);
         // In the owner's own chat the owner can still say yes; anywhere else a rejection stands.
         if (ctx.ownerRooted && !ctx.unattended && asks) {
-          const conf = await confirmWithOwner(store, asks, chatId, `دو بازبین با این تغییر موافق نیستند:\n${change}\n\n${summary}\n\nباز هم انجام بدهم؟`);
+          const conf = await confirmWithOwner(store, asks, chatId, `${result.rejected ? "دو بازبین با این تغییر موافق نیستند" : "بازبین‌ها جواب ندادند"}:\n${change}\n\n${summary}\n\nباز هم انجام بدهم؟`);
           store?.recordApproval?.({ chatId, caller: "review", tool: name, args: redactArgs(name, args), decision: consentOf(conf) ? "review-overridden" : "review-upheld", approver: "owner", detail: conf });
           if (consentOf(conf)) return inner(rawArgs);
         }
-        return {
-          isError: true,
-          content: [{ type: "text", text: JSON.stringify({ error: "بازبین‌ها این تغییر را رد کردند؛ همین کار یا نسخهٔ دورزدهٔ آن را دوباره نزن. دلیل‌ها را به درخواست‌کننده بگو.", reviews: result.notes }) }],
-        };
+        const error = result.rejected
+          ? "بازبین‌ها این تغییر را رد کردند؛ همین کار یا نسخهٔ دورزدهٔ آن را دوباره نزن. دلیل‌ها را به درخواست‌کننده بگو."
+          : "بازبین‌ها جواب ندادند (timeout/خطا) — تغییر رد نشده؛ چند دقیقه بعد همین فراخوانی را دوباره بزن.";
+        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error, reviews: result.notes }) }] };
       },
     };
   }

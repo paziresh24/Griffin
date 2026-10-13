@@ -15,7 +15,9 @@
 // surface (UI or Telegram), held early, or the run ended — so a caller (integrations manager)
 // can delete the mirrored Telegram question and keep only genuinely open ones visible there.
 
+import { randomBytes } from "node:crypto";
 import { maskText } from "./redact.mjs";
+import { motherInfo } from "./integrations/mother.mjs";
 
 export const ASK_TOOL = "ask_owner";
 
@@ -29,6 +31,22 @@ export const REQUESTER = "requester";
 export function audienceFor(chat, args = {}) {
   if (args?.audience === REQUESTER && chat && chat.caller && chat.caller !== OWNER) return REQUESTER;
   return OWNER;
+}
+
+/** Whether an open question ({ audience, rootChatId }) is the owner's to answer. audienceFor sees
+ *  only the asking chat, and a delegated child's caller is always its parent agent, so a
+ *  requester question can sit in a chain where nobody but the owner is there to answer it: his
+ *  own chat or the ops room, a Telegram mother chat (it never speaks to the colleague by itself;
+ *  manager.onEvent sends its threads' questions to the owner), a team chat with no link left.
+ *  The colleague answers only over /mcp (peer:*, peer-tasks) or a linked team chat. The board
+ *  and the chat list's «منتظر پاسخ شما» both read this. */
+export function ownerAnswers(store, item) {
+  if (item?.audience !== REQUESTER) return true;
+  const root = store?.getChat?.(item.rootChatId);
+  if (!root) return false;
+  if (root.caller === OWNER || root.caller === "ops") return true;
+  if (root.caller === "team") return Boolean(motherInfo(store, root.id)) || !store.linksForChat?.(root.id)?.length;
+  return false;
 }
 
 const inputSchema = {
@@ -86,7 +104,7 @@ const TOOL_CHOICE_REFUSAL = {
 const OPS_ASK_MS = 30 * 60_000;
 
 export function createAsks({ store = null, onSettled = () => {}, log = console } = {}) {
-  const pending = new Map(); // targetChatId -> [{ question, resolve, sourceChatId, mirrorIds }]
+  const pending = new Map(); // targetChatId -> [{ id, question, audience, resolve, sourceChatId, mirrorIds, … }]
   // Answers that arrived while the question card was visible but the SDK had not called execute() yet
   // (seen up to 12 minutes on 2026-09-15). The next question of that run takes it immediately.
   const early = new Map(); // targetChatId -> answer
@@ -131,6 +149,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     if (!store?.rootChatId) return chatId;
     return store.rootChatId(chatId);
   }
+
+  // The owner's main page lists open questions; every change of that list wakes it.
+  const changed = (target) => store?.bus?.emit?.("chats", { type: "ask", chatId: target });
 
   function rootIsUnwatched(rootId) {
     const root = store?.getChat?.(rootId);
@@ -185,28 +206,44 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       : args.options;
     args = { ...args, options };
 
-    // Mirror the question onto the root chat so AskCard appears where the owner is looking.
+    // Every open question has its own id: the main page, the in-chat card and a Telegram button
+    // each settle exactly that one, never "whatever is first in the queue". 8 hex also fits the
+    // Telegram callback id (6–16 hex), so the bridge reuses it.
     const mirrorIds = [];
+    const item = {
+      id: randomBytes(4).toString("hex"),
+      at: Date.now(),
+      via: args.via || null,
+      multiSelect: Boolean(args.multiSelect),
+      question,
+      audience,
+      sourceChatId: chatId,
+      mirrorIds,
+      by: null,
+      options: Array.isArray(options) ? options : null,
+    };
+
+    // Mirror the question onto the root chat so AskCard appears where the owner is looking.
+    // started and done share one callId, so the mirrored card closes when it is answered.
     if (store && target !== chatId) {
       const started = store.appendEvent(target, null, "tool.started", {
-        callId: `peer-ask-${Date.now()}`,
+        callId: `peer-ask-${item.id}`,
         name: ASK_TOOL,
-        args: { question, options: args.options, multiSelect: args.multiSelect, audience },
+        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id },
         fromChatId: chatId,
       });
       mirrorIds.push(started.id);
     }
 
-    const item = { question, audience, sourceChatId: chatId, mirrorIds, by: null, options: Array.isArray(options) ? options : null };
     return new Promise((resolve) => {
       if (!pending.has(target)) pending.set(target, []);
       Object.assign(item, {
         resolve: (answer) => {
           if (store && mirrorIds.length) {
             store.appendEvent(target, null, "tool.done", {
-              callId: `peer-ask-done`,
+              callId: `peer-ask-${item.id}`,
               name: ASK_TOOL,
-              args: { question, options: args.options, multiSelect: args.multiSelect },
+              args: { question, options: args.options, multiSelect: args.multiSelect, askId: item.id },
               result: answer,
               answeredBy: item.by || null,
               fromChatId: chatId,
@@ -220,8 +257,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       // tool arguments (openai-compatible) log tool.started with empty args, so no question ever reached
       // Telegram after 2026-09-24's engine switch. This carries the real text and audience.
       store?.appendEvent?.(target, null, "ask.pending", {
-        question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId,
+        question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId, askId: item.id, via: item.via,
       });
+      changed(target);
       for (const wake of listeners.get(target) || []) wake();
       // An ops-room question must not park the room forever: no answer in OPS_ASK_MS → the run goes
       // on and records the decision as waiting for the owner.
@@ -233,20 +271,34 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
           queue.splice(at, 1);
           if (!queue.length) pending.delete(target);
           item.resolve({ answered: false, reason: "no answer from the owner in 30 minutes — record it in triage as waiting for him and go on" });
+          changed(target);
         }, OPS_ASK_MS).unref?.();
       }
     });
   }
 
-  function settle(chatId, text, { by = OWNER } = {}) {
+  // Which open question an answer is for: by id when the surface knows it, else by its text, and
+  // the oldest only when neither came with the answer. A stale id or a text that matches nothing
+  // settles nothing — that question was answered elsewhere or its run ended, and the answer must
+  // never land on another open question (a guard approval would read it as a yes).
+  function settle(chatId, text, { by = OWNER, askId = null, question = null } = {}) {
     const target = targetOf(chatId);
     const queue = pending.get(target);
-    const next = queue?.[0];
-    if (!next) return false;
+    if (!queue?.length) return false;
+    let index = 0;
+    const asked = question ? maskText(String(question)).trim() : "";
+    if (askId) {
+      index = queue.findIndex((item) => item.id === askId);
+      if (index < 0) return false;
+    } else if (asked) {
+      index = queue.findIndex((item) => item.question.trim() === asked);
+      if (index < 0) return false;
+    }
+    const next = queue[index];
     // A question for the owner can only be settled by the owner: the peer agent that asked for
     // the work must not be able to approve it by answering its own task's question.
     if (next.audience === OWNER && by !== OWNER) return false;
-    queue.shift();
+    queue.splice(index, 1);
     if (!queue.length) pending.delete(target);
     next.by = by;
     next.resolve(text);
@@ -262,9 +314,11 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       answer: text?.answered ? text.answer : null,
       cancelled: !text?.answered,
       by,
+      askId: next.id,
       question: next.question,
       options: next.options,
     }); // no longer open — e.g. close the mirrored Telegram message
+    changed(target);
     return true;
   }
 
@@ -319,8 +373,36 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
 
     // Returns true when a waiting tool call received the answer. `by` says who answered: the
     // owner (UI or their Telegram) or the requester (a peer agent replying to its own task).
-    answer(chatId, { answer, selected = [], by = OWNER }) {
-      return settle(chatId, { answered: true, answer: String(answer || ""), selected }, { by });
+    answer(chatId, { answer, selected = [], by = OWNER, askId = null, question = null }) {
+      return settle(chatId, { answered: true, answer: String(answer || ""), selected }, { by, askId, question });
+    },
+
+    // Every open question of every chain, oldest first (the owner's main page reads this).
+    list() {
+      const out = [];
+      for (const [rootChatId, queue] of pending) {
+        for (const item of queue) {
+          out.push({
+            id: item.id,
+            rootChatId,
+            sourceChatId: item.sourceChatId,
+            question: item.question,
+            options: item.options,
+            multiSelect: item.multiSelect,
+            audience: item.audience,
+            via: item.via,
+            at: item.at,
+          });
+        }
+      }
+      return out.sort((a, b) => a.at - b.at);
+    },
+
+    // Any question only the owner answers is open on this chain — not just the queue head: a
+    // colleague's clarification ahead of it must not hide an approval waiting for him.
+    ownerWaiting(chatId) {
+      const target = targetOf(chatId);
+      return Boolean(pending.get(target)?.some((item) => ownerAnswers(store, { audience: item.audience, rootChatId: target })));
     },
 
     // Who may answer the question currently open on this chain (null when none is open).
@@ -345,14 +427,21 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       const queue = pending.get(target) || [];
       const keep = [];
       let cancelled = false;
+      const released = [];
       for (const item of queue) {
         if (item.sourceChatId === chatId) {
           item.resolve({ answered: false, reason: "the owner stopped the run before answering" });
           cancelled = true;
+          released.push(item);
         } else keep.push(item);
       }
       if (keep.length) pending.set(target, keep);
       else pending.delete(target);
+      // Others of the chain stay open: close only these, each by its id.
+      if (keep.length) {
+        for (const item of released) onSettled(target, { cancelled: true, askId: item.id, by: null, question: item.question, options: item.options });
+      }
+      if (cancelled) changed(target);
       const leftover = early.get(target) || null;
       if (chatId === target || cancelled) early.delete(target);
       // Only tell the bridge the chain is quiet when nothing of it is open any more.
@@ -363,9 +452,12 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     // The UI shows the question as soon as the model starts the tool call, but the SDK runs
     // execute() only after its MCP round trip (about a minute on the capsule). An answer in that
     // gap waits here for the question instead of becoming a duplicate follow-up run.
-    waitForQuestion(chatId, { timeoutMs = 120_000, stillActive = () => true, pollMs = 1_000 } = {}) {
+    // question: wait for exactly that one (a card's own question while another of the chain is open).
+    waitForQuestion(chatId, { timeoutMs = 120_000, stillActive = () => true, pollMs = 1_000, question = null } = {}) {
       const target = targetOf(chatId);
-      if (pending.get(target)?.length) return Promise.resolve(true);
+      const asked = question ? maskText(String(question)).trim() : "";
+      const ready = () => (pending.get(target) || []).some((item) => !asked || item.question.trim() === asked);
+      if (ready()) return Promise.resolve(true);
       return new Promise((resolve) => {
         const set = listeners.get(target) || new Set();
         listeners.set(target, set);
@@ -378,7 +470,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
           if (!set.size) listeners.delete(target);
           resolve(value);
         };
-        const wake = () => done(true);
+        const wake = () => {
+          if (ready()) done(true);
+        };
         set.add(wake);
         timer = setTimeout(() => done(false), timeoutMs);
         poll = setInterval(() => {

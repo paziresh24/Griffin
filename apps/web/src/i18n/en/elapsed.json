@@ -1,5 +1,6 @@
 {
   "چند لحظه پیش": "a moment ago",
   "{h} ساعت و {m} دقیقه پیش": "{h} h {m} min ago",
-  "{d} روز و {h} ساعت پیش": "{d} days {h} hours ago"
+  "{d} روز و {h} ساعت پیش": "{d} days {h} hours ago",
+  "دیروز {clock}": "yesterday {clock}"
 }

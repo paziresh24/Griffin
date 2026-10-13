@@ -24,6 +24,10 @@ export async function api(path, { method = "GET", body } = {}) {
   return data;
 }
 
+// Told whenever the owner's inbox may have changed (inbox.js refetches): after each chat-list load
+// (a 'chats' event or a reconnect) and on the stream's own 'inbox' event.
+export const INBOX_EVENT = "griffin:inbox";
+
 // Chat list, refreshed whenever the server says something changed.
 export function useChats() {
   const [state, setState] = useState({ chats: [], archived: [], groups: [], loading: true });
@@ -38,7 +42,10 @@ export function useChats() {
           api("/api/groups").catch(() => null),
         ]);
         // A failed groups read keeps the last list: an empty one would drop a chosen group silently.
-        if (alive) setState((s) => ({ chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, loading: false }));
+        if (alive) {
+          setState((s) => ({ chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, loading: false }));
+          window.dispatchEvent(new Event(INBOX_EVENT));
+        }
       } catch {
         if (alive) setState((s) => ({ ...s, loading: false }));
       }
@@ -49,6 +56,7 @@ export function useChats() {
       open: () => {
         const source = new EventSource("/api/stream");
         source.addEventListener("chats", load);
+        source.addEventListener("inbox", () => window.dispatchEvent(new Event(INBOX_EVENT)));
         return source;
       },
       onOpen: load,

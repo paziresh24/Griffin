@@ -34,6 +34,12 @@ test("a running chat lights the dot in front", () => {
   assert.equal(tabTitle({ chatId: "c1", chat: { title: "الف" }, running: true }), `● الف · ${b()}`);
 });
 
+test("what waits for the owner is counted in front, before the running dot", () => {
+  assert.equal(tabTitle({ chatId: "c1", chat: { title: "الف" }, needs: 2 }), `(۲) الف · ${b()}`);
+  assert.equal(tabTitle({ chatId: "c1", chat: { title: "الف" }, needs: 2, running: true }), `(۲) ● الف · ${b()}`);
+  assert.equal(tabTitle({ chatId: "c1", chat: { title: "الف" }, needs: 0 }), `الف · ${b()}`);
+});
+
 test("App sets the tab from tabTitle and settings reports its section", () => {
   const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.match(app, /document\.title = tabTitle\(/);

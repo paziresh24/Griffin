@@ -2,13 +2,14 @@
 // filtered, sorted and grouped. The component only draws the result. Griffin keeps its own tabs per
 // source, so there is no «origin» grouping; «owner» (whose threads, for Telegram and peer tabs) and
 // the owner's own groups stay.
+import { clockLabel } from "./elapsed.js";
 import { groupSections } from "./chat-groups.js";
 import { locale, num, t } from "./i18n.js";
 
 export const SORTS = [
   { id: "updated", label: t("جدیدترین") },
+  { id: "state", label: t("وضعیت (منتظر شما و در حال کار اول)") },
   { id: "unread", label: t("خوانده‌نشده اول") },
-  { id: "running", label: t("در حال اجرا اول") },
   { id: "title", label: t("نام (الفبا)") },
 ];
 
@@ -33,37 +34,61 @@ export const FILTERS = [
   { id: "pinned", label: t("سنجاق‌شده") },
 ];
 
-const STATES = { ask: t("منتظر پاسخ شما"), running: t("در حال کار"), error: t("خطا"), unread: t("خوانده‌نشده"), read: t("خوانده‌شده") };
-const STATE_ORDER = ["ask", "running", "error", "unread", "read"];
+const STATES = { ask: t("منتظر پاسخ شما"), running: t("در حال کار"), unread: t("خوانده‌نشده"), read: t("خوانده‌شده"), error: t("خطادار") };
+const STATE_ORDER = ["ask", "running", "unread", "read", "error"];
 
-/** The one state a chat is in, most pressing first. `waitingForOwner` comes from the server when it has it. */
+// The chat failed and the owner has not resolved it («حل شد» makes it "resolved"): the last run ended
+// in an error, or a message never reached the agent and was kept — unless the plan limit kept it:
+// that one goes again by itself at the reset.
+export const failed = (chat) => chat?.runStatus === "error" || Boolean(chat?.kept?.length && !chat?.limitResumeAt);
+
+/**
+ * The one state a chat is in, most pressing first: asking the owner → running → unread → read → error.
+ * Only a real question (`waitingForOwner`, from the server) asks the owner. Errors never lead: a failure
+ * ranks after every read chat, seen or not — the row still shows its red dot, and its unread dot while
+ * the owner has not opened it. A parent whose subtask still runs, or that goes on by itself when the plan
+ * limit resets, is still at work.
+ */
 export function chatState(chat, isUnread) {
   const unread = Boolean(isUnread(chat));
   let id = "read";
   if (chat?.waitingForOwner) id = "ask";
-  else if (chat?.runStatus === "running") id = "running";
-  else if (chat?.runStatus === "error") id = "error";
+  else if (chat?.runStatus === "running" || chat?.children?.some((k) => k.runStatus === "running") || chat?.limitResumeAt) id = "running";
+  else if (failed(chat)) id = "error";
   else if (unread) id = "unread";
-  return { id, label: STATES[id], unread };
+  return { id, label: STATES[id], unread, failed: failed(chat) };
 }
 
 // `keepId`: the chat on screen stays listed whatever the filter — opening an unread chat marks it
 // read, and it must not vanish from under the pointer.
 export function filterChats(list, filter, isUnread, { keepId = null } = {}) {
   if (!filter || filter === "all") return [...list];
-  const tests = { pinned: (c) => Boolean(c.pinned), unread: (c) => Boolean(isUnread(c)) };
+  const tests = { pinned: (c) => Boolean(c.pinned), unread: (c) => Boolean(isUnread(c)), error: failed };
   const test = tests[filter] || ((c) => chatState(c, isUnread).id === filter);
   return list.filter((c) => c.id === keepId || test(c));
 }
 
-const newest = (a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || ""));
+// Stamps compared as times, not strings: the server sends both SQLite («2026-10-07 11:00:00», UTC)
+// and ISO («…T10:00:00.000Z») forms, and as strings the space sorts before the «T».
+const stampOf = (c) => {
+  const v = c.updatedAt || c.createdAt;
+  if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
+  const s = String(v || "");
+  const ms = Date.parse(/^\d{4}-\d\d-\d\d \d/.test(s) ? `${s.replace(" ", "T")}Z` : s);
+  return Number.isFinite(ms) ? ms : 0;
+};
+const newest = (a, b) => stampOf(b) - stampOf(a);
 
 export function sortChats(list, sort, isUnread) {
   const first = (test) => (a, b) => Number(test(b)) - Number(test(a)) || newest(a, b);
   const items = [...list];
   if (sort === "title") return items.sort((a, b) => String(a.title).localeCompare(String(b.title), locale));
   if (sort === "unread") return items.sort(first((c) => isUnread(c)));
-  if (sort === "running") return items.sort(first((c) => c.runStatus === "running"));
+  if (sort === "state") {
+    // The same states as the row's dots, so a running subtask or a plan-limit wait counts as work.
+    const rank = (c) => STATE_ORDER.indexOf(chatState(c, isUnread).id);
+    return items.sort((a, b) => rank(a) - rank(b) || newest(a, b));
+  }
   return items.sort(newest);
 }
 
@@ -89,7 +114,8 @@ function bucket(list, keyOf, order = null) {
 /**
  * Sections of the list: [{ key, title, chats, collapsible?, groupId? }], empty ones left out (the
  * owner's own empty groups stay unless `narrowed`). The chats keep the order they came in.
- * "none" gives running → pinned → the rest: background work must be impossible to miss.
+ * "none" gives asking the owner → running → pinned → the rest: what needs the owner and background work must be
+ * impossible to miss; failures sit at the end of pinned and of the rest.
  */
 export function groupChats(list, groupBy, { isUnread = () => false, now = new Date(), timeZone, agentLabel = (id) => id, groups = [], narrowed = false, scope = "" } = {}) {
   if (groupBy === "custom") return groupSections(list, groups, { narrowed });
@@ -123,25 +149,21 @@ export function groupChats(list, groupBy, { isUnread = () => false, now = new Da
     return sections.sort((a, b) => Number(a.none) - Number(b.none)).map(({ none, ...s }) => s);
   }
   if (groupBy === "model") return bucket(list, (c) => c.model || "").map((s) => ({ key: `model:${s.key}`, title: s.key || t("مدل پیش‌فرض"), chats: s.chats }));
-  const running = list.filter((c) => c.runStatus === "running");
-  const others = list.filter((c) => c.runStatus !== "running");
+  const stateOf = (c) => chatState(c, isUnread).id;
+  const ask = list.filter((c) => stateOf(c) === "ask");
+  const running = list.filter((c) => stateOf(c) === "running");
+  // Failures go last in their section, read chats before them.
+  const rest = list.filter((c) => stateOf(c) !== "ask" && stateOf(c) !== "running");
+  const others = [...rest.filter((c) => stateOf(c) !== "error"), ...rest.filter((c) => stateOf(c) === "error")];
   return [
+    { key: "ask", title: ask.length > 1 ? t("منتظر پاسخ شما ({n})", { n: num(ask.length) }) : t("منتظر پاسخ شما"), chats: ask },
     { key: "running", title: running.length > 1 ? t("در حال اجرا ({n})", { n: num(running.length) }) : t("در حال اجرا"), chats: running },
     { key: "pinned", title: t("سنجاق‌شده"), chats: others.filter((c) => c.pinned) },
     { key: "rest", title: null, chats: others.filter((c) => !c.pinned) },
   ].filter((s) => s.chats.length);
 }
 
-// Short, muted relative time for a chat row («الان», «۵ دقیقه», «۲ ساعت», «۳ روز», «۲ ماه»).
+// A row's time, as a clock (elapsed.js clockLabel) rather than «۵ دقیقه».
 export function ago(stamp, now = Date.now()) {
-  const at = stamp ? new Date(stamp).getTime() : NaN;
-  if (!Number.isFinite(at)) return "";
-  const minutes = Math.max(0, Math.round((now - at) / 60000));
-  if (minutes < 1) return t("الان");
-  if (minutes < 60) return t("{n} دقیقه", { n: num(minutes) });
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return t("{n} ساعت", { n: num(hours) });
-  const days = Math.round(hours / 24);
-  if (days < 30) return t("{n} روز", { n: num(days) });
-  return t("{n} ماه", { n: num(Math.round(days / 30)) });
+  return clockLabel(stamp, new Date(now));
 }

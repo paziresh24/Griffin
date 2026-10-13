@@ -84,15 +84,27 @@ test("a rejected change in the owner's own chat asks the owner, who can override
   assert.equal(ran, true);
 });
 
-test("a reviewer that fails or times out counts as a reject", async () => {
+test("reviewers that never answer block without the never-retry message", async () => {
   forgetReviews();
   let ran = false;
   const broken = { label: "x", ask: async () => { throw new Error("down"); } };
   const slow = { label: "y", ask: () => new Promise(() => {}) };
-  const tools = reviewChangesOn({ git_push: { execute: async () => { ran = true; } } }, { chatId: "child", store: fakeStore(), reviewers: [broken, slow], timeoutMs: 50 });
+  const tools = reviewChangesOn({ git_push: { execute: async () => { ran = true; } } }, { chatId: "child", store: fakeStore(), reviewers: [broken, slow], timeoutMs: 20 });
   const out = await tools.git_push.execute({ repo: "a/b", branch: "griffin/x" });
   assert.equal(out.isError, true);
   assert.equal(ran, false);
+  assert.doesNotMatch(out.content[0].text, /دوباره نزن/);
+});
+
+test("a timed-out reviewer is retried once, then the other reviewer's approve stands", async () => {
+  forgetReviews();
+  let tries = 0;
+  const slow = { label: "flash", ask: () => { tries++; return new Promise(() => {}); } };
+  const store = fakeStore();
+  const tools = reviewChangesOn({ gitlab_propose: { execute: async () => "proposed" } }, { chatId: "child", store, reviewers: [reviewer("approve"), slow], timeoutMs: 20 });
+  assert.equal(await tools.gitlab_propose.execute({ repo: "a/b", branch: "griffin/x" }), "proposed");
+  assert.equal(tries, 2);
+  assert.equal(store.rows.at(-1).detail[1].verdict, "none");
 });
 
 test("a routine change (cache purge) now skips the two-reviewer gate", async () => {
@@ -103,7 +115,7 @@ test("a routine change (cache purge) now skips the two-reviewer gate", async () 
   assert.equal(seen.length, 0); // reviewers never consulted for a non-catastrophic change
 });
 
-test("unparseable verdicts reject", () => {
-  assert.equal(parseVerdict("sure, go ahead").verdict, "reject");
+test("unparseable verdicts are no verdict, not a reject", () => {
+  assert.equal(parseVerdict("sure, go ahead").verdict, "none");
   assert.equal(parseVerdict('```json\n{"verdict":"approve","reason":"ok"}\n```').verdict, "approve");
 });

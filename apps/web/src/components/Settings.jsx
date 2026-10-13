@@ -24,28 +24,33 @@ const KIND_META = {
   telegram_account: { label: t("اکانت تلگرام"), icon: UserRound, tint: "text-sky-500 bg-sky-500/12" },
 };
 
+// Ten sections in three groups, tidier than a flat list: name and sessions are one
+// «حساب», chat behaviour and this device's notifications one «گفتگو و اعلان», the live check and the
+// server's status one «سلامت». Old ids still open the right one (ALIASES).
 const SECTIONS = [
-  { id: "doctor", label: t("سلامت"), icon: Stethoscope, title: t("سلامت و تعمیر خودکار"), description: t("چک زنده‌ی موتورها، ایجنت‌ها، ران‌ها و اتصال‌ها؛ تعمیر با یک کلیک؛ و ویزاردهای راه‌اندازی.") },
-  { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت"), description: t("مدل‌ها، کارگزار ابزارها، منابع سرور، دریافت هشدار و مسیرهای کلاستر.") },
-  { id: "tokens", label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن هر نوبت از همهٔ گفتگوها، روزبه‌روز و به تفکیک مدل و گفتگو.") },
-  { id: "providers", label: t("موتورها"), icon: Cpu, title: t("موتورها و مدل‌ها"), description: t("پروایدرها، کلید و مدل پیش‌فرض هرکدام، و اینکه کدام ایجنت از کدام موتور استفاده می‌کند.") },
-  { id: "secrets", label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌منیجر"), description: t("کلیدها و توکن‌هایی که موتورها و ابزارها لازم دارند — رمزنگاری‌شده روی همین سرور، هرگز نمایش داده نمی‌شوند.") },
-  { id: "config", label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً با متغیر محیطی و دیپلوی دوباره عوض می‌شد — حالا همین‌جا، با ری‌استارت از همین صفحه.") },
-  { id: "profile", label: t("نام شما"), icon: UserRound, title: t("نام شما"), description: t("پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.") },
-  { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد و جواب می‌دهد.", { name: BRAND.name }) },
-  { id: "notifications", label: t("اعلان‌ها"), icon: Bell, title: t("اعلان‌ها"), description: t("وقتی جواب آماده شد، سؤالی منتظر شماست یا کاری در پس‌زمینه گزارش داد، روی همین دستگاه خبر می‌رسد — حتی وقتی صفحه بسته است.") },
-  { id: "chat", label: t("گفتگو"), icon: MessageSquare, title: t("گفتگو"), description: t("رفتار کادر پیام و ادامهٔ کار؛ برای همهٔ گفتگوها و بی‌ری‌استارت.") },
-  { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: t("فقط یادداشت‌های تأییدشده به قواعد همان ایجنت اضافه می‌شوند؛ بقیه اثری ندارند.") },
-  { id: "appearance", label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("پوستهٔ رابط روی همین مرورگر؛ روشن و تیره جداست و از دکمهٔ بالای صفحه عوض می‌شود. اسم {name} و لوگو با پوسته عوض نمی‌شود.", { name: BRAND.name }) },
-  { id: "account", label: t("حساب"), icon: KeyRound, title: t("حساب"), description: t("نشست‌های ورود به گریفین.") },
+  { id: "account", group: t("شما"), label: t("حساب"), icon: UserRound, title: t("حساب"), description: t("نام شما در منو، زبان رابط و نشست‌های ورود.") },
+  { id: "appearance", group: t("شما"), label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("پوسته و بخش‌های بالای منو، روی همین مرورگر.") },
+  { id: "chat", group: t("شما"), label: t("گفتگو و اعلان"), icon: MessageSquare, title: t("گفتگو و اعلان"), description: t("رفتار کادر پیام و ادامهٔ کار، و اعلان روی همین دستگاه.") },
+  { id: "providers", group: t("دستیار"), label: t("موتورها"), icon: Cpu, title: t("موتورها"), description: t("حساب‌ها، کلیدها و مدل پیش‌فرض هر موتور.") },
+  { id: "connections", group: t("دستیار"), label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد.", { name: BRAND.name }) },
+  { id: "knowledge", group: t("دستیار"), label: t("دانش"), icon: BookOpen, title: t("دانش"), description: t("فقط یادداشت‌های تأییدشده به قواعد ایجنت می‌روند.") },
+  { id: "secrets", group: t("دستیار"), label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
+  { id: "health", group: t("سیستم"), label: t("سلامت"), icon: Stethoscope, title: t("سلامت"), description: t("چک زنده و تعمیر با یک کلیک، و وضعیت سرور.") },
+  { id: "tokens", group: t("سیستم"), label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن روزبه‌روز، به تفکیک مدل و گفتگو.") },
+  { id: "config", group: t("سیستم"), label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.") },
 ];
+const ALIASES = { profile: "account", notifications: "chat", doctor: "health", status: "health" };
+const sectionId = (id) => {
+  const next = ALIASES[id] || id;
+  return SECTIONS.some((s) => s.id === next) ? next : null;
+};
+const SECTION_GROUPS = [...new Set(SECTIONS.map((s) => s.group))];
 
 const readSection = () => {
   try {
-    const saved = localStorage.getItem("griffin.settings.section");
-    return SECTIONS.some((s) => s.id === saved) ? saved : "status";
+    return sectionId(localStorage.getItem("griffin.settings.section")) || "health";
   } catch {
-    return "status";
+    return "health";
   }
 };
 
@@ -73,11 +78,13 @@ export function SettingsPage({ onBack, onSection }) {
           <h1 className="font-semibold">{t("تنظیمات")}</h1>
         </div>
         <nav className="space-y-0.5 px-3">
-          {SECTIONS.map(({ id, label, icon: Icon }) => {
+          {SECTIONS.map(({ id, group, label, icon: Icon }, index) => {
             const active = section === id;
+            const heading = SECTIONS[index - 1]?.group !== group;
             return (
+              <div key={id}>
+              {heading ? <p className={`px-3 pb-1 text-[11px] font-medium text-muted-foreground ${index ? "pt-4" : ""}`}>{group}</p> : null}
               <button
-                key={id}
                 type="button"
                 onClick={() => setSection(id)}
                 aria-current={active ? "page" : undefined}
@@ -89,6 +96,7 @@ export function SettingsPage({ onBack, onSection }) {
                 <Icon className={`size-4 ${active ? "text-primary" : ""}`} />
                 {label}
               </button>
+              </div>
             );
           })}
         </nav>
@@ -124,12 +132,65 @@ export function SettingsPage({ onBack, onSection }) {
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "doctor" ? <DoctorSection /> : section === "secrets" ? <SecretsSection /> : section === "config" ? <ConfigSection /> : section === "status" ? <StatusSection /> : section === "tokens" ? <TokensSection /> : section === "notifications" ? <PushSection /> : section === "providers" ? <ProvidersSection /> : section === "knowledge" ? <KnowledgeSection /> : section === "profile" ? <ProfileSection /> : section === "chat" ? <ChatPrefsSection /> : section === "appearance" ? <AppearanceSection /> : <AccountSection />}
+                {section === "health" ? (
+                  <HealthSection />
+                ) : section === "secrets" ? (
+                  <SecretsSection />
+                ) : section === "config" ? (
+                  <ConfigSection />
+                ) : section === "tokens" ? (
+                  <TokensSection />
+                ) : section === "providers" ? (
+                  <ProvidersSection />
+                ) : section === "knowledge" ? (
+                  <KnowledgeSection />
+                ) : section === "chat" ? (
+                  <div className="space-y-6">
+                    <ChatPrefsSection />
+                    <PushSection />
+                  </div>
+                ) : section === "appearance" ? (
+                  <AppearanceSection />
+                ) : (
+                  <div className="space-y-6">
+                    <ProfileSection />
+                    <AccountSection />
+                  </div>
+                )}
               </>
             )}
           </motion.div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// «سلامت»: the live check with its one-click fixes, and the server's status, as two tabs of one page.
+function HealthSection() {
+  const [tab, setTab] = useState("doctor");
+  const tabs = [
+    { id: "doctor", label: t("چک و تعمیر") },
+    { id: "status", label: t("وضعیت سرور") },
+  ];
+  return (
+    <div className="space-y-5">
+      <div role="tablist" aria-label={t("سلامت")} className="inline-flex rounded-full border bg-card p-0.5 text-sm">
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
+            onClick={() => setTab(item.id)}
+            className={`relative rounded-full px-3.5 py-1.5 transition-colors ${tab === item.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            {tab === item.id ? <motion.span layoutId="health-tab" className="absolute inset-0 rounded-full bg-muted" transition={{ type: "spring", stiffness: 500, damping: 38 }} /> : null}
+            <span className="relative">{item.label}</span>
+          </button>
+        ))}
+      </div>
+      {tab === "doctor" ? <DoctorSection /> : <StatusSection />}
     </div>
   );
 }
@@ -195,7 +256,7 @@ function PushSection() {
   };
 
   return (
-    <Group>
+    <Group title={t("اعلان")}>
       <Item
         icon={Bell}
         tint="bg-primary/12 text-primary"
@@ -405,7 +466,7 @@ function ChatPrefsSection() {
   };
   if (!settings) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
   return (
-    <Group>
+    <Group title={t("گفتگو")}>
       {CHAT_PREFS.map(({ key, icon, title, subtitle }) => {
         const on = (settings.find((s) => s.key === key)?.effective || "on") !== "off";
         return (
@@ -460,6 +521,8 @@ function ProfileSection() {
   };
   const changed = profile && name.trim() !== (profile.typedName || "");
   return (
+    <section>
+    <h3 className="mb-2 px-1 text-xs font-medium text-muted-foreground">{t("نام شما در منو")}</h3>
     <form onSubmit={save} className="flex flex-wrap items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm">
       {profile?.photo ? (
         <img src={profile.photo} alt="" className="size-10 shrink-0 rounded-full object-cover" onError={() => setProfile({ ...profile, photo: null })} />
@@ -480,6 +543,8 @@ function ProfileSection() {
         {busy ? <Loader2 className="size-4 animate-spin" /> : t("ذخیره")}
       </button>
     </form>
+    <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>
+    </section>
   );
 }
 
@@ -634,7 +699,7 @@ function AddDialog({ open, onOpenChange, onAdded }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-[fade-in_150ms]" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] overlay" />
         <Dialog.Content className="pop fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-card p-5 shadow-2xl">
           <div className="mb-4 flex items-center">
             <Dialog.Title className="font-semibold">{t("اتصال جدید")}</Dialog.Title>

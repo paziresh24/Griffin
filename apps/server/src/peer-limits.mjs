@@ -19,12 +19,13 @@ const MAX_MESSAGE = 2_000;
 export const isPeerModelId = (id) => typeof id === "string" && id.length <= 100 && Boolean(splitModel(id) || kindOf(id));
 
 // What a colleague gets on an agent by default (and what an older tools-only grant runs with): the
-// agent's own engines (no model list) and caps that leave room for several requests an hour. A long
-// agentic run can be ~0.5M tokens with its rounds, so one colleague cannot drain the plan.
+// agent's own engines (no model list) and no token cap — caps are off by default. They stay: a cap
+// set for one colleague on the peers page still applies, and the two open requests per colleague
+// (MAX_OPEN_TASKS_PER_PEER) still hold.
 export const PEER_DEFAULT_LIMITS = {
   model: null,
   models: [],
-  budget: { hourly: 5_000_000, daily: 20_000_000 },
+  budget: { hourly: null, daily: null },
   messages: {},
 };
 

@@ -13,7 +13,8 @@ import { AgentsPage } from "./components/Agents.jsx";
 import { JobsPage } from "./components/Jobs.jsx";
 import { IncidentsPage } from "./components/Incidents.jsx";
 import { PeersPage } from "./components/Peers.jsx";
-import { TelegramPage } from "./components/Telegram.jsx";
+import { GlobalPanel, MotherPanel, TelegramRedirect, WatchPill } from "./components/Telegram.jsx";
+import { motherName } from "./telegram.js";
 import { SettingsPage } from "./components/Settings.jsx";
 import { WorkbenchPage } from "./components/Workbench.jsx";
 import { SetupPage, setupFlowFromHash } from "./components/Setup.jsx";
@@ -35,6 +36,10 @@ import { badgeText } from "./chat-tools.js";
 import { useSuggestions } from "./components/ChatTools.jsx";
 import { quoteStore, withQuotes } from "./quotes.js";
 import { formatTokens } from "./tokens-format.js";
+import { useTouchPrimary } from "./touch.js";
+import { useInbox } from "./inbox.js";
+import { hasBoard } from "./board.js";
+import { NeedsYou, TaskLists } from "./components/Board.jsx";
 
 // The thread's connection state in the header (timeline-memo.js connectionNotice). `wrap`: the
 // phone's own row, where the whole sentence shows.
@@ -67,7 +72,12 @@ export default function App() {
   const notice = connectionNotice(connection);
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
   const [fetchedChat, setFetchedChat] = useState(null);
-  const chat = listed || (fetchedChat?.id === chatId ? fetchedChat : null);
+  // What the owner just changed (mode, model, effort…) shows at once: the PATCH answer sits over the
+  // record until the next list reload or fetch brings the same values.
+  const [changed, setChanged] = useState(null);
+  const record = listed || (fetchedChat?.id === chatId ? fetchedChat : null);
+  useEffect(() => setChanged(null), [listed, fetchedChat]);
+  const chat = record && changed?.id === record.id ? { ...record, ...changed.fields } : record;
   // Token use is only on the chat's own record (GET /api/chats/:id), not on the list: read it when
   // the chat opens and again when a run starts or ends.
   const [chatUsage, setChatUsage] = useState(null);
@@ -116,7 +126,9 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [chatId, listed]);
+    // A chat outside the list (a sub-agent, a thread) is fetched again on every list reload — every
+    // run start/finish and «حل شد» — so its state (the error bar, the header's stop) follows its run.
+  }, [chatId, listed, listed ? null : chats]);
   // While a chat is the open route and the tab is visible, its content counts as seen (seen.js): a
   // run that finishes in a hidden tab, or after the owner moved on, leaves it unread.
   useEffect(() => {
@@ -135,19 +147,38 @@ export default function App() {
   }, [chatId, seenTarget]);
   const karsara = useSkin() === "karsara";
   const openSuggestionCount = useSuggestions().open.length;
+  // The assistant's work: what waits for the owner and what runs, on the home page (Board.jsx).
+  const inbox = useInbox();
+  const menuBadge = openSuggestionCount + inbox.count;
+  const board = useMemo(
+    () => (!chatId && hasBoard(inbox, chats, openSuggestionCount) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} /> } : null),
+    [chatId, inbox, chats, openSuggestionCount],
+  );
 
+  // A sub-agent's chat is not in the sidebar (its parent shows it above the composer): the parent's
+  // row stands for it there.
+  const sidebarActive = !listed && chat?.parentChatId ? chat.parentChatId : chatId;
   // The tab a chat belongs to; a sub-agent chat belongs to its parent's tab.
   const activeSource = useMemo(() => {
     if (!chat) return null;
+    if (chat.global || chat.mother) return "telegram"; // the desk is an owner chat, but it lives under Telegram
     if (chat.source) return chat.source;
     const parent = chat.parentChatId ? [...chats, ...archived].find((c) => c.id === chat.parentChatId) : null;
     return parent?.source || null;
   }, [chat, chats, archived]);
   const [drawer, setDrawer] = useState(false);
+  // The sidebar's filter for this visit: held here so it outlives the phone drawer (which unmounts)
+  // and a visit to Settings; a reload clears it.
+  const [sidebarFilter, setSidebarFilter] = useState("all");
+  // A Telegram chat's side panel opens as a bottom sheet on a phone.
+  const [panelSheet, setPanelSheet] = useState(false);
+  useEffect(() => setPanelSheet(false), [chatId]);
+  const telegramChat = Boolean(chat?.mother || chat?.global);
+  const touch = useTouchPrimary();
   const [error, setError] = useState(null);
   const [theme, setTheme] = useState(() => readSetting(STORAGE.theme, "dark"));
   const [draft, setDraft] = useState(() => ({
-    mode: readSetting(STORAGE.mode, "agent"),
+    mode: "agent", // plan is a choice for one chat, never the default: not kept between chats
     model: readSetting(STORAGE.model, ""),
     effort: readSetting(STORAGE.effort, ""),
     agent: readSetting(STORAGE.agent, "griffin"),
@@ -205,8 +236,8 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState("");
   const chatTitle = chat ? chat.title || "" : null; // null: the chat's record has not loaded yet
   useEffect(() => {
-    document.title = tabTitle({ page, section: page === "settings" ? settingsSection : "", chatId, chat: chatTitle == null ? null : { title: chatTitle }, running });
-  }, [page, settingsSection, chatId, chatTitle, running]);
+    document.title = tabTitle({ page, section: page === "settings" ? settingsSection : "", chatId, chat: chatTitle == null ? null : { title: chatTitle }, running, needs: inbox.count });
+  }, [page, settingsSection, chatId, chatTitle, running, inbox.count]);
   // The login form replaces the app on a 401: the tab must not keep the last chat's name.
   useEffect(() => () => {
     document.title = BRAND.name;
@@ -219,28 +250,39 @@ export default function App() {
     navigate(null);
   }, []);
   useEffect(() => {
-    if (chatId || page) setDraft((d) => (d.groupId ? { ...d, groupId: "" } : d));
+    if (chatId || page) setDraft((d) => (d.groupId || d.mode !== "agent" ? { ...d, groupId: "", mode: "agent" } : d));
   }, [chatId, page]);
   const draftGroup = chat ? null : groups.find((g) => g.id === settings.groupId) || null;
+
+  // The composer shows a change at once (see `changed`): a chat outside the sidebar list (a Telegram
+  // mother chat, a sub-agent's) is read only once, and the list reloads a moment after the PATCH.
+  const patchChat = (body) =>
+    api(`/api/chats/${chat.id}`, { method: "PATCH", body })
+      .then((data) => {
+        if (!data?.chat) return;
+        const keys = ["mode", "model", "effort", "agent", "repo", "provider"];
+        setChanged({ id: data.chat.id, fields: Object.fromEntries(keys.filter((k) => k in data.chat).map((k) => [k, data.chat[k]])) });
+      })
+      .catch(setError);
 
   const updateSettings = async (patch) => {
     // The repo: on an open chat until its worktree exists (after that RepoChips moves it with /folder), else the next chat's.
     if (patch.repo != null) {
-      if (chat) await api(`/api/chats/${chat.id}`, { method: "PATCH", body: { repo: patch.repo } }).catch(setError);
+      if (chat) await patchChat({ repo: patch.repo });
       else setDraft((d) => ({ ...d, repo: patch.repo }));
       return;
     }
     // Model and effort are per chat (any provider: "claude:haiku"); the agent's default model and
     // effort live on the agents page. A fresh composer remembers them for the next chat.
     if (patch.model != null || patch.effort != null) {
-      if (chat) await api(`/api/chats/${chat.id}`, { method: "PATCH", body: patch }).catch(setError);
+      if (chat) await patchChat(patch);
       setDraft((d) => ({ ...d, ...patch }));
       if (patch.model != null) writeSetting(STORAGE.model, patch.model || "");
       if (patch.effort != null) writeSetting(STORAGE.effort, patch.effort || "");
       return;
     }
     if (chat && (patch.mode != null || patch.agent != null)) {
-      await api(`/api/chats/${chat.id}`, { method: "PATCH", body: patch }).catch(setError);
+      await patchChat(patch);
       if (patch.agent) {
         setDraft((d) => ({ ...d, agent: patch.agent }));
         writeSetting(STORAGE.agent, patch.agent);
@@ -249,7 +291,6 @@ export default function App() {
       setDraft((d) => ({ ...d, ...patch }));
       for (const [key, value] of Object.entries(patch)) {
         if (key === "agent") writeSetting(STORAGE.agent, value);
-        else if (key === "mode") writeSetting(STORAGE.mode, value);
         else if (key === "model") writeSetting(STORAGE.model, value);
       }
     }
@@ -363,10 +404,12 @@ export default function App() {
               chats={chats}
               archived={archived}
               groups={groups}
+              filter={sidebarFilter}
+              onFilter={setSidebarFilter}
               onNewChat={newChatIn}
-              activeId={chatId}
+              activeId={sidebarActive}
               activeSource={activeSource}
-                  activePersonId={telegramPerson || chat?.personId || null}
+              activePersonId={telegramPerson || chat?.personId || null}
               page={page}
               agent={settings.agent}
               onAgentChange={selectAgent}
@@ -381,8 +424,10 @@ export default function App() {
                   chats={chats}
                   archived={archived}
                   groups={groups}
+                  filter={sidebarFilter}
+                  onFilter={setSidebarFilter}
                   onNewChat={newChatIn}
-                  activeId={chatId}
+                  activeId={sidebarActive}
                   activeSource={activeSource}
                   activePersonId={telegramPerson || chat?.personId || null}
                   page={page}
@@ -396,7 +441,7 @@ export default function App() {
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
-            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramPage personId={telegramPerson} onBack={() => navigate(null)} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
+            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramRedirect personId={telegramPerson} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
               <ChatChildrenContext.Provider value={chat?.children || []}>
               <ChatRecord.Provider value={chat}>
               <Thread
@@ -405,11 +450,11 @@ export default function App() {
                     <div className="flex items-center gap-2">
                     <button type="button" onClick={() => setDrawer(true)} className="relative rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
                       <Menu className="size-5" />
-                      {badgeText(openSuggestionCount) ? (
-                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground" aria-label={t("{n} پیشنهاد", { n: num(openSuggestionCount) })}>{badgeText(openSuggestionCount)}</span>
+                      {badgeText(menuBadge) ? (
+                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground" aria-label={t("{n} مورد منتظر شما", { n: num(menuBadge) })}>{badgeText(menuBadge)}</span>
                       ) : null}
                     </button>
-                    {chat?.personId && chat.caller === "team" && !chat.parentChatId ? (
+                    {chat?.personId && chat.caller === "team" && !chat.parentChatId && !chat.mother ? (
                       <button
                         type="button"
                         onClick={() => { window.location.hash = `/telegram/${chat.personId}`; }}
@@ -429,6 +474,12 @@ export default function App() {
                       </button>
                     ) : null}
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
+                    {chat?.mother && chat.personId ? <WatchPill personId={chat.personId} /> : null}
+                    {telegramChat ? (
+                      <button type="button" onClick={() => setPanelSheet(true)} className="press shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted md:hidden">
+                        {chat.mother ? t("ترد‌ها ({n})", { n: num((chat.children || []).filter((c) => c.runStatus === "running").length) }) : t("پنل")}
+                      </button>
+                    ) : null}
                     {chatId && notice ? (
                       // Under the Karsara skin a lost connection moves to its own row on a phone (below).
                       <ConnectionNotice notice={notice} onRetry={reconnect} hideTextOnPhone={Boolean(notice.action)} className={karsara && notice.action ? "hidden sm:flex" : "flex"} />
@@ -443,7 +494,8 @@ export default function App() {
                         <span className="hidden sm:inline">{t("توکن")}</span>
                       </span>
                     ) : null}
-                    {chat?.caller && chat.caller !== "owner" ? (
+                    {/* A Telegram chat says whose it is in its title; "requested by team" meant nothing. */}
+                    {chat?.caller && chat.caller !== "owner" && chat.caller !== "team" ? (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground" dir="auto">
                         {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
@@ -464,12 +516,21 @@ export default function App() {
                     <span className="sr-only" role="status" aria-live="polite">{chatId && notice && notice.tone !== "muted" && notice.text ? t(notice.text) : ""}</span>
                   </header>
                 }
-                runInfo={<><SubagentsBar chat={chat} /><TodoProgress timeline={timeline} /></>}
+                runInfo={<>{chat?.mother ? null : <SubagentsBar chat={chat} />}<TodoProgress timeline={timeline} /></>}
                 readOnly={chat?.caller === "task" || Boolean(chat?.parentChatId)}
                 agentLabel={agentMeta(settings.agent).label}
                 agent={settings.agent}
                 fresh={!chatId}
+                board={board}
                 recentTitles={karsara ? [] : recentTitles}
+                placeholder={
+                  // A phone's box is a few words wide: the short form there (the panel says the rest).
+                  chat?.mother
+                    ? touch ? t("فقط به {name} می‌رسد", { name: BRAND.name }) : t("به {name} بگویید — برای {person} فرستاده نمی‌شود", { name: BRAND.name, person: motherName(chat) })
+                    : chat?.global
+                      ? touch ? t("به {name} بگویید…", { name: BRAND.name }) : t("به {name} بگویید… (مثلاً: جواب خانم رضایی را بده)", { name: BRAND.name })
+                      : ""
+                }
                 onSuggestion={quickSend}
                 mode={settings.mode}
                 model={settings.model}
@@ -479,7 +540,7 @@ export default function App() {
                 onModelChange={(model) => updateSettings({ model })}
                 onEffortChange={(effort) => updateSettings({ effort })}
                 composerTop={
-                  chat && (chat.caller || "owner") !== "owner" ? null : (
+                  chat && ((chat.caller || "owner") !== "owner" || chat.global) ? null : (
                     <RepoChips
                       chatId={chat?.id || null}
                       repo={settings.repo}
@@ -496,6 +557,8 @@ export default function App() {
               </ChatChildrenContext.Provider>
             </GriffinRuntime>}
           </main>
+          {!page && chat?.mother ? <MotherPanel key={chat.id} chat={chat} sheet={panelSheet} onCloseSheet={() => setPanelSheet(false)} /> : null}
+          {!page && chat?.global ? <GlobalPanel key={chat.id} chat={chat} sheet={panelSheet} onCloseSheet={() => setPanelSheet(false)} /> : null}
           {page ? null : (
             <SidePanel
               parentId={sideParent}
@@ -524,16 +587,18 @@ function TodoProgress({ timeline }) {
     if (!message || message.status !== "running") return null;
     for (let j = message.parts.length - 1; j >= 0; j -= 1) {
       const part = message.parts[j];
-      if (part.type === "tool" && part.name === "updateTodos") {
+      // Cursor's updateTodos, Claude's TodoWrite, the openai engine's todo_write.
+      if (part.type === "tool" && /^(updateTodos|TodoWrite|todo_write)$/.test(part.name)) {
         return unwrapResult(part).result?.todos || part.args?.todos || null;
       }
     }
     return null;
   }, [timeline]);
   if (!todos?.length) return null;
-  const done = todos.filter((t) => /complete|done/i.test(t.status)).length;
+  const closed = (t) => /complete|done|cancel/i.test(t.status);
+  const done = todos.filter(closed).length;
   if (done === todos.length) return null;
-  const current = todos.find((t) => /progress/i.test(t.status)) || todos.find((t) => !/complete|done/i.test(t.status));
+  const current = todos.find((t) => /progress/i.test(t.status)) || todos.find((t) => !closed(t));
   return (
     <div className="g-box mb-2 rounded-xl border bg-card text-sm">
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-2">
@@ -545,7 +610,7 @@ function TodoProgress({ timeline }) {
       {open ? (
         <ul className="space-y-1 border-t px-3 py-2">
           {todos.map((t, i) => (
-            <li key={i} className={/complete|done/i.test(t.status) ? "text-muted-foreground line-through" : ""} dir="auto">{t.content}</li>
+            <li key={i} className={closed(t) ? "text-muted-foreground line-through" : ""} dir="auto">{t.content}</li>
           ))}
         </ul>
       ) : null}

@@ -13,6 +13,7 @@ import { loadDraft, saveDraft } from "./draft.js";
 import { quoteStore, withQuotes } from "./quotes.js";
 import { retryableRunId } from "./side.js";
 import { collectChapters } from "./chat-tools.js";
+import { noteMessage } from "./telegram.js";
 
 export { unwrapResult };
 
@@ -20,7 +21,7 @@ const imageAdapter = new SimpleImageAttachmentAdapter();
 
 // The chat this runtime sends to (the composer keys its draft and quotes by it), a send of the
 // waiting quotes alone (an empty box cannot be submitted through the composer itself), and the
-// kept message's retry/delete.
+// kept message's retry.
 // boxId keys the composer's draft and quotes (the chat; null = a new chat).
 const RuntimeChat = createContext({ chatId: null, boxId: null, sendQuotes: () => {}, settings: {}, chapters: [] });
 export const useRuntimeChat = () => useContext(RuntimeChat);
@@ -74,7 +75,8 @@ outbox.subscribe(() => {
 export const editSend = (clientId) => sender.edit(clientId);
 
 // Bridges our event timeline (source of truth on the server) to assistant-ui.
-// kept: the chat's kept message ids (oldest first) — "delete" removes the oldest.
+// kept: the chat's kept message ids (oldest first); «دوباره» sends them again (Thread.jsx KeptActions,
+// which also has «حل شد» and «بستن» for them and for a last run that ended in an error).
 export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError, children }) {
   const waiting = useSyncExternalStore(outbox.subscribe, () => outbox.forChat(chatId), () => outbox.forChat(chatId));
   // The owner's messages still on their way show after the thread, each with its state.
@@ -93,7 +95,6 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
   const lastRun = messages.findLast((m) => m.role === "assistant");
   const isRunning = lastRun?.status === "running";
   const retryId = chatId ? retryableRunId(messages, kept.length) : null;
-  const keptId = kept[0] || null;
   const boxId = chatId;
 
   const adapter = useMemo(() => {
@@ -142,10 +143,12 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       isRunning,
       convertMessage: (message) => {
         const converted = convertMessage(message);
-        if (message.id !== retryId) return converted;
-        const onRetry = () => api(`/api/chats/${chatId}/retry`, { method: "POST" }).catch(onError);
-        const onDelete = () => (keptId ? api(`/api/chats/${chatId}/kept/${encodeURIComponent(keptId)}`, { method: "DELETE" }).catch(onError) : null);
-        return { ...converted, metadata: { custom: { ...converted.metadata.custom, onRetry, onDelete } } };
+        // The last run (its error actions show only there) and the run a kept message waits under.
+        const last = message.id === lastRun?.id;
+        const retry = message.id === retryId;
+        if (!last && !retry) return converted;
+        const onRetry = retry ? () => api(`/api/chats/${chatId}/retry`, { method: "POST" }).catch(onError) : undefined;
+        return { ...converted, metadata: { custom: { ...converted.metadata.custom, ...(last ? { last: true } : {}), ...(onRetry ? { onRetry } : {}) } } };
       },
       onNew: (message) => send(message, "send"),
       sendQuotes: () => (freeQuotes(boxId).length ? send({ content: [], attachments: [] }, isRunning ? "steer" : "send") : undefined),
@@ -166,7 +169,7 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       adapters: { attachments: imageAdapter },
       unstable_capabilities: { copy: true },
     };
-  }, [chatId, boxId, messages, isRunning, retryId, keptId, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
+  }, [chatId, boxId, messages, isRunning, retryId, lastRun?.id, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
 
   const runtime = useExternalStoreRuntime(adapter);
   const sendQuotes = adapter.sendQuotes;
@@ -199,13 +202,15 @@ function toPayload(message) {
 }
 
 function convertMessage(message) {
+  // A tg.note (a report, the owner's own Telegram line…): a system row, never a turn.
+  if (message.role === "note") return noteMessage(message);
   if (message.role === "user") {
     return {
       id: message.id,
       role: "user",
       content: [{ type: "text", text: message.text }],
       createdAt: message.at ? new Date(message.at) : undefined,
-      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, clientId: message.clientId || null, sendState: message.sendState || null } },
+      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, clientId: message.clientId || null, sendState: message.sendState || null, from: message.from || null, legacy: "legacyBehind" in message } },
     };
   }
   return {

@@ -3,6 +3,7 @@ import { usePolling } from "../api.js";
 import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
 import { Group, Item } from "./SettingsParts.jsx";
+import { clockLabel } from "../elapsed.js";
 
 const CLUSTER_NAMES = {}; // optional display names per cluster id
 const OPS_MODES = { record: t("فقط ثبت"), shadow: t("سایه (بدون ارسال)"), live: t("فعال"), off: t("خاموش") };
@@ -175,9 +176,4 @@ function tip(check) {
   return check.ok ? `OK ${check.status ?? ""} ${check.ms ?? ""}ms` : String(check.error || "down");
 }
 
-function ago(at) {
-  const s = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 1000));
-  if (s < 60) return t("همین حالا");
-  if (s < 3600) return t("{n} دقیقه پیش", { n: num(Math.round(s / 60)) });
-  return t("{n} ساعت پیش", { n: num(Math.round(s / 3600)) });
-}
+const ago = (at) => clockLabel(at);

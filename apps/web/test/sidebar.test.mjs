@@ -28,10 +28,11 @@ test("only «جدید» and the search stay fixed; the pages scroll with the lis
   const list = side.slice(side.indexOf("<nav "), side.indexOf("</nav>"));
   assert.match(head, /placeholder=\{t\("جستجوی گفتگوها"\)\}/);
   assert.match(head, /<NavButton active=\{!page && !activeId\}[^>]*label=\{t\("جدید"\)\}/, "«جدید» is lit only on the new-chat screen");
-  for (const label of ["تلگرام", "جاب", "حادثه‌ها", "ایجنت‌های همکاران", "میز کار"]) {
-    assert.doesNotMatch(head, new RegExp(`label=\\{t\\("${label}"\\)\\}`));
-    assert.match(list, new RegExp(`label=\\{t\\("${label}"\\)\\}`));
-  }
+  // The section rows (sidebar-nav.js, set in Settings → ظاهر) scroll with the list.
+  assert.doesNotMatch(head, /<SidebarNav /);
+  assert.match(list, /<SidebarNav /);
+  const nav = src("sidebar-nav.js");
+  for (const label of ["تلگرام", "جاب", "حادثه‌ها", "ایجنت‌های همکاران", "میز کار"]) assert.match(nav, new RegExp(`label: t\\("${label}"\\)`));
 });
 
 test("labels: token usage under the settings menu, no «همتا» shown anywhere", () => {
@@ -57,4 +58,32 @@ test("the sidebar is on the right of the RTL page and the side chat on the left"
   assert.match(app, /absolute inset-y-0 start-0/, "the phone drawer opens from the right (start) edge");
   const header = app.slice(app.indexOf("<header"), app.indexOf("</header>"));
   assert.ok(header.indexOf('aria-label={t("منو")}') < header.indexOf("<h1"), "the menu button is first in the RTL row, on the right");
+});
+
+test("no sub-agents in the list, error actions in the row menu, filters for this visit only", () => {
+  const side = src("components/Sidebar.jsx");
+  const app = src("App.jsx");
+  for (const gone of ["زیرکار", "گفتگوی باز", "openId"]) assert.ok(!side.includes(gone), gone);
+  assert.doesNotMatch(app, /openParent/);
+  assert.doesNotMatch(app, /openChat=/);
+  assert.match(side, /\/resolve`/);
+  assert.match(side, /حل شد/);
+  assert.match(side, /\/retry`/);
+  assert.ok(!side.includes('useStored("griffin.sidebar.filter"'), "the filter is not kept across reloads");
+  assert.ok(side.includes('section === "telegram" ? "all"'), "the Telegram tab ignores the hidden filter");
+  assert.match(side, /g-filter-chip/);
+});
+
+test("the filter outlives the phone drawer and Settings: App holds it for both sidebars", () => {
+  const side = src("components/Sidebar.jsx");
+  const app = src("App.jsx");
+  assert.doesNotMatch(side, /\[filter, setFilter\] = useState/, "no filter state inside the sidebar (the drawer unmounts it)");
+  assert.match(side, /export function Sidebar\(\{[^}]*filter = "all", onFilter/);
+  assert.match(app, /const \[sidebarFilter, setSidebarFilter\] = useState\("all"\)/, "per visit: a reload clears it");
+  const sidebars = app.split("<Sidebar").slice(1).map((block) => block.slice(0, block.indexOf("/>")));
+  assert.equal(sidebars.length, 2, "the desktop sidebar and the phone drawer");
+  for (const block of sidebars) {
+    assert.match(block, /filter=\{sidebarFilter\}/);
+    assert.match(block, /onFilter=\{setSidebarFilter\}/);
+  }
 });
