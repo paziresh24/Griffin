@@ -206,8 +206,12 @@ tests declare their own fixture site.
 
 ## Security posture
 
-- The agent process has no shell tool and no infrastructure credential; the broker holds them and
-  never returns a secret value to the model.
+- The agent process has no shell tool and no infrastructure credential; the broker holds them. Tools
+  that *use* a credential (cluster, router, CDN, GitLab) never hand it to the model, and copy tools
+  return key names only. The two tools whose job is to *read* a secret — `infisical_get` and
+  `kube_secret` — do return the value to the model; those results are masked in stored events and
+  logs, and the value is masked again if it later appears in another tool call. Remove
+  them from a caller's quota if a caller should never see secret values.
 - Tool access is filtered per caller before the tools reach the model — quota is code, not prompt
   text — and a caller with no quota row gets nothing.
 - Write tools are narrow by construction: router changes only touch items Griffin itself created, S3
