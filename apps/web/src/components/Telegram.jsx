@@ -114,7 +114,7 @@ export function TelegramRedirect({ personId }) {
 
 const TONE = {
   ok: "bg-ok/12 text-ok",
-  primary: "bg-primary/12 text-primary",
+  primary: "bg-signal/12 text-signal",
   warn: "bg-warn/15 text-warn",
   bad: "bg-bad/12 text-bad",
   muted: "bg-muted text-muted-foreground",
@@ -125,7 +125,7 @@ function Chip({ chip, className = "" }) {
   return <span className={`shrink-0 whitespace-nowrap rounded-full px-1.5 text-[11px] leading-5 ${TONE[chip.tone] || TONE.muted} ${className}`}>{chip.label}</span>;
 }
 
-const Dots = () => <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>;
+const Dots = () => <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>;
 
 function Toggle({ checked, onChange, label, disabled = false, title }) {
   return (
@@ -148,7 +148,12 @@ function Toggle({ checked, onChange, label, disabled = false, title }) {
 export function TelegramList({ query, activeId, activePersonId, onNavigate }) {
   const people = useTelegram(PEOPLE);
   const feed = useTelegram(FEED);
-  const [offOpen, setOffOpen] = useState(false);
+  // Stays as the owner left it across reloads and pages (owner 2026-10-19).
+  const [offOpen, setOffOpenState] = useState(() => readSetting("griffin.telegram.offOpen", "") === "1");
+  const setOffOpen = (open) => {
+    setOffOpenState(open);
+    writeSetting("griffin.telegram.offOpen", open ? "1" : "0");
+  };
   const waiting = feed?.waiting || [];
   const sections = peopleSections(people?.people, { query, waiting });
   const waitsFor = new Set(waiting.map((w) => w.personId));

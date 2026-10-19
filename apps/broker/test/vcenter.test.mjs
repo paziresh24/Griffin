@@ -118,7 +118,7 @@ function cloneFlow({ taskResponses, extra = {} } = {}) {
     "GET /rest/vcenter/host": ok({ value: [] }),
     "GET /rest/vcenter/folder": ok({ value: [] }),
     "POST /api/vcenter/guest/customization-specs": ok({ name: "griffin-test" }),
-    "DELETE /api/vcenter/guest/customization-specs/griffin-VPS-Test-Win-5": { status: 204, text: "" },
+    "DELETE /api/vcenter/guest/customization-specs/clone-VPS-Test-Win-5": { status: 204, text: "" },
     "POST /api/vcenter/vm?action=clone": ok({ vm: "vm-3001", task: "task-9:com.vmware.vcenter.vm" }),
     "GET /api/cis/tasks/task-9%3Acom.vmware.vcenter.vm": () => ok(taskResponses[polls++] || { status: "SUCCEEDED", progress: 100 }),
     "GET /api/vcenter/vm/vm-3001": ok({ name: "VPS-Test-Win-5", power_state: "POWERED_ON", cpu: { count: 4 }, memory: { size_MiB: 8192 } }),
@@ -144,7 +144,7 @@ test("vcenter_vm_create clones with a Windows spec and never echoes the password
 
   const specPost = calls.find((c) => c.key === "POST /api/vcenter/guest/customization-specs");
   const spec = JSON.parse(specPost.body);
-  assert.equal(spec.name, "griffin-VPS-Test-Win-5");
+  assert.equal(spec.name, "clone-VPS-Test-Win-5");
   assert.equal(spec.spec.configuration_spec.windows_config.sysprep.user_data.computer_name.fixed_name, "VPS-TEST-WIN-5");
   assert.equal(spec.spec.configuration_spec.windows_config.sysprep.gui_unattended.password, "Sup3r-Secret!");
   assert.deepEqual(spec.spec.interfaces, [{ adapter: { ipv4: { type: "DHCP" } } }]);
@@ -154,10 +154,10 @@ test("vcenter_vm_create clones with a Windows spec and never echoes the password
   assert.equal(clone.source, "vm-100");
   assert.equal(clone.name, "VPS-Test-Win-5");
   assert.equal(clone.power_on, true);
-  assert.deepEqual(clone.guest_customization_spec, { name: "griffin-VPS-Test-Win-5" });
+  assert.deepEqual(clone.guest_customization_spec, { name: "clone-VPS-Test-Win-5" });
 
   assert.ok(!JSON.stringify(result).includes("Sup3r-Secret"), "password never in the result");
-  assert.ok(calls.some((c) => c.key === "DELETE /api/vcenter/guest/customization-specs/griffin-VPS-Test-Win-5"), "scratch spec deleted");
+  assert.ok(calls.some((c) => c.key === "DELETE /api/vcenter/guest/customization-specs/clone-VPS-Test-Win-5"), "scratch spec deleted");
 });
 
 test("vcenter_vm_create re-sizes while off, then powers on", async () => {

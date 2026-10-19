@@ -22,8 +22,8 @@ test("the peek lists the owner's own waiting messages, oldest first", () => {
     user("u12", "untracked, from before user.queue", { legacy: true }),
   ];
   assert.deepEqual(waitingQueued(messages), [
-    { key: "u3", eventId: 3, text: "اولی", images: 0, sendState: null },
-    { key: "u11", eventId: 11, text: "دومی", images: 2, sendState: null },
+    { key: "u3", eventId: 3, text: "اولی", images: 0, files: [], sendState: null },
+    { key: "u11", eventId: 11, text: "دومی", images: 2, files: [], sendState: null },
   ]);
   assert.equal(inPeek(messages[0]), true);
   assert.equal(inPeek(messages[2]), false, "a started one is back in the thread");
@@ -49,8 +49,9 @@ test("under a bubble: nothing once it ran, muted «اجرا نشد» when it nev
 test("each composer carries the queue peek right under the scheduled one", () => {
   const thread = fs.readFileSync(new URL("../src/components/Thread.jsx", import.meta.url), "utf8");
   const composer = thread.slice(thread.indexOf("function Composer("), thread.indexOf("function ComposerImage("));
-  const peeks = composer.match(/<ScheduledPeek[^>]*\/>\}?\s*(\{\/\*[^]*?\*\/\}\s*)?<QueuePeek /g) || [];
-  assert.equal(peeks.length, 2, "dock/hero and the Karsara skin");
+  const peeks = composer.match(/<ScheduledPeek[^>]*\/> : null\}\s*(\{\/\*[^]*?\*\/\}\s*)?<QueuePeek /g) || [];
+  assert.equal(peeks.length, 2, "both looks, behind the flag «یادداشت‌های زمان‌دار بالای کادر»");
+  assert.equal((composer.match(/<QueuePeek /g) || []).length, 2, "both composers keep the queue peek");
   const message = thread.slice(thread.indexOf("function UserMessage("), thread.indexOf("function SendState("));
   assert.match(message, /if \(\(waiting && !readOnly\) \|\| queueRemoved\(custom\)\) return null;/);
   const peek = fs.readFileSync(new URL("../src/components/QueuePeek.jsx", import.meta.url), "utf8");
@@ -97,9 +98,9 @@ test("a queued send on its way is in the peek with its state (no bubble, nothing
   const merged = mergeOutbox(timeline, [entry("k4", "sending"), entry("k5", "sent"), entry("k6", "failed"), entry("k7", "sending", { shownIntent: "send" })]).map(converted);
   assert.deepEqual(merged.map(inPeek), [true, true, true, false, false], "failed stays for «ارسال دوباره»; a plain send retried as queue is not a queued one");
   assert.deepEqual(waitingQueued(merged), [
-    { key: "k3", eventId: 3, text: "اولی", images: 0, sendState: null },
-    { key: "k4", eventId: null, text: "پیام k4", images: 0, sendState: "sending" },
-    { key: "k5", eventId: null, text: "پیام k5", images: 0, sendState: "sent" },
+    { key: "k3", eventId: 3, text: "اولی", images: 0, files: [], sendState: null },
+    { key: "k4", eventId: null, text: "پیام k4", images: 0, files: [], sendState: "sending" },
+    { key: "k5", eventId: null, text: "پیام k5", images: 0, files: [], sendState: "sent" },
   ]);
   // It lands: the same key, now with its event id and the buttons.
   const landed = mergeOutbox([...timeline, { id: "u9", role: "user", text: "پیام k4", intent: "queue", clientId: "k4" }], [entry("k4", "sent")]).map(converted);
@@ -107,4 +108,17 @@ test("a queued send on its way is in the peek with its state (no bubble, nothing
   const peek = fs.readFileSync(new URL("../src/components/QueuePeek.jsx", import.meta.url), "utf8");
   assert.match(peek, /<li key=\{item\.key\}/);
   assert.match(peek, /\{item\.sendState \? \([^]*?SENDING_LABEL[^]*?\) : \([^]*?takeOut\(item, false\)[^]*?\)\}/, "no «حذف» until it lands");
+});
+
+// A review finding: «ویرایش» on a queued message with files must not lose them silently.
+test("a queued message with files lists them, and «ویرایش» names the files that will not come back", async () => {
+  const { editLossWarning } = await import("../src/queue-peek.js");
+  const files = [{ name: "report.pdf", mimeType: "application/pdf", bytes: 10 }];
+  const [item] = waitingQueued([user("u5", "ببین", { files })]);
+  assert.deepEqual(item.files, files);
+  assert.match(editLossWarning(item), /«report\.pdf»/);
+  assert.equal(editLossWarning({ images: 0, files: [] }), null);
+  const peek = fs.readFileSync(new URL("../src/components/QueuePeek.jsx", import.meta.url), "utf8");
+  assert.match(peek, /item\.files\.map\(\(f\) => f\.name\)/, "the peek lists the file names");
+  assert.match(peek, /editLossWarning\(item\)/, "the confirm before «ویرایش» covers files");
 });

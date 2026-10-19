@@ -1,6 +1,7 @@
 import { streamSSE } from "hono/streaming";
 import { MCP_TOOLS } from "./mcp-tools.mjs";
-import { PERSONA } from "./persona.mjs";
+import { currentProduct } from "./identity.mjs";
+import { OWNER, agentSlug, ownerSignatureName, PERSONA } from "./persona.mjs";
 
 // Stateless MCP server (streamable HTTP, JSON responses) for external agents such as Claude Code:
 //   claude mcp add --transport http griffin https://griffin.example.com/mcp \
@@ -18,7 +19,27 @@ export const WAIT_CAP_SSE = 55;
 
 export { MCP_TOOLS };
 
+// Who the peer is talking to. Every MCP client gets it at initialize.
+export const peerGuide = () =>
+  `You are talking to ${PERSONA.latin} (${PERSONA.name}), the assistant of ${ownerSignatureName() || OWNER.name}; ${currentProduct().latin} is the product it runs on, not its name. ` +
+  "Its tools answer to both the griffin_* and the karsara_* names.";
+
 const TOOL_NAMES = MCP_TOOLS.map((t) => t.name);
+
+// The "karsara" product's peer tools are karsara_*; MCP configs (allowed-tool lists, scripts) may call
+// those names. Every install accepts both, and lists them under its product's prefix: an install
+// set to that product (Settings → PRODUCT) shows karsara_send…, a Griffin griffin_send….
+const ALIAS = "karsara_";
+const PRIMARY = "griffin_";
+const toAlias = (text) => String(text).replace(/\bgriffin_(send|wait|reply|cancel|limits|tasks)\b/g, `${ALIAS}$1`);
+// The texts name the assistant this install runs, never «Griffin»; the tool names
+// (griffin_* / karsara_*) stay, colleagues' configs call them.
+const named = (text) => String(text).replace(/\bGRIFFIN\b|\bGriffin\b/g, () => PERSONA.latin);
+export function toolsFor(product = currentProduct()) {
+  const text = named(JSON.stringify(MCP_TOOLS));
+  return JSON.parse(product.id === "karsara" ? toAlias(text) : text);
+}
+export const toolPrefix = (product = currentProduct()) => (product.id === "karsara" ? ALIAS : PRIMARY);
 
 // Hand-rolled clients (and some frameworks) pass the namespaced name they show the model, e.g.
 // "mcp__griffin__griffin_send" or "griffin.griffin_send". Accept those rather than answering
@@ -26,7 +47,11 @@ const TOOL_NAMES = MCP_TOOLS.map((t) => t.name);
 export function resolveToolName(name) {
   const raw = String(name || "");
   if (TOOL_NAMES.includes(raw)) return raw;
-  return TOOL_NAMES.find((t) => raw.endsWith(t) && /[^a-z0-9]$|__$|\.$/i.test(raw.slice(0, -t.length))) || null;
+  const plain = TOOL_NAMES.find((t) => raw.endsWith(t) && /[^a-z0-9]$|__$|\.$/i.test(raw.slice(0, -t.length)));
+  if (plain) return plain;
+  // karsara_send, mcp__karsara__karsara_send, karsara.karsara_send → griffin_send
+  const alias = TOOL_NAMES.map((t) => [t, ALIAS + t.slice(PRIMARY.length)]).find(([, a]) => raw === a || (raw.endsWith(a) && /[^a-z0-9]$|__$|\.$/i.test(raw.slice(0, -a.length))));
+  return alias ? alias[0] : null;
 }
 
 export function createMcpHandler({ tasks, version = "dev", record = () => {}, log = console }) {
@@ -74,19 +99,19 @@ export function createMcpHandler({ tasks, version = "dev", record = () => {}, lo
         return ok({
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "griffin", version },
+          serverInfo: { name: agentSlug(), version },
           instructions:
-            "Griffin runs long operational tasks. griffin_send starts one and returns quickly; poll griffin_wait until the task ends. " +
+            `${currentProduct().latin} runs long operational tasks. ${toolPrefix()}send starts one and returns quickly; poll ${toolPrefix()}wait until the task ends. ` +
             "A task in state working is alive — do not treat it as failed. Progress items of kind \"status\" arrive at least " +
-            "every 5 minutes with elapsed time and the latest finding; relay them to your human instead of saying nothing." +
-            (PERSONA.latin === "Griffin" ? "" : ` Griffin is the platform; the assistant on this server is called ${PERSONA.latin} (${PERSONA.name}). Its tools keep the griffin_* names.`),
+            "every 5 minutes with elapsed time and the latest finding; relay them to your human instead of saying nothing.\n\n" +
+            named(currentProduct().id === "karsara" ? toAlias(peerGuide()) : peerGuide()),
         });
       }
       case "ping":
         return ok({});
       case "tools/list":
         note(peer, { method, outcome: "ok", startedAt });
-        return ok({ tools: MCP_TOOLS });
+        return ok({ tools: toolsFor() });
       case "tools/call": {
         const name = resolveToolName(params?.name);
         const args = { ...(params?.arguments || {}) };

@@ -61,6 +61,14 @@ export function chatState(chat, isUnread) {
 
 // `keepId`: the chat on screen stays listed whatever the filter — opening an unread chat marks it
 // read, and it must not vanish from under the pointer.
+// The sidebar's search: a chat matches by its title, or by its messages (bodyIds: the ids the server's
+// full-text search returned for the same text, /api/chats/search).
+export function searchChats(list, query, bodyIds = null) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((c) => String(c.title || "").toLowerCase().includes(q) || Boolean(bodyIds?.has(c.id)));
+}
+
 export function filterChats(list, filter, isUnread, { keepId = null } = {}) {
   if (!filter || filter === "all") return [...list];
   const tests = { pinned: (c) => Boolean(c.pinned), unread: (c) => Boolean(isUnread(c)), error: failed };
@@ -117,7 +125,16 @@ function bucket(list, keyOf, order = null) {
  * "none" gives asking the owner → running → pinned → the rest: what needs the owner and background work must be
  * impossible to miss; failures sit at the end of pinned and of the rest.
  */
-export function groupChats(list, groupBy, { isUnread = () => false, now = new Date(), timeZone, agentLabel = (id) => id, groups = [], narrowed = false, scope = "" } = {}) {
+export function groupChats(list, groupBy, options = {}) {
+  // By date, agent, repo or model (like Claude Desktop's folders), pinned chats stay on top.
+  if (["date", "agent", "repo", "model"].includes(groupBy) && list.some((c) => c.pinned)) {
+    const pinned = { key: "pinned", title: t("سنجاق‌شده"), chats: list.filter((c) => c.pinned) };
+    return [pinned, ...attributeGroups(list.filter((c) => !c.pinned), groupBy, options)];
+  }
+  return attributeGroups(list, groupBy, options);
+}
+
+function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date(), timeZone, agentLabel = (id) => id, groups = [], narrowed = false, scope = "" } = {}) {
   if (groupBy === "custom") return groupSections(list, groups, { narrowed });
   if (groupBy === "owner") {
     // Whose threads (Telegram, peers): each person's can be folded away.
@@ -145,7 +162,7 @@ export function groupChats(list, groupBy, { isUnread = () => false, now = new Da
   }
   if (groupBy === "agent") return bucket(list, (c) => c.agent || "griffin").map((s) => ({ key: `agent:${s.key}`, title: agentLabel(s.key), chats: s.chats }));
   if (groupBy === "repo") {
-    const sections = bucket(list, (c) => c.repo || "").map((s) => ({ key: `repo:${s.key}`, title: s.key || t("بدون مخزن"), chats: s.chats, none: !s.key }));
+    const sections = bucket(list, (c) => c.repo || "").map((s) => ({ key: `repo:${s.key}`, title: s.key || t("بدون مخزن"), chats: s.chats, none: !s.key, ...(s.key ? { repo: s.key } : {}) }));
     return sections.sort((a, b) => Number(a.none) - Number(b.none)).map(({ none, ...s }) => s);
   }
   if (groupBy === "model") return bucket(list, (c) => c.model || "").map((s) => ({ key: `model:${s.key}`, title: s.key || t("مدل پیش‌فرض"), chats: s.chats }));

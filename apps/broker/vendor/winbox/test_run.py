@@ -7,11 +7,11 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 sys.modules["winbox_terminal_client"] = types.SimpleNamespace(WinboxTerminalClient=None)
 import run  # noqa: E402
 
-cmd = "/ip route print where dst-address=198.51.100.0/24 or dst-address=203.0.113.0/24"
-raw = cmd[:50] + "\r\n" + cmd[50:] + "Edge] > " + cmd + "\r\nFlags: A - ACTIVE\r\n0 As 198.51.100.0/24\r\n[u@MainEdge] > "
-assert run.clean(raw, cmd) == "Flags: A - ACTIVE\n0 As 198.51.100.0/24"  # wrapped echo is cut
-live = cmd[:48] + " \n" + cmd[48:] + cmd + "\nFlags: A - ACTIVE\n0 As 198.51.100.0/24"  # seen live
-assert run.clean(live, cmd) == "Flags: A - ACTIVE\n0 As 198.51.100.0/24"
+cmd = "/ip route print where dst-address=10.20.3.0/24 or dst-address=10.20.6.0/24"
+raw = cmd[:50] + "\r\n" + cmd[50:] + "Edge] > " + cmd + "\r\nFlags: A - ACTIVE\r\n0 As 10.20.3.0/24\r\n[u@MainEdge] > "
+assert run.clean(raw, cmd) == "Flags: A - ACTIVE\n0 As 10.20.3.0/24"  # wrapped echo is cut
+live = cmd[:48] + " \n" + cmd[48:] + cmd + "\nFlags: A - ACTIVE\n0 As 10.20.3.0/24"  # seen live
+assert run.clean(live, cmd) == "Flags: A - ACTIVE\n0 As 10.20.3.0/24"
 assert run.clean("/ppp/active/print\r\n0 name=x\r\n[u@Y] > ", "/ppp/active/print") == "0 name=x"
 
 
@@ -26,4 +26,11 @@ class Slow:  # router answers after 1.5 s of silence (big table)
 
 slow = Slow([b"/ip route print\r\n"] + [None] * 30 + [b"0 As 10.0.0.0/8\r\n", b"[u@Y] > "])
 assert "10.0.0.0/8" in run.drain(slow, time.time() + 10, quiet_for=15)
+print("ok")
+
+sys.modules.pop("winbox_terminal_client")
+from winbox_terminal_client import M2  # noqa: E402
+
+assert M2.build_mepty_data(8, 784, 0, b"x") != M2.build_mepty_data(8, 784 & 0xFF, 0, b"x")  # id > 255 not truncated
+assert M2.encode_uint(M2.SESSION_ID, 7) == M2.encode_u8(M2.SESSION_ID, 7)
 print("ok")

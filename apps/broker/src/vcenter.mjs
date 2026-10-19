@@ -168,7 +168,7 @@ export function createVcenterTools({
   // com.vmware.vcenter.guest schema as this vCenter reports it, applied during the clone, then
   // deleted — the customization is baked into the guest, the spec itself is scratch state.
   function windowsSpec({ hostname, password, ip, prefix, gateway, dnsServers, vmName }) {
-    const computer = hostname || vmName.replace(/[^A-Za-z0-9-]/g, "").slice(0, 15) || "griffin";
+    const computer = hostname || vmName.replace(/[^A-Za-z0-9-]/g, "").slice(0, 15) || "vm";
     // Without an explicit ip the adapter is left out: the NIC keeps whatever the source guest
     // had configured (static included) — the caller is warned about that separately.
     const ipv4 = ip == null ? null : ip === "dhcp" ? { type: "DHCP" } : { type: "STATIC", ip_address: ip, prefix, ...(gateway ? { gateways: [gateway] } : {}) };
@@ -415,7 +415,7 @@ export function createVcenterTools({
           }
 
           // Scratch customization spec, deleted after the clone whatever happens.
-          const specName = customize ? `griffin-${name.replace(/[^A-Za-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 47)}` : null;
+          const specName = customize ? `clone-${name.replace(/[^A-Za-z0-9-]/g, "-").replace(/-+/g, "-").slice(0, 47)}` : null;
           if (specName && !SPEC_NAME.test(specName)) throw new ToolInputError("cannot derive a customization spec name from this VM name");
           if (customize && !ipMode) {
             warnings.push("no ip given — the NIC keeps the source guest's IP configuration; check for an IP conflict with the source VM");
@@ -424,7 +424,7 @@ export function createVcenterTools({
           if (specName) {
             const spec = windowsSpec({ hostname, password, ip, prefix, gateway, dnsServers, vmName: name });
             await vc.call("DELETE", `/api/vcenter/guest/customization-specs/${encodeURIComponent(specName)}`).catch(() => {});
-            await vc.call("POST", "/api/vcenter/guest/customization-specs", { json: { name: specName, description: `griffin clone of ${src.name}`, spec } });
+            await vc.call("POST", "/api/vcenter/guest/customization-specs", { json: { name: specName, description: `clone of ${src.name}`, spec } });
             specCreated = true;
           }
 

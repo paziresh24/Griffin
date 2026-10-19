@@ -1,27 +1,31 @@
+import { fallbackLabel } from "../fallback.js";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAui, useAuiState,
+  ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAui, useAuiEvent, useAuiState,
 } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { motion } from "motion/react";
 import {
-  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, ImagePlus, ListTodo, Loader2, Mic, Pencil, Plus, Quote, RotateCcw, Square, X,
+  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, FileText, ImagePlus, ListTodo, Loader2, Mic, Pencil, Plus, Quote, RotateCcw, Send, Sparkles, Square, StickyNote, X, Zap,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
 import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
 import { textDir } from "../dir.js";
-import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor } from "./Controls.jsx";
+import { Dialog } from "radix-ui";
+import { filesLine, rewindChoices } from "../rewind.js";
+import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor, useRunAccount } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
 import { locale, num, t, isRtl } from "../i18n.js";
 import { toast } from "sonner";
+import { countProblem, dragHasFiles, formatBytes, isImageAttachment, overLimit } from "../attachments.js";
 import { api, navigate, reloadTimeline } from "../api.js";
 import { RESTORE_EVENT, editSend, retrySend, useRuntimeChat } from "../runtime.jsx";
 import { FAILED_LABEL, SENDING_LABEL, SENT_LABEL } from "../outbox.js";
-import { quoteStore } from "../quotes.js";
+import { parseQuoted, quoteStore } from "../quotes.js";
 import { SelectionActions } from "./SelectionActions.jsx";
-import { QuoteChip } from "./QuoteChip.jsx";
+import { QuoteChip, QuotedText } from "./QuoteChip.jsx";
 import { ChatRecord, ComposerAssist, FastSwitch, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
 import { NoteRow, PersonAvatar, PersonName } from "./Telegram.jsx";
 import { isNoReply, motherName, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
@@ -29,19 +33,21 @@ import { submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
 import { holdReload } from "../new-version.js";
-import { ScheduledPeek } from "./Notes.jsx";
+import { LaterButton, ScheduledPeek } from "./Notes.jsx";
 import { QueuePeek } from "./QueuePeek.jsx";
+import { TasksPeek } from "./TasksPeek.jsx";
 import { inPeek, queueDropped, queueLabel, queueRemoved } from "../queue-peek.js";
-import { HostChip, UsageRing } from "./ComposerStats.jsx";
+import { UsageRing } from "./ComposerStats.jsx";
 import { WhyButton, WhyFlag, WhyPanel } from "./Why.jsx";
 import { phaseLabel } from "../run-phase.js";
 import { answerItems, chapterAnchor } from "../chat-tools.js";
 import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./ChatTools.jsx";
 import { tr } from "./Setup.jsx";
-import { useSkin } from "../skin.js";
+import { useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
 import { MessageBoundary } from "../boundary.js";
 import { escCancels } from "../keys.js";
-import { clockLabel, exactTime } from "../elapsed.js";
+import { clockLabel, exactTime, fullAgo } from "../elapsed.js";
+import { answerTokens } from "../tokens-format.js";
 
 const ChatContext = createContext({ chatId: null, readOnly: false });
 
@@ -54,6 +60,7 @@ export function Thread({
   header,
   runInfo,
   readOnly = false,
+  canSide = false, // "to side chat" in the selection toolbar (App: an owner's chat, SIDE_CHAT on)
   agentLabel = t("ایجنت"),
   agent = "griffin",
   fresh = false,
@@ -73,9 +80,9 @@ export function Thread({
 }) {
   return (
     <ChatContext.Provider value={{ chatId, readOnly }}>
-    <ThreadPrimitive.Root className="flex h-full min-h-0 flex-col">
+    <ThreadPrimitive.Root data-griffin-chat="" className="flex h-full min-h-0 flex-col">
       {header}
-      {readOnly ? null : <SelectionActions />}
+      {readOnly ? null : <SelectionActions canSide={canSide} />}
       <ThreadBody
         runInfo={runInfo}
         readOnly={readOnly}
@@ -105,13 +112,17 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   // board — or, with nothing on it, the welcome and suggestions — fills the page above it. The
   // side chat (compact) keeps its composer in the middle.
   const showHero = fresh && !readOnly;
-  const docked = showHero && !compact;
+  // «کارهای منتظر شما و در جریان» off (ui-prefs.js): Karsara's centred home page — the blurb, the
+  // setup card and the composer in the middle, no board.
+  const karsara = useLook() === "karsara";
+  const homeBoard = useFlag("homeBoard");
+  const docked = showHero && !compact && homeBoard;
   const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange, effort, onEffortChange, top: composerTop, compact, placeholder };
 
   return (
     // The hero has no messages to follow; a tall home-page board would be pulled to its bottom.
     <ThreadPrimitive.Viewport data-griffin-thread="" autoScroll={!showHero} className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className={`mx-auto flex w-full max-w-3xl flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && !board ? "justify-center" : ""}`}>
+      <div className={`mx-auto flex w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && (!homeBoard || !board) ? "justify-center" : ""}`}>
         {showHero ? (
           <WelcomeHero
             agent={agent}
@@ -131,7 +142,7 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
         )}
       </div>
       {readOnly || (showHero && !docked) ? null : (
-        <ThreadPrimitive.ViewportFooter className="g-thread-footer sticky bottom-0 mx-auto w-full max-w-3xl bg-gradient-to-t from-background via-background to-transparent px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 sm:px-6">
+        <ThreadPrimitive.ViewportFooter className={`g-thread-footer sticky bottom-0 mx-auto w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} bg-gradient-to-t from-background via-background to-transparent px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2 sm:px-6`}>
           {showHero ? null : (
             <>
               <ThreadPrimitive.ScrollToBottom className="absolute -top-10 left-1/2 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border bg-card shadow disabled:invisible">
@@ -152,7 +163,7 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
 // docked: the composer is in the page's footer (ThreadBody), so the hero leaves its slot empty.
 function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, top, compact, board, docked = false }) {
   const meta = agentMeta(agent);
-  const karsara = useSkin() === "karsara";
+  const homeBoard = useFlag("homeBoard");
   const suggestions = useMemo(
     () => pickSuggestions(agent, { count: 4, recentTitles, salt: String(recentTitles[0] || "") }),
     [agent, recentTitles],
@@ -176,16 +187,13 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
   // The board takes the blurb's place: «منتظر شما», then the task lists (above the docked box).
   const bottom = board && !compact ? board.bottom : null;
 
-  // Karsara skin: one quiet line, what is not connected yet, the composer. No glyph, no pills, no motion.
-  if (karsara) {
+  // Board off: one quiet line, what is not connected yet, the composer. No glyph, no pills, no motion.
+  if (!homeBoard) {
     return (
-      <div className={`mx-auto flex w-full ${board && docked ? "max-w-3xl" : "max-w-2xl"} flex-col gap-4 py-6`}>
-        {board ? null : <h2 className="text-center text-lg font-medium text-foreground/90" dir="auto">{meta.blurb || meta.label}</h2>}
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 py-6">
+        <h2 className="text-center text-lg font-medium text-foreground/90" dir="auto">{meta.blurb || meta.label}</h2>
         {compact ? null : <SetupCard />}
-        {board?.top}
-        {docked ? bottom : null}
         {composer}
-        {docked ? null : bottom}
       </div>
     );
   }
@@ -277,6 +285,7 @@ export function setupItems(setup, report) {
 }
 
 function SetupCard() {
+  const karsara = useLook() === "karsara";
   const [setup, setSetup] = useState(null);
   const [report, setReport] = useState(null);
   const [later, setLater] = useState(readLater);
@@ -299,6 +308,35 @@ function SetupCard() {
       // storage unavailable: hidden for this page only
     }
   };
+  if (karsara) {
+    // Karsara's SetupRow (Karsara Setup.jsx): an icon tile, the line, «وصل کن», and ✕ for «بعداً».
+    return (
+      <section className="rounded-2xl border border-warn/40 bg-warn/5 p-4" aria-label={t("هنوز وصل نیستند")}>
+        <p className="mb-3 text-sm font-medium">{t("این‌ها هنوز وصل نیستند:")}</p>
+        <ul className="divide-y">
+          {items.map((item) => {
+            const Icon = item.flow === "telegram" ? Send : Sparkles;
+            return (
+              <li key={item.id} className="space-y-3 py-3 first:pt-0 last:pb-0">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-warn/15 text-warn">
+                    <Icon className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium" dir="auto">{item.text}</p>
+                  </div>
+                  <a href={`#/setup/${item.flow}`} className="kc-pill shrink-0">{t("وصل کن")}</a>
+                  <button type="button" className="kc-icon-btn shrink-0" onClick={() => putOff(item.id)} aria-label={t("بعداً")} title={t("بعداً")}>
+                    <X className="size-4" />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+    );
+  }
   return (
     <section className="g-box rounded-2xl border border-warn/40 bg-warn/5 p-4 text-start" aria-label={t("هنوز وصل نیستند")} dir={isRtl ? "rtl" : "ltr"}>
       <p className="mb-2 text-sm font-medium">{t("این‌ها هنوز وصل نیستند:")}</p>
@@ -337,10 +375,31 @@ function SafeSystemMessage() {
 
 function SystemMessage() {
   const note = useAuiState((s) => s.message.metadata?.custom?.note);
+  const guest = useAuiState((s) => s.message.metadata?.custom?.guest);
+  if (guest) return <GuestNote from={guest.from} />;
   if (!note) return null;
   return (
     <MessagePrimitive.Root className="my-2">
       <NoteRow note={note} />
+    </MessagePrimitive.Root>
+  );
+}
+
+// A note from the person this chat was privately shared with (guest.js): their words, labelled as
+// theirs. It is not the owner's message and the agent never acts on it. The look per skin is in
+// styles.css (.g-guest-note).
+function GuestNote({ from }) {
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const text = useAuiState((s) => (Array.isArray(s.message.content) ? s.message.content.map((p) => p?.text || "").join("\n") : ""));
+  return (
+    <MessagePrimitive.Root className="group my-3 flex flex-col items-stretch">
+      <div className="g-guest-note rounded-2xl bg-muted/60 px-3 py-2">
+        <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <StickyNote className="size-3.5" /> {t("یادداشتِ {name} · ایجنت آن را اجرا نمی‌کند", { name: from || t("مهمان") })}
+        </p>
+        <p className="chat-text whitespace-pre-wrap break-words leading-7" dir={chatDir(text)}>{text}</p>
+      </div>
+      <span className="flex items-center gap-2"><MessageTime at={createdAt} /></span>
     </MessagePrimitive.Root>
   );
 }
@@ -363,10 +422,11 @@ function subscribeClock(onChange) {
 }
 
 // When, as a clock ("14:03", "yesterday 14:03" — not "3 minutes ago"), while the pointer
-// rests on the message; the exact date and time (weekday, seconds) as its tooltip.
+// rests on the message; the exact date and time (weekday, seconds) as its tooltip. The timeAgo
+// preference keeps the elapsed time instead ("2 days 2 hours ago").
 function MessageTime({ at }) {
   useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
-  const text = clockLabel(at);
+  const text = useFlag("timeAgo") ? fullAgo(at) : clockLabel(at);
   if (!text) return null;
   return (
     <span className="text-xs text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-80" title={exactTime(at)}>
@@ -382,7 +442,7 @@ function UserMessage() {
   const waiting = useAuiState((s) => inPeek(s.message));
   const messageId = useAuiState((s) => s.message.id);
   const createdAt = useAuiState((s) => s.message.createdAt);
-  const karsara = useSkin() === "karsara";
+  const links = useFlag("editLinks"); // «ویرایش» و «برگشت» زیر پیام
   const text = useAuiState((s) => {
     const parts = s.message.content || s.message.parts || [];
     if (typeof parts === "string") return parts;
@@ -394,6 +454,8 @@ function UserMessage() {
   const from = custom?.from;
   const { theirs: colleague, ownerNote, editable } = userSide(from, text, chat);
   const dir = chatDir(text);
+  // Replies to a part of an answer and «به چت جدید»: the quotes as cards, not raw «>» lines.
+  const quoted = useMemo(() => (colleague || ownerNote ? null : parseQuoted(text)), [text, colleague, ownerNote]);
   // A queued message that ran shows at its place with no label; one that never ran is muted.
   const label = queueLabel(custom);
   const dropped = queueDropped(custom);
@@ -402,16 +464,21 @@ function UserMessage() {
   const canEdit = chatId && eventId && !readOnly && editable;
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
-  const rewind = () => {
-    if (confirm(t("گفتگو از اینجا به بعد پاک شود؟"))) act({});
-  };
+  const [rewindOpen, setRewindOpen] = useState(false);
+  const rewind = () => setRewindOpen(true);
   if ((waiting && !readOnly) || queueRemoved(custom)) return null;
+  const shown = colleague ? stripSender(text, from.name) : ownerNote ? stripOwnerFrame(text) : text;
 
   const act = async (body) => {
     setBusy(true);
     try {
-      await api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, ...body } });
+      const { files } = (await api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, ...body } })) || {};
+      // Claude's file edits since that message (the owner's own chats): put back, or why not.
+      if (files?.restored) toast.success(t("{n} فایل به حالت قبل از این پیام برگشت.", { n: num(files.restored) }));
+      else if (files?.error) toast.error(t("فایل‌ها برنگشتند: {error}", { error: files.error }));
+      else if (body.files === false) toast.success(t("گفتگو به پیش از این پیام برگشت."));
       setEditing(null);
+      setRewindOpen(false);
       reloadTimeline();
     } catch (error) {
       toast.error(error.message || t("خطا"));
@@ -461,26 +528,34 @@ function UserMessage() {
           </div>
         ) : (
           <div className={`g-user-bubble chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7 ${dropped ? "opacity-60" : ""}`} dir={dir}>
-            {ownerNote ? stripOwnerFrame(text) : <MessagePrimitive.Parts />}
+            {ownerNote ? stripOwnerFrame(text) : quoted ? <QuotedText parts={quoted} /> : <MessagePrimitive.Parts />}
           </div>
         )}
-        {canEdit && !karsara ? (
-          <div className="mt-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-            <button type="button" title={t("ویرایش و ارسال دوباره")} onClick={() => setEditing(text)} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="size-3.5" /></button>
-            <button type="button" title={t("برگشت به اینجا (حذف ادامه)")} onClick={rewind} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3.5" /></button>
+        {!links ? (
+          <div className="mt-1 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100">
+            <CopyMessage text={shown} />
+            {canEdit ? (
+              <>
+                <button type="button" title={t("ویرایش و ارسال دوباره")} onClick={() => setEditing(text)} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Pencil className="size-3.5" /></button>
+                <button type="button" title={t("برگشت به اینجا (حذف ادامه)")} onClick={rewind} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3.5" /></button>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>
       {ownerNote ? <span className="mt-1 text-[11px] text-muted-foreground">{t("یادداشت شما — به {name} نمی‌رسد", { name: motherName(chat) })}</span> : null}
-      {custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
+      {custom?.imageIds?.length ? <SentImages ids={custom.imageIds} /> : custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
+      {custom?.files?.length ? <SentFiles files={custom.files} /> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
       {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} /> : null}
+      {rewindOpen ? <RewindDialog chatId={chatId} eventId={eventId} busy={busy} onRun={act} onClose={() => setRewindOpen(false)} /> : null}
       {/* Zero height: shown on hover under the bubble without moving the thread. items-start: it hangs
           below the line above (centred on a zero-height row it rose over the label/time above it). On a
           touch screen, where it always shows, it takes its height, so a wrapped line never overlaps. */}
       <span className="mt-1 flex h-0 flex-wrap items-start gap-x-3 gap-y-1 overflow-visible whitespace-nowrap leading-4 pointer-coarse:h-auto">
         <MessageTime at={createdAt} />
-        {canEdit && karsara ? (
+        {links ? <CopyMessage text={shown} labeled /> : null}
+        {canEdit && links ? (
           <>
             <button type="button" onClick={rewind} disabled={busy} title={t("گفتگو از اینجا به بعد پاک می‌شود")} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
               <RotateCcw className="size-3" /> {t("برگشت به اینجا")}
@@ -495,9 +570,25 @@ function UserMessage() {
   );
 }
 
+// Copy a message the owner (or a colleague) sent, as it reads in the bubble.
+function CopyMessage({ text, labeled = false }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => toast.error(t("کپی نشد")));
+  const Icon = copied ? Check : Copy;
+  return labeled ? (
+    <button type="button" onClick={copy} title={t("کپی پیام")} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100">
+      <Icon className="size-3" /> {copied ? t("کپی شد") : t("کپی")}
+    </button>
+  ) : (
+    <button type="button" onClick={copy} title={t("کپی پیام")} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+      <Icon className={`size-3.5 ${copied ? "text-ok" : ""}`} />
+    </button>
+  );
+}
+
 // A message still on its way (outbox.js): its state, and on a failure «ارسال دوباره» / «ویرایش».
 function SendState({ state, clientId }) {
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
   if (state === "failed" && karsara) {
     return (
       <span className="mt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -594,7 +685,7 @@ function KeptActions() {
   const { chatId } = useContext(ChatContext);
   const record = useContext(ChatRecord);
   const [busy, setBusy] = useState(false);
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
   const kept = Boolean(custom?.onRetry);
   const bar = keptBar({ chatId, record, kept, lastFailed: Boolean(custom?.last) && custom?.run?.status === "error" });
   if (!bar) return null;
@@ -658,7 +749,7 @@ function KeptActions() {
 function MarkdownText({ text, status, compact = false }) {
   const dir = chatDir(text);
   return (
-    <div className={`sd-block ${compact ? "leading-7" : "leading-8"} [&_pre]:my-2`} dir={dir}>
+    <div className={`sd-block ${compact ? "leading-7" : "g-answer leading-8"} [&_pre]:my-2`} dir={dir}>
       <Streamdown dir={dir} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
         {text}
       </Streamdown>
@@ -698,7 +789,7 @@ function compactTokens(n) {
 function RunFooter({ run }) {
   const { chatId } = useContext(ChatContext);
   const [why, setWhy] = useState(false);
-  const karsara = useSkin() === "karsara";
+  const karsara = useFlag("runFooterDetailed"); // «زیر جواب: مدت، مدل و توکن»
   if (!run) return null;
   const copyable = run.status !== "running";
   // «چرا؟» once the reply is done; a shared page has no chat id (and no session to ask with).
@@ -706,15 +797,8 @@ function RunFooter({ run }) {
   const seconds = run.endedAt && run.startedAt ? Math.max(1, Math.round((new Date(run.endedAt) - new Date(run.startedAt)) / 1000)) : null;
   const model = run.model && run.status !== "running" ? run.model : null;
   const done = run.status !== "running";
+  const moved = fallbackLabel(run);
   const answeredAt = done && run.endedAt ? formatAnsweredAt(run.endedAt) : null;
-  const tokens = run.usage ? (
-    <span
-      dir="ltr"
-      title={t("ورودی {input} (کش {cached}) · خروجی {output} · {requests} درخواست · کانتکست {context}", { input: num(run.usage.input), cached: num(run.usage.cached), output: num(run.usage.output), requests: num(run.usage.requests), context: num(run.usage.context) })}
-    >
-      {compactTokens(run.usage.input + run.usage.output)} tok
-    </span>
-  ) : null;
   const actions = copyable ? (
     <ActionBarPrimitive.Root hideWhenRunning autohide="not-last" className="flex items-center">
       <ActionBarPrimitive.Copy
@@ -729,26 +813,29 @@ function RunFooter({ run }) {
     </ActionBarPrimitive.Root>
   ) : null;
 
-  // Karsara skin: plain muted text and a ring, no pills.
+  // Karsara skin: plain muted text and a ring, no pills; Karsara's footer — the run's length, model,
+  // «۳.۶M توکن», then the elapsed time (MessageTime), no clock time in the meta.
   if (karsara) {
+    const kTokens = done ? answerTokens(run.usage) : null;
     return (
       <>
+      {moved ? <div className="mt-2 text-xs text-muted-foreground" dir="auto">{moved}</div> : null}
       <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
         {run.status === "running" ? <RunPhase run={run} /> : null}
         {run.status === "error" ? <span className="text-xs text-bad" dir="auto">{run.error || t("خطا")}</span> : null}
         {run.status === "cancelled" ? <span className="text-xs text-muted-foreground" dir="auto">{run.error || t("متوقف شد")}</span> : null}
-        {done && (answeredAt || seconds || model || run.usage) ? (
+        {done && (seconds || model || kTokens) ? (
           <div className="g-run-meta flex items-center gap-1.5 text-xs text-muted-foreground">
-            {answeredAt || seconds ? (
-              <span className="inline-flex items-center gap-1" title={[answeredAt && t("جواب: {time}", { time: answeredAt }), seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) })].filter(Boolean).join(" · ")}>
+            {seconds ? (
+              <span className="inline-flex items-center gap-1" title={formatDuration(seconds)}>
                 <Clock className="size-3 opacity-70" />
-                {answeredAt ? <span>{answeredAt}</span> : null}
-                {seconds ? <span className={answeredAt ? "opacity-70" : ""}>{answeredAt ? `(${formatDuration(seconds, { compact: true })})` : formatDuration(seconds, { compact: true })}</span> : null}
+                <span>{formatDuration(seconds, { compact: true })}</span>
               </span>
             ) : null}
-            {(answeredAt || seconds) && model ? <span className="text-border">·</span> : null}
+            {seconds && model ? <span className="text-border">·</span> : null}
             {model ? <span className="max-w-40 truncate" title={model} dir="ltr">{model}</span> : null}
-            {tokens ? <><span className="text-border">·</span>{tokens}</> : null}
+            {kTokens && (seconds || model) ? <span className="text-border">·</span> : null}
+            {kTokens ? <span title={kTokens.title}>{kTokens.label}</span> : null}
           </div>
         ) : null}
         {done ? <MessageTime at={run.endedAt || run.startedAt} /> : null}
@@ -762,6 +849,7 @@ function RunFooter({ run }) {
 
   return (
     <>
+    {moved ? <div className="mt-2 text-xs text-muted-foreground" dir="auto">{moved}</div> : null}
     <div className="mt-2 flex min-h-7 flex-wrap items-center gap-2">
       {run.status === "running" ? <RunPhase run={run} /> : null}
       {run.status === "error" ? (
@@ -773,35 +861,18 @@ function RunFooter({ run }) {
         </span>
       ) : null}
 
-      {done && (answeredAt || seconds || model || run.usage) ? (
-        <div className="g-run-meta flex items-center gap-1.5 rounded-full border bg-muted/50 px-2.5 py-1 text-[11px] text-muted-foreground">
-          {answeredAt || seconds ? (
-            <span
-              className="inline-flex items-center gap-1"
-              title={[answeredAt && t("جواب: {time}", { time: answeredAt }), seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) })].filter(Boolean).join(" · ")}
-            >
-              <Clock className="size-3 opacity-70" />
-              {answeredAt ? <span>{answeredAt}</span> : null}
-              {answeredAt && seconds ? <span className="opacity-60">({formatDuration(seconds, { compact: true })})</span> : null}
-              {!answeredAt && seconds ? <span>{formatDuration(seconds, { compact: true })}</span> : null}
-            </span>
-          ) : null}
-          {(answeredAt || seconds) && model ? <span className="text-border">·</span> : null}
-          {model ? (
-            <span className="max-w-40 truncate font-medium text-foreground/70" title={model} dir="ltr">
-              {model}
-            </span>
-          ) : null}
-          {tokens ? (
-            <>
-              <span className="text-border">·</span>
-              {tokens}
-            </>
-          ) : null}
-        </div>
+      {/* One quiet line, like Claude's: clock and model; duration and tokens on hover. */}
+      {done && (answeredAt || model) ? (
+        <span
+          className="g-run-meta text-xs text-muted-foreground/80"
+          title={[
+            seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) }),
+            run.usage && t("{tokens} توکن (ورودی {input} · خروجی {output})", { tokens: compactTokens(run.usage.input + run.usage.output), input: num(run.usage.input), output: num(run.usage.output) }),
+          ].filter(Boolean).join(" · ") || undefined}
+        >
+          {[answeredAt, model].filter(Boolean).join(" · ")}
+        </span>
       ) : null}
-
-      {done ? <MessageTime at={run.endedAt || run.startedAt} /> : null}
       {actions}
       {explainable && !why ? <WhyFlag count={run.manifestChanges} onClick={() => setWhy(true)} /> : null}
     </div>
@@ -813,7 +884,7 @@ function RunFooter({ run }) {
 // What the running turn is doing (run-phase.js): a retry or a closed limit in words. The shared
 // clock lets a retry label expire.
 function RunPhase({ run }) {
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
   useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
   const label = phaseLabel(run.phase, run.phaseDetail, { at: run.phaseAt, now: Date.now() });
   if (karsara) {
@@ -828,7 +899,7 @@ function RunPhase({ run }) {
     <motion.span
       initial={{ opacity: 0, scale: 0.92 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="g-run-phase inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-primary"
+      className="g-run-phase inline-flex items-center gap-2 rounded-full border border-signal/25 bg-signal/10 px-2.5 py-1 text-xs text-signal"
     >
       <span className="agent-dots" aria-hidden>
         <i /><i /><i />
@@ -976,7 +1047,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   const running = useAuiState((s) => s.thread.isRunning);
   const hero = variant === "hero";
   const touch = useTouchPrimary();
-  const karsara = useSkin() === "karsara";
+  // The look draws the box (Karsara's: flat, the microphone inside, a square send); the flags pick its
+  // pieces (ui-prefs.js «کادر پیام»).
+  const karsara = useLook() === "karsara";
+  const { flags } = useUiPrefs();
   const inputRef = useRef(null);
   const rootRef = useRef(null);
   const aui = useAui();
@@ -985,7 +1059,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   const next = useNextStep();
   // What was being typed in this chat comes back after a reload or a look at another chat
   // (draft.js). The composer is mounted once per chat, so this runs once per chat.
-  const { boxId: chatId, sendQuotes } = useRuntimeChat();
+  const { boxId: chatId, sendQuotes, settings: runSettings } = useRuntimeChat();
+  // What a note for later starts a new chat with: this composer's choices (notes.js noteBody).
+  const laterOptions = { repo: runSettings?.repo ?? undefined, model: runSettings?.model, agent: runSettings?.agent, mode: runSettings?.mode, effort: runSettings?.effort, groupId: runSettings?.groupId || undefined };
   const boxText = useRef(composerText);
   boxText.current = composerText;
   // A message that did not reach the server returns to this box, above what was typed since.
@@ -1003,9 +1079,77 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   // Quotes added with «به گفتگو» wait folded above the input and join the message when it is sent.
   const quotes = useSyncExternalStore(quoteStore.subscribe, () => quoteStore.get(chatId));
   const quotesOnly = quotes.length > 0 && !composerText.trim();
-  // Attached pictures live only in this page: a new version waits for them to be sent or removed.
+  // Attached pictures and files live only in this page: a new version waits for them to be sent or removed.
   const hasAttached = useAuiState((s) => (s.composer.attachments?.length || 0) > 0);
   useEffect(() => (hasAttached ? holdReload() : undefined), [hasAttached]);
+  // A file the adapter refused (empty, over 10 MB, a type the server does not take): say why —
+  // assistant-ui swallows the error from paste, drop and the add button.
+  useAuiEvent("composer.attachmentAddError", (event) =>
+    toast.error(event?.reason === "not-accepted" ? t("فقط تصویر، PDF یا فایل متنی را می‌شود پیوست کرد.") : event?.message || t("این فایل افزوده نشد.")),
+  );
+  // More than a message may carry: the newest extras leave at once, with the reason, so a send
+  // never fails on the count (and the composer never loses what it already had).
+  const attachedItems = useAuiState((s) => s.composer.attachments);
+  useEffect(() => {
+    const extra = overLimit(attachedItems || []);
+    if (!extra.length) return;
+    const files = (attachedItems || []).filter((a) => !isImageAttachment(a));
+    const images = (attachedItems || []).filter((a) => isImageAttachment(a));
+    // One toast however many times the effect fires before the removals land (a drop of many files).
+    toast.error(countProblem({ files, images }) || t("بیش از سقف یک پیام"), { id: "attach-over-limit" });
+    for (const id of extra) {
+      try {
+        Promise.resolve(aui.composer().attachment({ id }).remove()).catch(() => {});
+      } catch {
+        /* a composer that is gone has nothing to remove */
+      }
+    }
+  }, [attachedItems, aui]);
+  // Files dragged onto the chat (anywhere in it, not only the box) are attached like the add button
+  // does; the adapters refuse what the server would refuse, with the reason as a toast.
+  useEffect(() => {
+    const zone = rootRef.current?.closest("[data-griffin-chat]");
+    if (!zone) return undefined;
+    let depth = 0;
+    const show = (on) => zone.toggleAttribute("data-drop", on);
+    const onEnter = (event) => {
+      if (!dragHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      depth += 1;
+      show(true);
+    };
+    const onOver = (event) => {
+      if (!dragHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    };
+    const onLeave = (event) => {
+      if (!dragHasFiles(event.dataTransfer)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) show(false);
+    };
+    const onDrop = (event) => {
+      if (!dragHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      depth = 0;
+      show(false);
+      for (const file of Array.from(event.dataTransfer.files || [])) {
+        Promise.resolve(aui.composer().addAttachment(file)).catch(() => {});
+      }
+      inputRef.current?.focus();
+    };
+    zone.addEventListener("dragenter", onEnter);
+    zone.addEventListener("dragover", onOver);
+    zone.addEventListener("dragleave", onLeave);
+    zone.addEventListener("drop", onDrop);
+    return () => {
+      zone.removeEventListener("dragenter", onEnter);
+      zone.removeEventListener("dragover", onOver);
+      zone.removeEventListener("dragleave", onLeave);
+      zone.removeEventListener("drop", onDrop);
+      show(false);
+    };
+  }, [aui]);
   const draftSkip = useRef(true);
   useEffect(() => {
     const draft = loadDraft(browserStorage(), chatId);
@@ -1048,8 +1192,36 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     setText([text, boxText.current].filter((s) => s?.trim()).join("\n"));
     focusInput();
   };
+  // Only quotes in the box (a reply with nothing typed): the composer itself cannot send an empty
+  // box, so Enter (Ctrl+Enter on a phone) sends them here; Ctrl/⌘+Shift+Enter sends them «فوری».
+  const onInputKey = (event) => {
+    if (event.key !== "Enter" || event.nativeEvent?.isComposing || !quotesOnly || hasAttached) return;
+    const force = event.shiftKey && (event.ctrlKey || event.metaKey);
+    if (!force && (event.shiftKey || (submitMode(touch) === "ctrlEnter" && !(event.ctrlKey || event.metaKey)))) return;
+    event.preventDefault();
+    sendQuotes(force && running);
+  };
+  // «فوری» while the agent works: this message reaches it now instead of waiting in the queue.
+  const canForce = running && (composerText.trim() || hasAttached || quotes.length > 0);
+  const forceSend = () => {
+    if (quotesOnly && !hasAttached) sendQuotes(true);
+    else aui.composer.send({ steer: true });
+    focusInput();
+  };
+  const forceButton = canForce ? (
+    <button
+      type="button"
+      onClick={forceSend}
+      className={`g-force flex shrink-0 items-center justify-center gap-1 text-primary hover:bg-primary/10 ${karsara ? "h-8 rounded-md px-2 text-xs" : "h-9 rounded-full px-2.5 text-xs"}`}
+      title={touch ? t("فوری: همین حالا وسط کار به ایجنت برسد، نه بعد از آن") : `${t("فوری: همین حالا وسط کار به ایجنت برسد، نه بعد از آن")} (Ctrl+Shift+Enter)`}
+      aria-label={t("ارسال فوری")}
+    >
+      <Zap className="size-4" />
+      <span>{t("فوری")}</span>
+    </button>
+  ) : null;
   // A Telegram chat says who the box reaches (App.jsx): only the assistant, never the colleague.
-  const placeholder = karsara && next
+  const placeholder = flags.nextGhost && next
     ? ""
     : own
     ? own
@@ -1064,6 +1236,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       autoFocus
       dir={composerText.trim() ? chatDir(composerText) : isRtl ? "rtl" : "ltr"}
       submitMode={submitMode(touch)}
+      onKeyDown={onInputKey}
       aria-label={t("پیام به {agent}", { agent: agentLabel })}
       placeholder={placeholder}
       className={`scrollbar-thin min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
@@ -1073,13 +1246,58 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       }`}
     />
   );
+  const runAccount = useRunAccount(model, agent);
+  // «پیشنهاد پیام بعدی داخل کادر»: the suggestion as ghost text in the empty box (Tab takes it).
+  const ghost = flags.nextGhost && next ? (
+    <div className="pointer-events-none max-h-28 overflow-hidden px-1.5 py-2 text-start text-[15px] leading-7 text-muted-foreground [overflow-wrap:anywhere]" dir={chatDir(next)}>
+      <span>{next}</span>
+      <button
+        type="button"
+        onClick={() => {
+          setText(next);
+          focusInput();
+        }}
+        className="pointer-events-auto ms-2 whitespace-nowrap rounded-md border px-1.5 align-middle text-[11px] leading-5 hover:border-primary hover:text-foreground pointer-coarse:px-2.5 pointer-coarse:text-xs pointer-coarse:leading-6"
+        aria-label={t("نوشتن پیشنهاد در کادر: {text}", { text: next })}
+        title={t("پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود")}
+      >
+        {touch ? t("پذیرفتن") : "Tab"}
+      </button>
+    </div>
+  ) : null;
+  // «دکمهٔ «بعداً» در کادر»: keeps the text as a note for later (not in the side panel, not while running).
+  const later = flags.laterButton && !compact && !running ? (
+    <LaterButton
+      text={composerText}
+      chatId={chatId}
+      options={laterOptions}
+      disabled={hasAttached || quotes.length > 0}
+      disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ پیوست و نقل‌قول را بردارید")}
+      onSaved={() => {
+        setText("");
+        saveDraft(browserStorage(), chatId, "");
+      }}
+    />
+  ) : null;
+  // «هشدار موتور غیر Claude»: Karsara's line under the box when the chat runs on anything but its plain Claude login.
+  const nonClaude = flags.nonClaudeHint && runAccount && runAccount !== "claude" ? <div className="kc-note px-3 pb-2">{t("ابزارها و تصویر ممکن است کامل کار نکنند")}</div> : null;
+  // «حالت سریع کنار مدل» / «حلقهٔ مصرف»: readouts at the end of the bar under the box (the
+  // server-resources gauge that sat here is gone: its alerts are at the bottom of the sidebar).
+  const barEnd = (
+    <>
+      {flags.fastChip ? <FastToggle /> : null}
+      {flags.composerStats ? <UsageRing chatId={chatId} running={running} /> : null}
+    </>
+  );
+  const fastInMenu = flags.fastChip ? null : <FastSwitch />;
   if (karsara) {
     return (
       <div ref={rootRef} className="min-w-0">
         {compact ? null : top}
-        {compact ? null : <ScheduledPeek chatId={chatId} />}
+        {flags.scheduledPeek ? <ScheduledPeek chatId={chatId} /> : null}
         {/* Even in the side panel: a waiting message is not in its thread. */}
         <QueuePeek chatId={chatId} onEdit={takeBack} />
+        <TasksPeek chatId={chatId} />
         <ComposerPrimitive.Root className="composer-box g-composer relative z-[1] rounded-xl border bg-card focus-within:border-primary/60">
           {quotes.length ? (
             <div className="flex flex-col gap-1 px-2 pt-2">
@@ -1089,30 +1307,16 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
             </div>
           ) : null}
           <ComposerAssist inputRef={inputRef} next={next} />
-          <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
+          <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
           <div className="flex items-end gap-1 px-2 py-1.5">
             {/* The input and the ghost suggestion share one grid cell. */}
             <div className="grid min-w-0 flex-1 [&>*]:min-w-0 [&>*]:[grid-area:1/1]" onClick={(event) => event.target === event.currentTarget && focusInput()}>
               {input}
-              {next ? (
-                <div className="pointer-events-none max-h-28 overflow-hidden px-1.5 py-2 text-start text-[15px] leading-7 text-muted-foreground [overflow-wrap:anywhere]" dir={chatDir(next)}>
-                  <span>{next}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setText(next);
-                      focusInput();
-                    }}
-                    className="pointer-events-auto ms-2 whitespace-nowrap rounded-md border px-1.5 align-middle text-[11px] leading-5 hover:border-primary hover:text-foreground pointer-coarse:px-2.5 pointer-coarse:text-xs pointer-coarse:leading-6"
-                    aria-label={t("نوشتن پیشنهاد در کادر: {text}", { text: next })}
-                    title={t("پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود")}
-                  >
-                    {touch ? t("پذیرفتن") : "Tab"}
-                  </button>
-                </div>
-              ) : null}
+              {ghost}
             </div>
             <DictateButton value={composerText} setText={setText} focus={focusInput} size="size-5" />
+            {later}
+            {forceButton}
             {running ? (
               <ComposerPrimitive.Cancel className={KC_SEND} data-stop="" title={t("توقف")}>
                 <Square className="size-3.5 fill-current" />
@@ -1127,18 +1331,17 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               </ComposerPrimitive.Send>
             )}
           </div>
+          {nonClaude}
         </ComposerPrimitive.Root>
         {compact ? null : <div className="g-composer-bar mt-1 flex min-w-0 items-center gap-1">
-          <ComposerPrimitive.AddAttachment className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted" title={t("افزودن تصویر")} aria-label={t("افزودن تصویر")}>
+          <ComposerPrimitive.AddAttachment className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted" title={t("افزودن فایل یا تصویر")} aria-label={t("افزودن فایل یا تصویر")}>
             <Plus className="size-4" />
           </ComposerPrimitive.AddAttachment>
           {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} /> : null}
           <span className="flex-1" />
-          {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} compact /> : null}
+          {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} compact footer={fastInMenu} /> : null}
           {onEffortChange ? <EffortPicker effort={effort} model={model} agent={agent} onChange={onEffortChange} /> : null}
-          <FastToggle />
-          <HostChip />
-          <UsageRing chatId={chatId} running={running} />
+          {barEnd}
         </div>}
       </div>
     );
@@ -1146,9 +1349,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
 
   return (
     <>
-    {top}
-    <ScheduledPeek chatId={chatId} />
+    {top ? <div className={chatId && !hero ? "g-repo-top" : undefined}>{top}</div> : null}
+    {flags.scheduledPeek ? <ScheduledPeek chatId={chatId} /> : null}
     <QueuePeek chatId={chatId} onEdit={takeBack} />
+    <TasksPeek chatId={chatId} />
     <ComposerPrimitive.Root ref={rootRef} className="composer-box g-composer relative z-[1] rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
       {quotes.length ? (
         <div className="flex flex-col gap-1 px-2 pt-2">
@@ -1158,10 +1362,17 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
         </div>
       ) : null}
       <ComposerAssist inputRef={inputRef} next={next} />
-      <ComposerPrimitive.Attachments components={{ Attachment: ComposerImage }} />
+      <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
-        {input}
+        {flags.nextGhost ? (
+          <div className="grid min-w-0 flex-1 [&>*]:min-w-0 [&>*]:[grid-area:1/1]" onClick={(event) => event.target === event.currentTarget && focusInput()}>
+            {input}
+            {ghost}
+          </div>
+        ) : input}
         <div className="mb-0.5 flex shrink-0 items-center gap-1">
+          {later}
+          {forceButton}
           {running ? (
             <ComposerPrimitive.Cancel data-stop="" className="g-send flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
               {hero ? (
@@ -1186,9 +1397,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       {running && !hero ? (
         <div className="flex items-center gap-2 px-3 pb-2 text-xs text-primary">
           <span className="agent-dots" aria-hidden><i /><i /><i /></span>
-          {t("پیام جدید وسط کار ارسال می‌شود")}
+          {canForce ? t("«فوری» پیام را همین حالا وسط کار به ایجنت می‌رساند") : t("پیام جدید وسط کار ارسال می‌شود")}
         </div>
       ) : null}
+      {nonClaude}
     </ComposerPrimitive.Root>
     {/* Under the box: +, microphone and mode; model and effort at the far end. The box keeps its width for text. */}
     <div className="g-composer-bar mt-1.5 flex min-w-0 flex-wrap items-center gap-0.5 px-1">
@@ -1198,8 +1410,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       <DictateButton value={composerText} setText={setText} focus={focusInput} size="size-4" className="" />
       {onModeChange ? <ModeToggle mode={mode} onChange={onModeChange} named={hero} /> : null}
       <span className="flex-1" />
-      {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} compact footer={<FastSwitch />} /> : null}
+      {onModelChange ? <ModelPicker model={model} agent={agent} onChange={onModelChange} compact footer={fastInMenu} /> : null}
       {onEffortChange ? <EffortPicker effort={effort} model={model} agent={agent} onChange={onEffortChange} /> : null}
+      {barEnd}
     </div>
     </>
   );
@@ -1220,6 +1433,58 @@ function ComposerImage() {
   );
 }
 
+// A PDF or text file waiting in the composer: its name in a chip on the pictures' row, built like
+// the picture thumbnail (border, remove button). A picture stays a thumbnail.
+function ComposerAttachment() {
+  const image = useAuiState((s) => isImageAttachment(s.attachment));
+  const name = useAuiState((s) => s.attachment?.name || "");
+  if (image) return <ComposerImage />;
+  return (
+    <AttachmentPrimitive.Root className="g-file-chip relative ms-3 mt-3 inline-flex h-9 max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-lg border px-2 text-xs" title={name}>
+      <FileText className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate" dir="ltr">{name}</span>
+      <AttachmentPrimitive.Remove className="shrink-0 rounded-full p-0.5 hover:bg-muted" aria-label={t("حذف این فایل")}>
+        <X className="size-3" />
+      </AttachmentPrimitive.Remove>
+    </AttachmentPrimitive.Root>
+  );
+}
+
+// Under a message: the pictures it carried, as thumbnails that open full size in a new tab.
+function SentImages({ ids }) {
+  return (
+    <span className="mt-1.5 flex max-w-[88%] flex-wrap gap-1.5">
+      {ids.map((id) => (
+        <a key={id} href={`/api/media/${id}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border bg-muted/40">
+          <img src={`/api/media/${id}`} alt={t("تصویر پیوست")} loading="lazy" className="max-h-56 max-w-full object-contain" />
+        </a>
+      ))}
+    </span>
+  );
+}
+
+// Under a message: the files it carried, by name and size; a stored one opens (or downloads) on click.
+function SentFiles({ files }) {
+  return (
+    <span className="mt-1 flex max-w-full flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+      {files.map((file, i) => {
+        const body = (
+          <>
+            <FileText className="size-3 shrink-0" />
+            <span className="min-w-0 truncate" dir="ltr">{file.name}</span>
+            {file.bytes ? <span className="shrink-0" dir="ltr">{formatBytes(file.bytes)}</span> : null}
+          </>
+        );
+        return file.mediaId ? (
+          <a key={`${file.name}-${i}`} href={`/api/media/${file.mediaId}`} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-1 underline-offset-2 hover:text-foreground hover:underline" title={file.name}>{body}</a>
+        ) : (
+          <span key={`${file.name}-${i}`} className="flex min-w-0 items-center gap-1" title={file.name}>{body}</span>
+        );
+      })}
+    </span>
+  );
+}
+
 function AttachmentThumb() {
   const image = useAuiState((s) => s.attachment?.content?.find?.((part) => part.type === "image")?.image ?? null);
   const file = useAuiState((s) => s.attachment?.file ?? null);
@@ -1232,4 +1497,51 @@ function AttachmentThumb() {
   }, [file]);
   const src = image || fileUrl;
   return src ? <img src={src} alt="" className="size-full object-cover" /> : <div className="size-full bg-muted" />;
+}
+
+// «برگشت به اینجا» (from Karsara): the conversation, the files Claude Code's editing tools changed
+// since that message, or both. The dialog first asks the server what would change (dryRun).
+function RewindDialog({ chatId, eventId, busy, onRun, onClose }) {
+  const [preview, setPreview] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, dryRun: true } })
+      .then((body) => alive && setPreview(body))
+      .catch((error) => alive && setPreview({ error: error.message === "busy" ? t("این گفتگو در حال کار است؛ بعد از پایان کار دوباره امتحان کنید.") : error.message }));
+    return () => {
+      alive = false;
+    };
+  }, [chatId, eventId]);
+  const choices = rewindChoices(preview);
+  const choice = "press rounded-full border px-3.5 py-2 text-sm hover:bg-muted disabled:opacity-50";
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] overlay" />
+        <Dialog.Content className="pop fixed left-1/2 top-1/2 z-50 max-h-[90dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border bg-card p-5 text-sm shadow-2xl">
+          <div className="mb-3 flex items-center">
+            <Dialog.Title className="font-semibold">{t("برگشت به پیش از این پیام")}</Dialog.Title>
+            <Dialog.Close className="press ms-auto rounded-full p-1.5 hover:bg-muted" aria-label={t("بستن")}><X className="size-4" /></Dialog.Close>
+          </div>
+          {preview?.error ? (
+            <p className="leading-6 text-destructive" dir="auto">{preview.error}</p>
+          ) : (
+            <Dialog.Description asChild>
+              <div className="space-y-2 leading-6 text-muted-foreground">
+                <p>{t("این پیام و هرچه بعد از آن آمده از گفتگو پاک می‌شود.")}</p>
+                <p>{filesLine(preview?.files)}</p>
+                <p className="text-xs">{t("فقط تغییرهایی که با ابزار ویرایش فایل انجام شده برمی‌گردد. کاری که با دستور ترمینال، git یا روی سرورها شده سر جایش می‌ماند.")}</p>
+              </div>
+            </Dialog.Description>
+          )}
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            {choices.both ? <button type="button" disabled={busy} onClick={() => onRun({})} className={`${choice} border-transparent bg-primary text-primary-foreground hover:bg-primary`}>{t("گفتگو و فایل‌ها")}</button> : null}
+            {choices.conversation ? <button type="button" disabled={busy} onClick={() => onRun({ files: false })} className={choices.both ? choice : `${choice} border-transparent bg-primary text-primary-foreground hover:bg-primary`}>{choices.both ? t("فقط گفتگو") : t("برگشت گفتگو")}</button> : null}
+            {choices.files ? <button type="button" disabled={busy} onClick={() => onRun({ conversation: false })} className={choice}>{t("فقط فایل‌ها")}</button> : null}
+            <Dialog.Close className={choice}>{t("انصراف")}</Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }

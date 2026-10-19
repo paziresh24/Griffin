@@ -1,0 +1,22 @@
+{
+  "این لینک وجود ندارد یا صاحب گفتگو آن را بسته است.": "This link doesn't exist, or the chat's owner has closed it.",
+  "اتصال برقرار نشد؛ چند لحظه بعد خودش دوباره تلاش می‌کند.": "Couldn't connect; it tries again by itself in a moment.",
+  "در حال بارگذاری…": "Loading…",
+  "فقط برای شما": "Only for you",
+  "تم": "Theme",
+  "ارسال کد ممکن نشد.": "Couldn't send the code.",
+  "کد پذیرفته نشد.": "The code wasn't accepted.",
+  "این لینک روی دستگاه دیگری باز شده": "This link is open on another device",
+  "گفتگویی با شما به اشتراک گذاشته شده": "A chat has been shared with you",
+  "با کدی که به تلگرامِ {who} می‌رود، روی همین دستگاه باز می‌شود و روی دستگاه قبلی بسته.": "With a code sent to {who} on Telegram it opens on this device and closes on the previous one.",
+  "برای باز کردن آن، کدی به تلگرامِ {who} فرستاده می‌شود. بعد از ورودِ کد، این لینک فقط روی همین دستگاه باز می‌شود.": "To open it, a code is sent to {who} on Telegram. Once the code is entered, this link opens only on this device.",
+  "شما": "you",
+  "کد ۶ رقمی": "6-digit code",
+  "ورود": "Sign in",
+  "کد نرسید؟ دوباره بفرست": "No code? Send it again",
+  "ارسال کد به تلگرام": "Send the code to Telegram",
+  "ثبت یادداشت ممکن نشد.": "Couldn't save the note.",
+  "یادداشتی برای صاحب گفتگو…": "A note for the chat's owner…",
+  "ثبت یادداشت": "Save note",
+  "یادداشت در همین گفتگو به صاحبش نشان داده می‌شود؛ ایجنت آن را اجرا نمی‌کند.": "The note is shown to the owner in this chat; the agent does not act on it."
+}

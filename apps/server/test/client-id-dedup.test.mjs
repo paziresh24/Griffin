@@ -53,3 +53,22 @@ test("a copy arriving while the first is in flight shares its answer", async () 
   assert.deepEqual(await (await b).json(), { delivered: "duplicate" });
   assert.equal(calls.length, 1);
 });
+
+test("a message to an archived chat brings it back (the worktree sweep would stop its run)", async () => {
+  const { store, app } = setup();
+  const chat = store.createChat({ title: "t" });
+  store.updateChat(chat.id, { archived: true });
+  assert.equal((await post(app, `/api/chats/${chat.id}/messages`, { text: "ادامه" })).status, 202);
+  assert.equal(store.getChat(chat.id).archived, 0);
+});
+
+test("a chat says where its Claude Code runs: host, container or back to the section default", async () => {
+  const { store, app } = setup();
+  const chat = store.createChat({ title: "t" });
+  const patch = (body) => app.request(`/api/chats/${chat.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await patch({ runsOn: "host" })).status, 200);
+  assert.equal(store.getChat(chat.id).runs_on, "host");
+  assert.equal((await patch({ runsOn: "moon" })).status, 400);
+  assert.equal((await patch({ runsOn: null })).status, 200);
+  assert.equal(store.getChat(chat.id).runs_on, null);
+});

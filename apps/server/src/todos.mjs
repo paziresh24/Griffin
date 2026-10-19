@@ -82,25 +82,28 @@ export function todoWriteTool({ store, chatId }) {
 // or the ops room (nobody reads the board there).
 export const offersOwnerTask = ({ rootCaller, unattended }) => !unattended && (rootCaller === "owner" || rootCaller === COVERAGE_CALLER);
 
-// A chore for the owner: something only he can do that blocks nobody (a token to rotate, a person
-// to talk to). It lands in «منتظر شما» linked to the root chat; nothing waits for his answer.
-export function ownerTaskTool({ store, chatId, agent }) {
+// The owner gives access; the agents do the work (owner 2026-10-13: «چرا انقدر کار به دوش منه؟ من
+// قرار بود فقط دسترسی‌دهنده باشم» — three «کار شما» cards were review fixes and a workflow edit).
+// So the card is an access request only, and his «دادم» wakes the chat to carry on (app.mjs).
+export function ownerTaskTool({ store, chatId, askedIn = null, agent }) {
   return {
     description:
-      "Put a chore on the owner's main page: something only he can do that does not block you (rotate a token, talk to someone, review a doc). It does not wait for an answer — keep working. Once per chore; for a decision you need now use ask_owner instead.",
+      "Ask the owner for ACCESS you lack — besides a decision (ask_owner), the only thing that is his. Never work: a code change, the fixes a review asked for, editing a workflow, telling someone, running a fix — those are yours (do them or delegate them). Name the exact access: which permission or credential, on which system, and where it should land (e.g. «Maintainer برای کاربر griffin روی alice/search-service», «API key پنل n8n سرچ در Infisical پروژهٔ alice»). It lands on his main page; when he grants it the main conversation is told which thread asked, and the work goes on there. Do what you can meanwhile.",
     inputSchema: {
       type: "object",
       properties: {
-        title: { type: "string", maxLength: 120, description: "The chore in one short Persian line." },
-        detail: { type: "string", maxLength: 600, description: "Why and how, if the title is not enough." },
+        access: { type: "string", maxLength: 110, description: "The access, in one short Persian line: what, on which system." },
+        why: { type: "string", maxLength: 600, description: "The work it unblocks, one or two lines." },
       },
-      required: ["title"],
+      required: ["access"],
       additionalProperties: false,
     },
     async execute(args) {
-      const task = addOwnerTask(store, { title: args?.title, detail: args?.detail, chatId, agent });
-      if (!task) return reply("title is required", true);
-      return reply("روی صفحهٔ اصلی Owner گذاشته شد");
+      const access = String(args?.access || "").trim();
+      const task = access ? addOwnerTask(store, { title: `دسترسی: ${access}`, detail: args?.why, chatId, askedIn, agent, access }) : null;
+      if (!task) return reply("access is required: which permission or credential, on which system", true);
+      // The id lets the board's «باز کردن» find this call's card in the chat (web focus.js).
+      return reply(JSON.stringify({ placed: "روی صفحهٔ اصلی Owner گذاشته شد", id: task.id }));
     },
   };
 }

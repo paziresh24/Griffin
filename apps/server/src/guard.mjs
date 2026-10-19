@@ -1,6 +1,6 @@
 import { ASK_TOOL } from "./asks.mjs";
 import { maskText, redactArgs } from "./redact.mjs";
-import { PERSONA } from "./persona.mjs";
+import { OWNER, PERSONA } from "./persona.mjs";
 
 // Code-level gate for irreversible tool calls. Applies to every run whose chain is not rooted
 // in the owner (teammate coverage, scheduler, ops room, and — later — external peers): the
@@ -100,7 +100,7 @@ export function secretAdminBackdoor(name, args = {}) {
   // A git server's pre-receive hook may reject a push that deletes many files unless the push says
   // allow-mass-delete. That escape hatch is the owner's own, by hand — never an agent's.
   if ((name === "debug_exec" || name === "ssh_exec") && /allow-mass-delete/i.test(String(a.command || a.cmd || ""))) {
-    return "push با allow-mass-delete (دور زدن گارد حذف انبوه گیت‌لب) فقط کار دستی خود Owner است؛ اگر حذف انبوه لازم است همین را دقیق به او بگو.";
+    return `push با allow-mass-delete (دور زدن گارد حذف انبوه گیت‌لب) فقط کار دستی خود ${OWNER.nameFa} است؛ اگر حذف انبوه لازم است همین را دقیق به او بگو.`;
   }
   return null;
 }
@@ -132,7 +132,9 @@ const NEEDS_APPROVAL = new Map([
   ["mikrotik_set_enabled", "روشن/خاموش کردن قاعدهٔ روتر"],
   ["mikrotik_remove", "حذف قاعدهٔ روتر"],
   ["infisical_upsert", "نوشتن/بازنویسی secret در Infisical"],
-  ["infisical_machine_identity", "ساخت machine identity و client secret در Infisical"],
+  ["infisical_machine_identity", "ساخت machine identity در Infisical یا عضو کردنش در یک پروژه"],
+  ["infisical_create_project", "ساخت پروژهٔ Infisical"],
+  ["gitlab_project_member", "دادن نقش (Reporter/Developer) به یک کاربر روی پروژهٔ گیت‌لب"],
   ["kube_copy_secret", "کپی secret بین کلاسترها"],
   ["kube_exec", "اجرای دستور داخل پاد"],
   ["cnpg_retry_bootstrap", "حذف Jobهای bootstrap دیتابیس"],
@@ -150,7 +152,7 @@ const NEEDS_APPROVAL = new Map([
 ]);
 
 const ROOT_TOKEN_REASON =
-  "توکن گیت (GitLab/GitHub) مالِ خودِ Owner است و در این زنجیره خوانده/استفاده نمی‌شود (هیچ توکن دیگری هم جایگزینش نیست). برای تغییر ریپو از MR (gitlab_propose) استفاده کن یا مانع را به درخواست‌کننده بگو.";
+  `توکن گیت‌لب مالِ خودِ ${OWNER.nameFa} است و در این زنجیره خوانده/استفاده نمی‌شود (هیچ توکن دیگری هم جایگزینش نیست). برای تغییر ریپو از MR (gitlab_propose) استفاده کن یا مانع را به درخواست‌کننده بگو.`;
 
 // -> null (free) | { block: reason } | { approve: reason }
 export function classify(name, args = {}) {
@@ -185,6 +187,10 @@ export function classify(name, args = {}) {
     return { approve: `اجرای دستور با SSH روی ${args?.user ? args.user + "@" : ""}${args?.host || "?"}` };
   }
   if (name === "gitlab_mr") return args?.action === "merge" ? { approve: "merge کردن MR" } : null;
+  if (name === "gitlab_pipeline") return args?.playJob || args?.retryFailed ? { approve: "اجرای job پایپ‌لاین" } : null;
+  if (name === "infisical_machine_identity") {
+    return { approve: args?.membershipOnly ? "عضو کردن machine identity موجود در یک پروژهٔ دیگر Infisical (بدون ساخت secret)" : "ساخت machine identity و client secret در Infisical و ذخیره‌اش در پروژه" };
+  }
   if (name === "arvan_cache_purge") {
     // A full-cache purge sends the whole domain's traffic to the origin cold — on this platform
     // that killed the site for hours (owner, 2026-09-28). The approval question carries the
@@ -381,6 +387,7 @@ function scopeOf(name, args) {
   const a = args || {};
   if (name === "kube_exec") return { cluster: a.cluster, namespace: a.namespace };
   if (name === "infisical_upsert") return { projectId: a.projectId, environment: a.environment, path: a.path };
+  if (name === "infisical_get") return { projectId: a.projectId };
   if (name === "pg_query" && a.write) return { cluster: a.cluster, namespace: a.namespace, name: a.name, database: a.database };
   // Page rules under one host + first path segment are one change to the owner; the agent tried
   // several source rules to copy from and each one used to be a new question.
@@ -398,6 +405,7 @@ function scopeLabel(name, args) {
   const a = args || {};
   if (name === "kube_exec") return `هر دستوری داخل پادهای namespace «${a.namespace}» (کلاستر ${a.cluster})`;
   if (name === "infisical_upsert") return `نوشتن secret در Infisical پروژهٔ «${a.projectId}»، ${a.environment || "prod"}، مسیر ${a.path || "/"}`;
+  if (name === "infisical_get") return `خواندن سکرت‌های Infisical پروژهٔ «${a.projectId}»`;
   if (name === "pg_query") return `SQL نوشتنی روی دیتابیس ${a.database || "postgres"} در ${a.name} (namespace «${a.namespace}»، ${a.cluster})`;
   if (name === "arvan_page_rule_create") return `ساخت page rule آروان زیر ${pageRulePrefix(a.url)}… با کپی تنظیمات ruleهای موجود همین مسیر`;
   return "";
@@ -435,11 +443,11 @@ const INTENT = "intent";
 const INTENT_SCHEMA = {
   type: "string",
   description:
-    "Only used if this call needs the owner's approval: ONE everyday-Persian sentence, the way you'd say it to them out loud — what the requester wants and what you are about to change, e.g. «می‌خوان سرویس inbox به سرور تلفن برسه؛ برای این کار باید روی گیت‌وی یه route اضافه کنم». No tool/table/pod names, JSON or IDs, no pleading.",
+    `Only used if this call needs ${OWNER.name}'s approval: ONE everyday-Persian sentence, the way you'd say it to them out loud — what the requester wants and what you are about to change, e.g. «می‌خوان سرویس inbox به سرور تلفن برسه؛ برای این کار باید روی گیت‌وی یه route اضافه کنم». No tool/table/pod names, JSON or IDs, no pleading.`,
 };
 
 function mayAsk(name, extra) {
-  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "mikrotik_exec", "debug_exec", "ssh_exec", "arvan_cache_purge"].includes(name) || Boolean(extra?.has(name));
+  return NEEDS_APPROVAL.has(name) || ["pg_query", "gitlab_mr", "gitlab_pipeline", "mikrotik_exec", "debug_exec", "ssh_exec", "arvan_cache_purge"].includes(name) || Boolean(extra?.has(name));
 }
 
 function withIntent(schema) {
@@ -530,11 +538,46 @@ function refused(error, detail) {
   return { isError: true, content: [{ type: "text", text: JSON.stringify({ error, ...(detail ? { detail } : {}) }) }] };
 }
 
+// The assistant's secret-store identity may reach every project (an org admin), but other people's
+// secrets only with the owner's yes. Managing identities and memberships stays
+// as it is; reading or writing a secret VALUE in a project that is not the requester's own asks the
+// owner first, in every chain — the owner's own chats too. One yes covers that project for the
+// chain (scopeOf). Listing key names stays free. own: project names/ids that count as the
+// requester's (the owner's from config; a colleague's = their peer user id).
+// ponytail: a teammate (Telegram) chain owns no project here, so reading even their own secrets asks;
+// map the person to their project if that gets noisy.
+export function foreignSecret(store, chatId, args, ownerProjects = []) {
+  const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
+  const caller = String(root?.caller || "");
+  const own = caller === "owner" ? ownerProjects : caller.startsWith("peer:") ? [caller.slice(5)] : [];
+  const target = String(args?.projectId || "").trim();
+  if (!target) return "";
+  return own.some((p) => String(p).trim().toLowerCase() === target.toLowerCase()) ? "" : target;
+}
+
+export function secretsGate(tools, { chatId, asks, store = null, caller = "?", mode = "ask", ownerProjects = [] } = {}) {
+  const picked = {};
+  for (const name of ["infisical_get", "infisical_upsert"]) if (tools[name]) picked[name] = tools[name];
+  const gated = guardTools(picked, {
+    chatId,
+    asks,
+    store,
+    caller,
+    mode,
+    verdictOf: (name, args) => {
+      const project = foreignSecret(store, chatId, args, ownerProjects);
+      if (!project) return null;
+      return { approve: name === "infisical_get" ? `خواندن سکرت از پروژهٔ Infisical «${project}» (مال کس دیگری)` : `نوشتن سکرت در پروژهٔ Infisical «${project}» (مال کس دیگری)` };
+    },
+  });
+  return { ...tools, ...gated };
+}
+
 // extra: additional tool names that need approval for this caller (e.g. teammate coverage).
 // allowPass(name, args): true lets a call through without asking (e.g. replying in the same chat).
 // mode "refuse": nobody can approve on this path yet (external peers until a two-party approval
 // flow exists) — gated calls are refused and audited instead of asking.
-export function guardTools(tools, { chatId, asks, store = null, caller = "?", extra = null, allowPass = null, mode = "ask" } = {}) {
+export function guardTools(tools, { chatId, asks, store = null, caller = "?", extra = null, allowPass = null, mode = "ask", verdictOf = classify } = {}) {
   const out = { ...tools };
   for (const name of Object.keys(out)) {
     const tool = out[name];
@@ -545,7 +588,7 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
       ...(mayAsk(name, extra) && mode === "ask" ? { inputSchema: withIntent(tool.inputSchema) } : {}),
       async execute(rawArgs) {
         const { [WHY]: _why, [INTENT]: intent = "", ...args } = rawArgs || {};
-        let verdict = classify(name, args);
+        let verdict = verdictOf(name, args);
         if (!verdict && extra?.has(name)) verdict = { approve: EXTRA_LABELS[name] || `اجرای «${name}»` };
         if (!verdict || allowPass?.(name, args)) return inner(args);
         if (verdict.block) {

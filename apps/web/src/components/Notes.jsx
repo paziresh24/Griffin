@@ -5,8 +5,8 @@ import { AlarmClock, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
-import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteError, noteTarget, noteTitle, noteWhen, toLocalInput, untilLabel } from "../notes.js";
-import { isRtl, num, t } from "../i18n.js";
+import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, toLocalInput, untilLabel } from "../notes.js";
+import { t } from "../i18n.js";
 
 // One store for the whole app: the card above the composer and the sidebar list stay in step.
 export const notesStore = createNotesStore(api);
@@ -120,8 +120,52 @@ export function ScheduledPeek({ chatId = null }) {
   );
 }
 
-// Sidebar: «یادداشت‌ها». Hidden while there is none.
-export function SidebarNotes({ refreshKey, onNavigate }) {
+/**
+ * The composer's «بعداً» under the Karsara skin (Karsara's alarm-clock button): keeps what is typed
+ * as a note instead of sending it — into this chat, or (on the new-chat page) as the first message
+ * of a new chat with the composer's settings.
+ */
+export function LaterButton({ text, chatId = null, options = {}, disabled = false, disabledTitle = "", onSaved }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const empty = !String(text || "").trim();
+  const save = async (atMs) => {
+    setBusy(true);
+    try {
+      await notesStore.create(noteBody({ text, chatId, atMs, options }));
+      setOpen(false);
+      onSaved?.();
+      toast.success(atMs ? `یادداشت ذخیره شد؛ ${clockLabel(atMs)} اجرا می‌شود` : t("یادداشت ذخیره شد؛ در «یادداشت‌ها» منتظر می‌ماند"));
+    } catch (error) {
+      toast.error(noteError(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+          disabled={disabled || empty}
+          title={disabled ? disabledTitle : t("ارسال نکن؛ برای بعد نگه دار")}
+          aria-label={t("بعداً")}
+        >
+          <AlarmClock className="size-4" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="end" side="top" sideOffset={8} collisionPadding={16} className={menu}>
+          <WhenMenu busy={busy} onPick={(atMs) => save(atMs)} />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+/** Sidebar: «یادداشت‌ها». Hidden while there is none. */
+export function SidebarNotes({ refreshKey, onNavigate, karsara = false }) {
   const { items, busy } = useNotes();
   const [expanded, setExpanded] = useState(true);
   useEffect(() => {
@@ -134,6 +178,26 @@ export function SidebarNotes({ refreshKey, onNavigate }) {
   }, []);
   const now = useNow();
   if (!items.length) return null;
+  if (karsara) {
+    // Karsara's own heading (Karsara Notes.jsx): the name, the count, the arrow at the far end.
+    return (
+      <section className="mt-2" aria-label={t("یادداشت‌ها")}>
+        <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="kc-list-row w-full text-xs !text-[var(--kc-muted)]">
+          <span>{t("یادداشت‌ها")}</span>
+          <span className="kc-tag">{items.length.toLocaleString("fa-IR")}</span>
+          <span className="flex-1" />
+          <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </button>
+        {expanded ? (
+          <ul className="flex flex-col gap-1">
+            {items.map((note) => (
+              <NoteItem key={note.id} note={note} now={now} working={Boolean(busy[note.id])} onNavigate={onNavigate} />
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section className="mb-2" aria-label={t("یادداشت‌ها")}>
       <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground">

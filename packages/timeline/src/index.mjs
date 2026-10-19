@@ -21,8 +21,11 @@
 //   chat.suggestion.status { id, status }    that suggestion was started | dismissed
 //   usage          { inputTokens, outputTokens, ... }
 //   run.started    { retry? }                 a «ارسال دوباره» of a kept message
+//   run.started    { movedFrom? }             { from }: answered by the engine the owner moved to at a plan limit
 //   run.finished   { status, error?, undelivered? }  finished | error | cancelled; undelivered = message kept for retry
 //   tg.note        { kind, name, personId, chatId, text, sent, state, by }  a Telegram desk note -> message {role:"note"}
+//   guest.note     { text, from }            a note from the person a private share was given to —
+//                                            third-party content, never the owner's message; starts no run
 
 export function emptyTimeline() {
   return { messages: [], lastEventId: 0 };
@@ -46,12 +49,13 @@ function reduceMessages(messages, event) {
     // A «در صف» message from before user.queue existed settles by what followed it (see settleLegacy).
     const behind = messages[findRun(messages, null)]?.runId ?? null;
     const legacy = data.intent === "queue" && !data.tracked ? { legacyBehind: behind } : {};
-    const user = { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, at: event.at, ...legacy, ...(data.clientId ? { clientId: data.clientId } : {}), ...(data.from ? { from: data.from } : {}) };
+    const user = { id: `u${event.id}`, role: "user", text: data.text || "", intent: data.intent || null, images: data.images || 0, ...(Array.isArray(data.imageIds) && data.imageIds.length ? { imageIds: data.imageIds } : {}), ...(Array.isArray(data.files) && data.files.length ? { files: data.files } : {}), at: event.at, ...legacy, ...(data.clientId ? { clientId: data.clientId } : {}), ...(data.from ? { from: data.from } : {}) };
     return event.runId ? placeMidRun(messages, user, event) : [...messages, user];
   }
   // A note of the Telegram desk (a mother chat's report, the owner's own Telegram line): a message
   // of its own, never part of a run.
   if (event.type === "tg.note") return [...messages, { ...data, id: `n${event.id}`, role: "note", at: event.at }];
+  if (event.type === "guest.note") return [...messages, { id: `g${event.id}`, role: "guest", text: data.text || "", from: data.from || "", at: event.at }];
   // A queued message reached the agent or was dropped: its «در صف» label follows.
   if (event.type === "user.queue") {
     const at = messages.findIndex((m) => m.id === `u${data.userEventId}`);
@@ -71,6 +75,8 @@ function reduceMessages(messages, event) {
         phase: "connecting",
         model: data.model || null,
         ...(data.retry ? { retry: true } : {}),
+        // Answered by the engine the owner moved the chat to at a plan limit (PLAN_FALLBACK=ask).
+        ...(data.movedFrom && typeof data.movedFrom === "object" ? { fallback: { from: String(data.movedFrom.from || ""), ...(data.movedFrom.account ? { account: String(data.movedFrom.account) } : {}) } } : {}),
         parts: [],
         usage: null,
         error: null,
@@ -251,8 +257,12 @@ function reduceRun(run, event, data) {
       if (!data.id) return run;
       return { ...run, parts: [...run.parts, { type: "suggestion", id: data.id, title: data.title || "", tldr: data.tldr || "", status: data.status || "open" }] };
     case "usage":
-      // One event per model request; every request bills its full prompt, so the run's cost is the sum.
+      // A turn's usage (Claude: its result) or one request's (other engines): the run's cost is the sum.
       return { ...run, usage: addUsage(run.usage, data) };
+    case "usage.request":
+      // One request of a Claude turn: the context it filled and one more request; its cost comes with
+      // the turn's own "usage" (never counted twice).
+      return { ...run, usage: requestUsage(run.usage, data) };
     case "run.finished":
       return {
         ...run,
@@ -289,7 +299,9 @@ function setSuggestionStatus(messages, id, status) {
 
 // Tokens a chat used, by model: each run counted once (a run split by a steered message repeats its
 // usage on every piece; the last piece holds the whole run's). tokens = input + output.
-export function usageByModel(messages) {
+// billed: everything the requests billed (usage.total: input, cache writes and reads, output), as
+// the Karsara skin's header counts it; otherwise input + output.
+export function usageByModel(messages, { billed = false } = {}) {
   const runs = new Map();
   for (const m of messages || []) {
     if (m.role === "assistant" && m.usage) runs.set(m.runId || m.id, m);
@@ -297,7 +309,8 @@ export function usageByModel(messages) {
   const byModel = new Map();
   let total = 0;
   for (const run of runs.values()) {
-    const tokens = (Number(run.usage.input) || 0) + (Number(run.usage.output) || 0);
+    const own = (Number(run.usage.input) || 0) + (Number(run.usage.output) || 0);
+    const tokens = billed && run.usage.total != null ? Number(run.usage.total) || 0 : own;
     if (!tokens) continue;
     total += tokens;
     const model = run.model || "auto";
@@ -306,17 +319,42 @@ export function usageByModel(messages) {
   return { total, byModel: [...byModel].map(([model, tokens]) => ({ model, tokens })).sort((a, b) => b.tokens - a.tokens) };
 }
 
+function requestUsage(prev, data) {
+  const n = (v) => Number(v) || 0;
+  const input = n(data?.prompt_tokens ?? data?.inputTokens ?? data?.input_tokens);
+  return {
+    input: n(prev?.input),
+    output: n(prev?.output),
+    cached: n(prev?.cached),
+    cacheWrite: n(prev?.cacheWrite),
+    total: n(prev?.total),
+    requests: n(prev?.requests) + 1,
+    context: input || n(prev?.context),
+    seenRequests: n(prev?.seenRequests) + 1,
+  };
+}
+
 function addUsage(prev, data) {
   const n = (v) => Number(v) || 0;
   const input = n(data?.prompt_tokens ?? data?.inputTokens ?? data?.input_tokens);
   const output = n(data?.completion_tokens ?? data?.outputTokens ?? data?.output_tokens);
   const cached = n(data?.prompt_tokens_details?.cached_tokens ?? data?.cacheReadTokens ?? data?.cache_read_input_tokens);
+  // total: everything the request billed, as token-usage.mjs counts it (and the Karsara skin's footer shows):
+  // input + output + cache writes + cache reads. OpenAI-style prompt_tokens already hold the cached
+  // part, Anthropic-style input_tokens do not; cache writes used to be dropped.
+  const cacheWrite = n(data?.cache_creation_input_tokens ?? data?.cacheWriteTokens);
+  const billed = (data?.prompt_tokens != null ? input : input + cached) + output + cacheWrite;
   return {
     input: n(prev?.input) + input,
     output: n(prev?.output) + output,
     cached: n(prev?.cached) + cached,
-    requests: n(prev?.requests) + 1,
-    context: input || n(prev?.context),
+    cacheWrite: n(prev?.cacheWrite) + cacheWrite,
+    total: n(prev?.total) + billed,
+    // After a Claude turn's own requests (usage.request) the result adds no request, and its input
+    // (the turn's sum) is not a context size.
+    requests: n(prev?.requests) + (prev?.seenRequests ? 0 : 1),
+    context: prev?.seenRequests ? n(prev?.context) : input || n(prev?.context),
+    seenRequests: 0,
   };
 }
 

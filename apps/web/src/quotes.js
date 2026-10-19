@@ -104,3 +104,39 @@ function pageStorage() {
 }
 
 export const quoteStore = createQuoteStore(pageStorage());
+
+// «به چت جدید»: the line naming the chat the quote came from (App.jsx newChatContextNote).
+const ORIGIN_LINE = /^این بخش از گفتگوی (?:«([^»\n]*)» )?\(شناسهٔ ([\w-]+)\) است؛[^\n]*$/;
+
+/** A sent message read back for its bubble: [{ type: "quote", text } | { type: "text", text } |
+ *  { type: "origin", chatId, title }] in order — what withQuotes (and a pasted «> » blockquote, a
+ *  side-chat insert) wrote. null when it has no quote and no origin line: the bubble shows it as is. */
+export function parseQuoted(message) {
+  const lines = String(message || "").split("\n");
+  const parts = [];
+  let found = false;
+  const push = (type, line) => {
+    const last = parts.at(-1);
+    if (last && last.type === type) last.lines.push(line);
+    else parts.push({ type, lines: [line] });
+  };
+  for (const line of lines) {
+    const quoted = /^>\s?(.*)$/.exec(line);
+    if (quoted) {
+      found = true;
+      push("quote", quoted[1]);
+      continue;
+    }
+    const origin = ORIGIN_LINE.exec(line.trim());
+    if (origin) {
+      found = true;
+      parts.push({ type: "origin", chatId: origin[2], title: origin[1] || "", lines: [] });
+      continue;
+    }
+    push("text", line);
+  }
+  if (!found) return null;
+  return parts
+    .map((p) => (p.type === "origin" ? { type: "origin", chatId: p.chatId, title: p.title } : { type: p.type, text: p.lines.join("\n").replace(/^\n+|\n+$/g, "") }))
+    .filter((p) => p.type === "origin" || p.text.trim());
+}

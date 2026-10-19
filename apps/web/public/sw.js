@@ -1,8 +1,22 @@
-// Service worker: Web Push only (no offline caching — the app is always fetched fresh).
+// Service worker: Web Push, and an "updating" page when a page load finds the server away (a
+// restart: the CDN answers 502/503/504 or nothing). Nothing else is cached — the app is always
+// fetched fresh.
 // `push` shows a notification with the chat title and a short line; `notificationclick` opens
 // the chat if no tab has it, or focuses the tab that already does.
 
-self.addEventListener("install", () => self.skipWaiting());
+const OFFLINE = "/updating.html";
+const CACHE = "griffin-offline-1";
+
+self.addEventListener("install", (event) =>
+  event.waitUntil(caches.open(CACHE).then((c) => c.add(new Request(OFFLINE, { cache: "reload" }))).catch(() => {}).then(() => self.skipWaiting())),
+);
+
+// Page loads only; the API, assets and streams go to the network untouched.
+self.addEventListener("fetch", (event) => {
+  if (event.request.mode !== "navigate") return;
+  const away = () => caches.match(OFFLINE).then((r) => r || Response.error());
+  event.respondWith(fetch(event.request).then((r) => ([502, 503, 504].includes(r.status) ? away() : r), away));
+});
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
 self.addEventListener("push", (event) => {

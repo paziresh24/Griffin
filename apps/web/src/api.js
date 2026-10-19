@@ -1,3 +1,4 @@
+import { setNextStepReturns } from "./assist.js";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { emptyTimeline } from "@griffin/timeline";
 import { createTimelineMemo } from "./timeline-memo.js";
@@ -8,6 +9,7 @@ export class ApiError extends Error {
   constructor(status, body) {
     super(body?.error || `http ${status}`);
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -30,10 +32,12 @@ export const INBOX_EVENT = "griffin:inbox";
 
 // Chat list, refreshed whenever the server says something changed.
 export function useChats() {
-  const [state, setState] = useState({ chats: [], archived: [], groups: [], loading: true });
+  const [state, setState] = useState({ chats: [], archived: [], groups: [], sideChat: true, privateShare: false, loading: true, failed: false, retry: () => {} });
   useEffect(() => {
     let alive = true;
+    let retryTimer = null;
     const load = async () => {
+      clearTimeout(retryTimer);
       try {
         // The owner's chat groups ride along: a group change emits the same list event.
         const [active, archived, groups] = await Promise.all([
@@ -43,13 +47,19 @@ export function useChats() {
         ]);
         // A failed groups read keeps the last list: an empty one would drop a chosen group silently.
         if (alive) {
-          setState((s) => ({ chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, loading: false }));
+          setNextStepReturns(active.nextStepReturns === true);
+          setState((s) => ({ ...s, chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, sideChat: active.sideChat !== false, privateShare: active.privateShare === true, loading: false, failed: false }));
           window.dispatchEvent(new Event(INBOX_EVENT));
         }
       } catch {
-        if (alive) setState((s) => ({ ...s, loading: false }));
+        // A read that failed is not an empty list: say so, and try again until it works.
+        if (alive) {
+          setState((s) => ({ ...s, loading: false, failed: true }));
+          retryTimer = setTimeout(load, 4000);
+        }
       }
     };
+    setState((s) => ({ ...s, retry: () => { setState((v) => ({ ...v, loading: true })); load(); } }));
     load();
     // A stream the browser gave up on (a 502 during a deploy) is reopened (stream-keeper.js).
     const keeper = keepOpen({
@@ -64,6 +74,7 @@ export function useChats() {
     });
     return () => {
       alive = false;
+      clearTimeout(retryTimer);
       keeper.stop();
     };
   }, []);
@@ -135,6 +146,8 @@ export function useTimeline(chatId) {
 export function usePolling(path, intervalMs) {
   const [data, setData] = useState(null);
   useEffect(() => {
+    // No path: nothing to ask (a hook that only one skin needs).
+    if (!path) return setData(null);
     let alive = true;
     let timer;
     const tick = async () => {
@@ -164,8 +177,14 @@ function subscribeHash(callback) {
 // "#/settings" and "#/jobs" are pages that replace the thread.
 export function usePageRoute() {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
-  const match = /^#\/(settings|jobs|agents|telegram(?:\/[0-9a-f-]{36})?|incidents|peers|workbench|setup(?:\/\w+)?)$/.exec(hash);
+  const match = /^#\/(settings|jobs|agents|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?)$/.exec(hash);
   return match ? match[1].split("/")[0] : null;
+}
+
+// "#/peers/<id>": that colleague's page on the colleagues' agents page (Peers.jsx).
+export function usePeerRoute() {
+  const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
+  return /^#\/peers\/([\w.-]{1,64})$/.exec(hash)?.[1] || null;
 }
 
 // "#/telegram/<personId>": that person's mother chat.

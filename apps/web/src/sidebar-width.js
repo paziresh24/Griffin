@@ -27,6 +27,37 @@ export function saveSidebarWidth(storage, width) {
   }
 }
 
+// The desktop sidebar can be hidden (button or Ctrl/⌘+B, from Karsara); kept across reloads.
+const SIDEBAR_HIDDEN_KEY = "griffin.sidebarHidden";
+
+export function loadSidebarHidden(storage) {
+  try {
+    return storage?.getItem(SIDEBAR_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveSidebarHidden(storage, hidden) {
+  try {
+    storage?.setItem(SIDEBAR_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    /* storage blocked: the choice lasts for this page only */
+  }
+}
+
+/**
+ * Ctrl+B (⌘B on a Mac). A Latin layout is read by the letter it types (Dvorak's B key is Ctrl+X,
+ * Cut); a non-Latin one (Persian «ذ») by the physical key. A held key does not flicker the list.
+ */
+export function isSidebarToggle(event) {
+  if (event.isComposing || event.repeat || event.shiftKey || event.altKey) return false;
+  if (!event.ctrlKey && !event.metaKey) return false;
+  const key = String(event.key || "");
+  if (/^[a-z]$/i.test(key)) return key.toLowerCase() === "b";
+  return event.code === "KeyB";
+}
+
 /** A plain left click; anything else (middle, Ctrl/Cmd/Shift) is the browser opening a new tab. */
 export function isPlainClick(event) {
   return !event.button && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;

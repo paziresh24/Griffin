@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api } from "../api.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
 import { isRtl, num, t } from "../i18n.js";
+import { textDir } from "../dir.js";
 import { AgentGlyph } from "./Controls.jsx";
 import { accountLabel } from "./Providers.jsx";
 
@@ -72,13 +73,25 @@ const FIXED_CALLERS = [
   { id: "ops", label: t("اتاق عملیات") },
 ];
 
-export function AgentsPage({ onBack }) {
+// The page frame: its own scroll and width, or none when it sits inside Settings → Agents.
+function Page({ embedded, children }) {
+  if (embedded) return <div>{children}</div>;
+  return (
+    <div className="scrollbar-thin h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">{children}</div>
+    </div>
+  );
+}
+
+// embedded: inside Settings → Agents (no page scroll, back button or title of its own).
+export function AgentsPage({ onBack, embedded = false }) {
   const [data, setData] = useState(null);
   const [catalog, setCatalog] = useState([]);
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [accounts, setAccounts] = useState([]);
 
   const load = useCallback(() => {
     Promise.all([api("/api/agents"), api("/api/tool-catalog")])
@@ -91,7 +104,14 @@ export function AgentsPage({ onBack }) {
 
   useEffect(() => {
     load();
+    api("/api/providers").then((d) => setAccounts(d.providers || [])).catch(() => {});
   }, [load]);
+  // The engine a card names: the account it actually runs on now, by the account's own name.
+  const engineLabel = (agent) => {
+    const id = agent.route?.provider || agent.provider;
+    const acct = accounts.find((a) => a.id === id);
+    return acct ? accountLabel(acct) : PROVIDER_META[id]?.label || id;
+  };
 
   useEffect(() => {
     if (!selected) {
@@ -155,12 +175,13 @@ export function AgentsPage({ onBack }) {
   };
 
   if (creating) {
-    return <NewAgent catalog={catalog} busy={busy} onCancel={() => setCreating(false)} onCreate={createAgent} />;
+    return <NewAgent embedded={embedded} catalog={catalog} busy={busy} onCancel={() => setCreating(false)} onCreate={createAgent} />;
   }
 
   if (selected && detail) {
     return (
       <AgentDetail
+        embedded={embedded}
         agent={detail}
         agents={data?.agents || []}
         catalog={catalog}
@@ -173,14 +194,17 @@ export function AgentsPage({ onBack }) {
   }
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">
+    <Page embedded={embedded}>
         <div className="mb-6 flex items-center gap-2">
-          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-            <ArrowRight className="size-4 rtl-mirror" />
-          </button>
-          <h1 className="flex-1 text-lg font-semibold">{t("ایجنت‌ها")}</h1>
-          <button type="button" onClick={() => setCreating(true)} className={`${pill} border-primary/40 bg-primary/10 text-primary`}>
+          {embedded ? null : (
+            <>
+              <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
+                <ArrowRight className="size-4 rtl-mirror" />
+              </button>
+              <h1 className="flex-1 text-lg font-semibold">{t("ایجنت‌ها")}</h1>
+            </>
+          )}
+          <button type="button" onClick={() => setCreating(true)} className={`${pill} ${embedded ? "" : "ms-auto"} border-primary/40 bg-primary/10 text-primary`}>
             <Plus className="me-1 inline size-3.5" /> {t("ایجنت جدید")}
           </button>
         </div>
@@ -198,16 +222,15 @@ export function AgentsPage({ onBack }) {
         ) : (
           <ul className="space-y-3">
             {data.agents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} onOpen={() => setSelected(agent.id)} />
+              <AgentCard key={agent.id} agent={agent} engine={engineLabel(agent)} onOpen={() => setSelected(agent.id)} />
             ))}
           </ul>
         )}
-      </div>
-    </div>
+    </Page>
   );
 }
 
-function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }) {
+function AgentDetail({ embedded, agent, agents, catalog, busy, onBack, onPatch, onDelete }) {
   const [toolQuery, setToolQuery] = useState("");
   const [instructions, setInstructions] = useState(agent.instructions || "");
   const [callerEdit, setCallerEdit] = useState(null);
@@ -237,6 +260,7 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
     const row = callers.find((c) => c.id === callerEdit.id);
     return (
       <CallerTools
+        embedded={embedded}
         agent={agent}
         caller={callerEdit}
         current={row?.tools === "*" ? "*" : row?.tools || []}
@@ -252,8 +276,7 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
   }
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">
+    <Page embedded={embedded}>
         <div className="mb-6 flex items-center gap-2">
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
             <ArrowRight className="size-4 rtl-mirror" />
@@ -290,6 +313,17 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
               defaultValue={agent.domain}
               key={`${agent.id}-domain`}
               onBlur={(e) => e.target.value !== agent.domain && onPatch({ domain: e.target.value })}
+            />
+          </label>
+          <label className="block text-xs text-muted-foreground">
+            {t("معرفی کوتاه روی کارت (اختیاری)")}
+            <input
+              className={`${input} mt-1`}
+              dir="auto"
+              defaultValue={agent.blurb || ""}
+              key={`${agent.id}-blurb`}
+              maxLength={500}
+              onBlur={(e) => e.target.value.trim() !== (agent.blurb || "") && onPatch({ blurb: e.target.value.trim() })}
             />
           </label>
           <label className="block text-xs text-muted-foreground">
@@ -376,7 +410,7 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
 
         <section className="space-y-3 rounded-2xl border bg-card p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-medium">{t("ابزارهای خودش")}</h2>
+            <h2 className="text-sm font-medium">{t("ابزارهای خودش")} <span className="text-xs font-normal text-muted-foreground">{t("({n} روشن)", { n: num(toolRows.filter((row) => row.on).length) })}</span></h2>
             <button
               type="button"
               disabled={busy}
@@ -409,12 +443,11 @@ function AgentDetail({ agent, agents, catalog, busy, onBack, onPatch, onDelete }
             </p>
           ) : null}
         </section>
-      </div>
-    </div>
+    </Page>
   );
 }
 
-function CallerTools({ agent, caller, current, catalog, busy, onBack, onSave }) {
+function CallerTools({ embedded, agent, caller, current, catalog, busy, onBack, onSave }) {
   const [picked, setPicked] = useState(() => (current === "*" ? new Set(catalog) : new Set(current)));
   const [query, setQuery] = useState("");
   const rows = catalog.filter((n) => !query || n.toLowerCase().includes(query.trim().toLowerCase()));
@@ -427,8 +460,7 @@ function CallerTools({ agent, caller, current, catalog, busy, onBack, onSave }) 
     });
   };
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">
+    <Page embedded={embedded}>
         <div className="mb-4 flex items-center gap-2">
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
             <ArrowRight className="size-4 rtl-mirror" />
@@ -454,19 +486,17 @@ function CallerTools({ agent, caller, current, catalog, busy, onBack, onSave }) 
             </li>
           ))}
         </ul>
-      </div>
-    </div>
+    </Page>
   );
 }
 
-function NewAgent({ catalog, busy, onCancel, onCreate }) {
+function NewAgent({ embedded, catalog, busy, onCancel, onCreate }) {
   const [form, setForm] = useState({ id: "", label: "", domain: "", instructions: "", provider: "cursor", allTools: false });
   const set = (patch) => setForm((prev) => ({ ...prev, ...patch }));
   const valid = /^[a-z0-9][a-z0-9-]{0,39}$/.test(form.id);
   const afterCreate = t("بعد از ساخت: ابزارها را روشن کن و بگو چه کسی می‌تواند صدایش بزند. پروفایل آماده هم می‌توانی وارد کنی ({file}).").split("{file}");
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">
+    <Page embedded={embedded}>
         <div className="mb-6 flex items-center gap-2">
           <button type="button" onClick={onCancel} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
             <ArrowRight className="size-4 rtl-mirror" />
@@ -523,12 +553,11 @@ function NewAgent({ catalog, busy, onCancel, onCreate }) {
             {afterCreate[0]}<span className="ltr">examples/agents/*.json</span>{afterCreate[1]}
           </p>
         </form>
-      </div>
-    </div>
+    </Page>
   );
 }
 
-function AgentCard({ agent, onOpen }) {
+function AgentCard({ agent, engine, onOpen }) {
   const meta = agentMeta(agent.id);
   return (
     <li>
@@ -542,10 +571,11 @@ function AgentCard({ agent, onOpen }) {
           <AgentGlyph id={agent.id} className="size-10" />
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium" dir="auto">{t(agent.label)}</p>
-            <p className="ltr text-xs text-muted-foreground">{agent.id} · {PROVIDER_META[agent.provider]?.label || agent.provider}</p>
+            <p className="text-xs text-muted-foreground"><span className="ltr">{agent.id}</span> · <span className="ltr">{engine}</span>{agent.builtIn === false ? ` · ${t("ساخته‌شده")}` : ""}</p>
           </div>
         </div>
-        {agent.domain ? <p className="mt-3 text-sm leading-6 text-muted-foreground" dir="auto">{t(agent.domain)}</p> : null}
+        {agent.blurb || meta.blurb ? <p className="mt-3 text-sm leading-6 text-muted-foreground" dir={textDir(agent.blurb || meta.blurb)}>{agent.blurb || meta.blurb}</p> : null}
+        {agent.domain ? <p className="mt-2 text-sm leading-6 text-muted-foreground" dir={textDir(t(agent.domain))}>{t(agent.domain)}</p> : null}
         <p className="mt-3 text-xs text-muted-foreground">
           {agent.allTools ? t("همهٔ ابزارها") : t("{n} ابزار فعال", { n: num((agent.tools || []).length) })} · {t("{n} صداکننده", { n: num((agent.callers || []).length) })}
         </p>

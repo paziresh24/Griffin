@@ -1,9 +1,9 @@
-// Limits on what a colleague's agent (peer:*) may spend on one agent profile: its default and
-// allowed models, a token cap per rolling hour and per rolling day, and the texts it
+import { OWNER } from "./persona.mjs";
+// Limits on what a colleague's agent (peer:*) may spend on one agent profile): its
+// default and allowed models, a token cap per rolling hour and per rolling day, and the texts it
 // gets back when a cap is reached or the AI provider cannot be reached. They live next to the tool
 // quota, in agent_profiles.meta.callers["peer:<user>"], so every setting is per agent × colleague.
 import { kindOf, splitModel } from "./providers/ids.mjs";
-import { OWNER_NAME } from "./owner.mjs";
 import { ownerTimeZone } from "./token-usage.mjs";
 
 export const HOUR_MS = 60 * 60_000;
@@ -31,9 +31,9 @@ export const PEER_DEFAULT_LIMITS = {
 
 export const DEFAULT_PEER_MESSAGES = {
   overBudget:
-    `سقف مصرف شما پر شده است ({window}: {used} از {limit} توکن). درخواست اجرا نشد. بعد از {retryAt} دوباره بفرستید، یا از ${OWNER_NAME} بخواهید سقف را بالا ببرد.`,
+    `سقف مصرف شما پر شده است ({window}: {used} از {limit} توکن). درخواست اجرا نشد. بعد از {retryAt} دوباره بفرستید، یا از ${OWNER.nameFa} بخواهید سقف را بالا ببرد.`,
   unavailable:
-    `الان به سرویس هوش مصنوعی دسترسی نیست و درخواست پردازش نشد. چند دقیقهٔ دیگر دوباره بفرستید؛ اگر ادامه داشت به ${OWNER_NAME} خبر بدهید.`,
+    `الان به سرویس هوش مصنوعی دسترسی نیست و درخواست پردازش نشد. چند دقیقهٔ دیگر دوباره بفرستید؛ اگر ادامه داشت به ${OWNER.nameFa} خبر بدهید.`,
 };
 
 const WINDOW_LABEL = { hourly: "سقف یک ساعت", daily: "سقف ۲۴ ساعت" };

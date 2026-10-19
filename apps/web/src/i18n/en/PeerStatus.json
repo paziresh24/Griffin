@@ -17,5 +17,6 @@
   "{n} گزارش وضعیت": "{n} status updates",
   "در هفت روز اخیر درخواستی نبوده.": "No requests in the last seven days.",
   "این لینک وجود ندارد یا غیرفعال شده است.": "This link does not exist or has been disabled.",
-  "خطا {status}": "Error {status}"
+  "خطا {status}": "Error {status}",
+  "منتظر تأیید شما": "Waiting for your approval"
 }

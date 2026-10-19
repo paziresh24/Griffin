@@ -1,12 +1,32 @@
 // Griffin shell brand + per-agent accents. Agent ids stay stable; labels/colors are UI-facing.
+// Griffin is the platform; the assistant's name and the product come from the server (persona.mjs,
+// identity.mjs) via loadBrand(). Nothing here names an install's assistant or owner.
 import { lang, t } from "./i18n.js";
+import { setInstallLook } from "./ui-prefs.js";
 
 export const BRAND = {
   id: "griffin",
   name: t("گریفین"),
   nameEn: "Griffin",
+  product: t("گریفین"),
+  productId: "griffin",
   color: "#e8873a",
+  iconV: "", // when the install's logo last changed (server), so a new logo gets a new URL
+  // The browser tab's last part: the product when the install is set to the Karsara look, else the assistant.
+  get title() {
+    return this.productId === "karsara" ? this.product : this.name;
+  },
 };
+
+/** A logo URL that changes with the install's logo (the page and the browser cache it by URL). */
+export const iconUrl = (path = "/icon.svg") => (BRAND.iconV ? `${path}?v=${BRAND.iconV}` : path);
+
+/** After the logo changed (or once it is known): every logo URL from now on, and the tab's icon. */
+export function setIconVersion(v) {
+  BRAND.iconV = String(v || "");
+  AGENT_META.griffin.icon = iconUrl("/agents/griffin.svg");
+  for (const link of document.querySelectorAll('link[rel="icon"]')) link.href = iconUrl("/icon.svg");
+}
 
 export const STORAGE = {
   theme: "griffin.theme",
@@ -75,17 +95,38 @@ export const AGENT_META = {
   },
 };
 
-export async function loadBrand() {
+export const KARSARA_BLURB = t("یک دستیار مختص شما.");
+
+// `fetchImpl` and `onSkin` are for tests; the page uses fetch and the install's preset (ui-prefs.js).
+export async function loadBrand({ fetchImpl = fetch, onSkin = setInstallLook } = {}) {
   try {
-    const res = await fetch("/api/public/brand/info", { signal: AbortSignal.timeout(3000) });
-    const { name, latin } = await res.json();
+    const res = await fetchImpl("/api/public/brand/info", { signal: AbortSignal.timeout(3000) });
+    const { name, latin, product, productLatin, productId, skin, iconV } = await res.json();
+    if (iconV) setIconVersion(iconV);
     // The assistant's own name per install (server persona); English UI shows its Latin form.
     const shown = (lang === "en" && latin) || name;
-    if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = document.title = shown;
+    if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = shown;
     if (latin) BRAND.nameEn = latin;
+    const productShown = (lang === "en" && productLatin) || product;
+    if (productShown) BRAND.product = productShown;
+    if (productId) BRAND.productId = productId;
+    onSkin(skin || "griffin");
   } catch {
-    // keep the built-in defaults
+    onSkin("griffin"); // keep the built-in defaults; the cached look still paints
   }
+  try {
+    // Signed in only: the line under the assistant's name names its owner.
+    const res = await fetchImpl("/api/brand", { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const { blurb, brand } = await res.json();
+      if (typeof blurb === "string") AGENT_META.griffin.blurb = blurb;
+      applyAgentColor(brand);
+    }
+  } catch {
+    // signed out or offline: no line
+  }
+  // An install with the Karsara look keeps that look's own new-chat line.
+  if (BRAND.productId === "karsara") AGENT_META.griffin.blurb = KARSARA_BLURB;
 }
 
 export function agentMeta(id) {
@@ -99,7 +140,7 @@ export function agentMeta(id) {
   };
 }
 
-/** Drive page primary from the active specialist; the assistant (default) keeps --brand (orange). */
+/** Drive page primary from the active specialist; the assistant (default) keeps --brand (the install's own colour). */
 export function applyAgentTheme(agentId) {
   const root = document.documentElement;
   if (!agentId || agentId === "griffin" || !AGENT_META[agentId]) {
@@ -107,4 +148,14 @@ export function applyAgentTheme(agentId) {
     return;
   }
   root.setAttribute("data-agent", agentId);
+}
+
+// Tool cards and pickers tint with AGENT_META.griffin.color as `${hex}55`, so only a hex goes there.
+// `brand` is the install's saved look (GET /api/setup/brand, also on /api/brand); none = Griffin's.
+const STOCK = { color: AGENT_META.griffin.color, colorDark: AGENT_META.griffin.colorDark };
+export function applyAgentColor(brand) {
+  const hex = (v) => (/^#[0-9a-f]{6}$/i.test(v || "") ? v : null);
+  const light = hex(brand?.palette?.light?.brand);
+  AGENT_META.griffin.color = light || STOCK.color;
+  AGENT_META.griffin.colorDark = hex(brand?.palette?.dark?.brand) || light || STOCK.colorDark;
 }

@@ -27,7 +27,7 @@ export const PEER_DEFAULT_QUOTA = {
   griffin: ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "knowledge_list", ...PEER_CHAT_TOOLS],
   "platform": [
     "kube_status", "kube_get", "kube_df", "metrics_query", "alerts_active",
-    "gitlab_version", "gitlab_projects", "gitlab_search", "gitlab_file", "gitlab_mr", "gitlab_commits", "gitlab_pipeline",
+    "gitlab_version", "gitlab_projects", "gitlab_search", "gitlab_file", "gitlab_mr", "gitlab_mr_changes", "gitlab_commits", "gitlab_pipeline",
     "grafana_search", "grafana_dashboard", "grafana_panel_query", "grafana_query",
     "dns_lookup", "http_check", "tls_check", "nsin_edge_ranges",
   ],
@@ -53,18 +53,22 @@ function pickupPage({ code = null, token = null, mcpUrl = "", gone = false }) {
 <pre dir="ltr">${esc(token)}</pre>
 <p>اتصال Claude Code:</p>
 <pre dir="ltr">claude mcp add --transport http griffin ${esc(mcpUrl)} --header "Authorization: Bearer ${esc(token)}"</pre>`
-      : `<p>با این دکمه یک توکن اتصال ایجنت به گریفین (MCP) برای شما ساخته می‌شود. لینک یک‌بارمصرف است.</p>
+      : `<p>با این دکمه یک توکن اتصال ایجنت (MCP) برای شما ساخته می‌شود. لینک یک‌بارمصرف است.</p>
 <form method="post" action="/peer/pickup/${esc(code)}"><button type="submit">دریافت توکن</button></form>`;
   return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>گریفین — اتصال ایجنت</title>
+<meta name="robots" content="noindex"><title>اتصال ایجنت</title>
 <style>body{font-family:Vazirmatn,system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.8;background:#fafafa;color:#1c1c1c}
 pre{background:#fff;border:1px solid #ddd;border-radius:.5rem;padding:.75rem;white-space:pre-wrap;word-break:break-all}
 button{font:inherit;background:#e8702a;color:#fff;border:0;border-radius:999px;padding:.6rem 1.4rem;cursor:pointer}
 @media (prefers-color-scheme:dark){body{background:#161616;color:#eee}pre{background:#222;border-color:#333}}</style></head>
-<body><h1>گریفین</h1>${body}</body></html>`;
+<body><h1>اتصال ایجنت</h1>${body}</body></html>`;
 }
 
-export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }) {
+// On an install with a business docs repo (GRIFFIN_BUSINESS_DOCS_REPO), a new colleague can read it
+// too: every agent should be able to get the business information easily.
+export const PEER_BUSINESS_DOCS_TOOLS = ["business_docs_search", "business_docs_read"];
+
+export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", businessDocs = false }) {
   const hits = new Map(); // clientId -> timestamps
 
   function rateLimited(clientId) {
@@ -78,8 +82,9 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
   function grantDefaultQuota(userId) {
     const caller = peerCaller(userId);
     for (const profile of store.listAgentProfiles()) {
-      const tools = PEER_DEFAULT_QUOTA[profile.id];
-      if (!tools) continue;
+      const base = PEER_DEFAULT_QUOTA[profile.id];
+      if (!base) continue;
+      const tools = businessDocs && profile.id === "griffin" ? [...base, ...PEER_BUSINESS_DOCS_TOOLS] : base;
       const callers = { ...(profile.meta?.callers || {}) };
       if (callers[caller]) continue;
       callers[caller] = { tools, ...cloneDefaults() };
@@ -141,7 +146,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
       return {
         name: PEER_INVITE_TOOL,
         description:
-          "Invite a colleague as a peer agent (owner asks only): register them with the default read-only quota, mint their Griffin MCP token and store it in their own Infisical project. The token itself never appears anywhere — the result says the project/path/key to tell them, plus how to connect. Prefer their existing Infisical project name as id.",
+          "Invite a colleague as a peer agent (owner asks only): register them with the default read-only quota, mint their MCP token and store it in their own Infisical project. The token itself never appears anywhere — the result says the project/path/key to tell them, plus how to connect. Prefer their existing Infisical project name as id.",
         inputSchema: {
           type: "object",
           properties: {
@@ -180,7 +185,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
               projectId,
               environment,
               path: secretPath,
-              comment: `Griffin MCP bearer token for ${userId} (peer_invite)`,
+              comment: `MCP bearer token for ${userId} (peer_invite)`,
             });
           } catch (error) {
             return { isError: true, content: [{ type: "text", text: `peer registered and token minted, but the Infisical write failed: ${error.message} — re-run peer_invite` }] };
@@ -195,7 +200,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
                 created,
                 clientId: client.id,
                 secret: { manager: "infisical", projectId, environment, path: secretPath, key },
-                howToTellThem: `توکن MCP گریفین در Infisical پروژهٔ خودت (${projectId}، ${environment}، مسیر ${secretPath}، کلید ${key}) است؛ اتصال: POST https://<griffin-host>/mcp با هدر Authorization: Bearer <همان توکن>. سهمیه فعلی فقط خواندنی/تشخیصی است.`,
+                howToTellThem: `توکن MCP در Infisical پروژهٔ خودت (${projectId}، ${environment}، مسیر ${secretPath}، کلید ${key}) است؛ اتصال: POST https://<host>/mcp با هدر Authorization: Bearer <همان توکن>. سهمیه فعلی فقط خواندنی/تشخیصی است.`,
               }),
             }],
           };
@@ -374,7 +379,7 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }
 export function peerConnectionTool({ store, defaultUser = null }) {
   return {
     description:
-      "How a colleague's agent (Claude Code/Cursor over MCP) is connected to Griffin: recent MCP calls with outcome, recent tasks with state, and when this Griffin server last started (a restart drops open sessions; the client must reconnect). Use it first when someone says their connection to Griffin dropped or its tools disappeared.",
+      "How a colleague's agent (Claude Code/Cursor over MCP) is connected to this app: recent MCP calls with outcome, recent tasks with state, and when this server last started (a restart drops open sessions; the client must reconnect). Use it first when someone says their connection to Griffin dropped or its tools disappeared.",
     inputSchema: {
       type: "object",
       properties: { user: { type: "string", description: "peer user id (e.g. the colleague's id); defaults to the colleague of this thread" }, limit: { type: "number" } },

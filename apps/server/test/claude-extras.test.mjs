@@ -186,6 +186,7 @@ test("«/» list: Claude's commands plus /clear; on the OpenAI engine /clear and
   const names = async (a) => (await (await a.app.request(`/api/commands?chat=${chat.id}`)).json()).commands.map((c) => c.name);
   assert.deepEqual(await names(claude), ["review", "clear"]);
   assert.equal((await (await claude.app.request(`/api/commands?chat=${chat.id}`)).json()).engine, "claude");
+  assert.deepEqual((await (await claude.app.request("/api/commands")).json()).commands.map((c) => c.name), ["review", "clear"], "the new-chat page lists them too");
   claude.done();
 
   const glm = appSetup({ engine: "openai" });

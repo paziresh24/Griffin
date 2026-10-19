@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Check, CircleHelp, Loader2, Send } from "lucide-react";
+import { Check, CircleHelp, ExternalLink, Loader2, Send } from "lucide-react";
+import { askLink } from "../ask.js";
 import { api, useRoute } from "../api.js";
 import { num, t } from "../i18n.js";
 import { holdReload } from "../new-version.js";
+import { isFallbackCard } from "../fallback.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
 // run continues. If the run is already over, the same answer is sent as a follow-up message.
@@ -30,7 +32,9 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
     try {
       const response = await api(`/api/chats/${chatId}/answer`, {
         method: "POST",
-        body: { question: args.question, selected: picks, text: text.trim(), ...(askId ? { askId } : {}) },
+        // stale: its question is over (stopped, timed out). The answer goes as a new message, never held
+        // for the chain's next question, which may be a different one.
+        body: { question: args.question, selected: picks, text: text.trim(), ...(askId ? { askId } : {}), ...(!waiting && !askIdProp ? { stale: true } : {}) },
       });
       setSent(response.delivered === "tool" ? "tool" : response.delivered === "held" ? "held" : "message");
       onDone?.();
@@ -48,19 +52,37 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
   const toggle = (label) =>
     setSelected((current) => (current.includes(label) ? current.filter((l) => l !== label) : [...current, label]));
 
-  const closed = Boolean(answered) || sent;
+  // A plan-limit card: options only, and a closed one is not clickable (isFallbackCard).
+  const planCard = isFallbackCard(args);
+  const closed = Boolean(answered) || sent || (planCard && !waiting);
+  const done = planCard && Array.isArray(args.done) ? args.done : [];
   return (
     <div className={`g-box my-2 rounded-lg border bg-card ${waiting && !closed ? "border-primary/60" : ""}`}>
       <div className="flex items-start gap-2 px-3 pt-2.5 text-sm">
         <CircleHelp className="g-ask-icon mt-0.5 size-4 shrink-0 text-primary" />
         <p className="min-w-0 flex-1 font-medium" dir="auto">{args.question}</p>
       </div>
+      {askLink(args) && !closed ? (
+        <a href={askLink(args)} target="_blank" rel="noopener noreferrer" className="press mx-3 mt-2 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-muted">
+          <ExternalLink className="size-3.5" /> {t("باز کردن صفحهٔ ورود")}
+        </a>
+      ) : null}
+      {done.length ? (
+        <ul className="mx-3 mt-1.5 list-inside list-disc text-xs text-muted-foreground">
+          {done.map((line, i) => (
+            <li key={i} className="truncate" dir="ltr">{line}</li>
+          ))}
+          {args.doneMore > 0 ? <li className="list-none" dir="auto">{t("و {n} کار دیگر", { n: num(Number(args.doneMore)) })}</li> : null}
+        </ul>
+      ) : null}
 
       {answered ? (
         <p className="flex items-center gap-2 px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground" dir="auto">
           <Check className="g-ask-done size-4 shrink-0 text-ok" />
           {answered.answer}
         </p>
+      ) : planCard && !waiting && !sent ? (
+        <p className="px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground">{t("این سؤال بسته شد؛ مدل عوض نشد.")}</p>
       ) : sent ? (
         <p className="px-3 pb-2.5 pt-1.5 text-sm text-muted-foreground">
           {sent === "gone"
@@ -71,7 +93,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
         <div className="space-y-2 px-3 pb-3 pt-2">
           {!waiting ? (
             <p className="text-xs text-muted-foreground">
-              {result?.answered === false || isError ? t("این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود.") : null}
+              {result?.answered === false || isError || result?.cancelled ? t("این سؤال بی‌جواب ماند؛ اگر جواب بدهی، به‌عنوان پیام جدید می‌رود.") : null}
             </p>
           ) : null}
           {options.length ? (
@@ -113,7 +135,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
                 : t("می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.")}
             </p>
           ) : null}
-          <form
+          {planCard ? null : <form
             className="flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
@@ -135,7 +157,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
             >
               {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4 rtl:-scale-x-100" />}
             </button>
-          </form>
+          </form>}
           {error ? <p className="text-xs text-bad">{error}</p> : null}
         </div>
       )}

@@ -21,7 +21,7 @@ export function createBrokerServer({ tools, probe, vault = null, log = console }
       res.end(JSON.stringify(body));
     };
     try {
-      if (req.method === "GET" && req.url === "/healthz") return send(200, { ok: true });
+      if (req.method === "GET" && req.url === "/healthz") return send(200, { ok: true, vault: vault?.state?.() ?? null });
       if (req.method === "GET" && req.url === "/probe" && probe) return send(200, await probe());
       // Tool credentials, managed from the app's Settings → Secrets. Names out, values only in.
       if (req.url === "/secrets" && vault?.list) {
@@ -108,7 +108,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     tokenAge: genv("BAO_TOKEN_AGE"),
     identity: genv("AGE_IDENTITY"),
   });
+  // Keep the periodic machine token alive; a token that cannot renew (or shrinks under a week)
+  // will soon refuse every vault read, so it is said loudly in the log.
+  const renew = () =>
+    vault
+      .renew()
+      .then((ttl) => (ttl === null ? null : ttl < 7 * 86_400 ? console.error(`[broker] vault token expires in ${Math.round(ttl / 3600)}h and is not periodic`) : console.log(`[broker] vault token renewed (${Math.round(ttl / 3600)}h)`)))
+      .catch((error) => console.error(`[broker] vault token renew failed: ${error.message}`));
+  renew();
+  setInterval(renew, 12 * 3_600_000).unref();
   const site = loadSite();
+  // GRIFFIN_GRAFANA=off hides the Grafana tools (e.g. an install whose credential cannot read the
+  // platform's Grafana token), the same as "tools": { "grafana": false } in the site config.
+  if (genv("GRAFANA") === "off") site.tools = { ...(site.tools || {}), grafana: false };
   const sshRun = createSsh({ vault, knownHosts: genv("SSH_KNOWN_HOSTS", site.sshKnownHosts || "/config/ssh_known_hosts") });
   const clusters = genv("CLUSTERS") ? JSON.parse(genv("CLUSTERS")) : site.clusters;
   const kube = createKube({ vault, sshRun, clusters });

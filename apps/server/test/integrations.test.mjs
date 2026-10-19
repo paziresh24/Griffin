@@ -43,7 +43,7 @@ function fakeBotApi() {
   return { fetchImpl, calls, push, sent: () => calls.filter((c) => /^send/.test(c.method)) };
 }
 
-function setup({ pendingWork } = {}) {
+function setup({ pendingWork, sendFiles, modelChoices } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-int-"));
   const store = openStore(path.join(dir, "db.sqlite"));
   seedExampleAgents(store);
@@ -85,7 +85,7 @@ function setup({ pendingWork } = {}) {
     },
   };
   const runner = createRunner({ store, sdk, log: {}, onCancel: (c) => asks.cancel(c), agentOptions: (chat) => ({ local: { customTools: { [ASK_TOOL]: asks.tool(chat.id) } } }) });
-  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, pendingWork, log: {} });
+  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, pendingWork, sendFiles, modelChoices, log: {} });
   integrationsHolder.current = integrations;
   const cleanup = async () => {
     integrations.stopAll();
@@ -127,6 +127,21 @@ test("bot: wrong token rejected; strangers ignored; pairing; message → run →
     assert.match(reply.body.text, /⏱ [۰-۹]{2}:[۰-۹]{2} · [۰-۹]+ث/, "the owner's answer says when it came and how long it took");
     assert.equal(bot.calls.find((c) => c.method === "sendPhoto").body.chat_id, "777");
     assert.equal(store.listChats({ archived: false }).length, 1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("bot: TELEGRAM_FILES off sends the answer's text and no file", async () => {
+  const { bot, integrations, cleanup } = setup({ sendFiles: () => false });
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "123:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    bot.push(msg(777, `/start ${added.pairingCode}`));
+    await until(() => bot.sent().some((c) => /وصل شد|connected to Griffin/.test(c.body.text || "")));
+    bot.push(msg(777, "عکس را نشان بده"));
+    await until(() => bot.sent().some((c) => c.method === "sendMessage" && /<pre>a │ b/.test(c.body.text || "")));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(bot.calls.some((c) => /^send(Photo|Document)$/.test(c.method)), false, "no file reached the messenger");
   } finally {
     await cleanup();
   }
@@ -191,6 +206,26 @@ test("bot: ask_owner becomes buttons; tapping one answers the waiting agent; /ne
   }
 });
 
+// The owner can answer a question with free text, not only one of the offered options.
+test("bot: a reply to the question message answers it in the sender's own words", async () => {
+  const { bot, integrations, cleanup } = setup();
+  try {
+    const added = await integrations.addBot({ kind: "bale_bot", token: "999:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    bot.push(msg(42, `/start ${added.pairingCode}`));
+    await until(() => bot.sent().length === 1);
+    bot.push(msg(42, "بپرس"));
+    await until(() => bot.sent().some((c) => c.body.reply_markup));
+    const question = bot.sent().find((c) => c.body.reply_markup);
+    assert.match(question.body.text, /ریپلای کن و جواب خودت را بنویس/);
+    const questionId = bot.calls.indexOf(question) + 1; // the fake's message_id
+    bot.push(msg(42, "هیچ‌کدام؛ گزینهٔ دیگر", { from: { id: 42 }, reply_to_message: { message_id: questionId } }));
+    await until(() => bot.sent().some((c) => /باشه، هیچ‌کدام؛ گزینهٔ دیگر/.test(c.body.text || "")));
+    assert.ok(bot.sent().some((c) => /گرفتم|Got it/.test(c.body.text || "")));
+  } finally {
+    await cleanup();
+  }
+});
+
 test("coverage ask buttons stay bound to their own chat", async () => {
   const { parseAskCallback } = await import("../src/integrations/bots.mjs");
   const { COVERAGE_CALLER } = await import("../src/integrations/coverage.mjs");
@@ -234,15 +269,15 @@ test("coverage ask buttons stay bound to their own chat", async () => {
     assert.equal(integrations.bridge.openOwnerAskCount(), 2);
 
     // With two open asks, a bare number must not guess which chat.
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, null), false);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, null, { senderId: "5781" }), false);
     assert.equal(integrations.bridge.openOwnerAskCount(), 2);
 
     const enteAsk = parseAskCallback(enteCb);
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, enteAsk.index, enteAsk.askId), true);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, enteAsk.index, enteAsk.askId, { senderId: "5781" }), true);
     assert.equal(integrations.bridge.openOwnerAskCount(), 1);
 
     const saliAsk = parseAskCallback(saliCb);
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, saliAsk.index, saliAsk.askId), true);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, saliAsk.index, saliAsk.askId, { senderId: "5781" }), true);
     assert.equal(integrations.bridge.openOwnerAskCount(), 0);
 
     await runner.cancel(peerA.id).catch(() => {});
@@ -522,7 +557,7 @@ test("a delegated child's question reaches the Owner once, under the root reques
     assert.match(copies[0].body.text, /آقای احمدی/);
     assert.doesNotMatch(copies[0].body.text, /از مسیر «griffin»/);
 
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0), true);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, null, { senderId: "777" }), true);
     assert.deepEqual(JSON.parse((await pending).content[0].text).answer, "بله");
 
     // A guard approval raised inside the child keeps its yes/no buttons on the way up.
@@ -530,7 +565,7 @@ test("a delegated child's question reaches the Owner once, under the root reques
     await until(() => bot.sent().some((c) => /کار دوم/.test(c.body.text || "")));
     const approval = bot.sent().find((c) => /کار دوم/.test(c.body.text || ""));
     assert.equal(approval.body.reply_markup?.inline_keyboard?.length, 2);
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 1), true);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 1, null, { senderId: "777" }), true);
     assert.equal((await confirm).answer, "نه");
   } finally {
     await cleanup();
@@ -732,4 +767,37 @@ test("telegram account: no status line survives the answer, even when racing or 
   assert.equal(statuses(), 2, "a failed edit sends a fresh line");
   await channel.deliver("55", { text: "تمام شد" });
   assert.equal(statuses(), 0, "both lines go with the final answer");
+});
+
+// /model used to throw «row.map is not a function» (the menu is a flat list), and a tap on a
+// model button was swallowed by the question buttons' handler; behind a webhook the thrown update
+// came back as a 5xx, which Telegram resends and holds every later message behind.
+test("bot: /model shows one button per model and a tap pins it; a failing webhook update is still acknowledged", async () => {
+  const choices = [{ label: "GLM 5.3", value: "openai/glm-5.3", current: false }, { label: "Opus", value: "claude/claude-opus-5-5", current: true }];
+  const { store, bot, integrations, cleanup } = setup({ modelChoices: async () => choices });
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "999:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    bot.push(msg(42, `/start ${added.pairingCode}`));
+    await until(() => bot.sent().length === 1);
+    bot.push(msg(42, "سلام", { from: { id: 42 } }));
+    await until(() => store.linkedChat(added.id, "42"));
+    bot.push(msg(42, "/model", { from: { id: 42 } }));
+    await until(() => bot.sent().some((c) => c.body.reply_markup?.inline_keyboard?.length));
+    const menu = bot.sent().find((c) => c.body.reply_markup?.inline_keyboard?.length);
+    assert.deepEqual(menu.body.reply_markup.inline_keyboard.map((row) => row.map((b) => b.text)), [["GLM 5.3"], ["✔︎ Opus"]]);
+    const cb = menu.body.reply_markup.inline_keyboard[0][0].callback_data;
+    bot.push({ callback_query: { id: "m1", data: cb, from: { id: 42 }, message: { chat: { id: 42 }, message_id: 7 } } });
+    await until(() => store.getChat(store.linkedChat(added.id, "42")).model === "openai:glm-5.3");
+    assert.equal(store.getChat(store.linkedChat(added.id, "42")).provider, "openai", "the account moves with the pin, as from the web");
+    await until(() => bot.calls.some((c) => c.method === "answerCallbackQuery" && /ثبت شد/.test(c.body.text || "")));
+
+    integrations.get(added.id).handleUpdate = async () => {
+      throw new Error("boom");
+    };
+    assert.equal((await integrations.handleBotWebhook(added.id, msg(42, "x"), "wrong")).status, 401);
+    const secret = store.getKv(`bot-hook-secret:${added.id}`);
+    assert.deepEqual(await integrations.handleBotWebhook(added.id, msg(42, "x"), secret), { ok: true, status: 200 });
+  } finally {
+    await cleanup();
+  }
 });

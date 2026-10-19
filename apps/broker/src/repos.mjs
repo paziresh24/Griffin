@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { genv } from "./env.mjs";
+import { gitlabToken } from "./gitlab.mjs";
 import { ToolInputError } from "./kube.mjs";
 
 // The owner's git clones under GRIFFIN_REPOS_ROOT (the same path in the app, the broker and the
@@ -12,8 +13,9 @@ import { ToolInputError } from "./kube.mjs";
 
 const PROJECT = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)+$/;
 const NAME = /^[A-Za-z0-9._-]{1,100}$/;
-// Only a chat's own branch is ever pushed (worktrees.mjs branchName: griffin/<id8>[-2]).
-const CHAT_BRANCH = /^griffin\/[A-Za-z0-9]{1,8}(-2)?$/;
+// Only a chat's own branch is ever pushed (worktrees.mjs branchName: <assistant name>/<id8>[-2];
+// older chats: griffin/<id8>).
+const CHAT_BRANCH = /^[a-z0-9][a-z0-9-]{0,31}\/[A-Za-z0-9]{8}(-2)?$/;
 
 function run(args, { cwd, env, timeout }) {
   return new Promise((resolve, reject) => {
@@ -24,11 +26,11 @@ function run(args, { cwd, env, timeout }) {
   });
 }
 
-export function createRepoTools({ vault, host = "", root = genv("REPOS_ROOT", "/workspace/repos"), git = run }) {
+export function createRepoTools({ vault, host = "", root = genv("REPOS_ROOT", "/workspace/repos"), git = run, fetchImpl = fetch }) {
   const HOST = String(host || "").replace(/\/+$/, "");
-  async function env() {
+  async function env(write = false) {
     if (!HOST) throw new ToolInputError("no GitLab configured (site.gitlab.url)");
-    const token = (await vault.item("gitlab__token")).trim();
+    const token = await gitlabToken(vault, write);
     return {
       ...process.env,
       GIT_TERMINAL_PROMPT: "0",
@@ -48,6 +50,28 @@ export function createRepoTools({ vault, host = "", root = genv("REPOS_ROOT", "/
     if (!fs.existsSync(path.join(dir, ".git"))) throw new ToolInputError(`no repo ${repo} under ${root}`);
     return dir;
   };
+
+  // A pushed chat branch as a Draft MR (one per branch: an open one is returned, not duplicated).
+  // Merging stays with a person — this never merges.
+  async function openDraft(args) {
+    const { stdout: url } = await git(["remote", "get-url", "origin"], { cwd: repoDir(args.repo), env: process.env, timeout: 10_000 });
+    if (!HOST) throw new ToolInputError("no GitLab configured (site.gitlab.url)");
+    const hostname = new URL(HOST).host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const project = new RegExp(`${hostname}[:/](.+?)(\\.git)?\\s*$`).exec(url.trim())?.[1];
+    if (!project || !PROJECT.test(project)) throw new ToolInputError("origin is not a GitLab project of this instance");
+    const token = await gitlabToken(vault, true);
+    const api = async (p, init = {}) => {
+      const r = await fetchImpl(`${HOST}/api/v4/projects/${encodeURIComponent(project)}${p}`, { ...init, headers: { "PRIVATE-TOKEN": token, "Content-Type": "application/json" }, signal: AbortSignal.timeout(30_000) });
+      if (!r.ok) throw new Error(`GitLab ${p} http_${r.status}: ${(await r.text()).slice(0, 200)}`);
+      return r.json();
+    };
+    const open = await api(`/merge_requests?state=opened&source_branch=${encodeURIComponent(args.branch)}`);
+    if (open?.[0]) return { iid: open[0].iid, webUrl: open[0].web_url, project, existing: true };
+    const info = await api("");
+    const title = /^draft:/i.test(args.mrTitle) ? String(args.mrTitle) : `Draft: ${args.mrTitle}`;
+    const created = await api("/merge_requests", { method: "POST", body: JSON.stringify({ source_branch: args.branch, target_branch: info.default_branch || "main", title, description: String(args.mrDescription || ""), remove_source_branch: true }) });
+    return { iid: created.iid, webUrl: created.web_url, project, existing: false };
+  }
 
   return {
     git_clone: {
@@ -97,22 +121,28 @@ export function createRepoTools({ vault, host = "", root = genv("REPOS_ROOT", "/
 
     git_push: {
       description:
-        "Push a chat's own branch (griffin/<id>) of a repo to GitLab — never another branch, never --force. Returns git's output, which carries the link to open a merge request.",
+        "Push a chat's own branch (<your name>/<id>) of a repo to GitLab — never another branch, never --force. Returns git's output, which carries the link to open a merge request.",
       inputSchema: {
         type: "object",
-        properties: { repo: { type: "string", maxLength: 100 }, branch: { type: "string", maxLength: 100 } },
+        properties: {
+          repo: { type: "string", maxLength: 100 },
+          branch: { type: "string", maxLength: 100 },
+          mrTitle: { type: "string", maxLength: 200, description: "also open a Draft merge request to the default branch with this title (or return the open one for this branch)" },
+          mrDescription: { type: "string", maxLength: 20_000 },
+        },
         required: ["repo", "branch"],
         additionalProperties: false,
       },
       async execute(args) {
-        if (!CHAT_BRANCH.test(String(args.branch || ""))) throw new ToolInputError("only a chat branch (griffin/<id>) can be pushed");
+        if (!CHAT_BRANCH.test(String(args.branch || ""))) throw new ToolInputError("only a chat branch (<name>/<id8>) can be pushed");
         const { stdout, stderr } = await git(["push", "--porcelain", "origin", `refs/heads/${args.branch}:refs/heads/${args.branch}`], {
           cwd: repoDir(args.repo),
-          env: await env(),
+          env: await env(true),
           timeout: 180_000,
         });
         const mr = /https:\/\/\S+merge_requests\/new\S*/.exec(stderr)?.[0] || null;
-        return { repo: args.repo, branch: args.branch, pushed: true, mergeRequestUrl: mr, output: `${stdout}${stderr}`.trim().slice(-1500), source: "git push" };
+        const opened = args.mrTitle ? await openDraft(args) : null;
+        return { repo: args.repo, branch: args.branch, pushed: true, mergeRequestUrl: opened?.webUrl || mr, ...(opened ? { mergeRequest: opened } : {}), output: `${stdout}${stderr}`.trim().slice(-1500), source: "git push" };
       },
     },
   };

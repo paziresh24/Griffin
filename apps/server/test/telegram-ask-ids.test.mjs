@@ -89,12 +89,12 @@ test("two open owner asks in one root: each button settles its own ask and close
     assert.deepEqual(store.getKv("ask:open").map((row) => row.askId), [idB], "only the second row stays open");
 
     // A second tap on the closed question settles nothing and sends no follow-up.
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, idA), false);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, idA, { senderId: "777" }), false);
     assert.equal(sends.length, 0);
 
     // A bare digit with exactly one open owner ask answers that one.
     assert.equal(integrations.bridge.openOwnerAskCount(), 1);
-    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, null), true);
+    assert.equal(await integrations.bridge.answerOwnerAsk(added.id, 0, null, { senderId: "777" }), true);
     assert.equal(JSON.parse((await second).content[0].text).answer, "ج");
     await until(() => bot.calls.some((c) => c.method === "editMessageText" && c.body.message_id === msgB));
     assert.deepEqual(store.getKv("ask:open"), []);

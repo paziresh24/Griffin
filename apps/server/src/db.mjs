@@ -2,7 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { DEFAULT_AGENT } from "./agents/registry.mjs";
+import { DEFAULT_AGENT, SPECIALIST_AGENTS, registerAgent, specialistsOff, unregisterAgent } from "./agents/registry.mjs";
 import { seedProfilesFromRegistry, unique } from "./agents/profiles.mjs";
 import { normalizeProvider } from "./providers/ids.mjs";
 import { nameOf } from "./profile.mjs";
@@ -266,9 +266,121 @@ export function usageTokens(data) {
   return input + n(data?.completion_tokens ?? data?.outputTokens ?? data?.output_tokens);
 }
 
+// kv: this chat was linked to a Telegram chat at some point (linkChat).
+// kv: the last event id from before runner.send stored ownerText on user events (set once).
+export const OWNER_TEXT_SINCE = "owner-text-since";
+export const telegramOriginKey = (chatId) => `tg-origin:${chatId}`;
+
+// The message search (events_fts) folds Arabic yeh and kaf into the Persian letters, in the index and
+// in the query, so «پيام» and «پیام» are one word.
+export const foldSearch = (text) => String(text ?? "").replace(/\u064A/g, "\u06CC").replace(/\u0643/g, "\u06A9");
+const foldSql = (expr) => `replace(replace(${expr}, char(1610), char(1740)), char(1603), char(1705))`;
+// What the search indexes of an event `e` : a user message as it is, a whole
+// answer once — the run's streamed text pieces joined under its run.finished: back to back as they
+// are (a word can be split between two pieces), with a line break where the same run did anything
+// else (a tool call, thinking) between them, so «…می‌خوانم» and «مشکل…» around a tool stay two words;
+// events of other runs or the owner's own (a queued or steered message) in between do not count —
+// and a background-task summary.
+export const searchBody = (e, schema = "") => foldSql(`CASE
+  WHEN ${e}.type = 'user' THEN json_extract(${e}.data, '$.text')
+  WHEN ${e}.type = 'background.task-completed' THEN json_extract(${e}.data, '$.summary')
+  WHEN ${e}.type = 'run.finished' AND ${e}.run_id IS NOT NULL THEN (SELECT group_concat(
+      CASE WHEN (SELECT p.type FROM ${schema}events p WHERE p.chat_id = t.chat_id AND p.run_id = t.run_id AND p.id < t.id ORDER BY p.id DESC LIMIT 1) = 'text' THEN '' ELSE char(10) END
+        || json_extract(t.data, '$.text'), '' ORDER BY t.id)
+    FROM ${schema}events t WHERE t.run_id = ${e}.run_id AND t.type = 'text' AND t.chat_id = ${e}.chat_id)
+END`);
+export const SEARCH_TYPES = "'user', 'run.finished', 'background.task-completed'";
+// Indexes events (lo, hi] that the index lacks (index.mjs backfill). The
+// body is worked out once per row (MATERIALIZED: a plain subquery is flattened and evaluates it again
+// for each WHERE test).
+export const SEARCH_RANGE_SQL = (schema = "") => `WITH x AS MATERIALIZED (SELECT e.id, e.chat_id, ${searchBody("e", schema)} AS body FROM ${schema}events e
+    WHERE e.id > ? AND e.id <= ? AND e.type IN (${SEARCH_TYPES}))
+  INSERT INTO ${schema}events_fts (rowid, chat_id, body)
+  SELECT id, chat_id, body FROM x WHERE body IS NOT NULL AND body != '' AND NOT EXISTS (SELECT 1 FROM ${schema}events_fts f WHERE f.rowid = x.id)`;
+// The index, its triggers and the backfill cursor, made the first time CHAT_SEARCH_MESSAGES is on
+// (enableSearchSchema, on the backfill's worker thread) — never on an install that keeps it off.
+// Versioned by the insert trigger's name. In the trigger the body sits in a LIMIT 1 subquery, so it is
+// worked out once (a trigger takes no WITH).
+const SEARCH_TRIGGER = "events_fts_ai2";
+export const hasSearchIndex = (db) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?").get(SEARCH_TRIGGER));
+// The earlier shape (events_fts_ai, one row per streamed piece, a delete
+// trigger blind to run.finished, no prefix index). Found on open — search on or off — it is removed
+// whole: the index, its two triggers and the cursor. Only the search index goes; it is rebuilt from
+// the events (which stay) when the search is switched on.
+export function dropEarlierSearch(db) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'events_fts_ai'").get()) return false;
+  db.exec(`DROP TRIGGER IF EXISTS events_fts_ai; DROP TRIGGER IF EXISTS events_fts_ad; DROP TABLE IF EXISTS events_fts;
+    DELETE FROM kv WHERE key IN ('search:ceiling', 'search:cursor');`);
+  return true;
+}
+// Makes the index (searchSchemaSql) and its cursor, all events so far left to the backfill. Idempotent.
+// Building events_run_text scans the events once (about a second at 400k events, holding writes):
+// the server runs it on the worker thread, never on its own.
+export function enableSearchSchema(db) {
+  if (hasSearchIndex(db)) return true;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(searchSchemaSql());
+    const top = db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get().id;
+    db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES ('search:ceiling', ?), ('search:cursor', '0')").run(JSON.stringify(top));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return true;
+}
+// The backfill is done (or there is no index): nothing for a worker to do.
+export function searchBackfillDone(db) {
+  if (!hasSearchIndex(db)) return false;
+  const kv = (key) => JSON.parse(db.prepare("SELECT value FROM kv WHERE key = ?").get(key)?.value ?? "0");
+  return kv("search:cursor") >= kv("search:ceiling");
+}
+export function searchSchemaSql() {
+  return `
+    CREATE INDEX IF NOT EXISTS events_run_text ON events(run_id, id) WHERE type = 'text';
+    CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(chat_id UNINDEXED, body, prefix = '2 3');
+    CREATE TRIGGER IF NOT EXISTS ${SEARCH_TRIGGER} AFTER INSERT ON events
+    WHEN NEW.type IN (${SEARCH_TYPES})
+    BEGIN
+      INSERT INTO events_fts (rowid, chat_id, body) SELECT NEW.id, NEW.chat_id, b FROM (SELECT ${searchBody("NEW")} AS b LIMIT 1) WHERE b IS NOT NULL AND b != '';
+    END;
+    CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events
+    WHEN OLD.type IN (${SEARCH_TYPES})
+    BEGIN
+      DELETE FROM events_fts WHERE rowid = OLD.id;
+    END;`;
+}
+
+// One step of indexing the events older than the search index: ONE short transaction of `chunk`
+// events, then a checkpoint of what it wrote; returns true while some remain. The cursor and its
+// ceiling are kv. The server runs it on a worker thread with its own connection (search-worker.mjs),
+// paced by index.mjs. One transaction per step, because a server write that comes during it waits in
+// SQLite's busy handler (sleeps of 1–25 ms) and would miss the short gaps between back-to-back ones;
+// the checkpoint here, because a WAL page the worker wrote is otherwise checkpointed by the server's
+// own next commit (those two stalled the server during a backfill).
+export function indexSearchStep(db, { chunk = 100 } = {}) {
+  const kv = (key) => JSON.parse(db.prepare("SELECT value FROM kv WHERE key = ?").get(key)?.value ?? "0");
+  const ceiling = kv("search:ceiling");
+  const cursor = kv("search:cursor");
+  if (cursor >= ceiling) return false;
+  const upto = Math.min(ceiling, cursor + chunk);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(SEARCH_RANGE_SQL()).run(cursor, upto);
+    db.prepare("INSERT INTO kv (key, value) VALUES ('search:cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(upto));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+  return upto < ceiling;
+}
+
 export function openStore(file, { seedProvider } = {}) {
   const db = new DatabaseSync(file);
-  // run id -> model of its run.started (runs never change model); see usageRows.
+  // run id -> {model, provider} of its run.started (a run never changes either); see usageRows.
   // ponytail: process-wide memo capped at 50 000 runs, oldest dropped.
   const runModels = new Map();
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
@@ -286,6 +398,13 @@ export function openStore(file, { seedProvider } = {}) {
   // read is a scan of the whole event log (can be gigabytes). Partial: only usage rows. Building
   // it reads the table once, on the first start after this change.
   db.exec("CREATE INDEX IF NOT EXISTS events_usage_at ON events(at) WHERE type = 'usage'");
+  // Per-run model, tokens, turns and whether it showed anything (from Karsara), kept as events
+  // arrive so nothing scans the event log for them. Adding nullable columns is O(1); runs from
+  // before have NULL (unknown) and are never backfilled — that would read the whole event log.
+  const runCols = new Set(db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name));
+  for (const [name, type] of [["model", "TEXT"], ["tokens", "INTEGER"], ["turns", "INTEGER"], ["shown", "INTEGER"]]) {
+    if (!runCols.has(name)) db.exec(`ALTER TABLE runs ADD COLUMN ${name} ${type}`);
+  }
   // The chat list picks each job's last-created run per row; without this it scans every chat.
   db.exec("CREATE INDEX IF NOT EXISTS chats_job_created ON chats(job_id, created_at)");
   // Who the agent is talking to (owner / another agent / scheduler) and which agent persona.
@@ -337,6 +456,10 @@ export function openStore(file, { seedProvider } = {}) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "effort")) {
     db.exec("ALTER TABLE chats ADD COLUMN effort TEXT");
   }
+  // Where the owner's full Claude Code runs for this chat (config CLAUDE_HOST): host | container; NULL = the section's default.
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "runs_on")) {
+    db.exec("ALTER TABLE chats ADD COLUMN runs_on TEXT");
+  }
   // The owner's own chat groups (like the desktop app's custom groups). A chat sits
   // in at most one; deleting a group leaves its chats ungrouped.
   db.exec(`CREATE TABLE IF NOT EXISTS chat_groups (
@@ -345,6 +468,38 @@ export function openStore(file, { seedProvider } = {}) {
     position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
   )`);
+  // Private shares: one chat for one named person, reached through a code sent to their Telegram
+  // and bound to the device that typed it. A table of its own, never `shares`: an older build looks
+  // public tokens up in `shares` without any kind, so a private row there would open with no code.
+  db.exec(`CREATE TABLE IF NOT EXISTS private_shares (
+    token TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL REFERENCES chats(id),
+    grantee TEXT NOT NULL,
+    grantee_peer TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revoked_at TEXT,
+    code_hash TEXT,
+    code_expires_at TEXT,
+    code_sent_at TEXT,
+    codes_sent INTEGER NOT NULL DEFAULT 0,
+    code_attempts INTEGER NOT NULL DEFAULT 0,
+    device_hash TEXT,
+    claimed_at TEXT,
+    last_seen_at TEXT,
+    views INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.exec("CREATE INDEX IF NOT EXISTS private_shares_chat ON private_shares(chat_id)");
+  // The person's @username, when they have one: someone found through Telegram's own search (no
+  // recent chat with the owner) is reachable by a bare id only until the account restarts.
+  if (!db.prepare("PRAGMA table_info(private_shares)").all().some((c) => c.name === "grantee_username")) {
+    db.exec("ALTER TABLE private_shares ADD COLUMN grantee_username TEXT");
+  }
+  // From Karsara: start of the current code-cap window (codes_sent counts since then — a rolling
+  // cap, never a lifetime one), and an invite that went pending then failed (removed then, told to
+  // the owner once). Each column on its own: a kill between two ALTERs must not leave one missing.
+  for (const column of ["codes_window_start", "invite_failed_at", "failure_told_at"]) {
+    if (!db.prepare("PRAGMA table_info(private_shares)").all().some((c) => c.name === column)) db.exec(`ALTER TABLE private_shares ADD COLUMN ${column} TEXT`);
+  }
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "group_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN group_id TEXT");
   }
@@ -373,6 +528,40 @@ export function openStore(file, { seedProvider } = {}) {
     started_chat_id TEXT,
     created_at TEXT NOT NULL
   )`);
+  // Send ledger (from Karsara; telegram-ledger.mjs): which chat sent which Telegram message to which
+  // peer through telegram_send, so an answer can be traced back to the chat that asked. Written only
+  // when the install sets TELEGRAM_LEDGER=on. Same shape as Karsara's table, so from-karsara copies it.
+  db.exec(`CREATE TABLE IF NOT EXISTS telegram_sends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id TEXT NOT NULL,
+    chat_id TEXT,
+    message_id INTEGER,
+    at TEXT NOT NULL
+  )`);
+  db.exec("CREATE INDEX IF NOT EXISTS telegram_sends_peer ON telegram_sends (peer_id, id)");
+  // Telegram inbox items (telegram-inbox.mjs, from Karsara; config TELEGRAM_DM_MODE=inbox):
+  // pending -> delivered (its run is in flight) -> done | failed. Same shape as Karsara's table.
+  db.exec(`CREATE TABLE IF NOT EXISTS inbox_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    done_at TEXT,
+    meta TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
+  )`);
+
+  // Full-text search over what was said in a chat, not only its title (from Karsara 2496a06): the
+  // topic is usually in the messages, not in the auto title. Each row shares the id (rowid) of the
+  // event it came from — a user message, or the run.finished of an answer — so a deleted chat or a
+  // rewound turn takes its rows with it. Nothing exists until CHAT_SEARCH_MESSAGES is first on
+  // (enableSearch, from index.mjs): an install that keeps it off pays nothing, on open or on write.
+  // Then new events are indexed by trigger, and older ones a step at a time on a worker thread
+  // (search-worker.mjs). Turned off again, the index stays and keeps up; only searching stops.
+  dropEarlierSearch(db);
+  let searchIndex = hasSearchIndex(db);
 
   // One emitter for everything: "chat:<id>" carries events, "chats" carries list changes.
   const bus = new EventEmitter();
@@ -416,7 +605,9 @@ export function openStore(file, { seedProvider } = {}) {
       LEFT JOIN persons p ON p.id = c.person_id
       LEFT JOIN peer_users pu ON c.caller = 'peer:' || pu.id
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0
+      WHERE c.archived = @archived AND c.side_of IS NULL AND c.sim = 0
+        -- A Telegram general issue's thread (integrations/mother.mjs SHARED) is a main-list chat too.
+        AND (c.parent_chat_id IS NULL OR EXISTS (SELECT 1 FROM kv WHERE kv.key = 'sharedthread:' || c.id))
         -- One entry per job (an hourly job would fill the list): its last-created run, plus
         -- a run the owner pinned or kept and one still running (parked on a question too). Archiving
         -- the newest run clears the job until it runs again; the archive view lists every run.
@@ -445,8 +636,11 @@ export function openStore(file, { seedProvider } = {}) {
       "SELECT id, run_id, type, data, at FROM events WHERE chat_id = ? AND id > ? ORDER BY id LIMIT ?",
     ),
     insertRun: db.prepare(
-      "INSERT INTO runs (id, chat_id, status, started_at) VALUES (?, ?, 'running', ?)",
+      "INSERT INTO runs (id, chat_id, status, started_at, tokens, turns, shown) VALUES (?, ?, 'running', ?, 0, 0, 0)",
     ),
+    runUsage: db.prepare("UPDATE runs SET tokens = COALESCE(tokens, 0) + ?, turns = COALESCE(turns, 0) + 1 WHERE id = ?"),
+    runModel: db.prepare("UPDATE runs SET model = ? WHERE id = ?"),
+    runShown: db.prepare("UPDATE runs SET shown = 1 WHERE id = ? AND shown = 0"),
     setSdkRun: db.prepare("UPDATE runs SET sdk_run_id = ? WHERE id = ?"),
     finishRun: db.prepare("UPDATE runs SET status = ?, error = ?, ended_at = ? WHERE id = ?"),
     runningRuns: db.prepare("SELECT * FROM runs WHERE status = 'running'"),
@@ -561,6 +755,77 @@ export function openStore(file, { seedProvider } = {}) {
     // --- suggestions (chat_suggest): a proposed new chat, started or dismissed by the owner ---
     // A change rides the "chats" channel: the sidebar reloads its list and the suggestions with it.
 
+    // --- Telegram send ledger (telegram-ledger.mjs) ---
+
+    recordTelegramSend({ peerId, chatId = null, messageId = null, at = null }) {
+      db.prepare("INSERT INTO telegram_sends (peer_id, chat_id, message_id, at) VALUES (?, ?, ?, ?)").run(String(peerId), chatId, messageId == null ? null : Number(messageId), at || now());
+    },
+
+    /** Newest first: [{peerId, chatId, title, messageId, at}]; title is null once the chat is gone. */
+    listTelegramSends({ peerId, limit = 20 } = {}) {
+      return db
+        .prepare("SELECT s.peer_id AS peerId, s.chat_id AS chatId, c.title AS title, s.message_id AS messageId, s.at AS at FROM telegram_sends s LEFT JOIN chats c ON c.id = s.chat_id WHERE s.peer_id = ? ORDER BY s.id DESC LIMIT ?")
+        .all(String(peerId), Math.min(Math.max(Math.trunc(Number(limit)) || 20, 1), 500));
+    },
+
+    // --- Telegram inbox items (telegram-inbox.mjs) ---
+
+    addInboxItem({ peerId, text, meta = null }) {
+      const info = db
+        .prepare("INSERT INTO inbox_items (peer_id, text, status, created_at, meta) VALUES (?, ?, 'pending', ?, ?)")
+        .run(String(peerId), text, now(), meta ? JSON.stringify(meta) : null);
+      return Number(info.lastInsertRowid);
+    },
+
+    getInboxItem(id) {
+      return db.prepare("SELECT * FROM inbox_items WHERE id = ?").get(Math.trunc(Number(id)) || 0) || null;
+    },
+
+    /** The oldest pending item of each peer, oldest first: one row per peer, however long its backlog. */
+    pendingInboxHeads() {
+      return db
+        .prepare("SELECT * FROM inbox_items WHERE id IN (SELECT MIN(id) FROM inbox_items WHERE status = 'pending' GROUP BY peer_id) ORDER BY id ASC")
+        .all();
+    },
+
+    setInboxItemMeta(id, meta) {
+      db.prepare("UPDATE inbox_items SET meta = ? WHERE id = ?").run(JSON.stringify(meta || {}), id);
+    },
+
+    listInboxItems({ status = null, limit = 100 } = {}) {
+      return db.prepare("SELECT * FROM inbox_items WHERE (@status IS NULL OR status = @status) ORDER BY id ASC LIMIT @limit").all({ status, limit });
+    },
+
+    /** One sender's latest items, oldest first, and how many there are in all. */
+    peerInboxItems(peerId, { limit = 200 } = {}) {
+      const rows = db.prepare("SELECT * FROM inbox_items WHERE peer_id = ? ORDER BY id DESC LIMIT ?").all(String(peerId), limit).reverse();
+      const { total } = db.prepare("SELECT COUNT(*) AS total FROM inbox_items WHERE peer_id = ?").get(String(peerId));
+      return { rows, total };
+    },
+
+    /** Per sender: item count, open (pending / in flight) count and the latest item id; latest first. */
+    inboxPeers({ limit = 200 } = {}) {
+      return db
+        .prepare("SELECT peer_id AS peerId, COUNT(*) AS count, SUM(status IN ('pending', 'delivered')) AS open, MAX(id) AS lastId FROM inbox_items GROUP BY peer_id ORDER BY lastId DESC LIMIT ?")
+        .all(limit);
+    },
+
+    /** Ids of one chat's suggestions made in [from, to] (ISO times), oldest first. */
+    suggestionsFromChatBetween(chatId, from, to) {
+      return db
+        .prepare("SELECT id FROM suggestions WHERE from_chat_id = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at, rowid")
+        .all(String(chatId || ""), String(from), String(to))
+        .map((row) => row.id);
+    },
+
+    /** pending (re-queued) | delivered (one more attempt) | done | failed. */
+    setInboxItem(id, status, at = null) {
+      if (status === "pending") return void db.prepare("UPDATE inbox_items SET status = 'pending' WHERE id = ?").run(id);
+      const column = status === "delivered" ? "delivered_at" : "done_at";
+      const bump = status === "delivered" ? ", attempts = attempts + 1" : "";
+      db.prepare(`UPDATE inbox_items SET status = ?, ${column} = ?${bump} WHERE id = ?`).run(status, at || now(), id);
+    },
+
     createSuggestion({ fromChatId = null, title, tldr = "", prompt, repo = null, model = null }) {
       const id = randomUUID();
       db.prepare(
@@ -611,12 +876,14 @@ export function openStore(file, { seedProvider } = {}) {
         "DELETE FROM integration_links WHERE chat_id = ?",
         "DELETE FROM thread_links WHERE chat_id = ?",
         "DELETE FROM shares WHERE chat_id = ?",
+        "DELETE FROM private_shares WHERE chat_id = ?",
         "DELETE FROM media WHERE chat_id = ?",
         "DELETE FROM charts WHERE chat_id = ?",
         "DELETE FROM events WHERE chat_id = ?",
         "DELETE FROM runs WHERE chat_id = ?",
         "UPDATE job_runs SET chat_id = NULL WHERE chat_id = ?",
         "DELETE FROM kv WHERE key = 'manifest:' || ?",
+        "DELETE FROM kv WHERE key = 'jobrunby:' || ?",
         "UPDATE suggestions SET from_chat_id = NULL WHERE from_chat_id = ?",
       ]) db.prepare(sql).run(id);
       const changes = db.prepare("DELETE FROM chats WHERE id = ?").run(id).changes;
@@ -673,7 +940,7 @@ export function openStore(file, { seedProvider } = {}) {
     updateChat(id, patch) {
       const current = store.getChat(id);
       if (!current) return null;
-      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider", effort: "effort", repo: "repo", worktreePath: "worktree_path", groupId: "group_id" };
+      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider", effort: "effort", runsOn: "runs_on", repo: "repo", worktreePath: "worktree_path", groupId: "group_id" };
       const sets = [];
       const values = [];
       for (const [key, column] of Object.entries(allowed)) {
@@ -754,14 +1021,15 @@ export function openStore(file, { seedProvider } = {}) {
     // Prior conversation as plain role/content turns, for reseeding a fresh session after a rewind
     // or an agent switch. Owner/user messages and the agent's delivered text only — no tool noise.
     // throughId: only events up to that one (a fork from an earlier reply).
-    priorTurns(chatId, { limit = 40, throughId = null } = {}) {
+    // withData: user turns also carry their event (id, data) — a fork copies who wrote each one.
+    priorTurns(chatId, { limit = 40, throughId = null, withData = false } = {}) {
       const turns = [];
       let current = null;
       for (const event of store.allEvents(chatId)) {
         if (throughId && event.id > throughId) break;
         if (event.type === "user") {
           const text = String(event.data?.text || "").trim();
-          if (text) turns.push({ role: "user", content: text, eventId: event.id });
+          if (text) turns.push({ role: "user", content: text, eventId: event.id, data: event.data });
           current = null;
         } else if (event.type === "user.queue" && (event.data?.state === "dropped" || event.data?.state === "removed")) {
           // A queued message a Stop dropped, or the owner removed from the queue, never reached the agent.
@@ -778,7 +1046,7 @@ export function openStore(file, { seedProvider } = {}) {
         }
       }
       return turns
-        .map(({ role, content }) => ({ role, content: content.trim() }))
+        .map(({ role, content, eventId, data }) => (withData && role === "user" ? { role, content: content.trim(), event: { id: eventId, data } } : { role, content: content.trim() }))
         .filter((t) => t.content)
         .slice(-limit);
     },
@@ -787,6 +1055,11 @@ export function openStore(file, { seedProvider } = {}) {
       const at = now();
       const info = q.insertEvent.run(chatId, runId, type, JSON.stringify(data), at);
       const event = { id: Number(info.lastInsertRowid), runId, type, data, at };
+      if (runId) {
+        if (type === "usage") q.runUsage.run(usageTotal(data), runId);
+        else if (type === "run.started" && typeof data?.model === "string" && data.model) q.runModel.run(data.model, runId);
+        else if (type === "text" || type === "tool.started") q.runShown.run(runId); // the doctor's «showed something»
+      }
       bus.emit(`chat:${chatId}`, event);
       bus.emit("event", chatId, event);
       return event;
@@ -992,13 +1265,14 @@ export function openStore(file, { seedProvider } = {}) {
         )
         .all(String(sinceIso));
       const startOf = db.prepare(
-        `SELECT json_extract(data, '$.model') AS model FROM
+        `SELECT json_extract(data, '$.model') AS model, json_extract(data, '$.provider') AS provider FROM
            (SELECT type, run_id, data FROM events WHERE chat_id = ? AND id < ? ORDER BY id DESC LIMIT 5000)
          WHERE type = 'run.started' AND run_id = ? LIMIT 1`,
       );
       return rows.map(({ id, runId, data, ...row }) => {
         if (runId && !runModels.has(runId)) {
-          runModels.set(runId, startOf.get(row.chatId, id, runId)?.model || null);
+          const started = startOf.get(row.chatId, id, runId);
+          runModels.set(runId, { model: started?.model || null, provider: started?.provider || null });
           if (runModels.size > 50_000) runModels.delete(runModels.keys().next().value);
         }
         let usage = null;
@@ -1007,7 +1281,9 @@ export function openStore(file, { seedProvider } = {}) {
         } catch {
           // an unreadable record counts as zero
         }
-        return { ...row, model: runId ? runModels.get(runId) : null, usage };
+        const started = runId ? runModels.get(runId) : null;
+        // provider: the engine account the run was on (run.started), for the accounting report.
+        return { ...row, model: started?.model || null, provider: started?.provider || null, usage };
       });
     },
 
@@ -1037,6 +1313,66 @@ export function openStore(file, { seedProvider } = {}) {
 
     listApprovals({ limit = 100 } = {}) {
       return db.prepare("SELECT * FROM approvals ORDER BY id DESC LIMIT ?").all(limit);
+    },
+
+    // Indexes events older than the search index, `chunk` events per transaction, until `budgetMs`
+    // has passed (so one call holds the server about that long); returns true while some remain.
+    // Indexes events older than the search index (indexSearchStep); returns true while some remain.
+    indexSearchBatch(options) {
+      return searchIndex ? indexSearchStep(db, options) : false;
+    },
+
+    // Makes the message search's index (searchSchemaSql) the first time it is switched on; the events
+    // already there are left to the backfill (cursor 0 up to today's last event). A database that ran
+    // an earlier shape (events_fts_ai) is emptied and reindexed. False on a SQLite without FTS5: the
+    // sidebar keeps its title search.
+    enableSearch() {
+      if (searchIndex) return true;
+      try {
+        searchIndex = enableSearchSchema(db);
+      } catch {
+        searchIndex = false;
+      }
+      return searchIndex;
+    },
+
+    // The worker made the index on its own connection: this one sees it on the next search.
+    searchReady() {
+      if (!searchIndex) searchIndex = hasSearchIndex(db);
+      return searchIndex;
+    },
+
+    // Nothing left for the backfill (index.mjs starts no worker then).
+    searchBackfillDone() {
+      return searchBackfillDone(db);
+    },
+
+    // While the backfill runs, the server's own connection leaves WAL checkpoints to the worker
+    // (indexSearchStep checkpoints after every step); 1000 pages again once it is done.
+    setAutoCheckpoint(pages) {
+      db.exec(`PRAGMA wal_autocheckpoint = ${Math.max(0, Number(pages) || 0)}`);
+    },
+
+    // Ids of chats whose messages hold `query` (at least 2 letters), its last word as a prefix when it
+    // has 2 letters or more: «پرداخ» finds «پرداخت»; a one-letter last word («سرور م») is matched whole,
+    // since a one-letter prefix makes SQLite expand it over the whole vocabulary. FTS5 syntax in it is
+    // taken literally. Only the newest `scan` matching rows are read, so a common word costs the same on
+    // a large DB as on a small one.
+    searchChatIds(query, { limit = 500, scan = 2000 } = {}) {
+      const term = foldSearch(query).trim();
+      if (!store.searchReady() || [...term].length < 2) return [];
+      const last = term.split(/[^\p{L}\p{N}]+/u).filter(Boolean).pop() || "";
+      const phrase = `"${term.replace(/"/g, '""')}"${[...last].length >= 2 ? "*" : ""}`;
+      const ids = new Set();
+      try {
+        for (const r of db.prepare("SELECT chat_id FROM events_fts WHERE events_fts MATCH ? ORDER BY rowid DESC LIMIT ?").iterate(phrase, scan)) {
+          ids.add(r.chat_id);
+          if (ids.size >= limit) break;
+        }
+      } catch {
+        return []; // only punctuation: no word to look for
+      }
+      return [...ids];
     },
 
     getKv(key) {
@@ -1318,6 +1654,8 @@ export function openStore(file, { seedProvider } = {}) {
     },
 
     linkChat(integrationId, externalChat, chatId) {
+      // Remembered after the link is gone (owner-chat-tools.mjs): the chat holds that chat's words.
+      if (chatId) db.prepare("INSERT OR IGNORE INTO kv (key, value) VALUES (?, '1')").run(telegramOriginKey(chatId));
       db.prepare(`INSERT INTO integration_links (integration_id, external_chat, chat_id, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(integration_id, external_chat) DO UPDATE SET chat_id = excluded.chat_id, updated_at = excluded.updated_at`)
         .run(integrationId, String(externalChat), chatId, now());
@@ -1370,6 +1708,76 @@ export function openStore(file, { seedProvider } = {}) {
     chatForShare(token) {
       const row = db.prepare("SELECT chat_id FROM shares WHERE token = ? AND revoked_at IS NULL").get(String(token));
       return row ? store.getChat(row.chat_id) : null;
+    },
+
+    // Private shares (see the table above). Rows are returned raw; the routes decide what leaves.
+    createPrivateShare(chatId, { grantee, peerId, username = null }) {
+      const token = randomBytes(24).toString("base64url");
+      db.prepare("INSERT INTO private_shares (token, chat_id, grantee, grantee_peer, grantee_username, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(token, chatId, String(grantee), String(peerId), username ? String(username) : null, now());
+      return store.getPrivateShare(token);
+    },
+    getPrivateShare(token) {
+      return db.prepare("SELECT * FROM private_shares WHERE token = ? AND revoked_at IS NULL").get(String(token)) || null;
+    },
+    listPrivateShares(chatId) {
+      return db.prepare("SELECT * FROM private_shares WHERE chat_id = ? AND revoked_at IS NULL ORDER BY created_at").all(chatId);
+    },
+    revokePrivateShare(chatId, token) {
+      return db.prepare("UPDATE private_shares SET revoked_at = ? WHERE chat_id = ? AND token = ? AND revoked_at IS NULL").run(now(), chatId, String(token)).changes;
+    },
+    // A new code (saved only after it reached the person) replaces the previous one and its tries.
+    // sentAt: the reservation it belongs to — a slow send that lands after a newer one is dropped.
+    setShareCode(token, { codeHash, expiresAt, sentAt }) {
+      db.prepare("UPDATE private_shares SET code_hash = ?, code_expires_at = ?, code_attempts = 0 WHERE token = ? AND revoked_at IS NULL AND code_sent_at = ?").run(codeHash, expiresAt, String(token), sentAt);
+    },
+    // Reserves a code send: the cooldown and the per-share cap are checked and taken in one
+    // statement, so two requests at once cannot both send. False: too soon or no codes left.
+    // Returns the reservation time, or null when too soon or no codes are left.
+    // windowStart: a window that began at or before it is over, and the count starts again.
+    reserveShareCode(token, { notBefore, maxCodes, windowStart = "" }) {
+      const at = now();
+      const ok =
+        db
+          .prepare(
+            `UPDATE private_shares SET code_sent_at = @at,
+               codes_sent = CASE WHEN codes_window_start IS NULL OR codes_window_start <= @windowStart THEN 1 ELSE codes_sent + 1 END,
+               codes_window_start = CASE WHEN codes_window_start IS NULL OR codes_window_start <= @windowStart THEN @at ELSE codes_window_start END
+             WHERE token = @token AND revoked_at IS NULL
+               AND (codes_window_start IS NULL OR codes_window_start <= @windowStart OR codes_sent < @maxCodes)
+               AND (code_sent_at IS NULL OR code_sent_at <= @notBefore)`,
+          )
+          .run({ at, token: String(token), maxCodes, notBefore, windowStart }).changes > 0;
+      return ok ? at : null;
+    },
+    failPrivateShareInvite(chatId, token) {
+      const at = now();
+      return db.prepare("UPDATE private_shares SET revoked_at = ?, invite_failed_at = ? WHERE chat_id = ? AND token = ? AND revoked_at IS NULL").run(at, at, chatId, String(token)).changes;
+    },
+    takeFailedInvites(chatId) {
+      const rows = db.prepare("SELECT * FROM private_shares WHERE chat_id = ? AND invite_failed_at IS NOT NULL AND failure_told_at IS NULL ORDER BY invite_failed_at").all(chatId);
+      if (rows.length) db.prepare("UPDATE private_shares SET failure_told_at = ? WHERE chat_id = ? AND invite_failed_at IS NOT NULL AND failure_told_at IS NULL").run(now(), chatId);
+      return rows;
+    },
+    // A send that failed outright gives back its count; the cooldown stays, so failures cannot be hammered.
+    refundShareCode(token) {
+      db.prepare("UPDATE private_shares SET codes_sent = MAX(codes_sent - 1, 0) WHERE token = ?").run(String(token));
+    },
+    // Spends one try of the current code before it is checked, in one statement, so guesses sent
+    // together cannot all see the same count. False: no live code, or its tries are used up.
+    takeShareCodeAttempt(token, maxAttempts) {
+      return db.prepare("UPDATE private_shares SET code_attempts = code_attempts + 1 WHERE token = ? AND revoked_at IS NULL AND code_hash IS NOT NULL AND code_attempts < ?").run(String(token), maxAttempts).changes > 0;
+    },
+    // Binds the share to this device with the code that was just checked; the code is spent, so of
+    // two claims with it exactly one wins. A later code (sent to the same person) moves it to a
+    // new device and the old one is out.
+    claimPrivateShare(token, codeHash, deviceHash) {
+      return db.prepare("UPDATE private_shares SET device_hash = ?, claimed_at = ?, code_hash = NULL, code_expires_at = NULL WHERE token = ? AND revoked_at IS NULL AND code_hash = ?").run(deviceHash, now(), String(token), codeHash).changes > 0;
+    },
+    // A visit counts once per half hour of reading (the guest page polls); the last-seen time always moves.
+    touchPrivateShare(token) {
+      const at = now();
+      const since = new Date(Date.parse(at) - 30 * 60_000).toISOString();
+      db.prepare("UPDATE private_shares SET views = views + (CASE WHEN last_seen_at IS NULL OR last_seen_at < ? THEN 1 ELSE 0 END), last_seen_at = ? WHERE token = ?").run(since, at, String(token));
     },
 
     getChart(id) {
@@ -1489,19 +1897,35 @@ export function openStore(file, { seedProvider } = {}) {
 
     seedAgentProfiles({ provider } = {}) {
       let inserted = 0;
+      if (specialistsOff()) for (const id of SPECIALIST_AGENTS) db.prepare("DELETE FROM agent_profiles WHERE id = ?").run(id);
       for (const row of seedProfilesFromRegistry({ provider })) {
         const existing = store.getAgentProfile(row.id);
+        const snapshot = Object.fromEntries(Object.entries(row.meta.callers || {}).map(([id, q]) => [id, q?.tools ?? null]));
         if (existing) {
           // New caller rows from the registry are added; anything the owner edited stays.
           const callers = { ...(existing.meta?.callers || {}) };
           const missing = Object.keys(row.meta.callers || {}).filter((id) => !callers[id]);
-          if (missing.length) {
-            for (const id of missing) callers[id] = row.meta.callers[id];
-            store.updateAgentProfile(row.id, { meta: { ...(existing.meta || {}), callers } });
+          for (const id of missing) callers[id] = row.meta.callers[id];
+          // A tool the registry newly gives a caller reaches the stored row once. kv seed:callers
+          // remembers what the registry gave last boot, so a tool the owner took away stays away.
+          // Without it every new tool needed a one-time migration, and the forgotten ones left
+          // agents without tools the registry had given them.
+          const before = store.getKv(`seed:callers:${row.id}`) || {};
+          let added = false;
+          for (const [id, quota] of Object.entries(row.meta.callers || {})) {
+            if (missing.includes(id) || !Array.isArray(quota?.tools) || !Array.isArray(callers[id]?.tools)) continue;
+            const fresh = quota.tools.filter((t) => !(before[id] || []).includes(t) && !callers[id].tools.includes(t));
+            if (fresh.length) {
+              callers[id] = { ...callers[id], tools: [...callers[id].tools, ...fresh] };
+              added = true;
+            }
           }
+          if (missing.length || added) store.updateAgentProfile(row.id, { meta: { ...(existing.meta || {}), callers } });
+          store.setKv(`seed:callers:${row.id}`, snapshot);
           continue;
         }
         store.upsertAgentProfile(row);
+        store.setKv(`seed:callers:${row.id}`, snapshot);
         inserted += 1;
       }
       // One-time: a colleague's conversation may tell an owner chat something (chat_list +
@@ -1529,6 +1953,14 @@ export function openStore(file, { seedProvider } = {}) {
           store.updateAgentProfile(profile.id, { tools: [...new Set([...profile.tools, ...chatTools])] });
         }
         store.setKv("migr:chat-tools", "1");
+      }
+      // One-time: consult (from Karsara) goes to the same agents as the chat tools above.
+      if (!store.getKv("migr:consult")) {
+        for (const profile of store.listAgentProfiles()) {
+          if (profile.meta?.allPlatform || !Array.isArray(profile.tools) || !profile.tools.includes("chat_suggest") || profile.tools.includes("consult")) continue;
+          store.updateAgentProfile(profile.id, { tools: [...profile.tools, "consult"] });
+        }
+        store.setKv("migr:consult", "1");
       }
       return inserted;
     },
@@ -1559,7 +1991,10 @@ export function openStore(file, { seedProvider } = {}) {
       const existing = store.getAgentProfile(id);
       const toolsJson = JSON.stringify(unique(Array.isArray(tools) ? tools : []));
       const metaJson = JSON.stringify(meta && typeof meta === "object" ? meta : {});
-      const prov = normalizeProvider(provider);
+      // An extra account (claude-zai, claude-custom …) is only known once setAccounts ran, which is
+      // after openStore seeds the profiles: a seed that only adds tools must not turn the stored
+      // account into cursor (an install once lost its engine on an update).
+      const prov = existing && provider === existing.provider ? existing.provider : normalizeProvider(provider);
       if (existing) {
         db.prepare(
           `UPDATE agent_profiles SET label = ?, domain = ?, blurb = ?, instructions = ?, provider = ?, model = ?, tools_json = ?, meta_json = ?, built_in = ?, updated_at = ? WHERE id = ?`,
@@ -1571,7 +2006,20 @@ export function openStore(file, { seedProvider } = {}) {
         ).run(id, label, domain, blurb || "", instructions || "", prov, model || null, toolsJson, metaJson, Number(builtIn), at, at);
       }
       bus.emit("agents", { type: existing ? "updated" : "created", agentId: id });
-      return store.getAgentProfile(id);
+      const saved = store.getAgentProfile(id);
+      registerAgent(saved);
+      return saved;
+    },
+
+    // Only an agent made at run time can be deleted; the built-in ones are seeded again on every boot.
+    deleteAgentProfile(id) {
+      const existing = store.getAgentProfile(id);
+      if (!existing) return false;
+      if (existing.built_in) throw new Error("a built-in agent cannot be deleted");
+      db.prepare("DELETE FROM agent_profiles WHERE id = ?").run(id);
+      unregisterAgent(id);
+      bus.emit("agents", { type: "deleted", agentId: id });
+      return true;
     },
 
     updateAgentProfile(id, patch = {}) {
@@ -1606,14 +2054,6 @@ export function openStore(file, { seedProvider } = {}) {
     },
 
     /** Remove a custom agent. Chats that used it keep their history and fall back to the default. */
-    deleteAgentProfile(id) {
-      const profile = store.getAgentProfile(id);
-      if (!profile) return false;
-      db.prepare("DELETE FROM agent_profiles WHERE id = ?").run(String(id));
-      bus.emit("agents", { type: "deleted", agentId: String(id) });
-      return true;
-    },
-
     enableAgentTools(id, names) {
       const profile = store.getAgentProfile(id);
       if (!profile) return null;
@@ -1643,6 +2083,10 @@ export function openStore(file, { seedProvider } = {}) {
   };
 
   store.seedAgentProfiles({ provider: seedProvider });
+  for (const profile of store.listAgentProfiles()) registerAgent(profile);
+  db.prepare("INSERT OR IGNORE INTO kv (key, value) SELECT ?, CAST(COALESCE(MAX(id), 0) AS TEXT) FROM events").run(OWNER_TEXT_SINCE);
+  // Every chat linked to Telegram before telegramOriginKey existed is recorded too (idempotent).
+  db.prepare("INSERT OR IGNORE INTO kv (key, value) SELECT 'tg-origin:' || chat_id, '1' FROM (SELECT chat_id FROM integration_links UNION SELECT chat_id FROM thread_links) WHERE chat_id IS NOT NULL").run();
   return store;
 }
 
@@ -1722,4 +2166,12 @@ function jobRunFromRow(row) {
     startedAt: row.started_at,
     endedAt: row.ended_at,
   };
+}
+
+// One usage event's tokens, whatever the engine's field names (token-usage.mjs usageParts).
+function usageTotal(u) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  if (!u || typeof u !== "object") return 0;
+  if (u.prompt_tokens != null) return n(u.prompt_tokens) + n(u.completion_tokens) + n(u.cache_creation_input_tokens);
+  return n(u.input_tokens ?? u.inputTokens) + n(u.output_tokens ?? u.outputTokens) + n(u.cache_read_input_tokens ?? u.cacheReadTokens) + n(u.cache_creation_input_tokens ?? u.cacheWriteTokens);
 }

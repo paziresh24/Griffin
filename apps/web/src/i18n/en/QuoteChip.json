@@ -3,5 +3,10 @@
   "ذخیرهٔ تغییر": "Save change",
   "ذخیرهٔ تغییر (Ctrl+Enter)": "Save change (Ctrl+Enter)",
   "ویرایش این نقل‌قول: {text}": "Edit this quote: {text}",
-  "(برای ویرایش کلیک کن)": "(click to edit)"
+  "(برای ویرایش کلیک کن)": "(click to edit)",
+  "باز کردن گفتگویی که این بخش از آن آمده": "Open the chat this part came from",
+  "از گفتگوی «{title}»": "From the chat \"{title}\"",
+  "از گفتگوی دیگر": "From another chat",
+  "نمایش کامل": "Show all",
+  "بستن": "Close"
 }

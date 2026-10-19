@@ -138,12 +138,12 @@ function VegaView({ spec, height, maximized = false, onView }) {
   const ref = useRef(null);
   const [error, setError] = useState(null);
   // Light/dark and the skin both change the colours read by vegaConfig(); either one redraws.
-  const look = () => `${isDark()}:${document.documentElement.dataset.skin || ""}`;
+  const look = () => `${isDark()}:${document.documentElement.dataset.look || ""}`;
   const [theme, setTheme] = useState(look);
 
   useEffect(() => {
     const observer = new MutationObserver(() => setTheme(look()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-skin"] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-look"] });
     return () => observer.disconnect();
   }, []);
 

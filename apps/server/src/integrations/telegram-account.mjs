@@ -1,12 +1,15 @@
 import crypto from "node:crypto";
-import { markdownToPlain, chunk, signedByAgent, withAgentFooter } from "./format.mjs";
+import { markdownToPlain, signedByAgent, signedParts, splitMarkdown, withAgentFooter } from "./format.mjs";
 import { coverageCommand } from "./coverage.mjs";
 import { isAgentSigned, looksAssistantSigned, peerAgentConfig } from "./peer-agent.mjs";
 import { handsToGriffin } from "./threads.mjs";
 import { watching } from "./mother.mjs";
 import { DEFAULT_TZ } from "../jobs/cron.mjs";
+import { mediaKind } from "../telegram-inbox.mjs";
+import { MAX_FILE_BYTES, isAttachableFile, parseFiles } from "../attachments.mjs";
 import { CALL_WORD, PERSONA } from "../persona.mjs";
 import { isJpeg } from "../profile.mjs";
+import { withoutInertMarks, withoutInertMarksIn } from "../redact.mjs";
 
 // The owner's own Telegram account (MTProto, gramjs). Uses:
 //   1. a chat with the assistant in Saved Messages (call word),
@@ -17,6 +20,28 @@ import { isJpeg } from "../profile.mjs";
 // The login code and 2FA password are typed by the owner in the UI and only passed to Telegram.
 
 export const ACCOUNT_KIND = "telegram_account";
+
+// Messages Griffin sends from the owner's account that are not the owner talking (a private-share
+// invite or code, private-share.mjs): the inbox and the person's history must not read them as the
+// owner replying to that person. Keyed by peer + exact text, registered before the send so the echo
+// of the outgoing update finds it.
+const quietSends = new Map(); // "<peerId>\n<text>" -> expiry ms
+const QUIET_MS = 2 * 60_000;
+export function takeQuiet(peerId, text) {
+  const key = `${peerId}\n${String(text ?? "").trim()}`;
+  const until = quietSends.get(key);
+  if (until === undefined) return false;
+  quietSends.delete(key);
+  return until > Date.now();
+}
+
+/** Sends plain text (no Markdown: a "__" in a link would be eaten) that the inbox ignores. */
+export async function sendQuiet(client, entity, peerId, text) {
+  const now = Date.now();
+  for (const [k, until] of quietSends) if (until <= now) quietSends.delete(k);
+  quietSends.set(`${peerId}\n${String(text).trim()}`, now + QUIET_MS);
+  return client.sendMessage(entity, { message: text, linkPreview: false, parseMode: false });
+}
 const MARK = "🤖 ";
 
 // In Saved Messages, only act on a message that calls the product/agent by name, so the owner's own notes,
@@ -73,7 +98,24 @@ export async function mediaImages(client, message) {
   }
 }
 
-function clientOptions(proxy) {
+// A PDF or text file the colleague sent, as the owner's own attachments take them (attachments.mjs:
+// the same size, page and encoding checks). Anything else (zip, office, audio) stays a «[فایل]» label.
+export async function mediaFiles(client, message) {
+  try {
+    const doc = message?.document;
+    if (!doc || message.photo || !isAttachableFile(doc.mimeType) || !(Number(doc.size) <= MAX_FILE_BYTES)) return [];
+    const name = doc.attributes?.find((attribute) => attribute?.fileName)?.fileName || "file";
+    const buf = await client.downloadMedia(message, {});
+    if (!buf?.length) return [];
+    return parseFiles([{ name, mimeType: doc.mimeType, data: Buffer.from(buf).toString("base64") }]).files || [];
+  } catch {
+    return [];
+  }
+}
+
+// proxy: { host, port }, or a function giving it now (the wizard's VPN can come up while the server runs).
+function clientOptions(proxyOrNow) {
+  const proxy = typeof proxyOrNow === "function" ? proxyOrNow() : proxyOrNow;
   return {
     connectionRetries: 5,
     autoReconnect: true,
@@ -146,7 +188,13 @@ export function createAccountLogin({ proxy, load = gram, now = Date.now }) {
       try {
         await login.client.invoke(new Api.auth.SignIn({ phoneNumber: login.phone, phoneCodeHash: login.phoneCodeHash, phoneCode: String(code).trim() }));
       } catch (error) {
-        if (String(error.errorMessage || error.message).includes("SESSION_PASSWORD_NEEDED")) return { needPassword: true };
+        if (String(error.errorMessage || error.message).includes("SESSION_PASSWORD_NEEDED")) {
+          // The hint the owner set in Telegram, shown above the password field. Capped at a
+          // few seconds; none is never a failure.
+          const ask = login.client.invoke(new Api.account.GetPassword()).then((p) => p?.hint || null, () => null);
+          const hint = await Promise.race([ask, new Promise((resolve) => setTimeout(resolve, 5_000, null).unref?.())]);
+          return { needPassword: true, hint };
+        }
         throw new Error(error.errorMessage || error.message);
       }
       pending.delete(loginId);
@@ -169,11 +217,23 @@ export function createAccountLogin({ proxy, load = gram, now = Date.now }) {
 }
 
 // Running account: Saved Messages ⇄ the assistant, teammate coverage, and a client for agent tools.
-export function createAccountChannel({ integration, bridge, proxy, load = gram, log = console, now = Date.now, profileReadLimitMs = 60_000 }) {
+export function createAccountChannel({ integration, bridge, proxy, load = gram, log = console, now = Date.now, profileReadLimitMs = 60_000, sendTimeoutMs = 40_000 }) {
   const { session, apiId, apiHash } = JSON.parse(integration.secret);
   const status = { state: "starting", lastError: null, username: integration.settings.me?.username || null };
   let client = null;
   let meId = null;
+  // The texts of our own sends whose echo has not come back yet (sendPlain, onMessage), bounded.
+  const sentTexts = [];
+  const rememberSent = (piece) => {
+    sentTexts.push(String(piece || "").trim());
+    if (sentTexts.length > 200) sentTexts.shift();
+  };
+  const takeSent = (text) => {
+    const at = text ? sentTexts.indexOf(text) : -1;
+    if (at < 0) return false;
+    sentTexts.splice(at, 1);
+    return true;
+  };
   // The owner's own name and small profile photo, for the foot of the sidebar (profile.mjs). Read
   // in the background on start, again once a good read is an hour old (a failed or stuck one after
   // a few minutes). gramjs has no download timeout, so a read is given up after profileReadLimitMs.
@@ -222,6 +282,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
   const sentByUs = new Set(); // ids of messages we sent (Saved Messages or coverage)
   const statusByChat = new Map(); // externalChat -> { id, text, at }
   const questionByChat = new Map(); // externalChat -> message id of the currently-open ask_owner question
+  const askByMessage = new Map(); // question message id -> askId: a reply to it answers that ask in words
   const pendingReplyTo = new Map(); // peer key -> Telegram message id to reply to on next text deliver
 
   // People's profile photos for the Telegram page: one small JPEG per Telegram photo id, downloaded
@@ -270,7 +331,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
 
   async function resolveTarget(target) {
     if (target === "me") return "me";
-    const key = String(target);
+    const key = withoutInertMarks(target);
     // Username / @handle
     if (!/^-?\d+$/.test(key)) {
       return client.getEntity(key.startsWith("@") ? key : key);
@@ -286,16 +347,37 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     }
   }
 
+  // A send Telegram never answers must not hang the delivery forever (40 s, as the bot's).
+  function withTimeout(promise, ms, what) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // `text` may be a list of parts already cut (signedParts): each is sent as it is.
   async function sendPlain(target, text, { replyTo = null } = {}) {
     const dest = await resolveTarget(target);
-    const pieces = chunk(text, 4000);
+    const pieces = Array.isArray(text) ? text.map(withoutInertMarks) : splitMarkdown(withoutInertMarks(text), 4000);
     let lastId = null;
     for (let i = 0; i < pieces.length; i += 1) {
-      const sent = await client.sendMessage(dest, {
+      // Known before Telegram echoes it: a later piece of our own answer (no MARK on it) that
+      // arrives before sentByUs has its id must not read as the owner's request (onMessage).
+      rememberSent(pieces[i]);
+      const pending = client.sendMessage(dest, {
         message: pieces[i],
         linkPreview: false,
         ...(replyTo && i === 0 ? { replyTo: Number(replyTo) } : {}),
       });
+      let sent;
+      try {
+        sent = await withTimeout(pending, sendTimeoutMs, "sendMessage");
+      } catch (error) {
+        // Timed out but may still land: its echo must not read as the owner's own words.
+        Promise.resolve(pending).then((late) => late?.id != null && sentByUs.add(late.id)).catch(() => {});
+        throw error;
+      }
       sentByUs.add(sent.id);
       lastId = sent.id;
     }
@@ -352,7 +434,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
   }
 
   // One editable status line: create or edit; deleted before the final answer. Every step for a
-  // chat runs in order and every line ever sent is remembered: on 2026-10-08 a status still being
+  // chat runs in order and every line ever sent is remembered: once a status still being
   // sent when the answer went out, and a failed edit that sent a fresh line, left four «⏳» lines in
   // a colleague's chat.
   const statusChain = new Map(); // externalChat -> tail promise
@@ -368,7 +450,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     return inOrder(target, async () => {
       if (!client) return;
       const key = String(target);
-      const body = `⏳ ${String(line || "در حال کار…").slice(0, 180)}`;
+      const body = `⏳ ${withoutInertMarks(line || "در حال کار…").slice(0, 180)}`;
       const dest = await resolveTarget(target);
       const prev = statusByChat.get(key);
       if (prev?.id && prev.text === body) return;
@@ -415,7 +497,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     },
     // A message sent through the agent tool / API (telegram_send) is ours, not the owner typing:
     // unmarked, it read as a manual takeover and cancelled the open thread and its subtasks
-    // (2026-10-11: an unrelated notice to a colleague killed their open work twice).
+    // (an unrelated notice to a colleague once killed their open work twice).
     markSent(id) {
       if (id != null) sentByUs.add(id);
     },
@@ -522,6 +604,9 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       const onMessage = async (message, { caughtUp = false } = {}) => {
         if (!message || sentByUs.has(message.id)) return;
         const text = String(message.message || "").trim() || (message.out ? "" : mediaLabel(message));
+        if (message.out && takeSent(text)) return;
+        // A private-share invite or code (sendQuiet) is not the owner answering that person.
+        if (message.out && takeQuiet(peerKey(message, meId), text)) return;
         if (!text || text.startsWith(MARK.trim())) return;
 
         const inSaved = message.out && (String(message.chatId) === meId || String(message.peerId?.userId) === meId);
@@ -547,8 +632,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           // ——— Saved Messages: call word + answers to Owner asks from coverage ———
           if (inSaved) {
             const choice = text.match(/^([1-6])$/);
-            if (choice && (await bridge.answerOwnerAsk(integration.id, Number(choice[1]) - 1))) return;
-            if (choice && (bridge.openOwnerAskCount?.() || 0) > 1) {
+            // A reply to a question message here, in his own words.
+            const repliedAsk = askByMessage.get(Number(message.replyTo?.replyToMsgId));
+            if (repliedAsk && text && !choice) {
+              const done = (await bridge.answerOwnerAsk(integration.id, null, repliedAsk, { senderId: meId, text })) || (await bridge.answer(integration.id, "me", null, repliedAsk, { text }));
+              await client.sendMessage("me", { message: `${MARK}${done ? "✅ گرفتم." : "این سؤال دیگر باز نیست."}`, linkPreview: false }).then((s) => sentByUs.add(s.id)).catch(() => {});
+              return;
+            }
+            if (choice && (await bridge.answerOwnerAsk(integration.id, Number(choice[1]) - 1, null, { senderId: meId }))) return;
+            if (choice && (bridge.ownerAskCountFor?.(integration.id, meId) || 0) > 1) {
               await client.sendMessage("me", { message: `${MARK}چند سؤال باز است؛ دکمهٔ همان پیام ربات را بزن.`, linkPreview: false }).then((s) => sentByUs.add(s.id)).catch(() => {});
               return;
             }
@@ -556,12 +648,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             const request = callToGriffin(text);
             if (!request) return;
             await client.sendMessage("me", { message: `${MARK}چشم، دارم انجام می‌دهم…`, linkPreview: false }).then((s) => sentByUs.add(s.id)).catch(() => {});
-            await bridge.receive(integration.id, "me", { text: request });
+            // His own words (manager.mjs ownerWroteIt), unless he forwarded someone else's message here.
+            await bridge.receive(integration.id, "me", { text: request, forwarded: Boolean(message.fwdFrom || message.viaBotId || message.viaBot) });
             return;
           }
 
           // ——— The owner in a colleague's chat: /agent, /agent off, or his own line ———
           if (message.out && key) {
+            // His own message in a private chat closes that person's waiting burst (telegram-inbox.mjs).
+            if (!message.isGroup && !message.isChannel) bridge.inboxOutgoing?.(key, message.id ?? null);
             const cmd = coverageCommand(text);
             if (cmd === "start") return await agentOn(key, person, await focusFromReply(message), message.id ?? null);
             if (cmd === "end") return await agentOff(key, person, message.id ?? null);
@@ -574,7 +669,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           }
 
           // A watched team group where someone mentions the owner or replies to him (an alerts group,
-          // «@owner» under an alert, 2026-10-08). Only these messages reach the group's mother
+          // «@owner» under an alert). Only these messages reach the group's mother
           // chat — a busy group's other traffic never feeds it.
           if (key && person && message.isGroup && message.mentioned && watching(person) && person.access?.enabled !== false) {
             const who = message.sender || (await message.getSender?.().catch(() => null));
@@ -582,21 +677,26 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             const focus = await focusFromReply(message);
             const sender = who?.firstName || who?.title || "یکی از اعضا";
             const said = `${sender}${focus ? ` در پاسخ به «${focus.text.slice(0, 600)}»` : ""}: ${text}`;
-            await desk.colleague(integration.id, key, { person, name: person.display_name, text: said, images: message.media ? await mediaImages(client, message) : [], messageId: message.id ?? null, called: true });
+            await desk.colleague(integration.id, key, { person, name: person.display_name, text: said, images: message.media ? await mediaImages(client, message) : [], files: message.media ? await mediaFiles(client, message) : [], messageId: message.id ?? null, called: true });
             return;
           }
 
           // A watched person's 1:1 message (or their assistant's): their mother chat, through the desk.
           const dm = Boolean(key && person && !message.isGroup && !message.isChannel && !entity?.bot);
-          if (dm && watching(person) && person.access?.enabled !== false) {
-            await desk.colleague(integration.id, key, { person, name: person.display_name, text, images: message.media ? await mediaImages(client, message) : [], messageId: message.id ?? null, at: caughtUp && message.date ? message.date * 1000 : null });
+          // TELEGRAM_DM_MODE=inbox (telegram-inbox.mjs, read now — a switch needs no restart): the DM
+          // goes to the dispatcher chat only. The assistant's mother chat run and the per-colleague
+          // auto-reply below never see it. In the default mode this only moves the peer's seen mark.
+          if (dm && bridge.inboxIncoming?.(integration.id, key, { person, text, message: { id: message.id ?? null }, entityKnown: Boolean(entity) })) return;
+          // One of the owner's own chats wrote to them (desk.mjs askedBy): the mother hears it to assign
+          // it, even with the watcher off.
+          if (dm && (watching(person) || desk?.hasAskers?.(integration.id, key)) && person.access?.enabled !== false) {
+            await desk.colleague(integration.id, key, { person, name: person.display_name, text, images: message.media ? await mediaImages(client, message) : [], files: message.media ? await mediaFiles(client, message) : [], messageId: message.id ?? null, at: caughtUp && message.date ? message.date * 1000 : null });
             return;
           }
 
           // ——— A colleague's signed automated assistant: Griffin answers it agent-to-agent ———
           // Off unless the owner turns it on (settings.autoReplyAgents): replies go out from the
-          // owner's own account, and the owner switched them off 2026-09-23 («پیام خودکار رو
-          // خاموش کن»). The message stays in the chat for the owner, like any other DM.
+          // owner's own account, so they are opt-in. The message stays in the chat for the owner, like any other DM.
           const autoReply = dm && bridge.integration?.(integration.id)?.settings?.autoReplyAgents === true;
           const agentCfg = autoReply ? peerAgentConfig(person) : null;
           if (agentCfg && isAgentSigned(text, agentCfg.signature)) {
@@ -656,7 +756,9 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             const fresh = [...msgs].reverse().filter((m) => (m.date || 0) >= since && m.message && !known.has(String(m.id)) && !sentByUs.has(m.id));
             // A send from another session is already in the history (under its own id): not again.
             const sentTexts = new Set((person.history || []).filter((h) => h.direction === "out").map((h) => String(h.text || "").trim()));
-            const mine = (m) => m.out && !signedByAgent(m.message) && !m.message.startsWith("⏳") && !m.message.startsWith(MARK.trim()) && !coverageCommand(m.message) && !sentTexts.has(m.message.trim());
+            // A private-share invite or code is not the owner talking (share-sends.mjs).
+            const shareSent = bridge.shareSendIds?.(key) || new Set();
+            const mine = (m) => m.out && !shareSent.has(Number(m.id)) && !signedByAgent(m.message) && !m.message.startsWith("⏳") && !m.message.startsWith(MARK.trim()) && !coverageCommand(m.message) && !sentTexts.has(m.message.trim());
             for (const m of fresh.filter(mine)) {
               bridge.addPersonMessage?.(person.id, { externalMessageId: m.id, direction: "out", text: m.message, data: { chatId: key, by: "owner" } });
               desk.ownerLine(integration.id, key, { text: m.message, by: "owner", person, at: m.date * 1000 });
@@ -674,12 +776,14 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       // Catch up after the handler is armed (missed /agent while session was contested).
       catchUpAgents().catch((error) => log.error?.(`[telegram-account] catchup: ${error.message}`));
       // Queued batches (desk.mjs) wait for this: what the owner answered while we were down counts first.
+      bridge.desk?.catchUpStarted?.(integration.id);
       catchUpTeam()
         .catch((error) => log.error?.(`[telegram-account] catch-up: ${error.message}`))
         .finally(() => bridge.desk?.caughtUp?.(integration.id));
     },
 
-    async deliver(externalChat, message) {
+    async deliver(externalChat, raw) {
+      const message = withoutInertMarksIn(raw);
       if (!client) return;
       const target = externalChat === "me" ? "me" : externalChat;
       let sentId = null;
@@ -696,14 +800,22 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       }
       if (message.typing) return;
       const send = async (body, extra = {}) => {
-        const prefix = target === "me" ? MARK : "";
-        return sendPlain(target, withAgentFooter(`${prefix}${body}`), extra);
+        // Saved Messages is the owner's own: one message as before. To anyone else a long answer goes
+        // in numbered, signed parts, so another assistant reads it whole (signedParts).
+        if (target === "me") return sendPlain(target, withAgentFooter(`${MARK}${body}`), extra);
+        return sendPlain(target, signedParts(withAgentFooter(withoutInertMarks(body))), extra);
       };
       if (message.question) {
         await clearStatus(target);
         const options = message.question.options || [];
-        const messageId = await send(`❓ ${message.question.question}${options.length ? `\n\n${options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n")}\n\nعدد گزینه را بفرست.` : ""}`);
+        const askId = message.question.askId ? String(message.question.askId) : null;
+        const how = askId ? `${options.length ? "عدد گزینه را بفرست، یا " : ""}روی همین پیام ریپلای کن و جواب خودت را بنویس.` : options.length ? "عدد گزینه را بفرست." : "";
+        const messageId = await send(`❓ ${message.question.question}${options.length ? `\n\n${options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ` — ${o.description}` : ""}`).join("\n")}` : ""}${how ? `\n\n${how}` : ""}`);
         if (messageId != null) questionByChat.set(String(target), messageId);
+        if (messageId != null && askId) {
+          askByMessage.set(Number(messageId), askId);
+          if (askByMessage.size > 500) askByMessage.delete(askByMessage.keys().next().value);
+        }
         // The id lets the bridge close exactly this question (closeQuestion below) when it is
         // answered; without it an answered question stayed here until the run ended.
         return messageId != null ? { id: messageId } : undefined;
@@ -752,7 +864,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       const { CustomFile } = await load();
       for (const file of message.files || []) {
         const dest = await resolveTarget(target);
-        const caption = withAgentFooter(`${target === "me" ? MARK : ""}${file.caption || file.name}`);
+        const caption = withAgentFooter(`${target === "me" ? MARK : ""}${withoutInertMarks(file.caption || file.name)}`);
         const sent = await client.sendFile(dest, {
           file: new CustomFile(file.name, file.data.length, "", file.data),
           caption,
@@ -767,12 +879,26 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     async edit(externalChat, messageId, text) {
       if (!client) throw new Error("Telegram account is not connected");
       const dest = await resolveTarget(externalChat);
-      await client.editMessage(dest, { message: Number(messageId), text: withAgentFooter(markdownToPlain(text)), linkPreview: false });
+      await client.editMessage(dest, { message: Number(messageId), text: withAgentFooter(markdownToPlain(withoutInertMarks(text))), linkPreview: false });
     },
     async remove(externalChat, messageId) {
       if (!client) throw new Error("Telegram account is not connected");
       const dest = await resolveTarget(externalChat);
       await client.deleteMessages(dest, [Number(messageId)], { revoke: true });
+    },
+
+    // The assistant's own reaction on a message of this chat ("" takes it back). Its choice stays: the
+    // turn's 👍 (markDone) does not replace it.
+    async react(externalChat, messageId, emoji) {
+      if (!client) throw new Error("Telegram account is not connected");
+      const { Api } = await load();
+      const peer = await resolveTarget(externalChat);
+      try {
+        await client.invoke(new Api.messages.SendReaction({ peer, msgId: Number(messageId), reaction: emoji ? [new Api.ReactionEmoji({ emoticon: emoji })] : [] }));
+      } catch (error) {
+        if (!/MESSAGE_NOT_MODIFIED/i.test(error.message)) throw error; // it already has exactly that
+      }
+      if (pickedUp.get(String(externalChat)) === Number(messageId)) pickedUp.delete(String(externalChat));
     },
 
     // The desk ran the mother on this message: reply to it, and 👀 on it until a send says 👍.
@@ -792,8 +918,16 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
 }
 
 // Agent tools over the connected account. onSent(peer, text): a telegram_send went out — the owner
-// is in that conversation now (desk.mjs R2/R3), whichever chat or session sent it.
-export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {} }) {
+// is in that conversation now (desk.mjs R2/R3), whichever chat or session sent it. record({peerId,
+// messageId}): the send ledger (telegram-ledger.mjs), given only when the install keeps one.
+/** The newest messages of one private dialog as the Telegram inbox reads them (newest first). */
+export async function accountHistory(client, peerId, limit = 50) {
+  if (!client) return [];
+  const messages = await client.getMessages(await client.getEntity(/^-?\d+$/.test(String(peerId)) ? BigInt(peerId) : String(peerId)), { limit });
+  return messages.map((m) => ({ id: m.id, ts: Number(m.date), out: Boolean(m.out), text: m.message || "", replyTo: m.replyTo?.replyToMsgId ?? null, media: mediaKind(m) }));
+}
+
+export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null }) {
   const need = () => {
     const client = getClient();
     if (!client) throw new Error("no Telegram account is connected (Settings → اتصال‌ها)");
@@ -801,7 +935,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
   };
 
   async function resolveChat(client, chat) {
-    const value = String(chat || "").trim();
+    const value = withoutInertMarks(chat).trim();
     if (!value) throw new Error("chat is required");
     if (/^-?\d+$/.test(value) || value.startsWith("@")) {
       const entity = await client.getEntity(value.startsWith("@") ? value : BigInt(value));
@@ -826,7 +960,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
         try {
           const client = need();
           const dialogs = await client.getDialogs({ limit: 300 });
-          const q = String(args?.query || "").toLowerCase();
+          const q = withoutInertMarks(args?.query || "").toLowerCase();
           const rows = dialogs
             .filter((d) => !q || String(d.title || "").toLowerCase().includes(q))
             .slice(0, Math.min(Number(args?.limit) || 50, 300))
@@ -850,7 +984,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
         try {
           const client = need();
           const { entity, title } = await resolveChat(client, args.chat);
-          const messages = await client.getMessages(entity, { limit: Math.min(Number(args.limit) || 30, 200), ...(args.search ? { search: String(args.search) } : {}) });
+          const messages = await client.getMessages(entity, { limit: Math.min(Number(args.limit) || 30, 200), ...(args.search ? { search: withoutInertMarks(args.search) } : {}) });
           const rows = [];
           for (const m of messages) {
             const sender = m.sender ? [m.sender.firstName, m.sender.lastName].filter(Boolean).join(" ") || m.sender.title || m.sender.username : null;
@@ -881,7 +1015,16 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           const [message] = await client.getMessages(entity, { ids: [Number(args.messageId)] });
           if (!message) return text({ chat: title, found: false });
           const images = message.media ? await mediaImages(client, message) : [];
-          if (!images.length) return text({ chat: title, messageId: message.id, kind: mediaLabel(message) || "text", picture: false, text: message.message || "" });
+          if (!images.length) {
+              // A text file is read as text. A PDF only reaches an engine as an attachment of a message
+              // (desk.colleague), not as a tool result.
+              const [file] = message.media ? await mediaFiles(client, message) : [];
+              if (file && file.mimeType !== "application/pdf") {
+                const body = Buffer.from(file.data, "base64").toString("utf8");
+                return text({ chat: title, messageId: message.id, kind: mediaLabel(message), file: file.name, caption: message.message || "", content: body.length > 60_000 ? `${body.slice(0, 60_000)}\n… [truncated]` : body });
+              }
+              return text({ chat: title, messageId: message.id, kind: mediaLabel(message) || "text", picture: false, text: message.message || "", ...(file ? { file: file.name, note: "PDF: ask the colleague to send it again so it arrives with the message" } : {}) });
+            }
           return {
             content: [
               { type: "text", text: JSON.stringify({ chat: title, messageId: message.id, kind: mediaLabel(message), caption: message.message || "" }) },
@@ -906,7 +1049,8 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
         try {
           const client = need();
           const { entity, title } = await resolveChat(client, args.chat);
-          const sent = await client.sendMessage(entity, { message: String(args.text), ...(args.replyTo ? { replyTo: Number(args.replyTo) } : {}) });
+          const message = withoutInertMarks(args.text);
+          const sent = await client.sendMessage(entity, { message, ...(args.replyTo ? { replyTo: Number(args.replyTo) } : {}) });
           markSent(sent.id);
           // The chat's Telegram id as the account keys people (a marked peer id), so a send from
           // another session counts as the owner being in that conversation (desk.mjs R2).
@@ -917,9 +1061,14 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
             /* the plain id */
           }
           try {
-            if (peer) onSent(peer, String(args.text));
+            if (peer) onSent(peer, message);
           } catch {
             /* it went out; presence is best effort */
+          }
+          try {
+            if (peer && record) record({ peerId: peer, messageId: sent.id });
+          } catch {
+            /* it went out; the ledger row is best effort */
           }
           return text({ sent: true, chat: title, messageId: sent.id, peer, source: "telegram account" });
         } catch (error) {

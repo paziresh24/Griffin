@@ -1,4 +1,4 @@
-import { createClaudeProvider, PROVIDER_CLAUDE, CLAUDE_MODELS } from "./claude.mjs";
+import { createClaudeProvider, PROVIDER_CLAUDE, CLAUDE_MODELS, claudeModelList } from "./claude.mjs";
 import { createCursorProvider, PROVIDER_CURSOR } from "./cursor.mjs";
 import { createOpenAIProvider, PROVIDER_OPENAI } from "./openai.mjs";
 import { PROVIDER_IDS, normalizeProvider, kindOf, KINDS, setAccounts } from "./ids.mjs";
@@ -11,11 +11,12 @@ export const DEFAULT_PROVIDER = PROVIDER_CURSOR;
 
 const FACTORY = {
   [PROVIDER_CURSOR]: (a, builtinTools) => createCursorProvider({ apiKey: a.apiKey, defaultModel: a.model || "auto", builtinTools }),
-  [PROVIDER_CLAUDE]: (a) => createClaudeProvider({ apiKey: a.apiKey, defaultModel: a.model || "sonnet" }),
+  // a.endpoint (claude-endpoint.mjs): Claude Code against another vendor's Anthropic-compatible endpoint.
+  [PROVIDER_CLAUDE]: (a) => createClaudeProvider({ apiKey: a.apiKey, defaultModel: a.model || (a.endpoint ? a.endpoint.defaultModel : "sonnet"), endpoint: a.endpoint || null }),
   [PROVIDER_OPENAI]: (a) => createOpenAIProvider({ apiKey: a.apiKey, baseUrl: a.baseUrl, defaultModel: a.model || "gpt-4o-mini", reasoningEffort: a.reasoningEffort || "" }),
 };
 
-/** One provider object per engine account: accounts = [{ id, apiKey, baseUrl, model, reasoningEffort }]. */
+/** One provider object per engine account: accounts = [{ id, apiKey, baseUrl, model, reasoningEffort, endpoint }]. */
 export function createProviders({ accounts = [], builtinTools, demoSdk = null } = {}) {
   if (demoSdk) {
     return Object.fromEntries(PROVIDER_IDS.map((id) => [id, demoProvider(id, demoSdk)]));
@@ -32,7 +33,7 @@ function demoProvider(id, demoSdk) {
     kind,
     defaultModel: kind === PROVIDER_CLAUDE ? "sonnet" : "auto",
     listModels: async () =>
-      kind === PROVIDER_CLAUDE ? CLAUDE_MODELS.map((m) => ({ ...m, provider: id })) : [{ id: "demo", name: "Demo", provider: id }],
+      kind === PROVIDER_CLAUDE ? claudeModelList().map((m) => ({ ...m, provider: id })) : [{ id: "demo", name: "Demo", provider: id }],
     health: async () => ({ ok: true, status: 200, ms: 1 }),
     create: (o) => demoSdk.create(toDemoOptions(o)),
     resume: (agentId, o) => demoSdk.resume(agentId, toDemoOptions(o)),

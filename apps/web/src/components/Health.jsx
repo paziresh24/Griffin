@@ -1,4 +1,5 @@
 import { Bot, Cable, Clock, Cpu, HardDrive, MemoryStick, Radar, Server, Sparkles } from "lucide-react";
+import { loadLevel } from "../host-health.js";
 import { usePolling } from "../api.js";
 import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
@@ -23,7 +24,7 @@ export function StatusSection() {
   if (!health) {
     return (
       <div className="flex items-center gap-2 rounded-2xl border bg-card p-5 text-sm text-muted-foreground">
-        <span className="agent-dots text-primary" aria-hidden><i /><i /><i /></span>
+        <span className="agent-dots text-signal" aria-hidden><i /><i /><i /></span>
         {t("در حال بررسی…")}
       </div>
     );
@@ -107,7 +108,7 @@ function HostGroup() {
   const host = usePolling("/api/host", 5_000);
   if (!host?.at) return null;
   const pct = (n) => (n == null ? "—" : `${fa(n)}%`);
-  const tone = (n) => (n == null ? "none" : n >= 90 ? "bad" : n >= 75 ? "warn" : "ok");
+  const tone = (n) => (n == null ? "none" : { danger: "bad", warn: "warn", ok: "ok" }[loadLevel(n)]);
   return (
     <Group title={host.stale ? t("سرور (به‌روز نمی‌شود)") : t("سرور")}>
       <Item

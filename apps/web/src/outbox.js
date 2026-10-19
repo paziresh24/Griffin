@@ -90,6 +90,7 @@ export function mergeOutbox(messages, entries) {
       text: e.text || "",
       intent: (e.shownIntent ?? e.intent) === "send" ? null : e.shownIntent ?? e.intent,
       images: e.images || 0,
+      ...(e.files?.length ? { files: e.files } : {}),
       at: e.at,
       clientId: e.clientId,
       sendState: e.state,

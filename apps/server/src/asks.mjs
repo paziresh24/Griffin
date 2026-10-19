@@ -103,7 +103,18 @@ const TOOL_CHOICE_REFUSAL = {
 
 const OPS_ASK_MS = 30 * 60_000;
 
-export function createAsks({ store = null, onSettled = () => {}, log = console } = {}) {
+// Typed plan approval (from Karsara asks.mjs, config PLAN_APPROVAL): free text on a plan is often a
+// change request, so only these exact words approve.
+const PLAN_APPROVAL_WORDS = new Set(["برو", "تأیید", "مرج کن", "go", "approve"]);
+export function isPlanApprovalText(text) {
+  return PLAN_APPROVAL_WORDS.has(String(text || "").trim().toLowerCase());
+}
+
+// ownerJobApprovals(rootChatId): true for a job chain the owner wrote himself, run with his tools
+// (jobs/owner-jobs.mjs, a job in an asking mode). Its guard approvals reach him like the ops
+// room's critical question — with the same timeout, never answered for him; every other question
+// of a job chain is still refused.
+export function createAsks({ store = null, onSettled = () => {}, log = console, ownerJobApprovals = () => false, ownerJobAskMs = OPS_ASK_MS } = {}) {
   const pending = new Map(); // targetChatId -> [{ id, question, audience, resolve, sourceChatId, mirrorIds, … }]
   // Answers that arrived while the question card was visible but the SDK had not called execute() yet
   // (seen up to 12 minutes on 2026-09-15). The next question of that run takes it immediately.
@@ -166,13 +177,15 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     const audience = args.audience === REQUESTER ? REQUESTER : OWNER;
     // Approvals for irreversible calls (via guard) are still refused in the ops room; only its own
     // question to the owner goes out.
-    if (rootIsUnwatched(target) || (args.via === "guard" && store?.getChat?.(target)?.caller === "ops")) {
+    const ownerJobApproval = args.via === "guard" && rootIsUnwatched(target) && Boolean(ownerJobApprovals(target));
+    if ((rootIsUnwatched(target) && !ownerJobApproval) || (args.via === "guard" && store?.getChat?.(target)?.caller === "ops")) {
       return Promise.resolve({
         answered: false,
         reason: "nobody is watching this chain (scheduler/job/ops root) — decide yourself or refuse",
       });
     }
-    if (early.has(target)) {
+    // An answer held for another question is never a plan approval.
+    if (early.has(target) && args.via !== "plan") {
       const answer = early.get(target);
       early.delete(target);
       return Promise.resolve(answer);
@@ -188,7 +201,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     // inherit a yes), the model applies the owner's real answer through the guarded call or asks a
     // genuinely different question.
     const prior = settled.get(target);
-    if (NAG_MS && audience === OWNER && args.via !== "guard" && prior && Date.now() - prior.at < NAG_MS && similar(question, prior.question)) {
+    if (NAG_MS && audience === OWNER && args.via !== "guard" && args.via !== "plan" && args.via !== "elicit" && prior && Date.now() - prior.at < NAG_MS && similar(question, prior.question)) {
       const mins = Math.max(1, Math.round((Date.now() - prior.at) / 60_000));
       log?.log?.(`[ask] ${target.slice(0, 8)} nag guard: similar question answered ${mins}m ago — refusing the duplicate`);
       return Promise.resolve({
@@ -214,6 +227,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       id: randomBytes(4).toString("hex"),
       at: Date.now(),
       via: args.via || null,
+      // Decided now, not when it is answered: the live setting may change in between (index.mjs
+      // onSettled skips the chain blessing for these).
+      ownerJobApproval,
       multiSelect: Boolean(args.multiSelect),
       question,
       audience,
@@ -224,12 +240,14 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
     };
 
     // Mirror the question onto the root chat so AskCard appears where the owner is looking.
-    // started and done share one callId, so the mirrored card closes when it is answered.
-    if (store && target !== chatId) {
+    // started and done share one callId, so the mirrored card closes when it is answered. An MCP
+    // server's question (via "elicit") has no tool call of its own: its card is made the same way.
+    const link = args.via === "elicit" && typeof args.link === "string" && /^https?:\/\//i.test(args.link) ? args.link : null;
+    if (store && (target !== chatId || args.via === "elicit")) {
       const started = store.appendEvent(target, null, "tool.started", {
         callId: `peer-ask-${item.id}`,
         name: ASK_TOOL,
-        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id },
+        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id, ...(link ? { link } : {}), ...(args.header ? { header: String(args.header).slice(0, 40) } : {}) },
         fromChatId: chatId,
       });
       mirrorIds.push(started.id);
@@ -263,7 +281,19 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       for (const wake of listeners.get(target) || []) wake();
       // An ops-room question must not park the room forever: no answer in OPS_ASK_MS → the run goes
       // on and records the decision as waiting for the owner.
-      if (store?.getChat?.(target)?.caller === "ops") {
+      if (ownerJobApproval) {
+        setTimeout(() => {
+          const queue = pending.get(target);
+          const at = queue?.indexOf(item) ?? -1;
+          if (at < 0) return;
+          queue.splice(at, 1);
+          if (!queue.length) pending.delete(target);
+          item.resolve({ answered: false, reason: `no answer from the owner in ${Math.round(ownerJobAskMs / 60_000)} minutes — not approved` });
+          // Close the mirrored Telegram question too: it can no longer be answered.
+          onSettled(target, { cancelled: true, askId: item.id, by: null, question: item.question, options: item.options });
+          changed(target);
+        }, ownerJobAskMs).unref?.();
+      } else if (store?.getChat?.(target)?.caller === "ops") {
         setTimeout(() => {
           const queue = pending.get(target);
           const at = queue?.indexOf(item) ?? -1;
@@ -314,6 +344,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       answer: text?.answered ? text.answer : null,
       cancelled: !text?.answered,
       by,
+      ownerJobApproval: Boolean(next.ownerJobApproval),
       askId: next.id,
       question: next.question,
       options: next.options,
@@ -369,6 +400,31 @@ export function createAsks({ store = null, onSettled = () => {}, log = console }
       // via:"guard" — the guard's own approval flow manages its own repeats (decision cache +
       // unanswered map), so the nag guard must not swallow its questions.
       return enqueue(chatId, String(question || ""), { audience: OWNER, options, via: "guard" });
+    },
+
+    // Claude Code's plan approval (ExitPlanMode in plan mode; config PLAN_APPROVAL, providers/claude.mjs).
+    // via:"plan" — a revised plan shown again after «Keep planning» must reach the owner, so the nag
+    // guard leaves it alone; approvePlanByText finds it by this mark.
+    // An MCP server asks the owner (Claude Code elicitation, from Karsara): a sign-in link (link) or
+    // a form field. Its own card in the chat; resolves like confirm.
+    elicit(chatId, { question, options, link = null, header = null }) {
+      return enqueue(chatId, String(question || ""), { audience: OWNER, options, link, header, via: "elicit" });
+    },
+
+    plan(chatId, { question, options }) {
+      return enqueue(chatId, String(question || ""), { audience: OWNER, options, via: "plan" });
+    },
+
+    // The owner typed an exact approval word (isPlanApprovalText) while a plan card is open — callers
+    // check the sender is the owner. Only a plan card of the SAME chat the word was typed in, and only
+    // when exactly one is open there; never a child's plan mirrored into the chain (from Karsara).
+    approvePlanByText(chatId, text) {
+      if (!isPlanApprovalText(text)) return false;
+      const plans = (pending.get(targetOf(chatId)) || []).filter((item) => item.via === "plan" && item.sourceChatId === chatId);
+      if (plans.length !== 1) return false;
+      const [card] = plans;
+      const label = card.options?.[0]?.label || String(text).trim();
+      return settle(chatId, { answered: true, answer: label, selected: [label] }, { by: OWNER, askId: card.id });
     },
 
     // Returns true when a waiting tool call received the answer. `by` says who answered: the

@@ -227,7 +227,7 @@ test("ask_agent uses target profile provider/model; unknown id refused", async (
 
   const bad = await tool.execute({ agent: "no-such-agent", request: "hi" });
   assert.equal(bad.isError, true);
-  assert.match(bad.content[0].text, /list_agents/);
+  assert.match(bad.content[0].text, /agents here: .*griffin/);
 
   const ok = await tool.execute({ agent: "arvan-ban", request: "دامنه‌ها" });
   assert.ok(!ok.isError);
@@ -268,5 +268,45 @@ test("owner tools include ask_agent for every agent", () => {
   }
   assert.ok(store.getAgentProfile("arvan-ban").tools.includes(ASK_AGENT_TOOL));
   store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Tools added to a caller in the registry used to reach the stored rows only through a one-time migration.
+test("a tool the registry newly gives a caller reaches the stored row once; one the owner removed stays removed", () => {
+  const { store, dir } = tempStore();
+  try {
+    const quota = () => store.getAgentProfile("griffin").meta.callers.scheduler.tools;
+    const strip = (names) => {
+      const p = store.getAgentProfile("griffin");
+      const callers = { ...p.meta.callers, scheduler: { tools: quota().filter((t) => !names.includes(t)) } };
+      store.updateAgentProfile("griffin", { meta: { callers } });
+    };
+    // A row stored before the registry gave it these (no record of last boot's registry yet).
+    strip(["knowledge_write", "show_media"]);
+    store.setKv("seed:callers:griffin", null);
+    store.seedAgentProfiles();
+    assert.ok(quota().includes("knowledge_write") && quota().includes("show_media"));
+    // The owner takes one away: the next boot leaves it away.
+    strip(["show_media"]);
+    store.seedAgentProfiles();
+    assert.ok(!quota().includes("show_media"));
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("updating a profile keeps an account id the registry does not know yet", () => {
+  const { store, dir } = tempStore();
+  store.updateAgentProfile("griffin", { provider: "claude", model: "sonnet" });
+  // As from-karsara.mjs leaves it: an extra account, before setAccounts has run in this process.
+  store.db.prepare("UPDATE agent_profiles SET provider = 'claude-custom' WHERE id = 'griffin'").run();
+  const row = store.getAgentProfile("griffin");
+  store.updateAgentProfile("griffin", { meta: { ...row.meta, note: 1 } });
+  assert.equal(store.getAgentProfile("griffin").provider, "claude-custom");
+  assert.equal(store.getAgentProfile("griffin").model, "sonnet");
+  // A new value the registry does not know still normalizes.
+  store.updateAgentProfile("griffin", { provider: "claude-nope" });
+  assert.equal(store.getAgentProfile("griffin").provider, "cursor");
   fs.rmSync(dir, { recursive: true, force: true });
 });

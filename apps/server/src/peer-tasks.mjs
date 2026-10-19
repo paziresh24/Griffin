@@ -1,3 +1,4 @@
+import { OWNER, PERSONA } from "./persona.mjs";
 import crypto from "node:crypto";
 import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
 import { MAX_OPEN_TASKS_PER_PEER, allowsChatModel, budgetState, overBudget, overBudgetText, peerSettings } from "./peer-limits.mjs";

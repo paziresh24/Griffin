@@ -6,7 +6,7 @@ import path from "node:path";
 import { AGENTS, CORE_TOOLS, DEFAULT_AGENT, allowedTools, callerQuota, filterTools, listAgents, resolveAgentId } from "../src/agents/registry.mjs";
 import { agentPayload } from "../src/agents/import.mjs";
 import { resolveEnabledTools } from "../src/agents/profiles.mjs";
-import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, PEER_CONTEXT, TASK_RULE, VOICE, buildRules, identity, installRules, rulesFor } from "../src/prompt.mjs";
+import { CORE_RULES, DEFAULT_INSTRUCTIONS, NEVER_DEAD_END, OWNER_CHAT_STYLE, PEER_CONTEXT, TASK_RULE, VOICE, buildRules, identity, installRules, rulesFor } from "../src/prompt.mjs";
 import { exampleAgent } from "./fixture-agents.mjs";
 
 const ALL = [
@@ -68,6 +68,7 @@ test("rules are the shared core plus this agent's own instructions", () => {
   assert.ok(text.includes(NEVER_DEAD_END));
   assert.ok(text.includes(TASK_RULE), "every agent works in the task shape");
   assert.match(text, /never claim to be/, "the voice section fixes the identity");
+  assert.ok(text.includes(OWNER_CHAT_STYLE), "the owner's own chat gets the chat style");
   assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), text);
 
   const own = rulesFor({
@@ -94,6 +95,7 @@ test("a non-owner caller is told who is calling and what it may use", () => {
   assert.match(text, /Who is calling you now: زمان‌بند/);
   assert.match(text, /visualize, knowledge_list/);
   assert.match(text, /unattended/);
+  assert.ok(!text.includes(OWNER_CHAT_STYLE), "only the owner's own chat gets the chat style");
   const quotaLine = text.slice(text.indexOf("Who is calling you now:")).split("\n")[0];
   assert.doesNotMatch(quotaLine, /ask_owner/, "an unattended run is not told to ask");
   fs.rmSync(dir, { recursive: true, force: true });
@@ -172,5 +174,5 @@ test("third-party content and chat_send are explained only when they apply", () 
   assert.doesNotMatch(plain, /Third-party content/);
   assert.doesNotMatch(plain, /chat_list \(titles only\)/);
   assert.match(buildRules({ agent: "griffin", thirdParty: true }), /Third-party content: a message that starts with «📥/);
-  assert.match(buildRules({ agent: "griffin", tools: ["chat_list", "chat_send"] }), /At most 3 per 10 minutes/);
+  assert.match(buildRules({ agent: "griffin", caller: "peer:alice", tools: ["chat_list", "chat_send"] }), /At most 3 per 10 minutes/);
 });

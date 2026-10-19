@@ -1,7 +1,8 @@
 import { K8S_NAME, ToolInputError } from "./kube.mjs";
 
-// SQL on any CloudNativePG cluster, run with psql inside the cluster's current primary pod over the
-// emergency SSH path (kubectl exec needs no DB password and works when the public API is down).
+// SQL on any CloudNativePG cluster, run with psql inside the cluster's current primary pod: kubectl exec
+// over the emergency SSH path (works when the public API is down), else exec over the public API (a
+// colleague's install has only that). No DB password either way.
 // Read-only by default (the session is set to default_transaction_read_only); write=true runs the
 // same statement read-write. No statement filtering: the owner wants the full power, and the
 // agent is told to ask before writes.
@@ -106,18 +107,19 @@ export function createPgTools({ kube }) {
 
         const primary = await primaryPod(clusterName, namespace, name);
         const psql = [
-          "exec", "-n", namespace, primary.pod, "-c", "postgres", "--",
           "psql", "-X", "-q", "--csv", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database,
           "-c", `SET statement_timeout = '${timeout}s'`,
           ...(write ? [] : ["-c", "SET default_transaction_read_only = on"]),
           "-c", sql,
         ];
         const started = Date.now();
-        let csv;
+        let ran;
         try {
-          csv = await kube.emergency(clusterName, psql, { timeoutMs: (timeout + 30) * 1000, maxBytes: 16 * 1024 * 1024 });
+          ran = await kube.exec(clusterName, { namespace, pod: primary.pod, container: "postgres", command: psql, timeoutMs: (timeout + 30) * 1000, maxBytes: 16 * 1024 * 1024 });
         } catch (error) {
-          const message = String(error.message).replace(/^kubectl on [^:]+: /, "");
+          // the last attempt's error is psql's own (SSH first, then the API exec)
+          const last = error.attempts?.at(-1)?.error || error.message;
+          const message = String(last).replace(/^kubectl on [^:]+: /, "");
           if (!write && /read-only transaction/i.test(message)) {
             throw new Error(`${message} — the statement writes; rerun with write=true after the owner approves`);
           }
@@ -131,8 +133,8 @@ export function createPgTools({ kube }) {
           pod: primary.pod,
           mode: write ? "read-write" : "read-only",
           ms: Date.now() - started,
-          ...toTable(csv),
-          source: `psql ${namespace}/${primary.pod} via emergency-ssh (${primary.source})`,
+          ...toTable(ran.value),
+          source: `psql ${namespace}/${primary.pod} via ${ran.source.startsWith("public-api") ? "public-api exec" : "emergency-ssh"} (${primary.source})`,
         };
       },
     },

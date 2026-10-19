@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { PROVIDER_OPENAI } from "./ids.mjs";
+import { stripProductSignature } from "../identity.mjs";
 import { SIGNATURE_RE } from "../persona.mjs";
 
 export { PROVIDER_OPENAI };
@@ -77,7 +78,7 @@ const CONTINUE_NUDGE =
 const SIGNATURE_TAIL = new RegExp(`\\s*—\\s*${SIGNATURE_RE}\\s*$`, "u");
 
 export function promisesWork(text) {
-  const clean = String(text || "").replace(SIGNATURE_TAIL, "").trim();
+  const clean = stripProductSignature(String(text || "").replace(SIGNATURE_TAIL, "")).trim();
   if (!clean) return false;
   // Only the closing sentence counts: an offer («اگر خواستید اعمال می‌کنم») or a question is fine.
   const last = clean.split(/(?<=[.!؟?\n])\s+/u).filter(Boolean).slice(-2).join(" ").slice(-220);
@@ -90,7 +91,7 @@ export function promisesWork(text) {
 // independent by batching them). Anything that can change state or ask a human stays sequential,
 // so a cancel mid-batch still stops the rest (2026-10-06).
 const PARALLEL_SAFE =
-  /^(kube_(get|status|logs|df)|gitlab_(file|search|projects|commits)|infisical_(list|get|projects|access)|http_check|dns_lookup|tls_check|metrics_query|grafana_(search|dashboard|panel_query|query)|alerts_active|s3_list|knowledge_list|incidents_list|incident_history|list_agents|mikrotik_print|mikrotik_ping|nsin_edge_ranges|arvan_(domains|dns_records|dns_export|dnssec|cache_settings|purge_tags))$/;
+  /^(kube_(get|status|logs|df)|gitlab_(file|search|projects|commits)|infisical_(list|get|projects|access)|http_check|dns_lookup|tls_check|web_search|web_fetch|metrics_query|grafana_(search|dashboard|panel_query|query)|alerts_active|s3_list|knowledge_list|incidents_list|incident_history|list_agents|mikrotik_print|mikrotik_ping|nsin_edge_ranges|arvan_(domains|dns_records|dns_export|dnssec|cache_settings|purge_tags))$/;
 export function parallelSafe(call) {
   const args = call?.args || {};
   if (call?.name === "debug_exec") return !args.host || args.host === "sandbox";
@@ -364,9 +365,20 @@ export function createOpenAIProvider({
         // coding window answers "issue with the selected model … may not exist or you may not have
         // access" instead of a clean quota error (2026-10-10: both plans dry → a 5-min task took 2h
         // because this was thrown as a plain error and the two-way fallback never fired).
-        if (/usage limit|quota|\b13(08|10)\b|insufficient (balance|quota)|issue with the selected model|may not have access/i.test(String(error?.message))) {
-          error.code = "plan_limit";
-          throw error;
+        // autoFallback: main's exact text test, so auto mode moves (and only then fails at once)
+        // exactly as before. The code is for ask mode: a spent plan (Z.ai's body code 1308/1310 or
+        // the plan texts, the model-access answer included — a saturated window, 2026-10-10) is
+        // plan_limit; a bare 1308/1310 in the text (an index such as messages.1310) is
+        // engine_unavailable. A body code main's text test misses goes through main's retries
+        // unchanged and ends, if it still fails, as plan_limit with autoFallback false: auto treats
+        // it as the ordinary error main gave, ask mode as a spent plan.
+        const text = String(error?.message);
+        const autoFallback = /usage limit|quota|credit balance|\b13(08|10)\b|insufficient (balance|quota)|issue with the selected model|may not have access/i.test(text);
+        const spent = ["1308", "1310"].includes(String(error?.apiCode ?? "")) || /usage limit|quota|credit balance|insufficient (balance|quota)|issue with the selected model|may not have access/i.test(text);
+        if (spent || autoFallback) {
+          error.code = spent ? "plan_limit" : "engine_unavailable";
+          error.autoFallback = autoFallback;
+          if (autoFallback) throw error;
         }
         const limited = error?.status === 429 || /rate limit|too many requests/i.test(String(error?.message));
         // A dropped connection or a gateway 5xx is the network, not the model: retry the same round.
@@ -433,6 +445,7 @@ export function createOpenAIProvider({
       const retryAfter = Number(response.headers.get("retry-after"));
       throw Object.assign(new Error(errorText(parsed) || `openai http ${response.status}`), {
         status: response.status,
+        apiCode: parsed?.error?.code ?? null,
         retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null,
       });
     }
@@ -479,7 +492,7 @@ export function createOpenAIProvider({
           continue;
         }
         if (event.usage) out.usage = event.usage;
-        if (event.error) throw new Error(errorText(event) || "openai stream error");
+        if (event.error) throw Object.assign(new Error(errorText(event) || "openai stream error"), { apiCode: event.error?.code ?? null });
         const choice = event.choices?.[0];
         if (!choice) continue;
         if (choice.finish_reason) out.finishReason = choice.finish_reason;
@@ -793,7 +806,7 @@ export function createOpenAIProvider({
             }
             finish({
               status: abort.signal.aborted ? "cancelled" : "error",
-              error: { message: String(error?.message || error), ...(error?.code === "plan_limit" ? { code: "plan_limit" } : {}) },
+              error: { message: String(error?.message || error), ...(error?.code === "plan_limit" || error?.code === "engine_unavailable" ? { code: error.code, ...(typeof error.autoFallback === "boolean" ? { autoFallback: error.autoFallback } : {}) } : {}) },
             });
           }
         })();
@@ -915,7 +928,7 @@ export function createOpenAIProvider({
 }
 
 function fromCompleteResponse(json) {
-  if (json?.error) throw new Error(errorText(json) || "openai request failed");
+  if (json?.error) throw Object.assign(new Error(errorText(json) || "openai request failed"), { apiCode: json.error?.code ?? null });
   const message = json?.choices?.[0]?.message || {};
   const toolCalls = (message.tool_calls || []).map((call, index) => ({
     id: call.id || `call-${index}`,

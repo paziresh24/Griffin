@@ -237,6 +237,8 @@ function fakeInfisical() {
       state.members.push({ project: m[1], identity: m[2], role: body.role });
       return json({ ok: true });
     }
+    m = p.match(/^\/api\/v2\/workspace\/([\w-]+)\/identity-memberships$/);
+    if (m) return json({ identityMemberships: state.members.filter((x) => x.project === m[1]).map((x) => ({ identity: state.identities.find((i) => i.id === x.identity), roles: [{ role: x.role }] })) });
     if (/^\/api\/v2\/workspace\/[\w-]+\/memberships$/.test(p)) { state.users.push(...body.emails); return json({ ok: true }); }
     if (p.startsWith("/api/v3/secrets/raw")) {
       const ws = u.searchParams.get("workspaceId") || body.workspaceId;
@@ -282,4 +284,30 @@ test("machine identity: created end to end, stored in the project, proven, secre
   await tools.infisical_machine_identity.execute({ name: "jane-agents-ro", projectId: "jane-agents-ro" });
   assert.equal(state.minted, 2);
   assert.equal(state.secrets[created.projectId].INFISICAL_CLIENT_ID, "cid-I1");
+});
+
+// An agent identity whose secret lives in its owner's project also needs a colleague's project;
+// the full path would have minted a second secret into that project.
+test("machine identity, membershipOnly: an existing identity joins another project; nothing minted or stored", async () => {
+  const { state, tools } = fakeInfisical();
+  const own = await tools.infisical_create_project.execute({ name: "alice-example" });
+  await tools.infisical_machine_identity.execute({ name: "notes-agent", projectId: own.projectId });
+  const P2 = "00000000-0000-4000-8000-0000000000f2";
+  state.projects.push({ id: P2, name: "bob-example", orgId: "O1" });
+  const minted = state.minted;
+  const out = await tools.infisical_machine_identity.execute({ name: "notes-agent", projectId: "bob-example", role: "viewer", membershipOnly: true });
+  assert.equal(out.membership, "added as viewer");
+  assert.equal(out.verified, true);
+  assert.deepEqual(out.roles, ["viewer"]);
+  assert.equal(state.minted, minted, "no second secret");
+  assert.equal(state.secrets[P2], undefined, "nothing written into the other project");
+  const again = await tools.infisical_machine_identity.execute({ name: "notes-agent", projectId: "bob-example", membershipOnly: true });
+  assert.match(again.membership, /already a member/);
+  await assert.rejects(tools.infisical_machine_identity.execute({ name: "nobody-agent", projectId: "bob-example", membershipOnly: true }), /no machine identity named/);
+  assert.equal(state.identities.length, 1, "membershipOnly never creates an identity");
+  await assert.rejects(tools.infisical_machine_identity.execute({ name: "notes-agent", projectId: "bob-example", membershipOnly: true, memberEmail: "x@x.test" }), /without memberEmail/);
+  // The full path into a project whose stored keys are another identity's: refused, theirs kept.
+  const theirs = { ...state.secrets[own.projectId] };
+  await assert.rejects(tools.infisical_machine_identity.execute({ name: "other-agent", projectId: own.projectId }), /belongs to identity "notes-agent"/);
+  assert.deepEqual(state.secrets[own.projectId], theirs);
 });

@@ -45,7 +45,7 @@ const tag = "g-tag rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-fore
 
 function CountBadge({ count, className = "" }) {
   const text = badgeText(count);
-  return text ? <span className={`g-badge rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground ${className}`}>{text}</span> : null;
+  return text ? <span className={`g-badge rounded-full bg-signal px-1.5 text-[10px] leading-4 text-signal-foreground ${className}`}>{text}</span> : null;
 }
 
 // Before «شروع چت»: the repo as a tag, the model (changeable), and an optional note before or after the prompt.
@@ -155,7 +155,7 @@ export function SuggestionCard({ part, readOnly = false }) {
 }
 
 // Sidebar: «پیشنهادها», collapsed until opened, above the chat list. Hidden while nothing is open.
-export function SidebarSuggestions({ refreshKey, onNavigate }) {
+export function SidebarSuggestions({ refreshKey, onNavigate, karsara = false }) {
   const { open, busy } = useSuggestions();
   const [expanded, setExpanded] = useState(false);
   useEffect(() => {
@@ -163,15 +163,15 @@ export function SidebarSuggestions({ refreshKey, onNavigate }) {
   }, [refreshKey]);
   if (!open.length) return null;
   return (
-    <section className="mb-2" aria-label={t("پیشنهادها")}>
-      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted">
+    <section className={karsara ? "mt-2" : "mb-2"} aria-label={t("پیشنهادها")}>
+      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className={karsara ? "kc-list-row w-full text-xs !text-[var(--kc-muted)]" : "g-list-row flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted"}>
         <span>{t("پیشنهادها")}</span>
-        <CountBadge count={open.length} />
+        {karsara ? <span className="kc-badge" aria-label={t("{n} پیشنهاد", { n: badgeText(open.length) })}>{badgeText(open.length)}</span> : <CountBadge count={open.length} />}
         <span className="flex-1" />
         <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
       </button>
       {expanded ? (
-        <ul>
+        <ul className={karsara ? "kc-suggest-list" : undefined}>
           {open.map((s) => (
             <SuggestionItem key={s.id} item={s} working={Boolean(busy[s.id])} onNavigate={onNavigate} />
           ))}

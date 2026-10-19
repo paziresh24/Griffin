@@ -16,12 +16,22 @@ import { OWNER_NAME } from "../owner.mjs";
 import { PERSONA } from "../persona.mjs";
 import { finalText, foldEvents, lastRun } from "@griffin/timeline";
 import { coverageOwnerNote } from "./coverage.mjs";
-import { ensureGlobal, joinThread, joinedNames, motherChatId, motherInfo, openThreads, allMothers, watching } from "./mother.mjs";
+import { ensureGlobal, joinThread, joinedNames, motherChatId, motherInfo, openThreads, allMothers, subscribe, watching } from "./mother.mjs";
 import { isNoReply } from "./peer-agent.mjs";
 import { markdownToPlain } from "./format.mjs";
+import { withoutInertMarks } from "../redact.mjs";
 import { keptIds } from "../runner.mjs";
-import { threadInboundPrompt, threadOwnerPrompt, wantsGriffin } from "./threads.mjs";
+import { isPdf, notePdfs, pdfBudgetProblem } from "../attachments.mjs";
+import { isOwnerChat } from "../owner-chat-tools.mjs";
+import { forwardHead, incidentForwardHead, sessionLinePrompt, smallTalk, threadInboundPrompt, threadOwnerPrompt, wantsGriffin } from "./threads.mjs";
 
+const parseJson = (text) => {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+};
 const OWNER_QUIET_MS = 10 * 60_000; // the owner wrote: his colleague's next messages wait this long
 const RUNS_PER_HOUR = 20; // ping-pong brake between two agents, per person
 const BRAKE_MS = 15 * 60_000;
@@ -33,8 +43,14 @@ const SWEEP_MS = 10 * 60_000; // the supervisor
 const FLOOD = { count: 4, ms: 30 * 60_000 }; // this many sends to one person within ms = a flood
 const STALE_MS = 20 * 60_000; // working/queued this long with nothing running = stuck
 const SAME_ISSUE_MS = 30 * 60_000;
+const ASKER_MS = 24 * 3_600_000; // an owner chat that wrote to a person stays one of their threads this long
+const ASKER_KEEP = 5;
+const CANDIDATE_MS = 3 * 24 * 3_600_000; // his chats worked in this recently are where a colleague's message may belong
+const CANDIDATE_MAX = 12;
 const MAX_TEXT = 3800; // one Telegram message with the signature
 const CATCH_UP_GRACE_MS = 5 * 60_000; // at boot, queued batches wait for the account's catch-up at most this long
+const GREETING_MS = 12 * 3_600_000; // a lone «سلام» waits this long for the message it introduces, then lapses unanswered
+const GREETING_WHY = "فقط سلام و احوال‌پرسی؛ با پیام بعدی‌اش جواب می‌گیرد";
 // Telegram's answer to a change that cannot be made now or ever — not worth keeping a draft for.
 const PERMANENT = /MESSAGE_NOT_MODIFIED|EDIT_TIME_EXPIRED|MESSAGE_ID_INVALID|no longer in the chat/i;
 const SEEN_MS = 2 * 3_600_000; // one supervisor note per finding in this window
@@ -55,9 +71,9 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   let recentIn = []; // watched people's messages of the last SAME_ISSUE_MS (the supervisor's same-issue check)
   // R3 at boot: what the owner answered while the app was down is recorded by the account's
   // catch-up; until it reports (caughtUp), that account's queued batches do not run.
-  const bootAt = now();
-  const catchingUp = new Set();
-  const held = (integrationId) => catchingUp.has(integrationId) && now() - bootAt < CATCH_UP_GRACE_MS;
+  // Every catch-up (boot or a reconnect): integration id -> when it began.
+  const catchingUp = new Map();
+  const held = (integrationId) => catchingUp.has(integrationId) && now() - catchingUp.get(integrationId) < CATCH_UP_GRACE_MS;
   const noted = new Map(); // `${kind}:${personId}` -> ms of the last such note
   const iso = () => new Date(now()).toISOString();
 
@@ -106,14 +122,28 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
 
   // ---- owner presence (R2/R3): the owner's own lines in a colleague's chat ----
   // `at`: when he wrote it (a line caught up after a restart is older than now).
-  function ownerLine(integrationId, key, { text, by = "owner", person = null, at = now() }) {
-    const current = store.getKv(ownerKey(integrationId, key)) || {};
-    store.setKv(ownerKey(integrationId, key), { at: Math.max(current.at || 0, at), lines: [...(current.lines || []), { text, by, at }].slice(-10) });
+  // sent:false — a session's line that did not go to the colleague: claim:true = it took the issue over
+  // (session-note: holds the assistant like his own line), else only a mention (the prompt hook: the assistant decides).
+  function ownerLine(integrationId, key, { text, by = "owner", person = null, at = now(), sent = true, claim = false }) {
     person = person || store.findPerson(key);
-    // A line another session sent is marked ours, so the account never records it; the history should.
-    if (by === "session" && person) store.addPersonMessage({ personId: person.id, direction: "out", text, data: { chatId: key, by } });
     const chatId = motherChatId(store, integrationId, key);
-    if (chatId) store.appendEvent(chatId, null, "tg.note", { kind: "owner_line", name: by === "owner" ? "شما" : "جلسهٔ دیگر", text, by, personId: person?.id || null });
+    // The assistant is on it right now (a run or an open thread): it hears it at once, not with the
+    // colleague's next message, and decides to step back or keep to a part he is not doing.
+    const busy = Boolean(chatId) && (runner.isActive(chatId) || pendingWork(chatId) > 0);
+    const current = store.getKv(ownerKey(integrationId, key)) || {};
+    const lines = busy ? current.lines || [] : [...(current.lines || []), { text, by, at, ...(sent ? {} : { sent: false }) }].slice(-10);
+    // R2/R3 «he is in this conversation»: a line that reached the colleague, or a session's claim.
+    store.setKv(ownerKey(integrationId, key), { at: sent || claim ? Math.max(current.at || 0, at) : current.at || 0, lines });
+    // A line another session sent is marked ours, so the account never records it; the history should.
+    if (by === "session" && sent && person) store.addPersonMessage({ personId: person.id, direction: "out", text, data: { chatId: key, by } });
+    if (!chatId) return;
+    store.appendEvent(chatId, null, "tg.note", { kind: "owner_line", name: by === "owner" ? "شما" : "جلسهٔ دیگر", text, by, personId: person?.id || null });
+    if (busy) {
+      const name = person?.display_name || key;
+      const said = by === "owner" ? threadOwnerPrompt({ name, text }) : sessionLinePrompt({ name, text, sent });
+      runner.send(chatId, { text: said, from: { kind: "owner_line" }, intent: runner.isActive(chatId) ? "steer" : "queue" })
+        .catch((err) => log.error?.(`[desk] owner line to ${chatId}: ${err.message}`));
+    }
   }
   // A mother turn's text: the owner's lines since the mother last heard (then cleared; their time
   // stays) and the colleague's messages, in the order they were written.
@@ -122,8 +152,8 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     const lines = current?.lines || [];
     if (lines.length) store.setKv(ownerKey(integrationId, key), { ...current, lines: [] });
     return [
-      ...lines.map((l) => ({ at: l.at, text: threadOwnerPrompt({ name, text: l.text }) })),
-      ...items.map((i) => ({ at: i.at ?? now(), text: threadInboundPrompt({ name, text: i.text }) })),
+      ...lines.map((l) => ({ at: l.at, text: l.by === "owner" ? threadOwnerPrompt({ name, text: l.text }) : sessionLinePrompt({ name, text: l.text, sent: l.sent !== false }) })),
+      ...items.map((i) => ({ at: i.at ?? now(), text: threadInboundPrompt({ name, text: i.text, id: i.id }) })),
       ...extra,
     ]
       .sort((a, b) => a.at - b.at)
@@ -149,14 +179,20 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   }
 
   // ponytail: a batch carries text only; photos sent while it waits are not attached.
-  function queue(integrationId, key, person, name, items, due, why) {
+  // greeting: small talk only (smallTalk) — it waits for a real message, and joining a batch that
+  // already holds one leaves that batch's time alone; the real message, joining a greeting, sets it.
+  function queue(integrationId, key, person, name, items, due, why, { greeting = false } = {}) {
     const all = store.getKv(PICKUP(integrationId)) || {};
-    const batch = all[key] || { due, items: [], opened: now() };
-    batch.due = Math.max(batch.due || 0, due);
-    batch.items.push(...items.map((i) => ({ id: i.id ?? null, text: i.text, at: i.at ?? now() })));
+    const batch = all[key] || { due, items: [], opened: now(), ...(greeting ? { greeting: true } : {}) };
+    if (batch.greeting && !greeting) {
+      Object.assign(batch, { due, opened: now() });
+      delete batch.greeting;
+    } else if (!greeting) batch.due = Math.max(batch.due || 0, due);
+    batch.items.push(...items.map((i) => ({ id: i.id ?? null, text: i.text, at: i.at ?? now(), ...(i.image ? { image: true } : {}) })));
     all[key] = batch;
     store.setKv(PICKUP(integrationId), all);
-    setState(person.id, "queued", `${why} — در صف تا ${clock(batch.due)}`);
+    if (batch.greeting) setState(person.id, "greeting", GREETING_WHY);
+    else if (!greeting) setState(person.id, "queued", `${why} — در صف تا ${clock(batch.due)}`); // a greeting joining a real batch changes nothing
     log.info?.(`[desk] queued peer=${key} items=${batch.items.length} due=${new Date(batch.due).toISOString()} (${why})`);
     armWake();
     return "queued";
@@ -164,11 +200,19 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
 
   /** A watched person's message (or a group mention). byOwner: the owner's /agent, past every gate.
    *  at: when it was written, for a message caught up after a restart (else now). */
-  async function colleague(integrationId, key, { person, name, text, images = [], messageId = null, called = false, byOwner = false, at = null }) {
+  async function colleague(integrationId, key, { person, name, text, images = [], files = [], messageId = null, called = false, byOwner = false, at = null }) {
     if (!person) return null;
     name = name || person.display_name || String(key);
-    if (paused(integrationId) && !byOwner) return pausedNote(person, name);
-    const item = { id: messageId, text, at: at ?? now() };
+    // An owner chat of his wrote to them: their answer reaches the mother to be assigned, past the
+    // pause and the «he just wrote» hold that his chat's own send set.
+    const asked = hasAskers(integrationId, key);
+    if (paused(integrationId) && !byOwner && !asked) return pausedNote(person, name);
+    // A sticker or GIF carries its preview frame but no caption: its label («[استیکر]») is all it says.
+    const bareMedia = /^\[[^\]]+\]$/.test(String(text || "").trim());
+    // image: a picture with words (a caption) is content even when the words are a pleasantry.
+    // A file (PDF/text) runs now like a photo: a batch carries text only.
+    const picture = images.length + files.length > 0;
+    const item = { id: messageId, text, at: at ?? now(), ...(picture && !bareMedia ? { image: true } : {}) };
     // The supervisor's same-issue check: what reached the desk, with when it was written.
     if (String(text || "").trim().length >= 15 && now() - item.at < SAME_ISSUE_MS) {
       recentIn = recentIn.filter((m) => now() - m.at < SAME_ISSUE_MS);
@@ -176,16 +220,18 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     }
     const owner = store.getKv(ownerKey(integrationId, key));
     // Caught up: the owner answered it by hand while the account was down (R3).
-    if (!byOwner && owner?.at > item.at) return answered(integrationId, key, person, name);
+    if (!byOwner && !asked && owner?.at > item.at) return answered(integrationId, key, person, name);
+    if (!byOwner && smallTalk(text) && (!picture || bareMedia)) return queue(integrationId, key, person, name, [item], item.at + GREETING_MS, GREETING_WHY, { greeting: true });
     if (!byOwner && !wantsGriffin(text)) {
-      if (owner?.at && now() - owner.at < OWNER_QUIET_MS) return queue(integrationId, key, person, name, [item], owner.at + OWNER_QUIET_MS, "شما همین الان در گفتگو بودید");
+      if (!asked && owner?.at && now() - owner.at < OWNER_QUIET_MS) return queue(integrationId, key, person, name, [item], owner.at + OWNER_QUIET_MS, "شما همین الان در گفتگو بودید");
       const every = Number(person.access?.pickupEvery) || 0;
       if (every > 0 && !called) return queue(integrationId, key, person, name, [item], now() + every * 60_000, "برداشت زمان‌بندی‌شده");
       // A burst («سلام» «یه سوال» «پایپ‌لاین فیل شده») is one turn: wait burstMs after the latest
       // message, but no longer than BURST_CAP windows after the first. A photo runs now (a batch
       // carries text only), taking what waited before it along.
-      if (burstMs > 0 && !called && !images.length) {
-        const first = (store.getKv(PICKUP(integrationId)) || {})[key]?.opened ?? now();
+      if (burstMs > 0 && !called && !picture) {
+        const waiting = (store.getKv(PICKUP(integrationId)) || {})[key];
+        const first = waiting && !waiting.greeting ? waiting.opened : now(); // a held «سلام» is not the burst's start
         return queue(integrationId, key, person, name, [item], Math.min(now() + burstMs, first + BURST_CAP * burstMs), "جمع کردن پیام‌های پشت‌سرهم");
       }
     }
@@ -195,10 +241,10 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     const same = taken.find((w) => w.id != null && messageId != null && String(w.id) === String(messageId));
     if (same) item.at = same.at; // /agent on a waiting message: it keeps its place in the order
     if (taken.length) store.setKv(WAITING, waitingList().filter((w) => !(w.kind === "brake" && w.personId === person.id)));
-    return run(integrationId, key, person, name, [...taken.filter((w) => w !== same), item], images, { force: byOwner });
+    return run(integrationId, key, person, name, [...taken.filter((w) => w !== same), item], images, { force: byOwner, files });
   }
 
-  async function run(integrationId, key, person, name, items, images = [], { force = false } = {}) {
+  async function run(integrationId, key, person, name, items, images = [], { force = false, files = [] } = {}) {
     if (!force && !brakeOk(key)) {
       queue(integrationId, key, person, name, items, now() + BRAKE_MS, "بیش از ۲۰ بار در ساعت");
       if (!waitingList().some((w) => w.kind === "brake" && w.personId === person.id)) {
@@ -208,16 +254,26 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     }
     const chatId = await motherChat(integrationId, key, { name, person });
     store.linkChat(integrationId, key, chatId); // the pointer: an owner question from it names this person
-    const text = transcript(integrationId, key, name, items);
+    let text = transcript(integrationId, key, name, items);
+    // PDFs stay in the session and are re-sent every turn: past the chat's budget the file is named, not attached.
+    const budget = pdfBudgetProblem(store, chatId, files);
+    if (budget) {
+      files = files.filter((file) => !isPdf(file.mimeType));
+      text += `\n\n[یک PDF هم فرستاده شد ولی ضمیمه نشد: ${budget}]`;
+    }
     store.setKv(`tglastin:${chatId}`, now()); // his lines written before this are in the transcript
+    store.setKv(`tglastturn:${chatId}`, { text, at: now() }); // what forward_to_chat passes on
+    // msgId: the message this turn answers — react's default, read back from the turn's own input
+    // (a follow-up queued behind a running turn is not that turn's message).
+    const last = items.findLast((i) => i.id != null)?.id;
     try {
-      await runner.send(chatId, { text, images, from: { kind: "colleague", name, personId: person.id, ...(force ? { forced: true } : {}) }, intent: runner.isActive(chatId) ? "queue" : "send" });
+      await runner.send(chatId, { text, images, files, from: { kind: "colleague", name, personId: person.id, ...(force ? { forced: true } : {}), ...(last != null ? { msgId: last } : {}) }, intent: runner.isActive(chatId) ? "queue" : "send" });
+      notePdfs(store, chatId, files);
     } catch (error) {
       outcome({ personId: person.id, name, chatId }, "failed", `اجرا نشد: ${error.message}`);
       return "failed";
     }
     setState(person.id, "working", "در حال بررسی");
-    const last = items.findLast((i) => i.id != null)?.id;
     if (last != null) channelOf(integrationId)?.picked?.(key, last);
     return "run";
   }
@@ -231,9 +287,177 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     const waiting = takeBatch(integrationId, key)?.items || [];
     const lines = transcript(integrationId, key, name, waiting, [{ at: now(), text: threadOwnerPrompt({ name, text }) }]);
     store.setKv(`tglastin:${chatId}`, now());
+    const last = waiting.findLast((i) => i.id != null)?.id;
     // The colleague's words and a line that already reached them: not a private note to edit.
-    await runner.send(chatId, { text: lines, images: [], from: { kind: "colleague", name, personId: person.id, forced: true }, intent: runner.isActive(chatId) ? "queue" : "send" });
+    await runner.send(chatId, { text: lines, images: [], from: { kind: "colleague", name, personId: person.id, forced: true, ...(last != null ? { msgId: last } : {}) }, intent: runner.isActive(chatId) ? "queue" : "send" });
     setState(person.id, "working", "شما سپردید");
+  }
+
+  // ---- the owner's own chats that wrote to a person ----
+  // One of the owner's own chats wrote to this person with telegram_send. It is one more thread their
+  // reply may belong to: their messages reach the mother chat (even with the watcher off, and without
+  // the «he just wrote» hold that very send set), and the mother decides per message — answer it, a
+  // thread of hers, or forward_to_chat to the owner chat it answers. Nothing is reserved.
+  const askedKey = (integrationId, key) => `tgasked:${integrationId}:${key}`;
+  function askers(integrationId, key) {
+    return (store.getKv(askedKey(integrationId, key)) || []).filter((a) => {
+      const chat = store.getChat(String(a.chatId));
+      return chat && !chat.archived && now() - (a.at || 0) < ASKER_MS;
+    });
+  }
+  function askedBy(integrationId, key, chatId, text = "", { fwd = false } = {}) {
+    if (!integrationId || !key || !chatId) return;
+    const title = store.getChat(String(chatId))?.title || "";
+    const list = askers(integrationId, key).filter((a) => a.chatId !== chatId);
+    store.setKv(askedKey(integrationId, key), [...list, { chatId, title, text: String(text || "").slice(0, 300), at: now(), ...(fwd ? { fwd: true } : {}) }].slice(-ASKER_KEEP));
+  }
+  const hasAskers = (integrationId, key) => askers(integrationId, key).length > 0;
+  // The owner chats a person's message may belong to: those that wrote to them or already got their
+  // messages (askers), and his other recent working chats — a setup or an investigation he runs in a
+  // chat that never wrote to them is still where their message goes.
+  function recentText(chatId, n = 2) {
+    // Bounded: only the newest events, then the user lines among them (events are indexed by chat).
+    const rows = store.db.prepare("SELECT data FROM (SELECT type, data FROM events WHERE chat_id = ? ORDER BY id DESC LIMIT 600) WHERE type = 'user' LIMIT ?").all(chatId, n);
+    return rows
+      .map((r) => {
+        try {
+          const d = JSON.parse(r.data);
+          return d.from && d.from.kind !== "owner_web" ? "" : String(d.text || "").replace(/\s+/g, " ").trim().slice(0, 140);
+        } catch {
+          return "";
+        }
+      })
+      .filter(Boolean)
+      .reverse();
+  }
+  function candidates(integrationId, key, motherChat) {
+    const out = new Map();
+    for (const a of askers(integrationId, key)) out.set(String(a.chatId), { chatId: String(a.chatId), title: a.title, at: a.at, why: a.fwd ? "پیام‌های ایشان قبلاً به این گفتگو رفته" : "به ایشان پیام داده", said: a.text });
+    const since = now() - CANDIDATE_MS;
+    const recent = store
+      .listChats()
+      .filter((c) => c.id !== motherChat && Date.parse(c.updated_at) >= since && isOwnerChat(store, c))
+      .sort((x, y) => Date.parse(y.updated_at) - Date.parse(x.updated_at));
+    for (const c of recent) {
+      if (out.size >= CANDIDATE_MAX) break;
+      if (!out.has(c.id)) out.set(c.id, { chatId: c.id, title: c.title, at: Date.parse(c.updated_at), why: c.run_status === "running" ? "گفتگوی اخیر شما، همین الان در حال کار؛ با ایشان کاری نداشته" : "گفتگوی اخیر شما؛ با ایشان کاری نداشته" });
+    }
+    // Open shared threads (a general issue someone else reported): the same issue from this person joins it.
+    for (const t of openThreads(store)) {
+      if (!t.shared || t.motherChat === motherChat || out.has(t.thread)) continue;
+      out.set(t.thread, { chatId: t.thread, title: t.title, at: now(), why: `رشتهٔ عمومی، از «${t.person}»`, shared: true });
+    }
+    return [...out.values()];
+  }
+  // The ops room's open incidents (set once the incident layer is up; index.mjs builds it after the
+  // integrations): a colleague reporting what an alert already shows («سایت کنده») is that incident's
+  // human evidence — it goes to the room, not to a new thread.
+  let ops = null;
+  const INCIDENT_MAX = 8;
+  function incidentCandidates() {
+    if (!ops) return [];
+    let rows = [];
+    try {
+      rows = ops.open();
+    } catch {
+      return [];
+    }
+    return rows
+      .filter((r) => r.cluster !== "human" && !ops.isAcked(r))
+      .map((r) => ({ row: r, triage: parseJson(r.triage_json) }))
+      .filter(({ row, triage }) => row.severity === "critical" || (triage && !triage.noise))
+      .sort((a, b) => (a.row.severity === "critical" ? 0 : 1) - (b.row.severity === "critical" ? 0 : 1) || Date.parse(b.row.last_seen) - Date.parse(a.row.last_seen))
+      .slice(0, INCIDENT_MAX)
+      .map(({ row, triage }) => ({
+        chatId: `incident:${row.id.slice(0, 8)}`,
+        id: row.id,
+        title: [row.alertname, row.cluster, row.scope].filter(Boolean).join(" · "),
+        severity: row.severity,
+        summary: String(row.summary || "").replace(/\s+/g, " ").slice(0, 160),
+        cause: triage?.cause ? String(triage.cause).slice(0, 160) : "",
+        impact: triage?.impact ? String(triage.impact).slice(0, 160) : "",
+      }));
+  }
+  function incidentsNote(name) {
+    const incs = incidentCandidates();
+    if (!incs.length) return null;
+    const lines = incs.map((i) => `- ${i.chatId} «${i.title}» (${i.severity})${i.summary ? `: ${i.summary}` : ""}${i.cause ? ` — علت محتمل: ${i.cause}` : ""}${i.impact ? ` — اثر: ${i.impact}` : ""}`).join("\n");
+    return `[حادثه‌های باز اتاق عملیات (آلارم‌هایی که الان روشن‌اند):\n${lines}\nاگر «${name}» از همین مشکل خبر می‌دهد (قطعی، کندی یا خطای همان سرویس)، با forward_to_chat {chat: "incident:…"} به اتاق عملیات بده و خودت یک خط کوتاه به ایشان بگو مشکل دیده شده و در حال بررسی است؛ برایش رشتهٔ تازه باز نکن. اگر ربطی ندارد، مثل همیشه.]`;
+  }
+  function askersNote(chatId) {
+    const mother = motherInfo(store, chatId);
+    if (!mother?.integrationId) return null;
+    const list = candidates(mother.integrationId, mother.key, chatId);
+    const incNote = incidentsNote(mother.name);
+    if (!list.length) return incNote;
+    const lines = list
+      .map((a) => {
+        const said = a.said ? [a.said] : recentText(a.chatId);
+        return `- chat ${a.chatId} «${a.title || "بی‌عنوان"}» (${clock(a.at)}، ${a.why})${said.length ? `: ${said.map((t) => `«${t}»`).join(" ← ")}` : ""}`;
+      })
+      .join("\n");
+    return [`[کارهای خودِ ${OWNER_NAME} که ممکن است پیام «${mother.name}» مال یکی‌شان باشد:\n${lines}\nپیام تازه را با موضوع این کارها بسنج. فقط وقتی به یکی بده که آشکارا دنبالهٔ همان است: آن گفتگو به ایشان پیام داده یا همین را از ایشان خواسته، یا پیام دربارهٔ همان سیستم و همان مشکلِ عنوان و درخواست‌های آن گفتگوست. هم‌محصول یا هم‌سرور بودن یا موضوع نزدیک کافی نیست؛ گفتگویی که «با ایشان کاری نداشته» به‌ندرت جای پیام ایشان است. آن‌وقت forward_to_chat {chat, why} و خودت به ایشان جواب نده؛ در شک، یا اگر مال کار دیگری است، مثل همیشه خودت رسیدگی کن.]`, incNote].filter(Boolean).join("\n");
+  }
+  /** forward_to_chat: this turn's colleague messages, to one of the owner chats listed in the turn's note. */
+  async function forwardToChat(motherChat, target, note = "", why = "") {
+    const mother = motherInfo(store, motherChat);
+    if (!mother?.integrationId) return { error: "this is not a colleague's mother chat" };
+    if (/^incident:/i.test(String(target))) return forwardToIncident(mother, motherChat, String(target), note);
+    const list = candidates(mother.integrationId, mother.key, motherChat);
+    const entry = list.find((a) => String(a.chatId) === String(target));
+    if (!entry) return { error: `${target} is not one of the owner chats listed for «${mother.name}»`, chats: list.map((a) => ({ chat: a.chatId, title: a.title })) };
+    const turn = store.getKv(`tglastturn:${motherChat}`);
+    if (!turn?.text) return { error: "nothing from them in this turn to forward" };
+    // Wakes the chat; a chat already at work gets it mid-turn (steer; an engine that cannot steer
+    // queues it), with a head saying whose words these are and how they reach them back.
+    const running = runner.isActive(entry.chatId);
+    const text = [forwardHead({ name: mother.name, key: mother.key, shared: entry.shared, running, why }), turn.text, note ? `(${PERSONA.name}: ${String(note).slice(0, 300)})` : ""].filter(Boolean).join("\n");
+    if (entry.shared) subscribe(store, entry.chatId, motherChat); // its result reaches this person too
+    try {
+      await runner.send(entry.chatId, { text, from: { kind: "colleague", name: mother.name, ...(mother.personId ? { personId: mother.personId } : {}) }, intent: running ? "steer" : "send" });
+    } catch (error) {
+      return { error: error.message };
+    }
+    // The chat may say it was not its business; its next finished run tells (bounceBack below).
+    store.setKv(`fwdback:${entry.chatId}`, { motherChat, name: mother.name, text: String(turn.text).slice(0, 2000), at: now() });
+    // From now on this chat is one of their threads: their next messages reach the mother past the gates.
+    askedBy(mother.integrationId, mother.key, entry.chatId, "", { fwd: true });
+    store.appendEvent(motherChat, null, "tg.note", { kind: "forwarded", name: mother.name, text: `به گفتگوی «${entry.title || entry.chatId}» داده شد`, chatId: entry.chatId, personId: mother.personId || null });
+    if (mother.personId) setState(mother.personId, "forwarded", `به گفتگوی «${entry.title || "شما"}» رفت`);
+    return { forwarded: true, chat: entry.chatId, title: entry.title };
+  }
+
+  // One report per (incident, person) an hour wakes the room; more from the same person are only logged.
+  const INCIDENT_REPEAT_MS = 3_600_000;
+  async function forwardToIncident(mother, motherChat, target, note) {
+    const short = target.slice("incident:".length).toLowerCase();
+    const list = incidentCandidates();
+    const entry = short.length >= 4 ? list.find((i) => i.id.startsWith(short)) : null;
+    if (!entry) return { error: `${target} is not one of the open incidents listed`, incidents: list.map((i) => ({ chat: i.chatId, title: i.title })) };
+    const turn = store.getKv(`tglastturn:${motherChat}`);
+    if (!turn?.text) return { error: "nothing from them in this turn to forward" };
+    ops.log(entry.id, "reported", { personId: mother.personId || null, name: mother.name, text: String(turn.text).slice(0, 300) });
+    const seenKey = `tgfwdinc:${entry.id}:${motherChat}`;
+    const last = store.getKv(seenKey);
+    let room = null;
+    if (!(last && now() - last < INCIDENT_REPEAT_MS)) {
+      const text = [incidentForwardHead({ name: mother.name, incident: entry }), turn.text, note ? `(${PERSONA.name}: ${String(note).slice(0, 300)})` : ""].filter(Boolean).join("\n");
+      try {
+        room = await ops.relay({ text, from: { kind: "colleague", name: mother.name, ...(mother.personId ? { personId: mother.personId } : {}) } });
+      } catch (error) {
+        return { error: error.message };
+      }
+      if (room) store.setKv(seenKey, now());
+    }
+    store.appendEvent(motherChat, null, "tg.note", { kind: "forwarded", name: mother.name, text: `به حادثهٔ «${entry.title}» در اتاق عملیات داده شد`, chatId: room, personId: mother.personId || null });
+    if (mother.personId) setState(mother.personId, "forwarded", `به حادثهٔ «${entry.title}» رفت`);
+    return {
+      forwarded: true,
+      incident: entry.chatId,
+      title: entry.title,
+      room: room ? "the ops room got it" : "recorded on the incident (the room already has their report this hour, or triage is off)",
+      next: `send «${mother.name}» one short line yourself: the problem is known and being looked at. No thread for it.`,
+    };
   }
 
   function unwatched(person, name, text) {
@@ -251,16 +475,25 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   async function drainBatch(integrationId, key, batch, { force = false } = {}) {
     const person = store.findPerson(key);
     const name = person?.display_name || key;
+    const asked = hasAskers(integrationId, key); // an owner chat waits on them (askedBy)
     if (person) store.setKv(WAITING, waitingList().filter((w) => !(w.kind === "brake" && w.personId === person.id)));
-    if (!person || !watching(person)) {
+    if (!person || (!watching(person) && !asked)) {
       const said = batch.items.map((i) => `«${String(i.text || "").slice(0, 60)}»`).join("، ");
       outcome({ personId: person?.id || null, name, chatId: null }, "paused", `واچر خاموش شد؛ پیام‌های در صف بی‌جواب ماند: ${said}`);
       return "unwatched";
     }
-    if (paused(integrationId) && !force) return pausedNote(person, name);
+    if (paused(integrationId) && !force && !asked) return pausedNote(person, name);
     const owner = store.getKv(ownerKey(integrationId, key));
     const lastAt = Math.max(0, ...batch.items.map((i) => i.at || 0));
-    if (owner?.at > lastAt) return answered(integrationId, key, person, name);
+    if (!asked && owner?.at > lastAt) return answered(integrationId, key, person, name);
+    if (!force && batch.items.every((i) => !i.image && smallTalk(i.text))) {
+      // A held greeting is drained only at its lapse time; small talk queued another way waits now.
+      const until = Math.min(...batch.items.map((i) => i.at || now())) + GREETING_MS;
+      if (!batch.greeting && until > now()) return queue(integrationId, key, person, name, batch.items, until, GREETING_WHY, { greeting: true });
+      const said = batch.items.map((i) => `«${String(i.text || "").slice(0, 40)}»`).join("، ");
+      outcome({ personId: person.id, name, chatId: motherChatId(store, integrationId, key) }, "no_reply", `فقط سلام و احوال‌پرسی بود و پیامی بعدش نیامد: ${said}`);
+      return "greeting";
+    }
     return run(integrationId, key, person, name, batch.items, [], { force });
   }
   async function drain(t = now()) {
@@ -293,12 +526,14 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   }
 
   // ---- what reaches the colleague (R1/R2) ----
-  async function deliver(mother, text, chatId) {
+  // What Telegram gets is also what is kept (person history, her sent list): no inert marker.
+  async function deliver(mother, raw, chatId, { replyTo = null } = {}) {
+    const text = withoutInertMarks(raw);
     const channel = channelOf(mother.integrationId);
     if (!channel) return { error: "اکانت تلگرام وصل نیست" };
     let id = null;
     try {
-      id = (await channel.deliver(mother.key, { text })) ?? null;
+      id = (await channel.deliver(mother.key, { text, ...(replyTo ? { replyTo } : {}) })) ?? null;
     } catch (error) {
       return { error: error.message };
     }
@@ -320,6 +555,12 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   /** The first line of every mother turn (runner annotate hook): what it already said and they have
    *  not answered — so a thread report or a second interim line becomes an edit, not a new message. */
   function annotate(chatId) {
+    const caller = store.getChat(chatId)?.caller || "";
+    const theirs = caller === "team" || caller.startsWith("peer:") ? sessionsBlock() : null;
+    const own = unansweredNote(chatId);
+    return [theirs, own, askersNote(chatId)].filter(Boolean).join("\n") || null;
+  }
+  function unansweredNote(chatId) {
     const mother = motherInfo(store, chatId);
     if (!mother?.personId) return null;
     const list = unanswered(mother.personId);
@@ -335,7 +576,8 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     store.setKv(SENT(personId), list);
   }
   // The Telegram call itself; a message gone on Telegram (deleted by hand) is marked so.
-  async function applyChange(mother, id, { remove, body }) {
+  async function applyChange(mother, id, { remove, body: raw }) {
+    const body = raw == null ? raw : withoutInertMarks(raw);
     const channel = channelOf(mother.integrationId);
     if (!channel?.edit) return { error: "اکانت تلگرام وصل نیست" };
     try {
@@ -363,7 +605,7 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     const list = sentList(mother.personId);
     const entry = list.find((m) => String(m.id) === id);
     if (!entry || entry.deleted) return { error: `#${id} is not a message you sent to «${mother.name}» (or it was deleted)`, yours: list.filter((m) => !m.deleted).map((m) => m.id) };
-    const body = remove ? "" : plain(text);
+    const body = remove ? "" : plain(withoutInertMarks(text));
     if (!remove && !body) return { error: "text is empty" };
     if (markdownToPlain(body).length > MAX_TEXT) return { error: `too long (max ${MAX_TEXT} chars)` };
     if (!remove && body === entry.text) return { edited: true, id: Number(entry.id), unchanged: true };
@@ -393,6 +635,32 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   }
   const editSent = (chatId, id, text) => changeSent(chatId, id, text);
   const deleteSent = (chatId, id) => changeSent(chatId, id, "", { remove: true });
+
+  // A reaction instead of a message: on the
+  // message this turn answers, or any message of that chat by #id; "" takes hers back. Not a draft
+  // when the owner is in the conversation — a reaction is not worth one; it just does not go.
+  // Telegram takes only its own reaction set; these are the ones that fit the owner's voice.
+  const REACTIONS = ["👍", "❤", "🙏", "👌", "🔥", "👏", "🤝", "👀", "✍", "🫡", "💯", "😁", "🎉", "🤔"];
+  async function reactTo(chatId, rawId, rawEmoji) {
+    const mother = motherInfo(store, chatId);
+    if (!mother) return { error: "this is not a colleague's mother chat" };
+    const emoji = String(rawEmoji ?? "").replace(/\uFE0F/g, "").trim();
+    if (emoji && !REACTIONS.includes(emoji)) return { error: `Telegram does not take «${emoji}» here; one of ${REACTIONS.join(" ")} (or "" to take yours back)` };
+    const id = rawId != null && String(rawId).trim() ? msgId(rawId) : msgId(turnInput(chatId)?.from?.msgId);
+    if (id == null) return { error: "which message? this turn answers none of theirs: give its #id" };
+    const reason = holdReason(chatId, mother);
+    if (reason) return { held: true, reason, note: "not put, and no draft waits: a reaction is just dropped — leave it" };
+    const channel = channelOf(mother.integrationId);
+    if (!channel?.react) return { error: "اکانت تلگرام وصل نیست" };
+    try {
+      await channel.react(mother.key, id, emoji);
+    } catch (error) {
+      return { error: error.message };
+    }
+    const turn = turnOf(chatId);
+    turn.reacted = [...(turn.reacted || []), emoji ? `${emoji} روی پیام #${id}` : `واکنش پیام #${id} را برداشت`];
+    return { reacted: true, id, emoji: emoji || null };
+  }
   const turnStart = (chatId) => Date.parse(store.db.prepare("SELECT started_at FROM runs WHERE chat_id = ? ORDER BY started_at DESC LIMIT 1").get(chatId)?.started_at || "") || null;
   const turnOf = (chatId) => turns.get(chatId) || turns.set(chatId, { sent: [], changed: [], held: false }).get(chatId);
 
@@ -403,23 +671,29 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   // his own request is never held back from him. Read from the input that started the turn (the
   // last user event before it that this turn carries; a message queued during the turn is the next
   // turn's, and one removed, dropped or still waiting behind it is no turn's).
-  function ownerTurn(chatId) {
+  // The user event the latest turn started from (null if none).
+  function turnInput(chatId) {
     const started = store.db.prepare("SELECT started_at FROM runs WHERE chat_id = ? ORDER BY started_at DESC LIMIT 1").get(chatId)?.started_at;
     const users = store.db.prepare("SELECT id, data FROM events WHERE chat_id = ? AND type = 'user' AND at <= ? AND id < ? ORDER BY id DESC LIMIT 1");
     for (let before = Number.MAX_SAFE_INTEGER; ; ) {
       const row = users.get(chatId, started || "9", before);
-      if (!row) return false;
+      if (!row) return null;
       before = row.id;
       let data = {};
       try {
         data = JSON.parse(row.data);
       } catch {
-        return false;
+        return null;
       }
       if (data.tracked && queueStateOf(chatId, row.id) !== "started") continue;
-      if (data.from) return data.from.kind === "owner_web" || Boolean(data.from.forced);
-      return !/^\s*\[/.test(String(data.text || "")); // «[گزارش خودکار زیرکارها …» is a thread report
+      return data;
     }
+  }
+  function ownerTurn(chatId) {
+    const data = turnInput(chatId);
+    if (!data) return false;
+    if (data.from) return data.from.kind === "owner_web" || Boolean(data.from.forced);
+    return !/^\s*\[/.test(String(data.text || "")); // «[گزارش خودکار زیرکارها …» is a thread report
   }
   // A tracked «در صف» message's latest label (started | dropped | removed), null while it waits.
   // Forward from its own event id only (events_chat), never over the chat's older events.
@@ -439,10 +713,16 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     return null;
   }
 
-  async function sendToPerson(chatId, text) {
+  const msgId = (raw) => {
+    const id = String(raw ?? "").replace(/^#/, "").trim();
+    return /^\d+$/.test(id) ? Number(id) : null;
+  };
+  async function sendToPerson(chatId, text, { replyTo: rawReply = null } = {}) {
     const mother = motherInfo(store, chatId);
     if (!mother) return { error: "this is not a colleague's mother chat" };
-    const body = plain(text);
+    const replyTo = msgId(rawReply);
+    if (rawReply != null && String(rawReply).trim() && replyTo == null) return { error: `replyTo must be a message id like "#812", got «${rawReply}»` };
+    const body = plain(withoutInertMarks(text));
     if (!body || isNoReply(body)) return { skipped: true };
     // One Telegram message (4000 with the signature): its id is the whole message, so edit_sent and
     // delete_sent act on all of it.
@@ -452,10 +732,10 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     const reason = holdReason(chatId, mother);
     if (reason) {
       turn.held = true;
-      const item = addWaiting({ kind: "draft", reason, personId: mother.personId, name: mother.name, chatId, text: body, integrationId: mother.integrationId, key: mother.key });
+      const item = addWaiting({ kind: "draft", reason, personId: mother.personId, name: mother.name, chatId, text: body, ...(replyTo ? { replyTo } : {}), integrationId: mother.integrationId, key: mother.key });
       return { held: true, reason, waiting: item.id };
     }
-    const result = await deliver(mother, body, chatId);
+    const result = await deliver(mother, body, chatId, { replyTo });
     if (result.sent) turn.sent.push(body);
     // After the fact too: what else of its own is still unanswered there, so a stale line can go.
     const earlier = result.sent && mother.personId ? unanswered(mother.personId).filter((m) => String(m.id) !== String(result.id)) : [];
@@ -482,7 +762,7 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     if (turn.sent.length) {
       // What went out went out, even if the turn broke after it: no retry to send it twice.
       state = "sent";
-      line = `فرستاد: «${turn.sent.at(-1).slice(0, 80)}»${turn.sent.length > 1 ? ` (${fa(turn.sent.length)} پیام)` : ""}${turn.changed.length ? `؛ ${turn.changed.join("، ")}` : ""}${status === "error" ? ` — بعدش خطا: ${String(error || "").slice(0, 120)}` : ""}`;
+      line = `فرستاد: «${turn.sent.at(-1).slice(0, 80)}»${turn.sent.length > 1 ? ` (${fa(turn.sent.length)} پیام)` : ""}${turn.changed.length || turn.reacted?.length ? `؛ ${[...turn.changed, ...(turn.reacted || [])].join("، ")}` : ""}${status === "error" ? ` — بعدش خطا: ${String(error || "").slice(0, 120)}` : ""}`;
     } else if (status === "error") {
       state = "failed";
       line = `خطا: ${String(error || "کار ناتمام ماند").slice(0, 200)}${turn.changed.length ? ` (قبلش: ${turn.changed.join("، ")})` : ""}`;
@@ -498,7 +778,10 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     } else if (turn.changed.length) {
       // An edit does not notify them: not «جواب رفت».
       state = "edited";
-      line = turn.changed.join("، ");
+      line = [...turn.changed, ...(turn.reacted || [])].join("، ");
+    } else if (turn.reacted?.length) {
+      state = "reacted";
+      line = turn.reacted.join("، ");
     } else if (status === "cancelled") {
       line = "متوقف شد";
     } else if (pendingWork(chatId) > 0) {
@@ -507,7 +790,29 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     }
     outcome(who, state, line, { text: String(text || line).trim().slice(0, 600), sent: turn.sent });
   }
+  // A chat that got a colleague's message by forward_to_chat and said it was unrelated
+  // («… ربطی نداشت», forwardHead): the message goes back to the mother, which handles it itself,
+  // and that chat stops counting as one of the person's threads.
+  const BOUNCE_MS = 2 * 3_600_000;
+  async function bounceBack(chatId) {
+    const back = store.getKv(`fwdback:${chatId}`);
+    if (!back) return;
+    store.setKv(`fwdback:${chatId}`, null);
+    if (now() - back.at > BOUNCE_MS || !store.getChat(back.motherChat)) return;
+    const { text } = await finalTextOf(chatId);
+    if (!/ربطی\s*نداشت|ربطی\s*ندارد|نامربوط/.test(String(text || ""))) return;
+    const mother = motherInfo(store, back.motherChat);
+    if (mother?.integrationId) {
+      const list = askers(mother.integrationId, mother.key).filter((a) => String(a.chatId) !== String(chatId));
+      store.setKv(askedKey(mother.integrationId, mother.key), list);
+    }
+    const title = store.getChat(chatId)?.title || chatId;
+    store.appendEvent(back.motherChat, null, "tg.note", { kind: "bounced", name: back.name, text: `گفتگوی «${title}» گفت به کارش ربطی نداشت؛ برگشت`, chatId, personId: mother?.personId || null });
+    const body = `[گفتگوی «${title}» گفت پیام «${back.name}» به کارش ربطی نداشت و رویش کاری نکرد. دیگر آن‌جا نفرست؛ خودت مثل همیشه رسیدگی کن.]\n${back.text}`;
+    await runner.send(back.motherChat, { text: body, images: [], intent: runner.isActive(back.motherChat) ? "steer" : "send" });
+  }
   const onEvent = (chatId, event) => {
+    if (event?.type === "run.finished" && store.getKv(`fwdback:${chatId}`)) bounceBack(chatId).catch((error) => log.error?.(`[desk] bounce ${chatId}: ${error.message}`));
     if (event?.type !== "run.started" && event?.type !== "run.finished") return;
     // A thread stopped from its own chat (its stop button, subtasks cancel): its mother may be left
     // «working» with nothing going on; after childDone has marked the thread (next tick).
@@ -582,7 +887,7 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
         outcome(who, "edited", changeLine(item.msgId, change));
         return { ok: true };
       }
-      const result = mother ? await deliver(mother, item.text, item.chatId) : { error: "چت مادر پیدا نشد" };
+      const result = mother ? await deliver(mother, item.text, item.chatId, { replyTo: item.replyTo || null }) : { error: "چت مادر پیدا نشد" };
       if (result.error) {
         addWaiting(item);
         return { error: result.error, status: 502 };
@@ -645,6 +950,85 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
       })
       .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
   }
+  // ---- The owner's own Claude Code sessions (a UserPromptSubmit hook POSTs /api/sessions/activity) ----
+  // Every prompt he types in a session comes here: a watched colleague it names is «that session is on
+  // their issue» for the assistant, and the session gets back what the assistant is doing right now.
+  // ponytail: matched by family name / @username in the prompt, so a family name that is also a common
+  // word matches too; upgrade: the session names the person (session-note).
+  const sessionSeen = new Map(); // `${session}:${personId}` -> when the assistant was last told
+  const SESSION_TELL_MS = 30 * 60_000;
+  const sessions = new Map(); // session id -> { first, last, at }: what each session works on
+  const SESSION_KEEP_MS = 2 * 3_600_000;
+  function sessionActivity({ session = "", text = "" } = {}) {
+    const id = accountId();
+    const said = String(text || "").trim().slice(0, 600);
+    // The hook also sees the harness's own lines (a monitor's <task-notification>, <system-reminder>):
+    // not something he typed, and often another colleague's words — never forward them to a mother.
+    if (said.startsWith("<")) return { matched: [], context: assistantNow() };
+    if (session && said) {
+      const known = sessions.get(session);
+      sessions.set(session, { first: known?.first || said, last: said, at: now() });
+      for (const [k, v] of sessions) if (now() - v.at > SESSION_KEEP_MS) sessions.delete(k);
+    }
+    const matched = [];
+    if (id && said) {
+      for (const p of store.listPersonsLight({ source: "telegram" })) {
+        if (!watching(p) || isGroup(p)) continue;
+        const keys = [p.username && `@${p.username}`, ...[p.display_name, p.tg_name].map((n) => String(n || "").trim().split(/\s+/).at(-1))]
+          .filter((k) => k && k.length >= 3);
+        if (!keys.some((k) => new RegExp(`(^|[^\\p{L}])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}]|$)`, "iu").test(said))) continue;
+        matched.push(p.display_name);
+        const seen = `${session}:${p.id}`;
+        if (now() - (sessionSeen.get(seen) || 0) < SESSION_TELL_MS) continue;
+        sessionSeen.set(seen, now());
+        ownerLine(id, String(p.external_id), { text: said, by: "session", person: p, sent: false });
+      }
+    }
+    return { matched, context: assistantNow() };
+  }
+  // The assistant's work going now or done in the last half hour, any kind (mother, a colleague's bot, a thread);
+  // not the owner's own chats, jobs or the ops room.
+  const assistantWork = () =>
+    store.db
+      .prepare(`SELECT c.id, c.title, max(r.started_at) AS at, max(r.status = 'running') AS running FROM runs r JOIN chats c ON c.id = r.chat_id
+        WHERE (r.status = 'running' OR r.started_at >= ?) AND c.caller NOT IN ('owner', 'scheduler', 'ops') AND c.sim = 0
+        GROUP BY c.id ORDER BY at DESC LIMIT 6`)
+      .all(new Date(now() - SESSION_TELL_MS).toISOString())
+      .map((c) => ({ id: c.id, title: String(c.title || "").slice(0, 140), running: Boolean(c.running), at: Date.parse(c.at) }));
+  // For a colleague-facing turn (mother, a colleague's bot): what the owner's Claude sessions work on.
+  function sessionsBlock() {
+    // Only a session active in the last half hour is «on it»; an older one covers nothing new.
+    const recent = [...sessions.entries()].filter(([, v]) => now() - v.at <= SESSION_TELL_MS).slice(-5);
+    if (!recent.length) return null;
+    const short = (t) => String(t).replace(/\s+/g, " ").slice(0, 200);
+    return [
+      `[جلسه‌های Claude خود ${OWNER_NAME} در ۲ ساعت اخیر روی این‌ها کار کرده‌اند. اگر این پیام همان موضوع است، او خودش پیگیر است: زیرکار باز نکن و قول نده؛ به همکار یا چیزی نفرست یا یک خط که ${OWNER_NAME} خودش پیگیر است؛ در گزارش بگو کدام جلسه.]`,
+      ...recent.map(([k, v]) => `- جلسهٔ ${k.slice(0, 6)} (${clock(v.at)}): «${short(v.first)}»${v.last !== v.first ? ` … آخرین: «${short(v.last)}»` : ""}`),
+    ].join("\n");
+  }
+  // A session tells one of the assistant's chats it is on that work (any chat: a mother, a bot's, a thread).
+  async function sessionNoteChat(chatId, text) {
+    const chat = store.getChat(chatId);
+    if (!chat) return false;
+    const said = sessionLinePrompt({ name: chat.title, text, sent: false });
+    await runner.send(chatId, { text: said, from: { kind: "owner_line" }, intent: runner.isActive(chatId) ? "steer" : "queue" });
+    return true;
+  }
+  // What the assistant is doing now, a few lines for a session's context ("" when nothing).
+  function assistantNow() {
+    const busy = people().filter((p) => p.watch && (p.running || p.openThreads || p.queued));
+    const since = now() - SESSION_TELL_MS;
+    const reports = (store.getKv(FEED) || []).filter((r) => r.kind === "report" && Date.parse(r.at) >= since && !isNoReply(r.text)).slice(-5);
+    const work = assistantWork();
+    if (!busy.length && !reports.length && !work.length) return "";
+    return [
+      `[${PERSONA.name} (ایجنت تلگرام ${OWNER_NAME}) همین الان — اگر روی کار یکی از این‌هایی، با او هماهنگ باش، کار تکراری نکن؛ گفتن به او: POST /api/sessions/note {chatId, text}]`,
+      ...work.map((c) => `- ${c.running ? "در حال کار" : `تمام شد ${clock(c.at)}`} (${c.id}): ${c.title}`),
+      ...busy.map((p) => `- «${p.name}»: ${[p.running && "در حال کار", p.openThreads && `${fa(p.openThreads)} رشتهٔ باز`, p.queued && `${fa(p.queued.count)} پیام در صف`].filter(Boolean).join("، ")}${p.state?.line ? ` — ${p.state.line}` : ""}`),
+      ...reports.map((r) => `- گزارش ${clock(Date.parse(r.at))}: «${r.name || ""}» ${r.text}`),
+    ].join("\n");
+  }
+
   const threadsView = () => openThreads(store).map((t) => ({ ...t, joined: joinedNames(store, t.thread) }));
   function feed() {
     const account = accountChannel();
@@ -801,10 +1185,14 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
   let timer = null;
   let sweeper = null;
   return {
-    colleague, ownerLine, handOff, unwatched, drain, sendToPerson, setWatch, watchDecision, setPaused, act,
-    people, feed, globalTools, annotate, editSent, deleteSent, sweep, threadClosed, caughtUp,
+    setOps: (o) => {
+      ops = o || null;
+    },
+    colleague, askedBy, hasAskers, forwardToChat, ownerLine, sessionActivity, sessionNoteChat, handOff, unwatched, drain, sendToPerson, setWatch, watchDecision, setPaused, act,
+    people, feed, globalTools, annotate, editSent, deleteSent, reactTo, sweep, threadClosed, caughtUp,
+    catchUpStarted: (integrationId) => catchingUp.set(integrationId, now()),
     start() {
-      for (const i of store.listIntegrations().filter((x) => x.kind === "telegram_account")) catchingUp.add(i.id);
+      for (const i of store.listIntegrations().filter((x) => x.kind === "telegram_account")) catchingUp.set(i.id, now());
       timer = setInterval(() => drain().catch((error) => log.error?.(`[desk] drain: ${error.message}`)), 30_000);
       timer.unref?.();
       sweeper = setInterval(() => {

@@ -36,12 +36,28 @@ const DF_PATH = /^\/[A-Za-z0-9_./-]{0,200}$/;
 // Shell hosts for debug_exec, from the site config: { "<name>": { host, port, user } }.
 // With GRIFFIN_SANDBOX_KEY set (deploy/compose.yaml, profile "tools"), a disposable `sandbox` box
 // (deploy/sandbox: no credentials, no kubeconfig) is the default host; its key is its own, never
-// the owner's.
+// the owner's. Its address is 127.0.0.1:2222 by default; an install that runs the sandbox elsewhere
+// (or on another port) sets GRIFFIN_SANDBOX_HOST / GRIFFIN_SANDBOX_PORT (or GRIFFIN_SANDBOX_ADDR
+// host:port). Host-key checking is skipped only on loopback (the container regenerates its key);
+// any other address is pinned on first use, like ssh_exec.
+export function sandboxHost(env = process.env) {
+  const keyFile = genv("SANDBOX_KEY", "", env);
+  if (!keyFile) return null;
+  const [addrHost, addrPort] = String(genv("SANDBOX_ADDR", "", env)).split(":");
+  const host = genv("SANDBOX_HOST", "", env) || addrHost || "127.0.0.1";
+  const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  return {
+    host,
+    port: Number(genv("SANDBOX_PORT", "", env)) || Number(addrPort) || 2222,
+    user: "root",
+    keyFile,
+    ...(loopback ? { loopback: true } : { tofu: true }),
+  };
+}
+
 function sandboxHosts() {
-  const keyFile = genv("SANDBOX_KEY");
-  if (!keyFile) return {};
-  const [host, port] = String(genv("SANDBOX_ADDR", "127.0.0.1:2222")).split(":");
-  return { sandbox: { host, port: Number(port) || 22, user: "root", keyFile, loopback: true } };
+  const sandbox = sandboxHost();
+  return sandbox ? { sandbox } : {};
 }
 
 const k8sName = (description) => ({ type: "string", pattern: K8S_NAME.source, description });
@@ -128,40 +144,41 @@ export function createTools({
       },
       async execute(args) {
         const name = requireCluster(args);
-        const namespace = optionalName(args.namespace, "namespace");
         const prefix = optionalName(args.prefix, "prefix");
-        const podPath = namespace ? `/api/v1/namespaces/${namespace}/pods` : "/api/v1/pods";
-        const cnpgPath = `/apis/postgresql.cnpg.io/v1/namespaces/${namespace}/clusters`;
-        const result = await kube.withFallback(name, {
-          viaApi: async () => {
-            const pods = (await kube.publicRequest(name, podPath)).body;
-            const cnpg = namespace ? (await kube.publicRequest(name, cnpgPath)).body || { items: [] } : { items: [] };
-            return { pods, cnpg };
-          },
-          viaSsh: async () => {
-            const pods = JSON.parse(await kube.emergency(name, ["get", "pods", ...(namespace ? ["-n", namespace] : ["-A"]), "-o", "json"]));
-            let cnpg = { items: [] };
-            if (namespace) {
-              cnpg = JSON.parse(
-                await kube.emergency(name, ["get", "clusters.postgresql.cnpg.io", "-n", namespace, "-o", "json"]).catch(() => '{"items":[]}'),
-              );
-            }
-            return { pods, cnpg };
-          },
+        return inHomeIfForbidden(kube, name, optionalName(args.namespace, "namespace"), async (namespace) => {
+          const podPath = namespace ? `/api/v1/namespaces/${namespace}/pods` : "/api/v1/pods";
+          const cnpgPath = `/apis/postgresql.cnpg.io/v1/namespaces/${namespace}/clusters`;
+          const result = await kube.withFallback(name, {
+            viaApi: async () => {
+              const pods = (await kube.publicRequest(name, podPath)).body;
+              const cnpg = namespace ? (await kube.publicRequest(name, cnpgPath)).body || { items: [] } : { items: [] };
+              return { pods, cnpg };
+            },
+            viaSsh: async () => {
+              const pods = JSON.parse(await kube.emergency(name, ["get", "pods", ...(namespace ? ["-n", namespace] : ["-A"]), "-o", "json"]));
+              let cnpg = { items: [] };
+              if (namespace) {
+                cnpg = JSON.parse(
+                  await kube.emergency(name, ["get", "clusters.postgresql.cnpg.io", "-n", namespace, "-o", "json"]).catch(() => '{"items":[]}'),
+                );
+              }
+              return { pods, cnpg };
+            },
+          });
+          const match = (item) => !prefix || String(item.metadata?.name || "").startsWith(prefix);
+          const pods = (result.value.pods?.items || []).filter(match);
+          return {
+            cluster: name,
+            scope: namespace ? "namespace" : "cluster",
+            namespace: namespace || null,
+            prefix: prefix || null,
+            counts: countPods(pods),
+            pods: namespace || prefix ? pods.map(summarizePod) : unhealthyPods(pods),
+            cnpg: (result.value.cnpg?.items || []).filter(match).map(summarizeCnpg),
+            source: result.source,
+            attempts: result.attempts,
+          };
         });
-        const match = (item) => !prefix || String(item.metadata?.name || "").startsWith(prefix);
-        const pods = (result.value.pods?.items || []).filter(match);
-        return {
-          cluster: name,
-          scope: namespace ? "namespace" : "cluster",
-          namespace: namespace || null,
-          prefix: prefix || null,
-          counts: countPods(pods),
-          pods: namespace || prefix ? pods.map(summarizePod) : unhealthyPods(pods),
-          cnpg: (result.value.cnpg?.items || []).filter(match).map(summarizeCnpg),
-          source: result.source,
-          attempts: result.attempts,
-        };
       },
     },
 
@@ -184,33 +201,35 @@ export function createTools({
         const name = requireCluster(args);
         const spec = KINDS[args.kind];
         if (!spec) throw new ToolInputError(`kind must be one of ${Object.keys(KINDS).join(", ")}`);
-        const namespace = spec.namespaced ? optionalName(args.namespace, "namespace") : "";
         const objectName = optionalName(args.name, "name");
         const limit = Math.min(Math.max(Number(args.limit) || 100, 1), 300);
-        const plural = spec.plural || args.kind;
-        const apiPath = `/${spec.group}${namespace ? `/namespaces/${namespace}` : ""}/${plural}${objectName ? `/${objectName}` : ""}`;
-        const kubectlArgs = ["get", args.kind, ...(objectName ? [objectName] : []), ...(namespace ? ["-n", namespace] : spec.namespaced ? ["-A"] : []), "-o", "json"];
-        const result = await kube.withFallback(name, {
-          viaApi: async () => {
-            const response = await kube.publicRequest(name, apiPath);
-            if (response.notFound) return { notFound: true };
-            return response.body;
-          },
-          viaSsh: async () => JSON.parse(await kube.emergency(name, kubectlArgs)),
-        });
-        if (result.value?.notFound) return { cluster: name, kind: args.kind, found: false, source: result.source };
-        let items = result.value.items ? result.value.items : [result.value];
-        if (args.kind === "events") items = items.sort((a, b) => eventTime(b).localeCompare(eventTime(a)));
-        return {
-          cluster: name,
-          kind: args.kind,
-          namespace: namespace || null,
-          total: items.length,
-          items: items.slice(0, limit).map((item) => summarize(args.kind, item)),
-          truncated: items.length > limit,
-          source: result.source,
-          attempts: result.attempts,
+        const run = async (namespace) => {
+          const plural = spec.plural || args.kind;
+          const apiPath = `/${spec.group}${namespace ? `/namespaces/${namespace}` : ""}/${plural}${objectName ? `/${objectName}` : ""}`;
+          const kubectlArgs = ["get", args.kind, ...(objectName ? [objectName] : []), ...(namespace ? ["-n", namespace] : spec.namespaced ? ["-A"] : []), "-o", "json"];
+          const result = await kube.withFallback(name, {
+            viaApi: async () => {
+              const response = await kube.publicRequest(name, apiPath);
+              if (response.notFound) return { notFound: true };
+              return response.body;
+            },
+            viaSsh: async () => JSON.parse(await kube.emergency(name, kubectlArgs)),
+          });
+          if (result.value?.notFound) return { cluster: name, kind: args.kind, found: false, source: result.source };
+          let items = result.value.items ? result.value.items : [result.value];
+          if (args.kind === "events") items = items.sort((a, b) => eventTime(b).localeCompare(eventTime(a)));
+          return {
+            cluster: name,
+            kind: args.kind,
+            namespace: namespace || null,
+            total: items.length,
+            items: items.slice(0, limit).map((item) => summarize(args.kind, item)),
+            truncated: items.length > limit,
+            source: result.source,
+            attempts: result.attempts,
+          };
         };
+        return spec.namespaced ? inHomeIfForbidden(kube, name, optionalName(args.namespace, "namespace"), run) : run("");
       },
     },
 
@@ -252,7 +271,7 @@ export function createTools({
 
     kube_df: {
       description:
-        "Filesystem usage (df -h) inside a pod via emergency SSH (kubectl exec). There is no public-api path for this tool — do not report API failure. Give the pod and, when the pod has several volumes, the mount path.",
+        "Filesystem usage (df -h) inside a pod (kubectl exec: emergency SSH, else exec over the public API). Give the pod and, when the pod has several volumes, the mount path.",
       inputSchema: {
         type: "object",
         properties: { cluster, namespace: k8sName("namespace"), pod: k8sName("pod"), container: k8sName("container"), path: { type: "string", pattern: DF_PATH.source } },
@@ -265,17 +284,14 @@ export function createTools({
         const pod = requiredName(args.pod, "pod");
         const container = optionalName(args.container, "container");
         if (args.path !== undefined && !DF_PATH.test(String(args.path))) throw new ToolInputError("invalid path");
-        const result = await kube.withFallback(name, {
-          viaSsh: () =>
-            kube.emergency(name, ["exec", "-n", namespace, pod, ...(container ? ["-c", container] : []), "--", "df", "-h", ...(args.path ? [args.path] : [])]),
-        });
+        const result = await kube.exec(name, { namespace, pod, container, command: ["df", "-h", ...(args.path ? [args.path] : [])] });
         return { cluster: name, namespace, pod, path: args.path || null, df: parseDf(result.value), raw: result.value, source: result.source, attempts: result.attempts };
       },
     },
 
     kube_exec: {
       description:
-        "Run one shell command inside a pod (kubectl exec … -- sh -c) over the cluster's emergency SSH path — works even when the API gateway or the SSO in front of it rejects. Use it for in-pod checks: env hash, curl from the pod, ls. Never print secret values — hash them (sha256sum). Output capped at 20KB.",
+        "Run one shell command inside a pod (kubectl exec … -- sh -c): emergency SSH first, else exec over the public API — SSH works even when the API gateway or the SSO in front of it rejects. Use it for in-pod checks: env hash, curl from the pod, ls. Never print secret values — hash them (sha256sum). Output capped at 20KB.",
       inputSchema: {
         type: "object",
         properties: {
@@ -295,9 +311,7 @@ export function createTools({
         const container = optionalName(args.container, "container");
         const command = String(args.command || "");
         if (!command.trim()) throw new ToolInputError("command required");
-        const result = await kube.withFallback(name, {
-          viaSsh: () => kube.emergency(name, ["exec", "-n", namespace, pod, ...(container ? ["-c", container] : []), "--", "sh", "-c", command]),
-        });
+        const result = await kube.exec(name, { namespace, pod, container, command: ["sh", "-c", command] });
         return { cluster: name, namespace, pod, container: container || null, output: String(result.value).slice(0, 20_000), source: result.source, attempts: result.attempts };
       },
     },
@@ -589,6 +603,19 @@ function grafanasOf(site) {
 
 function alertClustersOf(site) {
   return Object.entries(site.clusters || {}).filter(([, config]) => config?.alerts !== false).map(([name]) => name);
+}
+
+// A namespace-bound credential (e.g. a teammate's install) cannot read cluster-wide: without a
+// namespace, a cluster-scope refusal reruns in the one namespace it may read, and says so. With a
+// namespace (or no such home) the refusal stands, worded by kube.withFallback.
+async function inHomeIfForbidden(kube, cluster, namespace, run) {
+  try {
+    return await run(namespace);
+  } catch (error) {
+    if (namespace || !error?.forbidden || !error.homeNamespace) throw error;
+    const result = await run(error.homeNamespace);
+    return { ...result, note: `cluster-wide reads are forbidden for this credential; showing its namespace "${error.homeNamespace}"` };
+  }
 }
 
 function optionalName(value, label) {

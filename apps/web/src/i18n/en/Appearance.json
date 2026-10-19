@@ -9,5 +9,14 @@
   "شکل بخش‌ها": "Section style",
   "در منو": "In the sidebar",
   "زیر «بیشتر»": "Under “More”",
-  "{name} در منو": "{name} in the sidebar"
+  "{name} در منو": "{name} in the sidebar",
+  "لوگو و رنگ": "Logo and colour",
+  "همه با هم": "All at once",
+  "همه مثل {name}": "All like {name}",
+  "پیش‌فرض این نصب: {name}": "This install's default: {name}",
+  "برگرداندن به پیش‌فرض نصب": "Back to the install default",
+  "بخش «{name}»": "“{name}” section",
+  "پنهان": "Hidden",
+  "ظاهر": "Appearance",
+  "رنگ و لوگوی همین نصب، گوشه‌های گرد، وزیرمتن": "This install's colour and logo, rounded corners, Vazirmatn"
 }

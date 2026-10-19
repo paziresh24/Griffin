@@ -1,6 +1,12 @@
 import { TriggerError } from "./triggers.mjs";
 
-export function createJobTools({ jobs, targets = () => [] }) {
+// chatId: the chat these tools run in. Any jobs_create / jobs_update from it records it as the job's
+// writer (options.promptChatId, read by jobs/owner-jobs.mjs) — a schedule, agent or destination
+// change steers the job as much as its prompt does. writerOf(chatId) may answer "unknown" instead,
+// for a chat already carrying someone else's words (index.mjs). Without a chat: "unknown", never
+// the owner.
+export function createJobTools({ jobs, targets = () => [], chatId = null, writerOf = (id) => id }) {
+  const writer = () => (chatId ? String(writerOf(chatId) || "unknown") : "unknown");
   const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
   const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: String(error?.message || error) }) }] });
 
@@ -11,6 +17,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
       name: view.name,
       prompt: view.prompt,
       agent: view.agent,
+      mode: view.mode,
       enabled: view.enabled,
       trigger: view.triggerType,
       when: view.description,
@@ -70,10 +77,11 @@ export function createJobTools({ jobs, targets = () => [] }) {
       notify: args.notify || current?.delivery?.notify || "always",
       targets: args.deliverTo !== undefined ? resolveTargets(args.deliverTo) : current?.delivery?.targets || [],
     };
-    const patch = { triggerType, trigger, delivery };
+    const patch = { triggerType, trigger, delivery, promptChatId: writer() };
     if (args.name !== undefined) patch.name = args.name;
     if (args.prompt !== undefined) patch.prompt = args.prompt;
     if (args.agent !== undefined) patch.agent = args.agent;
+    if (args.mode !== undefined) patch.mode = args.mode;
     if (args.enabled !== undefined) patch.enabled = args.enabled;
     if (args.options !== undefined) patch.options = args.options;
     return patch;
@@ -82,7 +90,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
   return {
     jobs_list: {
       description:
-        "List Platform-Ban scheduled jobs (name, when it next runs, last run) and the messenger chats a job can be delivered to. Use before creating or changing a job.",
+        "List scheduled jobs (name, when it next runs, last run) and the messenger chats a job can be delivered to. Use before creating or changing a job.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       async execute() {
         return ok({ jobs: jobs.list().map(summarize), destinations: destinations() });
@@ -91,15 +99,16 @@ export function createJobTools({ jobs, targets = () => [] }) {
 
     jobs_create: {
       description:
-        "Create a Griffin job the chosen agent will run later (hidden chat). Time: every (30m, 1h, 6h) or cron (Tehran). Official output goes to deliverTo (paired messenger chats from jobs_list). agent defaults to platform; use griffin to orchestrate via ask_agent.",
+        "Create a scheduled job the chosen agent will run later (hidden chat). Time: every (30m, 1h, 6h) or cron (the owner's time zone). Official output goes to deliverTo (paired messenger chats from jobs_list). agent defaults to griffin, which can orchestrate specialists via ask_agent.",
       inputSchema: {
         type: "object",
         properties: {
           name: { type: "string", description: "short Persian name" },
           prompt: { type: "string", description: "the instruction the agent should follow each run" },
           agent: { type: "string", enum: ["griffin", "platform", "arvan-ban", "nsin-ban"], description: "which agent runs the job" },
-          every: { type: "string", description: "interval such as 30m, 1h, 6h, 1d (Tehran wall clock)" },
-          cron: { type: "string", description: "5-field cron in Tehran time, e.g. 0 8 * * *" },
+          mode: { type: "string", enum: ["agent", "auto", "ask", "edits", "plan", "limited"], description: "how a job the owner wrote runs: agent = all his chat tools, nothing asks (default); auto/ask/edits = same tools, risky calls ask him; plan = plans only; limited = the lean scheduler quota, risky calls refused. A job anyone else wrote always runs limited." },
+          every: { type: "string", description: "interval such as 30m, 1h, 6h, 1d (owner's wall clock)" },
+          cron: { type: "string", description: "5-field cron in the owner's time zone, e.g. 0 8 * * *" },
           triggerType: { type: "string", enum: ["schedule", "manual"] },
           deliverTo: { type: "array", items: { type: "string" }, description: "names of paired messenger chats from jobs_list" },
           notify: { type: "string", enum: ["always", "error", "never"] },
@@ -118,7 +127,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
     },
 
     jobs_update: {
-      description: "Change an existing Griffin job (name, prompt, agent, schedule, destinations, enabled). Pass only the fields that should change.",
+      description: "Change an existing scheduled job (name, prompt, agent, mode, schedule, destinations, enabled). Pass only the fields that should change.",
       inputSchema: {
         type: "object",
         properties: {
@@ -126,6 +135,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
           name: { type: "string" },
           prompt: { type: "string" },
           agent: { type: "string", enum: ["griffin", "platform", "arvan-ban", "nsin-ban"] },
+          mode: { type: "string", enum: ["agent", "auto", "ask", "edits", "plan", "limited"], description: "how a job the owner wrote runs: agent = all his chat tools, nothing asks (default); auto/ask/edits = same tools, risky calls ask him; plan = plans only; limited = the lean scheduler quota, risky calls refused. A job anyone else wrote always runs limited." },
           every: { type: "string" },
           cron: { type: "string" },
           triggerType: { type: "string", enum: ["schedule", "manual"] },
@@ -149,7 +159,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
     },
 
     jobs_delete: {
-      description: "Delete a Platform-Ban job and its run history chats. Ask the owner first unless they already named that job to remove.",
+      description: "Delete a scheduled job and its run history chats. Ask the owner first unless they already named that job to remove.",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" } },
@@ -165,7 +175,7 @@ export function createJobTools({ jobs, targets = () => [] }) {
     },
 
     jobs_run: {
-      description: "Run a Platform-Ban job once now, without waiting for the schedule. Does not wait for the agent to finish.",
+      description: "Run a scheduled job once now, without waiting for the schedule. Does not wait for the agent to finish.",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" } },
@@ -176,7 +186,8 @@ export function createJobTools({ jobs, targets = () => [] }) {
         const id = String(args?.id || "");
         if (!jobs.get(id)) return fail("جاب پیدا نشد");
         if (jobs.isRunning(id)) return fail("این جاب همین حالا در حال اجراست");
-        jobs.run(id, "manual").catch(() => {});
+        // Who fired it decides the run's tools as much as who wrote it (jobs/owner-jobs.mjs).
+        jobs.run(id, "manual", { by: writer() }).catch(() => {});
         return ok({ started: true, id });
       },
     },

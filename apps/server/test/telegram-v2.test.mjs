@@ -8,7 +8,7 @@ import { openStore } from "../src/db.mjs";
 import { createIntegrations, integrationRoutes } from "../src/integrations/manager.mjs";
 import { createAccountChannel, createAccountTools } from "../src/integrations/telegram-account.mjs";
 import { createMotherTools, ensureMother, migrateTelegramV2 } from "../src/integrations/mother.mjs";
-import { AGENT_FOOTER } from "../src/integrations/format.mjs";
+import { agentFooter } from "../src/integrations/format.mjs";
 import { createPeerAuth } from "../src/peer-auth.mjs";
 import { createPeerChatTools, lastHop, thirdPartyKey } from "../src/related.mjs";
 import { createRunner } from "../src/runner.mjs";
@@ -44,12 +44,14 @@ function setup({ account = null, burstMs = 0, caughtUp = true } = {}) {
   const delivered = [];
   const picked = [];
   const changes = [];
+  const reactions = [];
   let nextId = 0;
   const fake = {
     kind: "telegram_account", status: { state: "polling" }, start() {}, stop() {},
     deliver: async (chat, message) => (delivered.push({ chat, ...message }), ++nextId),
     edit: async (chat, id, text) => changes.push(["edit", chat, id, text]),
     remove: async (chat, id) => changes.push(["remove", chat, id]),
+    react: async (chat, id, emoji) => reactions.push([chat, id, emoji]),
     picked: (key, id) => picked.push([key, id]),
   };
   const acc = store.createIntegration({ kind: "telegram_account", name: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} });
@@ -68,7 +70,7 @@ function setup({ account = null, burstMs = 0, caughtUp = true } = {}) {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   };
-  return { store, runner, sends, cancels, delivered, picked, changes, acc, integrations, desk: integrations.desk, app, watched, notes, cleanup };
+  return { store, runner, sends, cancels, delivered, picked, changes, reactions, acc, integrations, desk: integrations.desk, app, watched, notes, cleanup };
 }
 
 // A mother turn as the runner would record it; `during` runs while it is going.
@@ -88,8 +90,8 @@ test("1: a mother run never delivers by itself; send_to_person does exactly one,
     const karimi = watched("1001", "کریمی");
     assert.equal(await desk.colleague(acc.id, "1001", { person: karimi, text: "دیتابیس وصل نمیشه", messageId: 55 }), "run");
     const mother = sends[0].chatId;
-    assert.deepEqual(sends[0].from, { kind: "colleague", name: "کریمی", personId: karimi.id });
-    assert.equal(sends[0].text, "«کریمی»: دیتابیس وصل نمیشه");
+    assert.deepEqual(sends[0].from, { kind: "colleague", name: "کریمی", personId: karimi.id, msgId: 55 });
+    assert.equal(sends[0].text, "«کریمی» (#55): دیتابیس وصل نمیشه");
     assert.deepEqual(picked, [["1001", 55]], "👀 and the reply target on the picked message");
     assert.equal(store.getKv(`tgstate:${karimi.id}`).state, "working");
 
@@ -160,7 +162,7 @@ test("3: a colleague right after the owner's line waits 10 minutes; the drain dr
     desk.ownerLine(acc.id, "1003", { text: "الان چک می‌کنم" });
     const ownerAt = store.getKv(`tgowner:${acc.id}:1003`).at;
     await sleep(3);
-    assert.equal(await desk.colleague(acc.id, "1003", { person: a, text: "مرسی", messageId: 1 }), "queued");
+    assert.equal(await desk.colleague(acc.id, "1003", { person: a, text: "هنوز بالا نیومده", messageId: 1 }), "queued");
     assert.equal(sends.length, 0, "no run while the owner is in the conversation");
     assert.equal(store.getKv(`pickup:${acc.id}`)["1003"].due, ownerAt + 10 * 60_000);
     assert.equal(store.getKv(`tgstate:${a.id}`).state, "queued");
@@ -178,7 +180,7 @@ test("3: a colleague right after the owner's line waits 10 minutes; the drain dr
     await desk.colleague(acc.id, "1004", { person: b, text: "باشه", messageId: 2 });
     await desk.drain(Date.now() + 11 * 60_000);
     assert.equal(sends.length, 1);
-    assert.equal(sends[0].text, "«Owner در تلگرام به موسوی»: یه لحظه\n«موسوی»: باشه");
+    assert.equal(sends[0].text, "«صاحب‌کار در تلگرام به موسوی»: یه لحظه\n«موسوی» (#2): باشه");
     assert.deepEqual(store.getKv(`tgowner:${acc.id}:1004`).lines, [], "his lines are passed once");
     assert.equal(store.getKv(`pickup:${acc.id}`)["1004"], undefined);
   } finally {
@@ -203,7 +205,7 @@ test("4: past 20 runs an hour a person's messages wait 15 minutes and the owner 
     // «بفرست» runs it now, past the brake.
     await app.request(`/api/telegram/waiting/${waiting[0].id}`, { method: "POST", body: JSON.stringify({ action: "send" }) });
     assert.equal(sends.length, 21);
-    assert.equal(sends.at(-1).text, "«حسینی»: پیام 20");
+    assert.equal(sends.at(-1).text, "«حسینی» (#20): پیام 20");
   } finally {
     cleanup();
   }
@@ -308,7 +310,7 @@ test("7: /agent on a message turns the watcher on and answers it; /agent off →
     const person = h.store.findPerson("555000111");
     assert.equal(person.access.watch, true);
     assert.equal(h.sends.length, 1);
-    assert.equal(h.sends[0].text, "«Rezaei»: پوش با توکن کار نمیکنه");
+    assert.equal(h.sends[0].text, "«Rezaei» (#1): پوش با توکن کار نمیکنه");
     assert.ok(h.outbox.some((m) => m.to === "me" && /واچر «Rezaei» روشن شد/.test(m.message)), JSON.stringify(h.outbox));
     // send_to_person replies to the message /agent pointed at.
     await h.desk.sendToPerson(h.sends[0].chatId, "دارم بررسی می‌کنم");
@@ -348,7 +350,7 @@ test("8: an unwatched DM starts no run and tells the global chat once an hour; t
     // A line that hands work over runs the mother right away, with what was waiting behind him.
     await h.owner(5, "گریفین کمکتون میکنه");
     assert.equal(h.sends.length, 1);
-    assert.equal(h.sends[0].text, "«Owner در تلگرام به Rezaei»: بله بفرمایید\n«Rezaei»: دیتابیس وصل نمیشه\n«Owner در تلگرام به Rezaei»: گریفین کمکتون میکنه");
+    assert.equal(h.sends[0].text, "«صاحب‌کار در تلگرام به Rezaei»: بله بفرمایید\n«Rezaei» (#4): دیتابیس وصل نمیشه\n«صاحب‌کار در تلگرام به Rezaei»: گریفین کمکتون میکنه");
     assert.equal(h.store.getKv(`pickup:${h.acc.id}`)["555000111"], undefined);
   } finally {
     h.cleanup();
@@ -359,7 +361,7 @@ test("9: /api/telegram/people never reads message history", async () => {
   const { store, acc, desk, app, watched, cleanup } = setup();
   try {
     const p = watched("1007", "جعفری");
-    await desk.colleague(acc.id, "1007", { person: p, text: "سلام" });
+    await desk.colleague(acc.id, "1007", { person: p, text: "سرور کنده" });
     store.db.prepare("UPDATE persons SET history_json = 'not json' WHERE id = ?").run(p.id); // parsing it would throw
     const group = store.upsertPerson({ externalId: "-100123", name: "Alerts", data: { platform: "telegram" } });
     const res = await app.request("/api/telegram/people");
@@ -517,7 +519,7 @@ test("17: catch-up takes the owner's own replies typed meanwhile: what he answer
     const t = Math.floor(Date.now() / 1000);
     const dm = { chatId: 555000111n, peerId: { userId: 555000111n } };
     h.chatWith([
-      { out: true, id: 12, date: t - 100, message: `قبلاً گفتم\n\n${AGENT_FOOTER}`, ...dm },
+      { out: true, id: 12, date: t - 100, message: `قبلاً گفتم\n\n${agentFooter()}`, ...dm },
       { out: true, id: 11, date: t - 200, message: "خودم درستش کردم", ...dm },
       { out: false, id: 10, date: t - 300, message: "دیتابیس وصل نمیشه", ...dm },
     ]);
@@ -545,11 +547,11 @@ test("18: queued messages of a person whose watcher goes off are recorded as una
 
     // Turned off another way, found at drain time: the same.
     const q = watched("1014", "موسوی", { watch: true, pickupEvery: 30 });
-    assert.equal(await desk.colleague(acc.id, "1014", { person: q, text: "سلام" }), "queued");
+    assert.equal(await desk.colleague(acc.id, "1014", { person: q, text: "سرور کنده" }), "queued");
     store.updatePerson(q.id, { access: { watch: false } });
     await desk.drain(Date.now() + 31 * 60_000);
     assert.equal(store.getKv(`tgstate:${q.id}`).state, "paused");
-    assert.match(store.getKv("tgfeed").at(-1).text, /سلام/);
+    assert.match(store.getKv("tgfeed").at(-1).text, /سرور کنده/);
   } finally {
     cleanup();
   }
@@ -577,7 +579,7 @@ test("20: a turn that sent and then broke is recorded as sent, with no retry tha
   const { store, runner, sends, acc, desk, app, watched, cleanup } = setup();
   try {
     const p = watched("1017", "احمدی");
-    await desk.colleague(acc.id, "1017", { person: p, text: "سلام" });
+    await desk.colleague(acc.id, "1017", { person: p, text: "سرور کنده" });
     const mother = sends[0].chatId;
     const tools = createMotherTools({ store, runner, chatId: mother, name: "احمدی", sendToPerson: (t) => desk.sendToPerson(mother, t) });
     await motherTurn(store, mother, { status: "error", during: async () => tools.send_to_person.execute({ text: "سلام، بفرمایید" }) });
@@ -592,7 +594,7 @@ test("21: dismissing a held draft clears the person's «waiting»", async () => 
   const { store, runner, sends, acc, desk, app, watched, cleanup } = setup();
   try {
     const p = watched("1018", "رضایی");
-    await desk.colleague(acc.id, "1018", { person: p, text: "سلام" });
+    await desk.colleague(acc.id, "1018", { person: p, text: "سرور کنده" });
     const mother = sends[0].chatId;
     const tools = createMotherTools({ store, runner, chatId: mother, name: "رضایی", sendToPerson: (t) => desk.sendToPerson(mother, t) });
     await motherTurn(store, mother, { during: async () => (desk.ownerLine(acc.id, "1018", { text: "سلام" }), tools.send_to_person.execute({ text: "سلام" })) });
@@ -945,7 +947,7 @@ test("37: dismissing a failed turn lets go of the message the runner kept for it
   const { store, runner, sends, acc, desk, app, watched, cleanup } = setup();
   try {
     const p = watched("1040", "موسوی");
-    await desk.colleague(acc.id, "1040", { person: p, text: "سلام" });
+    await desk.colleague(acc.id, "1040", { person: p, text: "سرور کنده" });
     const mother = sends[0].chatId;
     store.setKv(`kept:${mother}`, [{ id: "k1", message: { text: "سلام" }, ids: [], fails: 0 }]); // as the runner keeps an errored turn
     const dropped = [];
@@ -965,7 +967,7 @@ test("38: a turn that goes through clears the chat's «ارسال نشد»; «د
   const { store, sends, acc, desk, app, watched, cleanup } = setup();
   try {
     const p = watched("1041", "صالحی");
-    await desk.colleague(acc.id, "1041", { person: p, text: "سلام" });
+    await desk.colleague(acc.id, "1041", { person: p, text: "سرور کنده" });
     const mother = sends[0].chatId;
     const waiting = async () => (await (await app.request("/api/telegram/feed")).json()).waiting;
     await motherTurn(store, mother, { status: "error" });
@@ -1064,6 +1066,443 @@ test("41: a watched person still blocked by the old «دسترسی» flag is ans
     store.updatePerson(a.id, { access: { ...store.getPerson(a.id).access, enabled: false } });
     await desk.setWatch(a.id, true, { decided: true });
     assert.equal(store.getPerson(a.id).access.enabled, true);
+  } finally {
+    cleanup();
+  }
+});
+
+// Small talk is answered only together with a later message that can start a thread.
+test("42: small talk alone gets no turn; it goes with the next real message, or lapses unanswered", async () => {
+  const { smallTalk } = await import("../src/integrations/threads.mjs");
+  for (const t of ["سلام", "سلام، وقت بخیر 🌹", "صبح به خیر", "خسته‌نباشید", "ممنون", "مرسی 🙏", "[استیکر]", "@someone سلام", "گریفین سلام"]) assert.equal(smallTalk(t), true, t);
+  // Answers to something the assistant asked are never held: a no, an ok, a number, a thumbs-up.
+  for (const t of ["سلام، پایپ‌لاین فیل شده", "بله", "اوکی", "خیر", "خیر، ممنون", "خوبه", "۲ ممنون", "802798 ممنون", "ممنون 👍", "👍", "", "ممنون، حل شد"]) assert.equal(smallTalk(t), false, t);
+
+  const { store, sends, acc, desk, watched, cleanup } = setup({ burstMs: 45_000 });
+  try {
+    const p = watched("1071", "نوری");
+    await desk.colleague(acc.id, "1071", { person: p, text: "سلام، وقت بخیر" });
+    assert.equal(store.getKv(`tgstate:${p.id}`).state, "greeting");
+    await desk.drain(Date.now() + 10 * 60_000);
+    assert.equal(sends.length, 0, "a greeting alone is not answered");
+    // The real message, minutes later: one turn with both, after its own burst wait.
+    await desk.colleague(acc.id, "1071", { person: p, text: "ربات مانیتور لاگین ساکت شده" });
+    assert.equal(store.getKv(`tgstate:${p.id}`).state, "queued");
+    const due = store.getKv(`pickup:${acc.id}`)["1071"].due;
+    assert.ok(due > Date.now() && due <= Date.now() + 45_000, "the greeting's long wait does not delay the real message");
+    await desk.drain(Date.now() + 46_000);
+    assert.equal(sends.length, 1);
+    assert.match(sends[0].text, /وقت بخیر[\s\S]*ربات مانیتور لاگین/);
+
+    // A call word or a mention does not make a greeting a request.
+    const q = watched("1072", "کاظمی");
+    await desk.colleague(acc.id, "1072", { person: q, text: "گریفین سلام", called: true });
+    assert.equal(sends.length, 1);
+    // A photo, or the owner's /agent, runs now and takes the greeting along.
+    const img = { data: "aGk=", mimeType: "image/png" };
+    assert.equal(await desk.colleague(acc.id, "1072", { person: q, text: "", images: [img] }), "run");
+    assert.match(sends.at(-1).text, /گریفین سلام/);
+
+    // A greeting joining a waiting real message leaves its time alone.
+    const r = watched("1073", "جعفر");
+    await desk.colleague(acc.id, "1073", { person: r, text: "باکت پر شده" });
+    const before = store.getKv(`pickup:${acc.id}`)["1073"].due;
+    await desk.colleague(acc.id, "1073", { person: r, text: "ممنون" });
+    assert.equal(store.getKv(`pickup:${acc.id}`)["1073"].due, before);
+    await desk.drain(Date.now() + 46_000);
+    assert.match(sends.at(-1).text, /باکت پر شده[\s\S]*ممنون/);
+
+    // A sticker carries its preview frame, but its label is all it says: held too.
+    const u = watched("1075", "مرادی");
+    assert.equal(await desk.colleague(acc.id, "1075", { person: u, text: "[استیکر]", images: [img] }), "queued");
+    assert.equal(store.getKv(`tgstate:${u.id}`).state, "greeting");
+    // A photo captioned «سلام» is content: queued behind the owner's line, it still runs.
+    const v = watched("1076", "سلیمی");
+    desk.ownerLine(acc.id, "1076", { text: "الان میام" });
+    await sleep(3);
+    await desk.colleague(acc.id, "1076", { person: v, text: "سلام", images: [img] });
+    const ran = sends.length;
+    await desk.drain(Date.now() + 11 * 60_000);
+    assert.equal(sends.length, ran + 1, "the photo's turn is not dropped as small talk");
+
+    // Nothing after it for 12 hours: it lapses, recorded, never answered.
+    const s2 = watched("1074", "احمدی");
+    await desk.colleague(acc.id, "1074", { person: s2, text: "سلام خوبی؟" });
+    const count = sends.length;
+    await desk.drain(Date.now() + 13 * 3_600_000);
+    assert.equal(sends.length, count);
+    assert.equal(store.getKv(`tgstate:${s2.id}`).state, "no_reply");
+    assert.equal(store.getKv(`pickup:${acc.id}`)["1074"], undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+// The mother can react to, reply to and edit its messages, not only send new ones.
+test("43: the mother reacts instead of writing, and replies to a chosen message; the owner in the chat stops both", async () => {
+  const { store, sends, delivered, reactions, acc, desk, watched, cleanup } = setup();
+  try {
+    const p = watched("1081", "رحیمی");
+    await desk.colleague(acc.id, "1081", { person: p, text: "استیجینگ بالا اومد", messageId: 501 });
+    const mother = sends[0].chatId;
+    assert.match(sends[0].text, /«رحیمی» \(#501\): استیجینگ بالا اومد/, "their line carries its id");
+
+    await motherTurn(store, mother, {
+      during: async () => {
+        assert.deepEqual(await desk.reactTo(mother, null, "👍"), { reacted: true, id: 501, emoji: "👍" }, "default: the message this turn answers");
+        assert.equal((await desk.reactTo(mother, "#499", "❤️")).reacted, true, "an emoji's variation selector is fine");
+        assert.match((await desk.reactTo(mother, null, "🍌")).error, /does not take/);
+      },
+    });
+    await sleep(10);
+    assert.deepEqual(reactions, [["1081", 501, "👍"], ["1081", 499, "❤"]]);
+    assert.equal(delivered.length, 0, "a reaction is not a message");
+    assert.equal(store.getKv(`tgstate:${p.id}`).state, "reacted");
+
+    const sent = await desk.sendToPerson(mother, "کدوم سرویس؟", { replyTo: "#499" });
+    assert.equal(sent.sent, true);
+    assert.equal(delivered.at(-1).replyTo, 499);
+    assert.match((await desk.sendToPerson(mother, "x", { replyTo: "دیروزی" })).error, /replyTo must be/);
+
+    // The default is the message the turn started from: a follow-up queued behind it is not it,
+    // and a turn that answers none of theirs (a thread report) has no default at all.
+    store.appendEvent(mother, null, "user", { text: "«رحیمی» (#502): یه چیز دیگه", from: { kind: "colleague", name: "رحیمی", personId: p.id, msgId: 502 }, intent: "queue", tracked: true });
+    await motherTurn(store, mother, { during: async () => assert.equal((await desk.reactTo(mother, null, "👌")).id, 501) });
+    store.appendEvent(mother, null, "user", { text: "[گزارش خودکار زیرکارها — این پیام را سیستم فرستاده]" });
+    await motherTurn(store, mother, { during: async () => assert.match((await desk.reactTo(mother, null, "👍")).error, /answers none of theirs/) });
+    reactions.length = 2;
+
+    // The owner writes to them himself: neither a reaction nor a reply goes.
+    await sleep(3);
+    desk.ownerLine(acc.id, "1081", { text: "دیدم" });
+    assert.equal((await desk.reactTo(mother, "#501", "🙏")).held, true);
+    assert.equal(reactions.length, 2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("44: owner or a Claude session joining while the assistant works: it hears it at once, drafts stay held", async () => {
+  const { store, runner, sends, acc, desk, watched, app, cleanup } = setup();
+  try {
+    const p = watched("1090", "صالحی");
+    await desk.colleague(acc.id, "1090", { person: p, text: "VPN وصل نمیشه", messageId: 9 });
+    const mother = sends[0].chatId;
+    runner.isActive = (id) => id === mother;
+    desk.ownerLine(acc.id, "1090", { text: "خودم نگاه می‌کنم" });
+    assert.equal(sends.length, 2);
+    assert.deepEqual([sends[1].chatId, sends[1].intent, sends[1].from], [mother, "steer", { kind: "owner_line" }]);
+    assert.equal(sends[1].text, "«صاحب‌کار در تلگرام به صالحی»: خودم نگاه می‌کنم");
+    assert.deepEqual(store.getKv(`tgowner:${acc.id}:1090`).lines, [], "told now, not again with her next message");
+
+    const res = await post(app, `/api/telegram/persons/${p.id}/session-note`, { text: "روتر را خودم درست کردم" });
+    assert.equal(res.status, 200);
+    assert.equal(sends[2].text, "«جلسهٔ Claude صاحب‌کار دربارهٔ کار صالحی، بدون پیام به او»: روتر را خودم درست کردم");
+    assert.ok(store.getKv(`tgowner:${acc.id}:1090`).at > 0, "a claim holds the assistant like his own line (R3: its next turn waits)");
+    await sleep(3);
+    assert.equal(await desk.colleague(acc.id, "1090", { person: p, text: "هنوز وصل نمیشه", messageId: 10 }), "queued");
+    assert.equal(store.listPersonMessages?.(p.id)?.some?.((m) => m.direction === "out") || false, false, "nothing went to the colleague");
+
+    // Idle and nothing open: the line waits for her next turn, as before.
+    runner.isActive = () => false;
+    desk.ownerLine(acc.id, "1090", { text: "حل شد" });
+    assert.equal(sends.length, 3);
+    assert.equal(store.getKv(`tgowner:${acc.id}:1090`).lines.length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("45: a Claude session's prompt naming a colleague reaches the assistant once; the session gets what it is doing", async () => {
+  const { store, runner, sends, acc, desk, watched, app, cleanup } = setup();
+  try {
+    const p = watched("1091", "محمد صالحی");
+    watched("1092", "جعفر");
+    await desk.colleague(acc.id, "1091", { person: p, text: "VPN وصل نمیشه", messageId: 3 });
+    const mother = sends[0].chatId;
+    runner.isActive = (id) => id === mother;
+    const res = await post(app, "/api/sessions/activity", { session: "s1", text: "مشکل VPN صالحی رو چک کن" });
+    const body = await res.json();
+    assert.deepEqual(body.matched, ["محمد صالحی"], "family name, word-bounded (not «جعفری»-like substrings)");
+    assert.match(body.context, /«محمد صالحی»: در حال کار/);
+    assert.equal(sends.at(-1).text, "«جلسهٔ Claude صاحب‌کار دربارهٔ کار محمد صالحی، بدون پیام به او»: مشکل VPN صالحی رو چک کن");
+    assert.equal(store.getKv(`tgowner:${acc.id}:1091`).at, 0, "a session's note holds no draft: the assistant decides");
+    const before = sends.length;
+    await post(app, "/api/sessions/activity", { session: "s1", text: "صالحی دوباره" });
+    assert.equal(sends.length, before, "once per session and person in 30 minutes");
+    assert.deepEqual((await (await post(app, "/api/sessions/activity", { session: "s2", text: "جعفری را ببین" })).json()).matched, []);
+    const n = sends.length;
+    const harness = await (await post(app, "/api/sessions/activity", { session: "s3", text: "<task-notification>\n<event>MSG از صالحی دربارهٔ VPN</event>" })).json();
+    assert.deepEqual(harness.matched, [], "a monitor's notification is not something he typed");
+    assert.equal(sends.length, n, "and it never reaches a mother");
+  } finally {
+    cleanup();
+  }
+});
+
+test("46: a colleague's bot turn sees what the owner's sessions work on; a session sees the assistant's runs and can tell any of its chats", async () => {
+  const { store, runner, sends, desk, app, cleanup } = setup();
+  try {
+    await post(app, "/api/sessions/activity", { session: "sess-upload-1", text: "مشکل آپلود فایل فروشگاه: S3 شرق پر شده، چک کن" });
+    const bot = store.createChat({ title: "🤖 آقای سلیمی: S3", caller: "peer:bob", agent: "griffin" });
+    const note = desk.annotate(bot.id);
+    assert.match(note, /جلسه‌های Claude خود Owner/);
+    assert.match(note, /S3 شرق پر شده/);
+    assert.equal(desk.annotate(store.createChat({ title: "mine", caller: "owner" }).id), null, "the owner's own chats: no block");
+
+    const sub = store.createChat({ title: "← گریفین: S3 شرق", caller: "griffin", agent: "platform" });
+    store.startRun(sub.id);
+    const ctx = (await (await post(app, "/api/sessions/activity", { session: "sess-upload-1", text: "ادامه" })).json()).context;
+    assert.match(ctx, new RegExp(`در حال کار \\(${sub.id}\\): ← گریفین: S3 شرق`));
+    store.finishRun(bot.id, store.startRun(bot.id), "finished", null);
+    assert.match((await (await post(app, "/api/sessions/activity", { session: "sess-upload-1", text: "و؟" })).json()).context, new RegExp(`تمام شد .* \\(${bot.id}\\): 🤖 آقای سلیمی`), "its finished bot reply shows too");
+
+    assert.equal((await post(app, "/api/sessions/note", { chatId: bot.id, text: "S3 را من دارم" })).status, 200);
+    assert.deepEqual([sends.at(-1).chatId, sends.at(-1).from], [bot.id, { kind: "owner_line" }]);
+    assert.match(sends.at(-1).text, /جلسهٔ Claude صاحب‌کار.*S3 را من دارم/);
+    assert.equal((await post(app, "/api/sessions/note", { chatId: "nope", text: "x" })).status, 404);
+  } finally {
+    cleanup();
+  }
+});
+
+// Private share (private-share.mjs): an invite or a code sent from the owner's account is not the owner
+// talking to that person — not live, and not when a reconnect's catch-up reads the dialog again.
+test("47: a private-share invite is never the owner's line — its live echo, and catch-up after a restart", async () => {
+  const { telegramForShares } = await import("../src/private-share.mjs");
+  const { rememberShareSend } = await import("../src/integrations/share-sends.mjs");
+  const h = accountHarness();
+  try {
+    await h.ready();
+    const p = h.watched("555000111", "Rezaei");
+    const invite = "گفتگوی «فروش» را با شما به اشتراک گذاشتم:\nhttps://g.example/#/p/abc";
+    const tg = telegramForShares(h.client, { store: h.store, markSent: (id) => h.integrations.markAccountSent(id) });
+    await tg.send("555000111", invite);
+    const sentId = 901; // the harness numbers sends from 901
+    // The live echo, shaped like gramjs's (bigint ids).
+    await h.owner(sentId, invite);
+    const ownerLines = () => (h.store.getKv(`tgowner:${h.acc.id}:555000111`)?.lines || []).filter((l) => l.text.includes("#/p/"));
+    const ownerHistory = () => h.store.findPerson("555000111").history.filter((x) => String(x.text || "").includes("#/p/"));
+    assert.equal(ownerLines().length, 0, "live: not an owner line");
+    assert.equal(ownerHistory().length, 0, "live: not in the person's history as the owner's words");
+
+    // A new process: only what is stored survives. The code sent before the restart comes back in catch-up.
+    const t = Math.floor(Date.now() / 1000);
+    const dm = { chatId: 555000111n, peerId: { userId: 555000111n } };
+    const code = "کد ورود به گفتگوی «فروش»: 123456\nده دقیقه اعتبار دارد. https://g.example/#/p/abc";
+    rememberShareSend(h.store, "555000111", 77);
+    h.chatWith([
+      { out: true, id: 77, date: t - 60, message: code, ...dm },
+      { out: false, id: 76, date: t - 300, message: "سلام، یه سوال داشتم", ...dm },
+    ]);
+    await h.restart();
+    assert.equal(ownerLines().length, 0, "catch-up: the code is not an owner line on the desk");
+    assert.equal(ownerHistory().length, 0, "catch-up: not in the history as the owner's words");
+    assert.ok(p);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// Telegram can deliver the echo of an outgoing message before sendMessage resolves: the id is not
+// known yet (markSent has not run), so only the text registered before the send (takeQuiet) keeps it out.
+test("48: a private-share code whose echo arrives before the send resolves is not the owner's line", async () => {
+  const { telegramForShares } = await import("../src/private-share.mjs");
+  const h = accountHarness();
+  try {
+    await h.ready();
+    h.watched("555000111", "Rezaei");
+    const send = h.client.sendMessage;
+    let echoed = false;
+    h.client.sendMessage = async (to, opts) => {
+      await h.owner(950, opts.message); // the echo, first
+      echoed = true;
+      const sent = await send(to, opts);
+      return { ...sent, id: 950 };
+    };
+    const code = "کد ورود به گفتگوی «فروش»: 654321\nده دقیقه اعتبار دارد. https://g.example/#/p/abc";
+    const tg = telegramForShares(h.client, { store: h.store, markSent: (id) => h.integrations.markAccountSent(id) });
+    await tg.send("555000111", code);
+    assert.ok(echoed, "the echo came before the send resolved");
+    const lines = (h.store.getKv(`tgowner:${h.acc.id}:555000111`)?.lines || []).filter((l) => l.text.includes("654321"));
+    const history = h.store.findPerson("555000111").history.filter((x) => String(x.text || "").includes("654321"));
+    assert.equal(lines.length, 0, "not an owner line on the desk");
+    assert.equal(history.length, 0, "not in the person's history as the owner's words");
+  } finally {
+    h.cleanup();
+  }
+});
+test("an owner chat that wrote to a person is one of their threads: the mother hears the reply and forwards it", async () => {
+  const { store, runner, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const off = watched("1302", "ناظر", { watch: false });
+    const own = store.createChat({ title: "کار من", agent: "griffin" });
+    // His chat's own send counts as him in the conversation; that must not hold their reply.
+    desk.ownerLine(acc.id, "1302", { text: "لاگ رو بفرستید", by: "session" });
+    desk.askedBy(acc.id, "1302", own.id, "لاگ رو بفرستید");
+    assert.equal(desk.hasAskers(acc.id, "1302"), true);
+
+    assert.equal(await desk.colleague(acc.id, "1302", { person: off, text: "اینم لاگ: timeout", messageId: 9 }), "run");
+    const mother = sends.at(-1).chatId;
+    assert.notEqual(mother, own.id, "the mother decides; nothing is reserved");
+    assert.match(desk.annotate(mother), new RegExp(`chat ${own.id} «کار من»`));
+
+    const tools = createMotherTools({ store, runner, chatId: mother, name: "ناظر", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(mother, c, n) });
+    assert.ok(parse(await tools.forward_to_chat.execute({ chat: "nope" })).error);
+    assert.deepEqual(parse(await tools.forward_to_chat.execute({ chat: own.id })), { forwarded: true, chat: own.id, title: "کار من" });
+    const forwarded = sends.at(-1);
+    assert.equal(forwarded.chatId, own.id);
+    assert.equal(forwarded.from.kind, "colleague");
+    assert.match(forwarded.text, /timeout/);
+
+    // An archived chat is no thread any more; an unwatched person is then silent again.
+    store.updateChat(own.id, { archived: true });
+    assert.equal(desk.hasAskers(acc.id, "1302"), false);
+    assert.equal(desk.annotate(mother), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a chat of his that never wrote to the person is still a candidate: the mother sees its topic and can hand the message over", async () => {
+  const { store, runner, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const mahla = watched("1401", "مهلا");
+    const setupChat = store.createChat({ title: "راه‌اندازی پنل", agent: "griffin" });
+    store.appendEvent(setupChat.id, null, "user", { text: "پنل مالی را هم مثل بقیه راه بنداز", ownerText: true });
+    const other = store.createChat({ title: "بررسی دیسک", agent: "griffin" });
+    store.appendEvent(other.id, null, "user", { text: "دیسک db1 را ببین", ownerText: true });
+
+    assert.equal(desk.hasAskers(acc.id, "1401"), false, "recent chats alone do not open the gates");
+    assert.equal(await desk.colleague(acc.id, "1401", { person: mahla, text: "ایمیل من mahla@example.com است", messageId: 4 }), "run");
+    const mother = sends.at(-1).chatId;
+    const note = desk.annotate(mother);
+    assert.match(note, new RegExp(`chat ${setupChat.id} «راه‌اندازی پنل».*پنل مالی را هم مثل بقیه راه بنداز`));
+    assert.match(note, new RegExp(`chat ${other.id} «بررسی دیسک»`));
+    assert.doesNotMatch(note, new RegExp(`chat ${mother}\\b`), "the mother chat itself is not a candidate");
+
+    const tools = createMotherTools({ store, runner, chatId: mother, name: "مهلا", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(mother, c, n) });
+    assert.deepEqual(parse(await tools.forward_to_chat.execute({ chat: setupChat.id })), { forwarded: true, chat: setupChat.id, title: "راه‌اندازی پنل" });
+    assert.equal(sends.at(-1).chatId, setupChat.id);
+    assert.match(sends.at(-1).text, /mahla@example\.com/);
+    assert.equal(desk.hasAskers(acc.id, "1401"), true, "after the hand-over their next messages keep reaching the mother");
+    assert.ok(parse(await tools.forward_to_chat.execute({ chat: "no-such" })).error);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hand-over to a chat at work arrives mid-turn (steer), saying whose words they are and how to answer them", async () => {
+  const { store, runner, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const p = watched("1501", "کاظمی");
+    const own = store.createChat({ title: "کندی جستجو", agent: "griffin" });
+    store.appendEvent(own.id, null, "user", { text: "چرا جستجو کنده؟", ownerText: true });
+    assert.equal(await desk.colleague(acc.id, "1501", { person: p, text: "الان هم کنده", messageId: 7 }), "run");
+    const mother = sends.at(-1).chatId;
+    runner.isActive = (id) => id === own.id;
+    assert.equal((await desk.forwardToChat(mother, own.id)).forwarded, true);
+    const sent = sends.at(-1);
+    assert.equal(sent.chatId, own.id);
+    assert.equal(sent.intent, "steer", "a chat already awake gets it now, not after its turn");
+    assert.match(sent.text, /«کاظمی»/);
+    assert.match(sent.text, /نه /, "the head says it is not the owner");
+    assert.match(sent.text, /telegram_send \{chat: "1501"\}/);
+    assert.match(sent.text, /الان هم کنده/);
+    runner.isActive = () => false;
+    await desk.forwardToChat(mother, own.id);
+    assert.equal(sends.at(-1).intent, "send", "an idle chat is woken");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a shared thread is in the main list, offered to every mother, and whoever hands it a message gets its result", async () => {
+  const { store, runner, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const a = watched("1601", "علی");
+    const b = watched("1602", "بهار");
+    assert.equal(await desk.colleague(acc.id, "1601", { person: a, text: "گیت‌لب بالا نمیاد", messageId: 1 }), "run");
+    const motherA = sends.at(-1).chatId;
+    // What delegate {shared:true} leaves behind (peers.mjs).
+    const thread = store.createChat({ title: "🧵 قطعی گیت‌لب", agent: "platform", caller: "griffin", parentChatId: motherA });
+    store.setKv(`delegate:${thread.id}`, { parent: motherA, agent: "platform", state: "running" });
+    store.setKv(`sharedthread:${thread.id}`, { by: "علی", motherChat: motherA });
+    assert.ok(store.listChatsBySource().some((c) => c.id === thread.id && c.source === "manual"), "listed in the main sidebar");
+
+    assert.equal(await desk.colleague(acc.id, "1602", { person: b, text: "گیت‌لب برای منم باز نمیشه", messageId: 2 }), "run");
+    const motherB = sends.at(-1).chatId;
+    assert.match(desk.annotate(motherB), new RegExp(`chat ${thread.id} «🧵 قطعی گیت‌لب».*رشتهٔ عمومی`));
+    assert.doesNotMatch(desk.annotate(motherA) || "", new RegExp(`chat ${thread.id}`), "not offered back to its own mother");
+
+    const tools = createMotherTools({ store, runner, chatId: motherB, name: "بهار", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(motherB, c, n) });
+    assert.equal(parse(await tools.forward_to_chat.execute({ chat: thread.id })).forwarded, true);
+    assert.match(sends.at(-1).text, /گزارش نهایی همین رشته/);
+    assert.deepEqual(store.getKv(`threadsubs:${thread.id}`), [motherB], "its result reaches بهار too");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a colleague reporting what an open incident shows goes to the ops room for that incident, once an hour", async () => {
+  const { store, runner, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const { createIncidentStore } = await import("../src/incidents/index.mjs");
+    const { createOpsRoom } = await import("../src/incidents/opsroom.mjs");
+    const incidents = createIncidentStore(store.db);
+    const opsRoom = createOpsRoom({ store, runner, incidents, mode: "critical" });
+    desk.setOps({ open: () => incidents.open(), isAcked: (r) => incidents.isAcked(r), log: (...a) => incidents.log(...a), relay: (m) => opsRoom.relay(m), roomId: () => opsRoom.roomId() });
+    const inc = incidents.insert({ key: "east|PublicAppEndpointDown|www", cluster: "east", alertname: "PublicAppEndpointDown", scope: "www", severity: "critical", summary: "www.example.com 503", members: ["www"], seenFrom: ["east"] });
+    incidents.insert({ key: "west|KubePodNotReady|x", cluster: "west", alertname: "KubePodNotReady", severity: "warning", summary: "noise", members: ["x"], seenFrom: ["west"] });
+
+    const p = watched("1701", "رضایی");
+    assert.equal(await desk.colleague(acc.id, "1701", { person: p, text: "سایت باز نمیشه برای بیمارا", messageId: 3 }), "run");
+    const mother = sends.at(-1).chatId;
+    const note = desk.annotate(mother);
+    const ref = `incident:${inc.id.slice(0, 8)}`;
+    assert.match(note, new RegExp(`${ref} «PublicAppEndpointDown · east · www» \\(critical\\)`));
+    assert.doesNotMatch(note, /KubePodNotReady/, "an untriaged warning is not offered");
+
+    const tools = createMotherTools({ store, runner, chatId: mother, name: "رضایی", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(mother, c, n) });
+    const out = parse(await tools.forward_to_chat.execute({ chat: ref }));
+    assert.equal(out.forwarded, true);
+    assert.match(out.next, /one short line/);
+    const room = opsRoom.roomId();
+    assert.ok(room);
+    assert.equal(sends.at(-1).chatId, room);
+    assert.match(sends.at(-1).text, /اتاق عملیات — حالت سایه/, "a fresh room gets its charter first");
+    assert.match(sends.at(-1).text, /«رضایی».*حادثهٔ/);
+    assert.match(sends.at(-1).text, /سایت باز نمیشه/);
+    assert.ok(incidents.logs(inc.id).some((l) => l.kind === "reported" && l.data.name === "رضایی"));
+
+    const before = sends.length;
+    assert.equal(parse(await tools.forward_to_chat.execute({ chat: ref })).forwarded, true);
+    assert.equal(sends.length, before, "the same person's next report this hour is only logged");
+    assert.ok(parse(await tools.forward_to_chat.execute({ chat: "incident:ffffffff" })).error);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hand-over the chat calls unrelated comes back to the mother, which handles it itself", async () => {
+  const { store, sends, acc, desk, watched, cleanup } = setup();
+  try {
+    const p = watched("1801", "کاظمی");
+    const own = store.createChat({ title: "آپدیت نصب‌ها", agent: "griffin" });
+    store.appendEvent(own.id, null, "user", { text: "همهٔ نصب‌ها را آپدیت کن", ownerText: true });
+    assert.equal(await desk.colleague(acc.id, "1801", { person: p, text: "پنل سلیمی ۵۰۲ می‌دهد", messageId: 9 }), "run");
+    const mother = sends.at(-1).chatId;
+    assert.match(desk.annotate(mother), /با ایشان کاری نداشته/, "a chat that never wrote to them is labelled so");
+    assert.equal((await desk.forwardToChat(mother, own.id, "", "آپدیت نصب‌ها")).forwarded, true);
+    assert.match(sends.at(-1).text, /به گمان .*آپدیت نصب‌ها/);
+    assert.match(sends.at(-1).text, /ربطی نداشت/, "the head says how to decline");
+    const before = sends.length;
+    await motherTurn(store, own.id, { text: "آپدیت تمام شد. پیام «کاظمی» به این گفتگو ربطی نداشت." });
+    await until(() => sends.length > before);
+    assert.equal(sends.at(-1).chatId, mother);
+    assert.match(sends.at(-1).text, /ربطی نداشت/);
+    assert.match(sends.at(-1).text, /سلیمی/);
+    assert.equal(desk.hasAskers(acc.id, "1801"), false, "that chat is no longer one of their threads");
   } finally {
     cleanup();
   }

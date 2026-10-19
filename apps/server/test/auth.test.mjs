@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createApp } from "../src/app.mjs";
 import { createAuth } from "../src/auth.mjs";
+import { parseTrustedProxies } from "../src/listen.mjs";
 import { openStore } from "../src/db.mjs";
 import { createRunner } from "../src/runner.mjs";
 
@@ -126,4 +127,41 @@ test("an old public name redirects browser GETs permanently; POSTs are still ser
   assert.notEqual(post.status, 301);
   const lan = await app.request("http://192.0.2.46:3100/healthz", { headers: { host: "192.0.2.46:3100" } });
   assert.equal(lan.status, 200);
+});
+
+// A request as it reaches the server: the TCP peer plus whatever headers the client sent.
+const loginFrom = (app, token, { peer, forwardedFor }) =>
+  app.request(
+    `${origin}/api/auth/login`,
+    { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ token }) },
+    { incoming: { socket: { remoteAddress: peer }, headers: forwardedFor ? { "x-forwarded-for": forwardedFor } : {} } },
+  );
+
+test("a forged X-Forwarded-For does not reset the login rate limit", async () => {
+  const { app, token, cleanup } = setup();
+  try {
+    // A direct client rotates the header on every try; it is still one address.
+    for (let i = 0; i < 5; i += 1) assert.equal((await loginFrom(app, "wrong", { peer: "198.51.100.7", forwardedFor: `10.0.0.${i}` })).status, 401);
+    assert.equal((await loginFrom(app, token, { peer: "198.51.100.7", forwardedFor: "10.0.0.99" })).status, 429);
+    // A different real client is not affected.
+    assert.equal((await loginFrom(app, token, { peer: "203.0.113.5" })).status, 200);
+  } finally {
+    cleanup();
+  }
+});
+
+test("behind a trusted proxy each forwarded client has its own limit", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-auth-proxy-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  try {
+    const runner = createRunner({ store, sdk: {}, agentOptions: () => ({}), log: {} });
+    const app = createApp({ store, runner, auth: createAuth({ dataDir: dir, store, trustedProxies: parseTrustedProxies("203.0.113.10") }) });
+    const token = fs.readFileSync(path.join(dir, "owner.token"), "utf8").trim();
+    for (let i = 0; i < 5; i += 1) assert.equal((await loginFrom(app, "wrong", { peer: "203.0.113.10", forwardedFor: "198.51.100.9" })).status, 401);
+    assert.equal((await loginFrom(app, token, { peer: "203.0.113.10", forwardedFor: "198.51.100.9" })).status, 429);
+    assert.equal((await loginFrom(app, token, { peer: "203.0.113.10", forwardedFor: "198.51.100.10" })).status, 200, "the owner behind the same edge still gets in");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

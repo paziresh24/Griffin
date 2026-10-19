@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
 import { OWNER_NAME } from "../src/owner.mjs";
-import { PERSONA } from "../src/persona.mjs";
+import { OWNER, PERSONA } from "../src/persona.mjs";
 import { RATE_MAX, chatHistoryBlock, derivePeerUserId, isAgentSigned, isNoReply, looksAssistantSigned, peerAgentConfig, peerAgentPrompt, takeRate } from "../src/integrations/peer-agent.mjs";
 
 test("signature matches the colleague's assistant, not the colleague", () => {
@@ -93,7 +93,7 @@ test("chatHistoryBlock shows what was said outside this Griffin chat, minus the 
     { direction: "out", text: "لطفاً خانم کریمی را به n8n دعوت کنید" },
     { direction: "in", text: "قبوله، فقط بگو چه سطح دسترسی" },
   ], { label: "ربات همکار" });
-  assert.ok(block.includes(`${OWNER_NAME}/${PERSONA.name}: لطفاً خانم کریمی را به n8n دعوت کنید`));
+  assert.ok(block.includes(`${OWNER.nameFa}/${PERSONA.name}: لطفاً خانم کریمی را به n8n دعوت کنید`));
   assert.doesNotMatch(block, /چه سطح دسترسی/, "the newest message is the one being answered, not history");
   assert.equal(chatHistoryBlock([{ direction: "in", text: "only" }]), "");
   const p = peerAgentPrompt({ label: "x", userId: "y", text: "z", history: block });

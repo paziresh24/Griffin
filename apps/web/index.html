@@ -7,13 +7,15 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <script>
-      // Skin before first paint (skin.js switches it later): no flash of the other look.
-      try { var s = localStorage.getItem("griffin.skin"); document.documentElement.dataset.skin = s === "karsara" ? s : "griffin"; } catch (e) { document.documentElement.dataset.skin = "griffin"; }
+      // The look before first paint (ui-prefs.js switches it later): the cached prefs, else the skin this
+      // browser chose before looks became per-user prefs. No flash of the other look.
+      try { var u = JSON.parse(localStorage.getItem("griffin.ui") || "null"); var s = (u && u.look) || localStorage.getItem("griffin.skin"); document.documentElement.dataset.look = s === "karsara" ? s : "griffin"; } catch (e) { document.documentElement.dataset.look = "griffin"; }
     </script>
     <title>گریفین</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <link rel="stylesheet" href="/brand.css" />
   </body>
 </html>

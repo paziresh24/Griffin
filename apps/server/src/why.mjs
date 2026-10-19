@@ -23,6 +23,7 @@ export function explainRun(events, { approvals = [], manifest = null } = {}) {
   const startedAt = new Map();
   const used = new Set();
   const run = { model: null, provider: null, effort: null, retry: false, fallback: false, usage: null };
+  let requestsSeen = 0; // usage.request events since the last usage (a Claude turn's own requests)
   for (const event of events || []) {
     const data = event.data || {};
     switch (event.type) {
@@ -65,7 +66,16 @@ export function explainRun(events, { approvals = [], manifest = null } = {}) {
         const n = (v) => Number(v) || 0;
         const input = n(data.prompt_tokens ?? data.inputTokens ?? data.input_tokens);
         const u = run.usage || { requests: 0, input: 0, output: 0, context: 0 };
-        run.usage = { requests: u.requests + 1, input: u.input + input, output: u.output + n(data.completion_tokens ?? data.outputTokens ?? data.output_tokens), context: input || u.context };
+        // After a Claude turn's own requests (usage.request), its result is the cost, not a request.
+        run.usage = { requests: u.requests + (requestsSeen ? 0 : 1), input: u.input + input, output: u.output + n(data.completion_tokens ?? data.outputTokens ?? data.output_tokens), context: requestsSeen ? u.context : input || u.context };
+        requestsSeen = 0;
+        break;
+      }
+      case "usage.request": {
+        const input = Number(data.prompt_tokens ?? data.inputTokens ?? data.input_tokens) || 0;
+        const u = run.usage || { requests: 0, input: 0, output: 0, context: 0 };
+        run.usage = { ...u, requests: u.requests + 1, context: input || u.context };
+        requestsSeen += 1;
         break;
       }
       case "run.finished":

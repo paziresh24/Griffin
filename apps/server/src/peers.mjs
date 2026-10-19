@@ -1,6 +1,12 @@
 import { CALLER_LABELS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { clip } from "./updates.mjs";
 import { normalizeProvider } from "./providers/ids.mjs";
+import { redactSecrets } from "./push.mjs";
+import { maskText } from "./redact.mjs";
+import { ASK_TOOL, ASK_REQUESTER_TOOL } from "./asks.mjs";
+import { OWNER_TASK_TOOL } from "./todos.mjs";
+import { FORWARDING_TOOLS, peerReachable } from "./related.mjs";
+import { motherInfo, SHARED } from "./integrations/mother.mjs";
 
 // ask_agent: free-text request to a peer agent. Runs in a child chat whose tools come from
 // the peer's profile (tools_json). Discovery is via list_agents / agent profiles in the DB.
@@ -19,6 +25,75 @@ const FACT_CAP = 40;
 // keeps its session and everything it already read) instead of starting cold in a new one.
 const REUSE_WINDOW_MS = 2 * 60 * 60_000;
 
+// consult: another model answers the asking agent inside one
+// blocking call, in a child chat of the asking chat with that chat's own agent, tools, mode and
+// folder — never more. The model is pinned to one engine account; the other usable accounts of the
+// same kind that run that model are its fallbacks (index.mjs modelCandidates reads them from the
+// consult's kv row), so a Claude account at its plan limit moves to the next one. The caps stop a
+// looping agent from spending the owner's keys: the hourly counts live in the database (kv
+// consult-times), so a restart does not reset them; the running counts are in memory, since a
+// restart ends every consult (runner notResumable).
+export const CONSULT_TOOL = "consult";
+// Past this the consult is cancelled. It stays under the runner's 15-minute stale sweep, which would
+// otherwise cancel the asking run, quiet while it waits.
+export const CONSULT_TIMEOUT_MS = 13 * 60_000;
+// Nobody watches a consult live: a model that keeps working without answering stops here
+// (providers/claude.mjs maxTurns).
+export const CONSULT_MAX_TURNS = 40;
+export const CONSULT_MAX_PER_HOUR = 6;
+export const CONSULT_MAX_PER_HOUR_ALL = 20;
+export const CONSULT_MAX_RUNNING = 2;
+// Consults running at once across all the owner's chats.
+export const CONSULT_MAX_RUNNING_ALL = 4;
+const CONSULT_TIMES_KV = "consult-times"; // [{ chat, t }]: every consult started in the last hour
+export const CONSULT_PROMPT_MAX = 4000;
+const CONSULT_ANSWER_MAX = 20_000;
+const CONSULT_POLL_MS = 500;
+const CONSULT_KV = "consult:"; // consult:<childChatId> -> { from, accounts: [account ids, first = pinned], model }
+// What a consult chat is not given (index.mjs): work handed on would wake it with a new run after its
+// call returned, on the owner's keys, with nobody reading the answer. It answers the agent that
+// asked: no question to the owner or the requester (it would stall the asking run), no chore left
+// for the owner, and nothing sent out of the chat (Telegram, a colleague, another chat) — in the
+// owner's own chain the guard would not stop those.
+export const CONSULT_WITHHELD = [
+  ...new Set([ASK_AGENT_TOOL, DELEGATE_TOOL, SUBTASKS_TOOL, CONSULT_TOOL, ASK_TOOL, ASK_REQUESTER_TOOL, OWNER_TASK_TOOL, ...FORWARDING_TOOLS, "send_to_person"]),
+  // Nor anything that outlives the call or changes the owner's setup: jobs, the shared agent
+  // profile, a suggestion card in front of the owner, a knowledge note, a colleague invite, incidents.
+  ...["jobs_create", "jobs_update", "jobs_run", "jobs_delete", "agent_tools_enable", "agent_tools_disable", "agent_settings_set"],
+  ...["chat_suggest", "chat_dismiss_suggestion", "knowledge_write", "peer_invite", "incident_ack", "incident_update"],
+  // Nor ring the owner's phone: the asking chat decides what he must know.
+  "notify_owner",
+];
+/** The consult row of a chat (null for any other chat). */
+export const consultOf = (store, chatId) => (chatId ? store.getKv(`${CONSULT_KV}${chatId}`) : null);
+
+// The accounts that run `model` now, best first: the one named (or the kind's base account), then
+// the other accounts of the same kind. check(id) -> null when that account can run the model now,
+// else why not. Another account of the openai kind can be another vendor (Z.ai, OpenRouter), so it
+// is a fallback only when lists(id) says it offers the model by that exact id.
+export async function resolveConsultAccounts({ provider, model, accounts = [], check = async () => null, lists = async () => false }) {
+  const named = accounts.find((a) => a.id === provider);
+  const kind = named?.kind || (accounts.some((a) => a.kind === provider) ? provider : null);
+  if (!kind) return { error: `unknown engine account "${provider}"; accounts: ${accounts.map((a) => a.id).join(", ")}` };
+  const order = [...(named ? [named] : []), ...accounts.filter((a) => a.kind === kind && a.id !== provider)];
+  const usable = [];
+  let problem = null;
+  for (const a of order) {
+    const why = await check(a.id);
+    const listed = a === order[0] || kind !== "openai" || (await lists(a.id));
+    if (!why && listed) usable.push(a.id);
+    else problem ??= why || `engine account "${a.id}" does not list model "${model}"`;
+  }
+  return usable.length ? { accounts: usable } : { error: problem || `no engine account runs "${model}" now` };
+}
+
+// The engine candidates of a consult chat, in order: one per account, all on the model asked for.
+// Nothing else: a consult never runs on another model or vendor nobody named.
+export function consultCandidates(row, { usable = () => true } = {}) {
+  if (!row?.model || !Array.isArray(row.accounts)) return [];
+  return row.accounts.filter((id) => usable(id)).map((provider) => ({ provider, model: row.model }));
+}
+
 const inputSchema = {
   type: "object",
   properties: {
@@ -32,7 +107,18 @@ const inputSchema = {
     },
   },
   required: ["agent", "request"],
-  additionalProperties: false,
+};
+
+// A mother chat's delegate also takes shared: a general issue's thread (mother.mjs SHARED).
+const delegateSharedSchema = {
+  ...inputSchema,
+  properties: {
+    ...inputSchema.properties,
+    shared: {
+      type: "boolean",
+      description: "true for a general issue others hit too (an outage, CI, a shared service): the thread is listed in the owner's main list and other colleagues' messages on it join it",
+    },
+  },
 };
 
 export function createPeers({
@@ -42,6 +128,11 @@ export function createPeers({
   now = () => new Date(),
   wakeDelayMs = 3_000,
   log = console,
+  // consult: (provider, model, parentChat) -> { accounts: [account ids that run the model, best
+  // first] } or { error }. index.mjs checks the account registry (on, keyed, not limited, lists it).
+  consultAccounts = async () => ({ error: "consult is not set up on this server" }),
+  consultTimeoutMs = CONSULT_TIMEOUT_MS,
+  consultPollMs = CONSULT_POLL_MS,
 }) {
   const childrenOf = new Map(); // parentChatId -> Set(childChatId)
   const askTail = new Map(); // parentChatId -> Promise — serialize parallel ask_agent calls
@@ -249,7 +340,7 @@ export function createPeers({
     return {
       description:
         "Hand a piece of work to a peer agent and return immediately (non-blocking). Use it for anything that may take more than a minute or when several peers can work in parallel. The result is reported to this chat automatically when the peer finishes — do not poll or wait; finish your turn (tell the asker what you started). Use subtasks to list/check/steer/cancel. For a quick lookup you need right now, ask_agent is fine.",
-      inputSchema,
+      inputSchema: motherInfo(store, parentChatId) ? delegateSharedSchema : inputSchema,
       async execute(args) {
         const request = String(args?.request || "").trim();
         const twin = delegatesOf(parentChatId).find(
@@ -262,6 +353,12 @@ export function createPeers({
         if (spawned.error) return { isError: true, content: [{ type: "text", text: spawned.error }] };
         const { child, callerAgent, target, continued } = spawned;
         writeDelegate(child.id, { parent: parentChatId, agent: target, request, state: "running", at: now().toISOString() });
+        // A mother chat's general issue: listed in the main sidebar, open to every mother (mother.mjs SHARED).
+        const mother = args?.shared === true ? motherInfo(store, parentChatId) : null;
+        if (mother && !continued) {
+          store.setKv(`${SHARED}${child.id}`, { by: mother.name, motherChat: parentChatId, at: now().toISOString() });
+          store.updateChat(child.id, { title: `🧵 ${request.split("\n")[0].slice(0, 70)}` });
+        }
         watchChild(child.id);
         try {
           await runner.send(child.id, { text: peerMessage(callerAgent, request, { continued }), images: [] });
@@ -345,15 +442,22 @@ export function createPeers({
     const target = String(args?.agent || "").trim();
     const request = String(args?.request || "").trim();
     const targetProfile = store.getAgentProfile(target);
-    if (!target || !targetProfile) return { error: `unknown agent: ${target || "(empty)"} — call list_agents` };
+    if (!target || !targetProfile) {
+      const ids = store.listAgentProfiles?.().map((p) => p.id).join(", ");
+      return { error: `unknown agent: ${target || "(empty)"}${ids ? ` — agents here: ${ids}` : " — call list_agents"}` };
+    }
     if (!request) return { error: "request is required" };
     if (request.length > MAX_REQUEST) return { error: "request too long" };
     const parent = store.getChat(parentChatId);
     if (!parent) return { error: "parent chat missing" };
+    if (consultOf(store, parentChatId)) return { error: "a consult answers by itself: it cannot hand work on to another agent" };
     const callerAgent = parent.agent || DEFAULT_AGENT;
-    if (target === callerAgent) return { error: `cannot ${ASK_AGENT_TOOL} yourself` };
-    const chain = parseChain(parent.call_chain).concat(callerAgent);
-    if (chain.includes(target)) return { error: `call loop refused: ${[...chain, target].join(" → ")}` };
+    const prior = parseChain(parent.call_chain);
+    // One hop to yourself only where you hold a quota on yourself (a single-agent install: registry).
+    const selfHop = target === callerAgent && targetProfile.meta?.callers?.[callerAgent] && !prior.includes(target);
+    if (target === callerAgent && !selfHop) return { error: `cannot ${ASK_AGENT_TOOL} yourself` };
+    const chain = prior.concat(callerAgent);
+    if (!selfHop && chain.includes(target)) return { error: `call loop refused: ${[...chain, target].join(" → ")}` };
     // Seen 2026-09-24: a peer's report was cut, Griffin re-asked "ادامهٔ کار قبلی" and the new
     // child started from zero — every router read done again. Continue the idle one instead.
     const since = new Date(now().getTime() - REUSE_WINDOW_MS).toISOString();
@@ -364,7 +468,7 @@ export function createPeers({
       return { child: store.getChat(previous.id), callerAgent, target, request, continued: true };
     }
     const child = store.createChat({
-      title: `← ${CALLER_LABELS[callerAgent] || callerAgent}: ${request.slice(0, 60)}`,
+      title: `← ${CALLER_LABELS[callerAgent] || callerAgent}: ${request.trim().split("\n")[0].slice(0, 60)}`,
       model: targetProfile.model || parent.model,
       mode: parent.mode === "plan" ? "plan" : "agent",
       caller: callerAgent,
@@ -429,10 +533,190 @@ export function createPeers({
     }
   }
 
+
+  // ---- consult: ask another model and get its answer back in the same call ----
+  const consultStarting = new Map(); // parentChatId -> consults past the caps, not yet tracked
+  // The last hour's consults, read from and written to the database on every check (one synchronous
+  // step with the check, so parallel calls still see each other's slots).
+  const consultTimes = (t) => {
+    const list = store.getKv(CONSULT_TIMES_KV);
+    return (Array.isArray(list) ? list : []).filter((e) => e && typeof e.chat === "string" && Number.isFinite(e.t) && t - e.t < 3_600_000);
+  };
+  const consultsRunning = (chatId) =>
+    [...(childrenOf.get(chatId) || [])].filter((id) => consultOf(store, id)).length + (consultStarting.get(chatId) || 0);
+  const consultsRunningAll = () => {
+    let n = 0;
+    for (const chatId of new Set([...childrenOf.keys(), ...consultStarting.keys()])) n += consultsRunning(chatId);
+    return n;
+  };
+
+  // The same consult (chat, account, model, prompt) asked again while the first still runs — an
+  // engine re-issuing a tool call it gave up on — shares the first one's answer instead of a second run.
+  const consultInflight = new Map();
+  function consultTool(parentChatId) {
+    const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error }) }] });
+    const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
+    const trimmed = (value) => (typeof value === "string" ? value.trim() : "");
+    return {
+      description:
+        "Ask another model (another engine account or vendor, for a cross-check or a second pair of hands) and get its answer back in this same call — then go on with your work. It runs as a sub-chat of this one on exactly that account/model, with this chat's tools, mode and folder (never more); if that account is at its plan limit, another account of the same kind that runs the model takes over. The owner sees it under this chat. It may take minutes (at most 13). The prompt must stand alone. Its answer is another model's view: verify before acting on it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          provider: { type: "string", description: "engine account id or kind, e.g. claude, claude-2, openai" },
+          model: { type: "string", description: "model id that account runs, e.g. claude-opus-4-7 or glm-5.3" },
+          prompt: { type: "string", description: "self-contained task or question, with paths and context (at most 4,000 characters)" },
+        },
+        required: ["provider", "model", "prompt"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        // The asking run is part of the key: after the owner's Stop, the next run's same consult is a
+        // new one, not a share in the cancelled one's «the asking chat stopped».
+        const key = [parentChatId, runner.runIdOf?.(parentChatId) ?? "", trimmed(args?.provider), trimmed(args?.model), trimmed(args?.prompt).replace(/\s+/g, " ")].join("\u0000");
+        if (consultInflight.has(key)) return consultInflight.get(key);
+        const job = runConsult(args).finally(() => consultInflight.delete(key));
+        consultInflight.set(key, job);
+        return job;
+      },
+    };
+
+    async function runConsult(args) {
+        const from = store.getChat(parentChatId);
+        if (!from) return fail("chat not found");
+        // The owner's own top-level chat only: not a job, a colleague's or the ops room's chain, a
+        // sub-chat (a delegated task, an ask_agent child, another consult) or a side chat.
+        if ((from.caller || "owner") !== "owner" || from.job_id || from.sim) return fail("consult works only from one of the owner's own chats.");
+        if (from.parent_chat_id || from.side_of) return fail("consult is not available inside a sub-chat or a side chat; ask from the main chat.");
+        // Not the Telegram desk (the global chat) nor a chat linked to Telegram: what is said there
+        // comes from people other than the owner (related.mjs peerReachable, chat_send's own rule).
+        if (!peerReachable(store, from)) return fail("consult is not available in a Telegram chat; ask from one of the owner's web chats.");
+        const provider = typeof args?.provider === "string" ? args.provider.trim().slice(0, 40) : "";
+        const model = typeof args?.model === "string" ? args.model.trim().slice(0, 200) : "";
+        // Masked before it leaves for another vendor and before the child's user event stores it: a
+        // secret the asking agent read in a tool result must not be pasted on.
+        const asked = typeof args?.prompt === "string" ? args.prompt.trim() : "";
+        if (!provider || !model || !asked) return fail("provider, model and prompt are required");
+        if (asked.length > CONSULT_PROMPT_MAX) return fail(`prompt is ${asked.length} characters; the limit is ${CONSULT_PROMPT_MAX}. Shorten it or point to files instead.`);
+        const prompt = redactSecrets(maskText(asked));
+        // The caps are checked and taken in one synchronous step: calls made in parallel (one model
+        // step can issue several) each see the others' slots.
+        const t = now().getTime();
+        const chatKey = String(parentChatId);
+        const times = consultTimes(t);
+        if (times.filter((e) => e.chat === chatKey).length >= CONSULT_MAX_PER_HOUR) return fail(`this chat already consulted ${CONSULT_MAX_PER_HOUR} times in the last hour; decide with what you have.`);
+        if (times.length >= CONSULT_MAX_PER_HOUR_ALL) return fail(`the owner's chats already consulted ${CONSULT_MAX_PER_HOUR_ALL} times in the last hour; decide with what you have.`);
+        const running = consultsRunning(parentChatId);
+        if (running >= CONSULT_MAX_RUNNING) return fail(`${running} consults of this chat are still running; wait for one to answer first.`);
+        const runningAll = consultsRunningAll();
+        if (runningAll >= CONSULT_MAX_RUNNING_ALL) return fail(`${runningAll} consults are already running across the owner's chats; wait for one to answer first.`);
+        store.setKv(CONSULT_TIMES_KV, [...times, { chat: chatKey, t }]);
+        consultStarting.set(parentChatId, (consultStarting.get(parentChatId) || 0) + 1);
+        const doneStarting = () => {
+          const left = (consultStarting.get(parentChatId) || 1) - 1;
+          if (left > 0) consultStarting.set(parentChatId, left);
+          else consultStarting.delete(parentChatId);
+        };
+        // A call refused before anything ran gives its slot back.
+        const refund = () => {
+          const list = consultTimes(now().getTime());
+          const at = list.findIndex((e) => e.chat === chatKey && e.t === t);
+          if (at >= 0) store.setKv(CONSULT_TIMES_KV, list.filter((_, i) => i !== at));
+        };
+        let resolved;
+        try {
+          // Through a promise, so a lookup that throws at once is refused (and refunded) like any other.
+          resolved = await Promise.resolve()
+            .then(() => consultAccounts(provider, model, from))
+            .catch((error) => ({ error: String(error?.message || error) }));
+        } finally {
+          doneStarting();
+        }
+        const accounts = Array.isArray(resolved?.accounts) ? resolved.accounts.filter(Boolean) : [];
+        if (!accounts.length) {
+          refund();
+          return fail(resolved?.error || `no engine account can run ${provider}:${model} now.`);
+        }
+        let child;
+        try {
+          child = store.createChat({
+            title: `مشورت با ${model}: ${prompt.replace(/\s+/g, " ").slice(0, 60)}`,
+            model: `${accounts[0]}:${model}`,
+            // The asking chat's mode: in plan mode the consult plans too.
+            mode: from.mode === "plan" ? "plan" : "agent",
+            // The asking chat's agent and caller: the same tool set, never more.
+            caller: from.caller || "owner",
+            agent: from.agent || DEFAULT_AGENT,
+            parentChatId,
+            callChain: parseChain(from.call_chain),
+            provider: normalizeProvider(accounts[0]),
+          });
+          // The asking chat's reasoning effort, when the owner set one there.
+          if (from.effort) store.updateChat(child.id, { effort: from.effort });
+          store.setKv(`${CONSULT_KV}${child.id}`, { from: parentChatId, accounts, model });
+        } catch (error) {
+          refund();
+          return fail(`the consult could not start: ${error?.message || error}`);
+        }
+        // Tracked like an ask_agent child: the asking run ending (the owner's Stop, a restart) cancels it.
+        track(parentChatId, child.id);
+        const askingRun = runner.runIdOf?.(parentChatId) ?? null;
+        const consultFrom = `${accounts[0]}:${model}`;
+        const text =
+          `[مشورت از چتِ «${redactSecrets(maskText(String(from.title || "").replace(/\s+/g, " ").slice(0, 80)))}» — ایجنتِ آن چت کمکت را می‌خواهد، نه Owner]\n` +
+          "همان ابزارها و پوشهٔ آن چت را داری. کار را انجام بده و جوابِ کامل را در پاسخِ آخرت بنویس؛ همان متن به آن ایجنت برمی‌گردد.\n\n" +
+          prompt;
+        try {
+          try {
+            await runner.send(child.id, { text, images: [] });
+          } catch (error) {
+            refund();
+            return fail(`the consult could not start: ${error?.message || error}`);
+          }
+          const end = Date.now() + consultTimeoutMs;
+          let stopped = null;
+          for (;;) {
+            if (!store.getChat(child.id)) {
+              await Promise.resolve(runner.cancel(child.id)).catch(() => {});
+              return ok({ consultId: child.id, state: "failed", from: consultFrom, error: "the owner deleted this consult" });
+            }
+            // Ended, and no fallback run took over (a plan limit starts a new run on the next account).
+            if (!runner.isActive(child.id) && lastRun(child.id)?.status !== "running") break;
+            if (askingRun && (runner.runIdOf?.(parentChatId) ?? null) !== askingRun) stopped = "the asking chat stopped";
+            else if (Date.now() >= end) stopped = `over its time limit (${Math.round(consultTimeoutMs / 60_000) || "<1"} min)`;
+            if (stopped) {
+              await Promise.resolve(runner.cancel(child.id)).catch(() => {});
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, consultPollMs));
+          }
+          const status = lastRun(child.id)?.status || "error";
+          const answer = consultAnswer(store, child.id);
+          // The account that answered (a fallback may have taken over from the first).
+          const started = [...store.allEvents(child.id)].filter((event) => event.type === "run.started").at(-1)?.data;
+          const servedBy = started?.provider ? `${started.provider}:${started.model || model}` : consultFrom;
+          if (stopped || status !== "finished") {
+            return ok({ consultId: child.id, state: "failed", from: servedBy, error: stopped || lastRun(child.id)?.error || status, answer });
+          }
+          return ok({ consultId: child.id, state: "finished", from: servedBy, answer });
+        } finally {
+          untrack(parentChatId, child.id);
+          // A consult that failed before any output must not leave a «پیام نرسید» card with «دوباره»
+          // under a hidden sub-chat: nobody waits for a retry of it (runner.mjs kept messages).
+          store.deleteKv?.(`kept:${child.id}`);
+        }
+    }
+  }
+
+  function lastRun(chatId) {
+    return store.db.prepare("SELECT status, error FROM runs WHERE chat_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1").get(chatId) || null;
+  }
+
   recover();
 
   return {
     tool,
+    consultTool,
     delegateTool,
     subtasksTool,
     pendingDelegates,
@@ -446,6 +730,26 @@ export function peerMessage(callerAgent, request, { continued = false } = {}) {
   return continued
     ? `[ادامه — درخواست تازه از «${who}» در همین گفتگو؛ هرچه قبلاً خواندی معتبر است، دوباره نخوان]\n\n${request}`
     : `[درخواست از «${who}»]\n\n${request}`;
+}
+
+// What a consult said last: the text after its last tool call in its latest run (the narration
+// between tools is not the answer), redacted, its end kept when over the cap.
+export function consultAnswer(store, chatId) {
+  const events = [...store.allEvents(chatId)];
+  let start = 0;
+  events.forEach((event, i) => { if (event.type === "run.started") start = i; });
+  let all = "";
+  let final = "";
+  for (const event of events.slice(start)) {
+    if (event.type === "text" && event.data?.text) {
+      all += String(event.data.text);
+      final += String(event.data.text);
+    }
+    if (event.type === "tool.done") final = "";
+  }
+  let answer = redactSecrets((final.trim() || all.trim()), { maxLength: Infinity });
+  if (answer.length > CONSULT_ANSWER_MAX) answer = `…${answer.slice(answer.length - CONSULT_ANSWER_MAX + 1)}`;
+  return answer;
 }
 
 export function buildEnvelope(store, chatId, { status, error = null, at = null } = {}) {
@@ -479,6 +783,12 @@ export function buildEnvelope(store, chatId, { status, error = null, at = null }
   const answer = finalText.trim();
   const summary = (answer.length >= 40 ? answer.slice(0, 4000) : all.length > 4000 ? `…${all.slice(-4000)}` : all) || null;
   const brief = briefFromFacts(facts) || (summary ? summary.split(/\n+/).map((l) => l.trim()).filter(Boolean).slice(0, 3).join("\n").slice(0, 500) : null);
+  // Which model answered, and whether the run moved there after a plan limit (a delegated
+  // subtask keeps the auto-fallback): the owner sees it in the result his chat gets back.
+  const started = events[start]?.type === "run.started" ? events[start].data || {} : {};
+  const moved = Boolean(started.limitMove || started.movedFrom);
+  const shown = started.model && started.model !== "auto" ? started.model : started.provider || null;
+  const answeredBy = shown ? { model: shown, ...(started.provider ? { provider: started.provider } : {}), ...(moved ? { movedAfterLimit: true } : {}) } : null;
   const unknowns = [];
   if (error) unknowns.push(String(error));
   if (!summary && !brief && status === "finished") unknowns.push("peer returned no text summary");
@@ -489,6 +799,7 @@ export function buildEnvelope(store, chatId, { status, error = null, at = null }
     facts,
     unknowns,
     chatRef: chatId,
+    ...(answeredBy ? { answeredBy, ...(moved ? { modelLabel: `پاسخ از ${answeredBy.model} (موتور قبلی به سقف پلن خورد)` } : {}) } : {}),
     ...(at ? { at } : {}),
   };
 }

@@ -204,8 +204,8 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
         let truncated = false;
         while (queue.length && visited < MAX_FOLDERS && matches.length < limit) {
           const batch = queue.splice(0, 8);
-          // One unreadable folder (404/403 on its secrets) must not sink the whole search — seen
-          // 2026-09-23: every recursive search of the owner's project failed with http_404.
+          // One unreadable folder (404/403 on its secrets) must not sink the whole search (otherwise
+          // a single locked sub-folder fails every recursive search with http_404).
           const results = await Promise.all(
             batch.map(async ({ path, depth }) => ({
               path,
@@ -283,11 +283,12 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
     // Reads memberships only — never a secret value.
     infisical_access: {
       description:
-        "Audit Infisical access (read-only): organization members with their org role, and per project which users and groups are members with which role. Use it to check that a person can reach their own project and nothing they should not. Never returns secret values.",
+        "Audit Infisical access (read-only): organization members with their org role, and per project which users, groups and machine identities are members with which role. Use it to check that a person can reach their own project and nothing they should not. Never returns secret values.",
       inputSchema: {
         type: "object",
         properties: {
           project: { type: "string", description: "limit to one project by name or id (default: every project)" },
+          projectId: { type: "string", description: "same as project" },
           person: { type: "string", description: "limit the report to memberships whose email or name contains this" },
           roles: { type: "boolean", description: "resolve custom project roles and their permissions (default true)" },
         },
@@ -295,7 +296,8 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
       },
       async execute(args) {
         const cfg = await config();
-        const want = String(args.project || "").trim().toLowerCase();
+        const asked = String(args.project || args.projectId || "").trim();
+        const want = asked.toLowerCase();
         const who = String(args.person || "").trim().toLowerCase();
         const matches = (p) => !who || `${p.email || ""} ${p.name || ""}`.toLowerCase().includes(who);
 
@@ -340,12 +342,14 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
 
         const projects = workspaces
           .map((w) => ({ id: w.id || w._id, name: w.name }))
-          .filter((w) => !want || String(w.name).toLowerCase() === want || String(w.id) === args.project);
+          .filter((w) => !want || String(w.name).toLowerCase() === want || String(w.id) === asked);
 
         const report = [];
         for (const p of projects) {
           const users = await tryGet(cfg, [`/api/v1/workspace/${p.id}/users`, `/api/v2/workspace/${p.id}/memberships`, `/api/v1/workspace/${p.id}/memberships`]);
           const groups = await tryGet(cfg, [`/api/v1/workspace/${p.id}/groups`, `/api/v2/workspace/${p.id}/groups`]);
+          // Machine identities (a person's agent) are members too.
+          const identities = await tryGet(cfg, [`/api/v2/workspace/${p.id}/identity-memberships`]);
           // A group's power is in its role, not its name: resolve custom project roles so "which
           // group is on this project" also answers "and what may it do with the secrets".
           const roles = args.roles === false ? { body: null } : await tryGet(cfg, [`/api/v1/workspace/${p.id}/roles`, `/api/v2/workspace/${p.id}/roles`]);
@@ -372,6 +376,11 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
               name: g.group?.name || g.name || null,
               role: g.roles?.map((r) => r.customRoleSlug || r.role).join(",") || g.role || null,
             })),
+            identities: (identities.body?.identityMemberships || []).map((m) => ({
+              name: m.identity?.name || null,
+              role: (m.roles || []).map((r) => r.customRoleSlug || r.role).join(",") || null,
+            })),
+            ...(identities.body ? {} : { identitiesError: identities.error }),
             ...(roleDefs.length ? { roles: roleDefs } : {}),
             ...(users.body ? {} : { membersError: users.error }),
           });
@@ -443,7 +452,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
       inputSchema: {
         type: "object",
         properties: {
-          name: { type: "string", description: "secret name, e.g. HAMI_DB_PASSWORD" },
+          name: { type: "string", description: "secret name, e.g. APP_DB_PASSWORD" },
           value: { type: "string", minLength: 1, maxLength: 8000 },
           projectId: projectArg,
           environment: envArg,
@@ -536,7 +545,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
   // identity; the client secret goes straight into the project and never reaches the model.
   tools.infisical_machine_identity = {
     description:
-      "Give a person's agent its own read-only Infisical machine identity: creates the identity (or reuses one with that name), enables Universal Auth, makes it a member of the person's project, mints a client secret and stores INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET in that project (prod, /). Optionally adds the person (memberEmail) to the project. Verifies by logging in as the new identity. The secret value is never returned. Use this instead of touching Infisical's admin account or database.",
+      "Give a person's agent its own read-only Infisical machine identity: creates the identity (or reuses one with that name), enables Universal Auth, makes it a member of the person's project, mints a client secret and stores INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET in that project (prod, /). Optionally adds the person (memberEmail) to the project. Verifies by logging in as the new identity. The secret value is never returned. Use this instead of touching Infisical's admin account or database. membershipOnly: an identity that already exists (and already has its secret in its own project) only becomes a member of ANOTHER project with `role` — nothing is created, minted or stored.",
     inputSchema: {
       type: "object",
       properties: {
@@ -545,6 +554,7 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
         role: { type: "string", enum: ["viewer", "member"], description: "project role for the identity (default viewer)" },
         memberEmail: { type: "string", description: "also add this person (by email) to the project as viewer" },
         rotate: { type: "boolean", description: "mint a new client secret even if the project already has one" },
+        membershipOnly: { type: "boolean", description: "only add this existing identity to projectId with role; no new identity, secret or stored keys" },
       },
       required: ["name", "projectId"],
       additionalProperties: false,
@@ -562,6 +572,31 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
 
       const memberships = await call(cfg, "GET", `/api/v2/organizations/${orgId}/identity-memberships`, { query: { limit: 1000 } });
       let identityId = (memberships.identityMemberships || []).find((m) => m.identity?.name === name)?.identity?.id;
+      // Another project for an identity that already has its own (e.g. an agent's identity that needs
+      // a second project): the full path would mint a second secret and write it into that project.
+      if (args.membershipOnly) {
+        if (args.memberEmail || args.rotate) throw new ToolInputError("membershipOnly adds only the identity: call again without memberEmail/rotate (those need the full path)");
+        if (!identityId) throw new ToolInputError(`no machine identity named "${name}" in the organization`);
+        let membership;
+        try {
+          await call(cfg, "POST", `/api/v2/workspace/${workspaceId}/identity-memberships/${identityId}`, { body: { role } });
+          membership = `added as ${role}`;
+        } catch (error) {
+          if (!/already|exists/i.test(error.message)) throw error;
+          membership = "already a member (role unchanged)";
+        }
+        const listed = await tryGet(cfg, [`/api/v2/workspace/${workspaceId}/identity-memberships`]);
+        const mine = (listed.body?.identityMemberships || []).find((m) => (m.identity?.id || m.identityId) === identityId);
+        return {
+          identity: name,
+          identityId,
+          project: workspaceId,
+          membership,
+          verified: Boolean(mine),
+          ...(mine ? { roles: (mine.roles || []).map((r) => r.customRoleSlug || r.role) } : { verifyError: listed.error || "not in the project's identity list" }),
+          source: `infisical ${new URL(cfg.host).host}`,
+        };
+      }
       if (identityId) steps.push("identity: exists");
       else {
         const created = await call(cfg, "POST", "/api/v1/identities", { body: { name, organizationId: orgId, role: "no-access" } });
@@ -606,10 +641,24 @@ export function createInfisicalTools({ vault, fetchImpl = fetch }) {
         call(cfg, "GET", `/api/v3/secrets/raw/${n}`, { query: { workspaceId, environment: "prod", secretPath: "/" } }).then((b) => b.secret?.secretValue ?? null, () => null);
       // Reuse a stored secret only if it belongs to this identity (a stale CLIENT_ID from an earlier
       // attempt paired with a fresh secret failed exactly this way once).
-      let secret = !args.rotate && (await read("INFISICAL_CLIENT_ID")) === clientId ? await read("INFISICAL_CLIENT_SECRET") : null;
+      const storedId = await read("INFISICAL_CLIENT_ID");
+      // A stale id (an earlier attempt) is replaced; one another member of this project logs in with
+      // is not — granting access to someone else's project is membershipOnly, never their keys.
+      if (storedId && storedId !== clientId && !args.rotate) {
+        const listed = (await tryGet(cfg, [`/api/v2/workspace/${workspaceId}/identity-memberships`])).body?.identityMemberships || [];
+        for (const m of listed) {
+          const id = m.identity?.id || m.identityId;
+          if (!id || id === identityId) continue;
+          const theirs = await call(cfg, "GET", `/api/v1/auth/universal-auth/identities/${id}`).then((b) => b.identityUniversalAuth?.clientId, () => null);
+          if (theirs === storedId) {
+            throw new ToolInputError(`this project's INFISICAL_CLIENT_ID belongs to identity "${m.identity?.name || id}"; "${name}" is now a ${role} here — for access only use membershipOnly:true, never replace theirs`);
+          }
+        }
+      }
+      let secret = !args.rotate && storedId === clientId ? await read("INFISICAL_CLIENT_SECRET") : null;
       if (!secret) {
         const minted = await call(cfg, "POST", `/api/v1/auth/universal-auth/identities/${identityId}/client-secrets`, {
-          body: { description: `griffin ${new Date().toISOString().slice(0, 10)}`, ttl: 0, numUsesLimit: 0 },
+          body: { description: `agent ${new Date().toISOString().slice(0, 10)}`, ttl: 0, numUsesLimit: 0 },
         });
         secret = minted.clientSecret;
         if (!secret) throw new Error("Infisical minted no client secret");

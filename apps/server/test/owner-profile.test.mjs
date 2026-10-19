@@ -9,11 +9,11 @@ import { profileRoutes } from "../src/profile.mjs";
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
 
-function setup({ telegram = null } = {}) {
+function setup({ telegram = null, configuredName = null } = {}) {
   const kv = new Map();
   const store = { getKv: (k) => kv.get(k) ?? null, setKv: (k, v) => kv.set(k, v) };
   const app = new Hono();
-  profileRoutes(app, { store, telegramProfile: () => telegram });
+  profileRoutes(app, { store, telegramProfile: () => telegram, configuredName });
   const get = async () => (await app.request("/api/profile")).json();
   const put = (body) => app.request("/api/profile", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return { app, get, put, kv };
@@ -342,4 +342,14 @@ test("a huge typed name is cut quickly and a single over-long character is not s
   assert.equal((await s.get()).name.length, 60);
   await s.put({ name: `a${"́".repeat(100_000)}` });
   assert.ok((await s.get()).name.length <= 200);
+});
+
+// An install configured for its owner never shows «Owner».
+test("neither typed nor Telegram: the configured owner's name; Telegram and a typed name still win", async () => {
+  assert.equal((await setup({ configuredName: "سارا احمدی" }).get()).name, "سارا احمدی");
+  assert.equal((await setup({ configuredName: "سارا احمدی", telegram: { name: "Sara" } }).get()).name, "Sara");
+  const typed = setup({ configuredName: "سارا احمدی" });
+  await typed.put({ name: "احمدی" });
+  assert.equal((await typed.get()).name, "احمدی");
+  assert.equal((await setup().get()).name, null);
 });

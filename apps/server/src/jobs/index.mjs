@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT, resolveAgentId } from "../agents/registry.mjs";
 import { formatLocal } from "./cron.mjs";
 import { describeTrigger, nextTriggerAt, TRIGGERS, TriggerError, triggerKinds, validateTrigger } from "./triggers.mjs";
+import { jobChatMode, jobMode } from "./owner-jobs.mjs";
 
 // A job is a saved prompt plus a trigger and a delivery list. When it fires, the job gets its own
 // chat (hidden from the sidebar, listed under the job), the agent answers there exactly as it would
@@ -13,7 +14,7 @@ const DEFAULT_KEEP_RUNS = 20;
 const MAX_PROMPT = 8_000;
 
 export function jobMessage(job) {
-  return `[اجرای خودکار «${job.name}»] این پیام را زمان‌بند گریفین فرستاده، نه Owner. کسی پشت چت نیست: ask_owner نپرس و منتظر تأیید نمان؛ اگر جایی مبهم بود معقول‌ترین فرض را بگیر و در جواب بنویس که چه فرضی گرفتی. جواب نهایی باید کوتاه و آمادهٔ خواندن در پیام‌رسان باشد.\n\n${job.prompt}`;
+  return `[اجرای خودکار «${job.name}»] این پیام را زمان‌بند فرستاده، نه Owner. کسی پشت چت نیست: ask_owner نپرس و منتظر تأیید نمان؛ اگر جایی مبهم بود معقول‌ترین فرض را بگیر و در جواب بنویس که چه فرضی گرفتی. جواب نهایی باید کوتاه و آمادهٔ خواندن در پیام‌رسان باشد.\n\n${job.prompt}`;
 }
 
 export function createJobs({
@@ -28,6 +29,13 @@ export function createJobs({
   tickMs = 30_000,
   now = () => new Date(),
   timeoutFor = (job) => (job.options.timeoutMinutes || DEFAULT_TIMEOUT_MINUTES) * 60_000,
+  // isWaiting(chatId): the run is waiting on an owner approval (asks.isWaiting). That time does not
+  // count against the job's timeout, so the owner gets the approval's whole window. A run can keep
+  // raising new questions, so the paused total is capped at the job's timeout plus one question
+  // window (questionWindowMs); past that, waiting counts like any other time.
+  isWaiting = () => false,
+  questionWindowMs = 30 * 60_000,
+  pollMs = 1_000,
 }) {
   const running = new Map(); // jobId -> { chatId, jobRunId }
   let timer = null;
@@ -45,25 +53,40 @@ export function createJobs({
   function waitForRun(chatId, timeoutMs) {
     return new Promise((resolve) => {
       let timeout = null;
+      let spent = 0;
+      let paused = 0;
+      const maxPause = timeoutMs + questionWindowMs;
+      let last = Date.now();
       const onEvent = (event) => {
         if (event.type !== "run.finished") return;
         cleanup();
         resolve({ status: event.data?.status || "error", error: event.data?.error || null });
       };
       const cleanup = () => {
-        clearTimeout(timeout);
+        clearInterval(timeout);
         store.bus.off(`chat:${chatId}`, onEvent);
       };
       store.bus.on(`chat:${chatId}`, onEvent);
-      timeout = setTimeout(() => {
+      timeout = setInterval(() => {
+        const at = Date.now();
+        let waiting = false;
+        try {
+          waiting = Boolean(isWaiting(chatId));
+        } catch {}
+        if (waiting && paused < maxPause) paused += at - last;
+        else spent += at - last;
+        last = at;
+        if (spent < timeoutMs) return;
         cleanup();
         runner.cancel(chatId).catch(() => {});
         resolve({ status: "error", error: `از ${Math.round(timeoutMs / 60000)} دقیقه بیشتر طول کشید و متوقف شد` });
-      }, timeoutMs);
+      }, Math.max(1, Math.min(pollMs, timeoutMs)));
     });
   }
 
-  async function execute(job, trigger) {
+  // by: who started this run by hand — "owner" (the jobs page) or the chat whose agent called
+  // jobs_run; null for the schedule. Kept on the run chat (kv jobrunby:<chat>) for owner-jobs.mjs.
+  async function execute(job, trigger, by = null) {
     if (running.has(job.id)) {
       const run = store.startJobRun({ jobId: job.id, chatId: null, trigger });
       store.finishJobRun(run, { status: "skipped", error: "اجرای قبلی هنوز تمام نشده بود" });
@@ -73,11 +96,12 @@ export function createJobs({
     const chat = store.createChat({
       title: `${job.name} — ${formatLocal(startedAt)}`,
       model: job.model,
-      mode: job.mode === "plan" ? "plan" : "agent",
+      mode: jobChatMode(job.mode),
       jobId: job.id,
       caller: "scheduler",
       agent: resolveAgentId(job.agent),
     });
+    if (by) store.setKv(`jobrunby:${chat.id}`, String(by));
     const jobRunId = store.startJobRun({ jobId: job.id, chatId: chat.id, trigger });
     running.set(job.id, { chatId: chat.id, jobRunId });
     try {
@@ -147,10 +171,10 @@ export function createJobs({
 
   return {
     // Called by the HTTP layer and, later, by other trigger sources.
-    async run(jobId, trigger = "manual") {
+    async run(jobId, trigger = "manual", { by = null } = {}) {
       const job = store.getJob(jobId);
       if (!job) return null;
-      return execute(job, trigger);
+      return execute(job, trigger, by);
     },
 
     isRunning: (jobId) => running.has(jobId),
@@ -237,7 +261,7 @@ function prepare(input, current = null, store = null) {
     name: name.slice(0, 80),
     prompt,
     model: input.model === undefined ? current?.model ?? null : input.model || null,
-    mode: input.mode === "plan" ? "plan" : "agent",
+    mode: jobMode(input.mode, current?.mode),
     agent,
     triggerType,
     trigger: validateTrigger(triggerType, input.trigger ?? current?.trigger),
@@ -245,9 +269,21 @@ function prepare(input, current = null, store = null) {
     options: {
       timeoutMinutes: clamp(input.options?.timeoutMinutes, 1, 120, DEFAULT_TIMEOUT_MINUTES),
       keepRuns: clamp(input.options?.keepRuns, 1, 200, DEFAULT_KEEP_RUNS),
+      // Who last wrote the job (jobs/owner-jobs.mjs reads it): the chat whose agent last called
+      // jobs_create / jobs_update on it, or "owner" when the jobs page changed the prompt. A page
+      // edit that keeps the prompt keeps the writer; absent on jobs from before writers were recorded.
+      ...promptWriter(input, current, prompt),
     },
     enabled: input.enabled === undefined ? current?.enabled ?? true : Boolean(input.enabled),
   };
+}
+
+function promptWriter(input, current, prompt) {
+  let writer;
+  if (input.promptChatId !== undefined) writer = input.promptChatId || "owner";
+  else if (current && current.prompt === prompt) writer = current.options?.promptChatId || null;
+  else writer = "owner";
+  return writer ? { promptChatId: String(writer) } : {};
 }
 
 function clamp(value, min, max, fallback) {

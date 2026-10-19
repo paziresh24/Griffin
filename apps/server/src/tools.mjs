@@ -1,6 +1,7 @@
 import { mediaContent, storeMedia } from "./media.mjs";
 import fs from "node:fs";
 import http from "node:http";
+import { gitPrefix } from "./persona.mjs";
 
 // Exposes broker tools to the Cursor agent as SDK customTools. The broker owns the tool
 // list and schemas; this side only forwards calls over the shared unix socket.
@@ -75,6 +76,16 @@ export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request =
     return mediaContent({ ...rest, media: summaryMedia }, media);
   }
 
+  // Arguments the server sets, never the model: gitlab_propose names its branch after this install's
+  // assistant (persona.mjs agentSlug; owner 2026-10-17: no «griffin/» branches on any agent).
+  const SERVER_ARGS = { gitlab_propose: () => ({ prefix: gitPrefix() }) };
+  const hidden = (name, schema) => {
+    if (!SERVER_ARGS[name] || !schema?.properties) return schema;
+    const properties = { ...schema.properties };
+    for (const key of Object.keys(SERVER_ARGS[name]())) delete properties[key];
+    return { ...schema, properties };
+  };
+
   async function customTools(chatId) {
     const defs = await definitions();
     if (!defs) return undefined;
@@ -82,10 +93,10 @@ export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request =
     for (const def of defs) {
       tools[def.name] = {
         description: def.description,
-        inputSchema: def.inputSchema,
+        inputSchema: hidden(def.name, def.inputSchema),
         async execute(args) {
           try {
-            const response = await request(socketPath, "POST", `/tools/${def.name}`, args ?? {});
+            const response = await request(socketPath, "POST", `/tools/${def.name}`, { ...(args ?? {}), ...(SERVER_ARGS[def.name]?.() || {}) });
             if (response.body?.ok) return { content: toContent(response.body.result, chatId) };
             return errorResult(response.body?.error || `http ${response.status}`, response.body?.attempts);
           } catch (error) {
@@ -119,6 +130,7 @@ const HINTS = [
   [/killed \(timeout\)/i, "The command hit the 120s limit. Narrow it, or start it in the background (nohup … > /root/x.log 2>&1 &) and read the log in the next call."],
   [/serializer for text\/html/i, "kubectl got the SSO login page (gateway auth). Use kube_get / kube_exec / kube_logs / kube_secret, never kubectl from a shell."],
   [/^timeout$|aborted due to timeout|ETIMEDOUT/i, "No answer within the timeout from this vantage point. Check dns_lookup / the route once; a second identical try is not new evidence."],
+  [/^forbidden: /i, "Kubernetes RBAC refused this credential (the gateway let it in; no other path will). If the error names the namespace it may read, ask there; otherwise report which permission is missing."],
   [/unauthorized|http_401|http_403|permission/i, "A permission refusal is the answer: report which permission on which system is missing. Do not switch identity or hunt other credentials."],
 ];
 

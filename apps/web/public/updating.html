@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Updating…</title>
+<!-- Served by sw.js when a page load gets 502/503/504 or no answer (a restart); reloads itself. -->
+<style>
+  :root { color-scheme: light dark; --bg: #f7f7f8; --card: #fff; --fg: #18181b; --muted: #71717a; --accent: #e8873a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --card: #181b22; --fg: #ececf1; --muted: #9a9aa6; } }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+    font-family: Vazirmatn, Tahoma, system-ui, sans-serif; padding: 16px; box-sizing: border-box; }
+  .card { max-width: 360px; background: var(--card); border-radius: 16px; padding: 28px 24px; text-align: center;
+    box-shadow: 0 10px 40px rgba(0,0,0,.15); }
+  .spin { width: 32px; height: 32px; margin: 0 auto 14px; border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-top-color: var(--accent); border-radius: 50%; animation: s 0.9s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  h1 { font-size: 17px; margin: 0 0 8px; } p { font-size: 14px; line-height: 1.8; color: var(--muted); margin: 0; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="spin"></div>
+  <h1 id="h">Updating or restarting</h1>
+  <p id="p">The server is away for a moment. It usually takes less than a minute; this page comes back by itself. Your chats and messages stay where they are.</p>
+</div>
+<script>
+  // Same language choice as the app (src/i18n.js): saved choice, else the browser language.
+  (function () {
+    var l = null;
+    try { l = localStorage.getItem("griffin.lang"); } catch (e) {}
+    var langs = navigator.languages || [navigator.language];
+    if (l !== "fa" && l !== "en") l = [].some.call(langs, function (x) { return String(x).toLowerCase().indexOf("fa") === 0; }) ? "fa" : "en";
+    if (l !== "fa") return;
+    document.documentElement.lang = "fa"; document.documentElement.dir = "rtl"; document.title = "در حال آپدیت…";
+    document.getElementById("h").textContent = "در حال آپدیت یا ری‌استارت";
+    document.getElementById("p").textContent = "سرور چند لحظه در دسترس نیست. معمولاً کمتر از یک دقیقه طول می‌کشد؛ این صفحه خودش برمی‌گردد. گفتگوها و پیام‌هایتان سر جایشان می‌مانند.";
+  })();
+  (function poll() {
+    fetch("/healthz", { cache: "no-store" }).then(function (r) {
+      if (r.ok) location.reload(); else setTimeout(poll, 2000);
+    }, function () { setTimeout(poll, 2000); });
+  })();
+</script>
+</body>
+</html>

@@ -15,7 +15,7 @@ const STATE = {
   working: { label: t("در جریان"), cls: "bg-warn/15 text-warn" },
   submitted: { label: t("در صف"), cls: "bg-muted text-muted-foreground" },
   "input-required": { label: t("منتظر جواب شما"), cls: "bg-warn/15 text-warn" },
-  "auth-required": { label: t("منتظر تأیید Owner"), cls: "bg-warn/15 text-warn" },
+  "auth-required": { label: t("منتظر تأیید شما"), cls: "bg-warn/15 text-warn" },
 };
 
 function when(iso) {
@@ -36,7 +36,7 @@ export function PeerStatus({ token }) {
         const body = await r.json();
         if (!alive) return;
         setData(body);
-        document.title = `${BRAND.name} · ${body.label}`;
+        document.title = `${BRAND.title} · ${body.label}`;
       } catch (e) {
         if (alive) setError(e.message);
       }

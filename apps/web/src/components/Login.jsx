@@ -1,21 +1,34 @@
 import { useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
+import { BRAND, iconUrl } from "../brand.js";
+import { loginError } from "../login-error.js";
 import { t } from "../i18n.js";
-import { BRAND } from "../brand.js";
 
 export function AuthGate({ children }) {
   const [state, setState] = useState("checking");
 
+  const [offline, setOffline] = useState(false);
+
   useEffect(() => {
     let alive = true;
-    fetch("/api/auth/me", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((body) => alive && setState(body.authenticated ? "in" : "out"))
-      .catch(() => alive && setState("out"));
+    let timer = null;
+    // Only a real "not signed in" answer shows the login page. A server that is restarting or
+    // unreachable is retried quietly, so a signed-in owner never meets a surprise login screen.
+    const check = () =>
+      fetch("/api/auth/me", { credentials: "same-origin" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((body) => alive && setState(body.authenticated ? "in" : "out"))
+        .catch(() => {
+          if (!alive) return;
+          setOffline(true);
+          timer = setTimeout(check, 3000);
+        });
+    check();
     const onUnauthorized = () => setState("out");
     window.addEventListener("griffin:unauthorized", onUnauthorized);
     return () => {
       alive = false;
+      clearTimeout(timer);
       window.removeEventListener("griffin:unauthorized", onUnauthorized);
     };
   }, []);
@@ -23,8 +36,9 @@ export function AuthGate({ children }) {
   if (state === "checking") {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-3">
-        <img src="/icon.svg" alt="" className="g-login-logo size-12 rounded-xl ring-2 ring-brand/40" />
+        <img src={iconUrl()} alt="" className="g-login-logo size-12 rounded-xl ring-2 ring-brand/40" />
         <span className="agent-dots text-brand" aria-hidden><i /><i /><i /></span>
+        {offline ? <p className="text-sm text-muted-foreground">{t("سرور در دسترس نیست؛ دوباره وصل می‌شوم…")}</p> : null}
       </div>
     );
   }
@@ -48,9 +62,9 @@ function Login({ onDone }) {
         body: JSON.stringify({ token: token.trim() }),
       });
       if (response.ok) return onDone();
-      setError(response.status === 429 ? t("تلاش زیادی شد؛ ۱۵ دقیقه بعد دوباره امتحان کنید.") : t("توکن درست نیست."));
+      setError(loginError(response.status, await response.json().catch(() => ({}))));
     } catch {
-      setError(t("سرور در دسترس نیست."));
+      setError(loginError(0));
     } finally {
       setBusy(false);
     }
@@ -60,9 +74,9 @@ function Login({ onDone }) {
     <div className="flex h-dvh items-center justify-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-2xl border bg-card p-6 shadow-sm">
         <div className="flex items-center gap-3">
-          <img src="/icon.svg" alt="" className="size-10" />
+          <img src={iconUrl()} alt="" className="size-10" />
           <div>
-            <h1 className="font-semibold">{BRAND.name}</h1>
+            <h1 className="font-semibold">{BRAND.title}</h1>
             <p className="text-xs text-muted-foreground">{t("ورود با توکن Owner")}</p>
           </div>
         </div>

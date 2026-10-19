@@ -27,7 +27,7 @@ export const DEFAULT_ROUTERS = {};
 //       "label": "site gateway",
 //       "vaultSlug": "mikrotik-gateway__api",   // vault item: {host, port, user, password}
 //       "publicAddress": "203.0.113.1",          // only this address may be a forward's dst
-//       "lan": "10.0.0.0/24",                    // only this range may be a forward's target
+//       "lan": "10.0.0.0/24",                    // only this range (or a list of ranges) may be a forward's target
 //       "writableLists": ["edge-allowlist"]      // plus any list named "<MARK-prefix>*"
 //     },
 //     "office": {
@@ -130,7 +130,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
   }
 
   // Parallel tool calls each read three Infisical keys; on a cold token they raced and one came back
-  // 404 (2026-09-24, mid-diagnosis). One shared read per router, reused for a few minutes.
+  // 404. One shared read per router, reused for a few minutes.
   const credentials = new Map(); // name -> { at, promise }
   function cachedCredential(config, name) {
     const hit = credentials.get(name);
@@ -175,7 +175,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
   }
 
   // Catastrophic console commands: not "needs approval", simply never from here.
-  const FORBIDDEN_CONSOLE = /(reset-configuration|\/system\s+reset|system\/reset|shutdown|reboot|routerboard\s+upgrade|package\s+downgrade|\/file\s+remove|file\/remove|user\s+remove|\/user\s+set\s+.*password|show-sensitive)/i; // show-sensitive: every secret in clear text (2026-09-24, asked for mid-diagnosis)
+  const FORBIDDEN_CONSOLE = /(reset-configuration|\/system\s+reset|system\/reset|shutdown|reboot|routerboard\s+upgrade|package\s+downgrade|\/file\s+remove|file\/remove|user\s+remove|\/user\s+set\s+.*password|show-sensitive)/i; // show-sensitive: every secret in clear text
 
   async function console_(name, command, { timeoutMs = 30_000 } = {}) {
     const config = routers[name || firstRouter()];
@@ -338,7 +338,8 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
         if (srcList && !LIST_NAME.test(srcList)) throw new ToolInputError("invalid srcAddressList");
         return session(args.router, async (api, config) => {
           if (!config.lan) throw new ToolInputError(`router "${args.router || firstRouter()}" has no LAN configured for port forwards`);
-          if (!IPV4.test(toAddress) || !inCidr(toAddress, config.lan)) throw new ToolInputError(`toAddress must be inside ${config.lan}`);
+          const lans = [config.lan].flat();
+          if (!IPV4.test(toAddress) || !lans.some((cidr) => inCidr(toAddress, cidr))) throw new ToolInputError(`toAddress must be inside ${lans.join(" or ")}`);
           const existing = await api.command(["/ip/firewall/nat/print", "?chain=dstnat", `?dst-port=${publicPort}`], { limit: 50 });
           const clash = existing.records.filter((r) => r.protocol === protocol && (!r["dst-address"] || r["dst-address"] === config.publicAddress));
           if (clash.length) throw new ToolInputError(`public ${protocol} port ${publicPort} is already forwarded (${clash.map((r) => `${r[".id"]} ${r.comment || ""}`).join("; ")})`);

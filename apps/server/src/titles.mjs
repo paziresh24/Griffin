@@ -6,6 +6,8 @@ export const TITLE_PROMPT = `You name chats in a sidebar. Reply with ONLY the ti
 question (Persian when it is Persian), no quotes, no trailing punctuation, no emoji. Name the subject, not the
 request (e.g. "فروش امروز", "فضای دیسک S3", "آخرین فایل باکت").`;
 
+export const STUCK_TITLE = "گفتگو";
+
 export function cleanTitle(raw) {
   const line = String(raw || "").split("\n").map((l) => l.trim()).find(Boolean) || "";
   const title = line.replace(/^["'«“]+|["'»”.。!؟?:]+$/g, "").replace(/\s+/g, " ").trim();
@@ -24,7 +26,8 @@ export function createTitler({ store, generate, timelines = null, log = console 
     // A run split by a message the owner sent mid-run counts once (its last piece).
     const runs = messages.filter((m) => m.role === "assistant" && m.status !== "running" && !m.continued);
     // only the first finished run, and only while the title is still the auto one (first line of the question)
-    if (!firstUser || !runs.length || (!backfill && runs.length !== 1) || chat.title !== autoTitle(firstUser.text)) return null;
+    // «گفتگو» is what a keyless install wrote in place of a title: still the auto one, renamed now.
+    if (!firstUser || !runs.length || (!backfill && runs.length !== 1) || (chat.title !== autoTitle(firstUser.text) && chat.title !== STUCK_TITLE)) return null;
     inFlight.add(chatId);
     try {
       const answer = finalText(wholeRun(messages, runs[0].runId) || runs[0]).slice(0, 1500);

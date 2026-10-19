@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   AssistantRuntimeProvider,
+  CompositeAttachmentAdapter,
   SimpleImageAttachmentAdapter,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
@@ -9,15 +10,18 @@ import { createSender, mergeOutbox, newClientId, outbox } from "./outbox.js";
 import { holdReload } from "./new-version.js";
 import { unwrapResult } from "./result.js";
 import { t } from "./i18n.js";
-import { loadDraft, saveDraft } from "./draft.js";
+import { holdSending, loadDraft, recoverSending, releaseSending, saveDraft } from "./draft.js";
 import { quoteStore, withQuotes } from "./quotes.js";
 import { retryableRunId } from "./side.js";
 import { collectChapters } from "./chat-tools.js";
 import { noteMessage } from "./telegram.js";
+import { guestMessage } from "./guest.js";
+import { FileAttachmentAdapter, attachmentPayload, countProblem, filesShown } from "./attachments.js";
 
 export { unwrapResult };
 
-const imageAdapter = new SimpleImageAttachmentAdapter();
+// Pictures go as images; PDFs and text files as files (attachments.js, from Karsara).
+const attachmentAdapter = new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new FileAttachmentAdapter()]);
 
 // The chat this runtime sends to (the composer keys its draft and quotes by it), a send of the
 // waiting quotes alone (an empty box cannot be submitted through the composer itself), and the
@@ -40,6 +44,16 @@ function browserStorage() {
   }
 }
 
+// Held sends (draft.js holdSending) are per tab: sessionStorage survives a reload and a reopened
+// tab, and another tab of the same chat never takes over a send this one still owns (review).
+function tabStorage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 function returnToBox(chatId, text) {
   if (!text) return;
   const detail = { chatId, text, handled: false };
@@ -55,9 +69,15 @@ const errorHandlers = new Map(); // chatId -> onError
 // chat and back. Each message carries a client id, so "send again" never stores it twice.
 const sender = createSender({
   outbox,
-  post: (entry) => api(`/api/chats/${entry.chatId}/messages`, { method: "POST", body: { ...entry.payload, intent: entry.intent, clientId: entry.clientId } }),
+  post: async (entry) => {
+    const out = await api(`/api/chats/${entry.chatId}/messages`, { method: "POST", body: { ...entry.payload, intent: entry.intent, clientId: entry.clientId } });
+    // The text answered an open question but its files could not follow: say so (server app.mjs).
+    if (out?.filesError) errorHandlers.get(entry.chatId)?.(new Error(t("پاسخ رسید ولی فایل‌ها نرسیدند: {error}", { error: out.filesError })));
+    return out;
+  },
   catchUp: catchUpTimeline,
   settle: (entry, outcome, error) => {
+    if (entry.held) releaseSending(tabStorage(), entry.chatId, entry.held);
     for (const id of entry.quoteIds) quotesInFlight.delete(id);
     // Only the quotes as they were sent leave the box; one edited meanwhile waits for the next message.
     if (outcome === "sent") quoteStore.removeSent(entry.chatId, entry.quotes || []);
@@ -84,6 +104,17 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
   useEffect(() => {
     if (chatId) sender.landed(chatId, timeline.messages);
   }, [chatId, timeline.messages, waiting]);
+  // A message this browser was still sending when its last page closed comes back to the box
+  // (draft.js holdSending), once the timeline has loaded and can say which of them arrived.
+  const recovered = useRef(false);
+  const loaded = !chatId || timeline.lastEventId > 0;
+  useEffect(() => {
+    if (recovered.current || !loaded) return;
+    recovered.current = true;
+    const landed = new Set((timeline.messages || []).filter((m) => m?.role === "user" && m.clientId).map((m) => m.clientId));
+    returnToBox(chatId, recoverSending(tabStorage(), chatId, landed));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId, loaded]);
   useEffect(() => {
     if (!chatId || !onError) return undefined;
     errorHandlers.set(chatId, onError);
@@ -99,7 +130,15 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
 
   const adapter = useMemo(() => {
     const send = async (message, intent) => {
-      const typed = toPayload(message);
+      const typed = attachmentPayload(message);
+      // Over the server's limits: said in Persian before anything is sent; the text goes back to the box.
+      const tooMany = countProblem(typed);
+      if (tooMany) {
+        returnToBox(boxId, typed.typed);
+        onError?.(new Error(tooMany));
+        return;
+      }
+      if (!typed.files.length) delete typed.files;
       // The folded quotes join the message here and leave the box only once it is delivered.
       const quotes = freeQuotes(boxId);
       for (const q of quotes) quotesInFlight.add(q.id);
@@ -108,11 +147,15 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       if (chatId) {
         // Shown at once with its state; the quotes stay in flight until it is delivered or taken back.
         const text = payload.text || "";
-        await sender.submit({ chatId, clientId: newClientId(), text, typed: typed.typed, images: payload.images?.length || 0, intent, payload, quoteIds: quotes.map((q) => q.id), quotes });
+        const clientId = newClientId();
+        // Held in the browser until the server answers: a page closed meanwhile gives it back.
+        const held = holdSending(tabStorage(), chatId, typed.typed, clientId);
+        await sender.submit({ chatId, clientId, held, text, typed: typed.typed, images: payload.images?.length || 0, ...(payload.files?.length ? { files: filesShown(payload.files) } : {}), intent, payload, quoteIds: quotes.map((q) => q.id), quotes });
         return;
       }
       // A reload mid-send could create the chat and still put the text back in the box.
       const releaseNew = holdReload();
+      const held = holdSending(tabStorage(), boxId, typed.typed);
       try {
         const { chat } = await api("/api/chats", {
           method: "POST",
@@ -135,6 +178,7 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
         onError(error);
       } finally {
         releaseNew();
+        releaseSending(tabStorage(), boxId, held);
         for (const q of quotes) quotesInFlight.delete(q.id);
       }
     };
@@ -151,7 +195,9 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
         return { ...converted, metadata: { custom: { ...converted.metadata.custom, ...(last ? { last: true } : {}), ...(onRetry ? { onRetry } : {}) } } };
       },
       onNew: (message) => send(message, "send"),
-      sendQuotes: () => (freeQuotes(boxId).length ? send({ content: [], attachments: [] }, isRunning ? "steer" : "send") : undefined),
+      // force: «فوری» — reach the agent now (steered into the turn, or the turn is interrupted and
+      // continues with it; runner.mjs), not after it.
+      sendQuotes: (force = false) => (freeQuotes(boxId).length ? send({ content: [], attachments: [] }, isRunning ? (force ? "force" : "steer") : "send") : undefined),
       onCancel: async () => {
         if (chatId) await api(`/api/chats/${chatId}/cancel`, { method: "POST" }).catch(onError);
       },
@@ -161,12 +207,14 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
         items: [],
         steerItems: [],
         enqueue: (message) => send(message, isRunning ? "queue" : "send"),
-        steer: (message) => send(message, isRunning ? "steer" : "send"),
+        // assistant-ui sends here for every message while running; only «فوری» (the button,
+        // Ctrl/⌘+Shift+Enter) sets message.steer — the rest keeps the old steer-or-queue.
+        steer: (message) => send(message, isRunning ? (message?.steer === true ? "force" : "steer") : "send"),
         move: () => {},
         edit: () => {},
         remove: () => {},
       },
-      adapters: { attachments: imageAdapter },
+      adapters: { attachments: attachmentAdapter },
       unstable_capabilities: { copy: true },
     };
   }, [chatId, boxId, messages, isRunning, retryId, lastRun?.id, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
@@ -184,33 +232,18 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
   );
 }
 
-function toPayload(message) {
-  const text = message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
-  const images = [];
-  for (const attachment of message.attachments || []) {
-    for (const part of attachment.content || []) {
-      if (part.type !== "image") continue;
-      const match = String(part.image).match(/^data:([^;]+);base64,(.*)$/);
-      if (match) images.push({ mimeType: match[1], data: match[2] });
-    }
-  }
-  return { text: text || (images.length ? t("این تصویر را ببین.") : ""), images, typed: text };
-}
-
 function convertMessage(message) {
   // A tg.note (a report, the owner's own Telegram line…): a system row, never a turn.
   if (message.role === "note") return noteMessage(message);
+  // A note from the person this chat was privately shared with (guest.js): theirs, labelled.
+  if (message.role === "guest") return guestMessage(message);
   if (message.role === "user") {
     return {
       id: message.id,
       role: "user",
       content: [{ type: "text", text: message.text }],
       createdAt: message.at ? new Date(message.at) : undefined,
-      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, clientId: message.clientId || null, sendState: message.sendState || null, from: message.from || null, legacy: "legacyBehind" in message } },
+      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, imageIds: message.imageIds || null, files: message.files || null, clientId: message.clientId || null, sendState: message.sendState || null, from: message.from || null, legacy: "legacyBehind" in message } },
     };
   }
   return {

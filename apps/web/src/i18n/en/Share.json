@@ -10,5 +10,22 @@
   "کپی": "Copy",
   "خروجی ابزارها، فایل‌ها و نمودارهای همین گفتگو هم دیده می‌شوند؛ پیام‌های بعدی هم در لینک می‌آیند.": "Tool output, files and charts from this chat are visible too; later messages also appear at the link.",
   "غیرفعال کردن لینک": "Disable link",
-  "ساخت لینک عمومی": "Create public link"
+  "ساخت لینک عمومی": "Create public link",
+  "لینک عمومی": "Public link",
+  "هر کس لینک را داشته باشد، بدون ورود می‌بیند": "Anyone with the link can see it without signing in",
+  "دعوت برای {name} در صف تلگرام است؛ اگر نرسید همین‌جا خبر می‌دهیم.": "The invite for {name} is queued in Telegram; if it doesn't arrive we'll tell you here.",
+  "دعوت در تلگرام برای {name} رفت": "Invite sent to {name} on Telegram",
+  "دسترسی {name} بسته شد": "{name}'s access closed",
+  "اشتراکِ خصوصی با یک نفر": "Share privately with one person",
+  "فقط او، روی دستگاه خودش؛ می‌خواند و یادداشت می‌گذارد": "Only them, on their own device; they read and leave notes",
+  "باز کرده · {n} بار · آخرین بار {when}": "Opened · {n} times · last {when}",
+  "دعوت رفته؛ هنوز باز نکرده": "Invite sent; not opened yet",
+  "بستن دسترسی": "Close access",
+  "انتخاب دیگری": "Pick someone else",
+  "دعوت": "Invite",
+  "{source}؛ برای اطمینان نامِ کاربریِ دقیقش را بنویسید.": "{source}; to be sure, type their exact username.",
+  "نامِ کاربری ندارد؛ اول او را در تلگرام به مخاطبانتان اضافه کنید.": "They have no username; add them to your Telegram contacts first.",
+  "جستجوی نام یا آی‌دی در تلگرام": "Search a name or username on Telegram",
+  "کسی با این نام در تلگرامِ شما پیدا نشد.": "No one with this name in your Telegram.",
+  "برای اشتراکِ خصوصی، اول تلگرامِ خودتان را از تنظیمات به {name} وصل کنید.": "To share privately, first connect your Telegram to {name} in Settings."
 }

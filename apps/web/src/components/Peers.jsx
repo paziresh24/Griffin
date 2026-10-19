@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Switch } from "radix-ui";
-import { ArrowRight, Check, Copy, KeyRound, Loader2, Plus, ShieldAlert, Trash2, Users, X } from "lucide-react";
+import { ArrowRight, Check, ChevronLeft, Copy, KeyRound, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, navigate } from "../api.js";
+import { api, navigate, usePeerRoute } from "../api.js";
 import { BRAND } from "../brand.js";
 import { locale, num, t } from "../i18n.js";
 import { clockLabel, exactTime } from "../elapsed.js";
+import { NetworkSection } from "./Network.jsx";
+import { activeClients, initial, lastSeen, openAgents, peerList, taskTitle } from "../peers-list.js";
 
-// External agents (MCP now, A2A later): who they are, their device tokens, what they may use,
-// what they asked for, and every gated (irreversible) call on record.
+// External agents (MCP now, A2A later): a short list of colleagues (peers-list.js); a row opens
+// what that colleague's agent asked for, what it may use and its device tokens. The agents' network
+// and the irreversible-call audit are tabs of their own.
 
 const MCP_URL = `${window.location.origin}/mcp`;
 const input = "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary";
@@ -18,7 +21,7 @@ const ago = (iso) => (iso ? clockLabel(iso) : t("هرگز"));
 
 const TASK_STATE = {
   submitted: ["bg-muted-foreground", t("در صف")],
-  working: ["bg-primary animate-pulse", t("در حال کار")],
+  working: ["bg-signal animate-pulse", t("در حال کار")],
   "input-required": ["bg-warn", t("منتظر جواب")],
   completed: ["bg-ok", t("تمام")],
   failed: ["bg-bad", t("خطا")],
@@ -33,15 +36,27 @@ const DECISION = {
   blocked: ["text-bad", t("مسدود (مخرب)")],
 };
 
+const TABS = [
+  { id: "people", label: t("همکاران") },
+  { id: "network", label: t("شبکهٔ ایجنت‌ها") },
+  { id: "audit", label: t("کارهای برگشت‌ناپذیر") },
+];
+
 export function PeersPage({ onBack }) {
   const [data, setData] = useState(null);
-  const [approvals, setApprovals] = useState([]);
   const [catalog, setCatalog] = useState([]);
   const [adding, setAdding] = useState(false);
+  const [tab, setTab] = useState("people");
+  const [query, setQuery] = useState("");
+  // The open colleague lives in the address (#/peers/<id>): the browser's back and the sidebar's
+  // «ایجنت‌های همکاران» both return to the list.
+  const openId = usePeerRoute();
+  const setOpenId = (id) => {
+    window.location.hash = id ? `/peers/${id}` : "/peers";
+  };
 
   const load = useCallback(() => {
     api("/api/peers").then(setData, (e) => toast.error(e.message));
-    api("/api/approvals?limit=40").then((r) => setApprovals(r.approvals || []), () => {});
   }, []);
   useEffect(() => {
     load();
@@ -51,56 +66,129 @@ export function PeersPage({ onBack }) {
   }, [load]);
 
   const users = data?.users || [];
+  const opened = openId ? users.find((u) => u.id === openId) : null;
+  if (opened) {
+    return (
+      <Page>
+        <PeerDetail user={opened} catalog={catalog} defaults={data?.defaultMessages || {}} onChange={load} onBack={() => setOpenId(null)} />
+      </Page>
+    );
+  }
+  const { on, off } = peerList(users, query);
 
   return (
-    <div className="scrollbar-thin h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-4 sm:px-6">
-        <div className="mb-4 flex items-center gap-2">
-          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-            <ArrowRight className="size-4 rtl-mirror" />
-          </button>
-          <h1 className="text-lg font-semibold">{t("ایجنت‌های همکاران")}</h1>
+    <Page>
+      <div className="mb-3 flex items-center gap-2">
+        <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
+          <ArrowRight className="size-4" />
+        </button>
+        <h1 className="text-lg font-semibold">{t("ایجنت‌های همکاران")}</h1>
+        {tab === "people" ? (
           <button type="button" onClick={() => setAdding((v) => !v)} className="press ms-auto flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:shadow">
-            <Plus className="size-4" /> {t("ایجنت همکار جدید")}
+            <Plus className="size-4" /> همکار جدید
           </button>
-        </div>
-        <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          {t("ایجنت‌های همکاران از راه MCP ({url}) مستقیم با {name} کار می‌کنند. هویت هر ایجنت همکار یک شخص است؛ هر دستگاه توکن جدای خودش را دارد. کار برگشت‌ناپذیر از این مسیر رد می‌شود.", { name: BRAND.name }).split("{url}").flatMap((part, i) => (i ? [<span key={i} className="ltr font-mono text-xs">{MCP_URL}</span>, part] : [part]))}
-        </p>
-
-        {adding ? <NewPeer onDone={() => { setAdding(false); load(); }} /> : null}
-
-        {!data ? (
-          <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
-        ) : users.length ? (
-          <div className="space-y-4">
-            {users.map((user) => <PeerCard key={user.id} user={user} catalog={catalog} defaults={data?.defaultMessages || {}} onChange={load} />)}
-          </div>
-        ) : (
-          <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{t("هنوز ایجنتی از همکاران تعریف نشده.")}</p>
-        )}
-
-        <h2 className="mb-2 mt-8 flex items-center gap-1.5 text-sm font-semibold"><ShieldAlert className="size-4" /> {t("کارهای برگشت‌ناپذیر (ممیزی)")}</h2>
-        {approvals.length ? (
-          <div className="overflow-hidden rounded-xl border bg-card">
-            {approvals.map((a) => {
-              const [color, label] = DECISION[a.decision] || ["", a.decision];
-              return (
-                <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs last:border-b-0">
-                  <span className="text-muted-foreground">{time(a.at)}</span>
-                  <span className="ltr font-mono">{a.tool}</span>
-                  <span className="text-muted-foreground">{t("به درخواست {caller}", { caller: a.caller })}</span>
-                  <span className={`ms-auto font-medium ${color}`}>{label}</span>
-                  {a.chat_id ? <button type="button" onClick={() => navigate(a.chat_id)} className="text-primary hover:underline">{t("گفتگو")}</button> : null}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">{t("موردی ثبت نشده.")}</p>
-        )}
+        ) : null}
       </div>
+      <p className="mb-4 text-sm leading-6 text-muted-foreground">
+        ایجنت هر همکار با توکن خودش به {BRAND.name} وصل می‌شود و فقط ابزارهایی را دارد که شما باز کرده‌اید. کار برگشت‌ناپذیر از این مسیر انجام نمی‌شود.
+      </p>
+
+      <div role="tablist" className="mb-4 flex gap-1 rounded-xl bg-muted/60 p-1 text-sm">
+        {TABS.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className={`press flex-1 rounded-lg px-3 py-1.5 ${tab === t.id ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "network" ? <NetworkSection /> : tab === "audit" ? <Audit /> : (
+        <>
+          {adding ? <NewPeer onDone={() => { setAdding(false); load(); }} /> : null}
+          <div className="relative mb-3">
+            <Search className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("جست‌وجوی همکار")} className={`${input} ps-9`} />
+          </div>
+          {!data ? (
+            <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+          ) : on.length || off.length ? (
+            <>
+              <PeerRows users={on} onOpen={setOpenId} />
+              {off.length ? (
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-sm text-muted-foreground">غیرفعال ({off.length.toLocaleString("fa-IR")})</summary>
+                  <div className="mt-2"><PeerRows users={off} onOpen={setOpenId} /></div>
+                </details>
+              ) : null}
+            </>
+          ) : (
+            <p className="rounded-xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{query ? t("همکاری با این نام نیست.") : t("هنوز ایجنتی از همکاران تعریف نشده.")}</p>
+          )}
+        </>
+      )}
+    </Page>
+  );
+}
+
+const Page = ({ children }) => (
+  <div className="scrollbar-thin h-full overflow-y-auto">
+    <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-4 sm:px-6">{children}</div>
+  </div>
+);
+
+function PeerRows({ users, onOpen }) {
+  if (!users.length) return null;
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card">
+      {users.map((u) => {
+        const seen = lastSeen(u);
+        const devices = activeClients(u).length;
+        return (
+          <button key={u.id} type="button" onClick={() => onOpen(u.id)} className="press flex w-full items-center gap-3 border-b px-3 py-2.5 text-start last:border-b-0 hover:bg-muted/60">
+            <span className={`flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-medium ${u.enabled ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground"}`}>{initial(u.label || u.id)}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium" dir="auto">{u.label}</span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {seen ? <>{t("آخرین فعالیت")} <span title={exactTime(seen)}>{ago(seen)}</span></> : t("هنوز وصل نشده")}
+                {" · "}
+                {devices ? `${devices.toLocaleString("fa-IR")} دستگاه` : t("بدون دستگاه فعال")}
+              </span>
+            </span>
+            <ChevronLeft className="size-4 shrink-0 text-muted-foreground" />
+          </button>
+        );
+      })}
     </div>
+  );
+}
+
+function Audit() {
+  const [approvals, setApprovals] = useState(null);
+  useEffect(() => {
+    api("/api/approvals?limit=40").then((r) => setApprovals(r.approvals || []), () => setApprovals([]));
+  }, []);
+  if (!approvals) return <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>;
+  return (
+    <>
+      <p className="mb-3 text-xs text-muted-foreground">{t("هر بار که ایجنتی خواست کاری برگشت‌ناپذیر بکند، اینجا ثبت می‌شود: چه کسی، چه کاری، و نتیجه.")}</p>
+      {approvals.length ? (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {approvals.map((a) => {
+            const [color, label] = DECISION[a.decision] || ["", a.decision];
+            return (
+              <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs last:border-b-0">
+                <span className="text-muted-foreground">{time(a.at)}</span>
+                <span className="ltr font-mono">{a.tool}</span>
+                <span className="text-muted-foreground">به درخواست {a.caller}</span>
+                <span className={`ms-auto font-medium ${color}`}>{label}</span>
+                {a.chat_id ? <button type="button" onClick={() => navigate(a.chat_id)} className="text-primary hover:underline">{t("گفتگو")}</button> : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">{t("موردی ثبت نشده.")}</p>
+      )}
+    </>
   );
 }
 
@@ -129,100 +217,125 @@ function NewPeer({ onDone }) {
   );
 }
 
-function PeerCard({ user, catalog, defaults, onChange }) {
-  const [tasks, setTasks] = useState(null);
-  const [calls, setCalls] = useState(null);
+const SECTIONS = [
+  { id: "work", label: t("کارها") },
+  { id: "access", label: t("دسترسی") },
+  { id: "devices", label: t("دستگاه‌ها") },
+];
+
+function PeerDetail({ user, catalog, defaults, onChange, onBack }) {
+  const [section, setSection] = useState("work");
   const [issued, setIssued] = useState(null);
-
-  useEffect(() => {
-    api(`/api/peers/${user.id}/tasks`).then((r) => setTasks(r.tasks), () => setTasks([]));
-    api(`/api/peers/${user.id}/calls`).then((r) => setCalls(r.calls), () => setCalls([]));
-  }, [user.id, user.clients.length]);
-
   const toggle = (enabled) =>
     api(`/api/peers/${user.id}`, { method: "PATCH", body: { enabled } }).then(onChange, (e) => toast.error(e.message));
-
-  const active = user.clients.filter((c) => !c.revoked_at);
+  const devices = activeClients(user).length;
+  const agents = openAgents(user);
+  const seen = lastSeen(user);
 
   return (
-    <section className="rounded-xl border bg-card p-4">
-      <div className="flex items-center gap-3">
-        <span className="flex size-10 items-center justify-center rounded-xl bg-primary/12 text-primary"><Users className="size-5" /></span>
+    <>
+      <div className="mb-4 flex items-center gap-3">
+        <button type="button" onClick={onBack} className="press flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت به فهرست")}>
+          <ArrowRight className="size-4" />
+        </button>
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{user.label}</div>
-          <div className="ltr truncate text-start font-mono text-xs text-muted-foreground">{user.caller}</div>
+          <h1 className="truncate text-lg font-semibold" dir="auto">{user.label}</h1>
+          <p className="truncate text-xs text-muted-foreground">
+            {seen ? <>{t("آخرین فعالیت")} <span title={exactTime(seen)}>{ago(seen)}</span></> : t("هنوز وصل نشده")}
+            {" · "}{devices.toLocaleString("fa-IR")} دستگاه · {agents.toLocaleString("fa-IR")} ایجنت باز
+          </p>
         </div>
-        <Switch.Root
-          checked={user.enabled}
-          onCheckedChange={toggle}
-          dir="ltr"
-          className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-          aria-label={t("فعال")}
-        >
-          <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
-        </Switch.Root>
+        <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {user.enabled ? t("فعال") : t("غیرفعال")}
+          <Switch.Root
+            checked={user.enabled}
+            onCheckedChange={toggle}
+            dir="ltr"
+            className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
+            aria-label={t("فعال")}
+          >
+            <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
+          </Switch.Root>
+        </label>
       </div>
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("دستگاه‌ها ({n} فعال)", { n: num(active.length) })}</h3>
-      <div className="space-y-1">
-        {user.clients.map((c) => (
-          <ClientRow key={c.id} userId={user.id} client={c} onChange={onChange} />
+      <div role="tablist" className="mb-4 flex gap-1 rounded-xl bg-muted/60 p-1 text-sm">
+        {SECTIONS.map((s) => (
+          <button key={s.id} type="button" role="tab" aria-selected={section === s.id} onClick={() => setSection(s.id)} className={`press flex-1 rounded-lg px-3 py-1.5 ${section === s.id ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+            {s.label}
+          </button>
         ))}
       </div>
-      {issued ? <IssuedToken token={issued} onClose={() => setIssued(null)} /> : <NewClient userId={user.id} onIssued={(t) => { setIssued(t); onChange(); }} />}
 
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("سهمیه و سقف (به ازای هر ایجنت؛ حداکثر ۲ درخواست باز)")}</h3>
-      <div className="space-y-2">
-        {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} defaults={defaults} onChange={onChange} />)}
-      </div>
+      {section === "work" ? <PeerWork userId={user.id} label={user.label} /> : section === "access" ? (
+        <>
+          <p className="mb-2 text-xs text-muted-foreground">{t("این همکار به کدام ایجنت‌ها می‌تواند کار بدهد، با کدام ابزارها و تا چه سقفی. حداکثر ۲ درخواست باز در هر ایجنت.")}</p>
+          <div className="space-y-2">
+            {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} defaults={defaults} onChange={onChange} />)}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mb-2 text-xs text-muted-foreground">{t("هر دستگاه (لپ‌تاپ، سرور، ایجنت) توکن جدای خودش را دارد؛ با باطل کردن یکی بقیه کار می‌کنند. وصل شدن از نشانی")} <span className="ltr font-mono">{MCP_URL}</span></p>
+          <div className="space-y-1">
+            {user.clients.map((c) => <ClientRow key={c.id} userId={user.id} client={c} onChange={onChange} />)}
+          </div>
+          {issued ? <IssuedToken token={issued} onClose={() => setIssued(null)} /> : <NewClient userId={user.id} onIssued={(t) => { setIssued(t); onChange(); }} />}
+          <StatusLink userId={user.id} />
+        </>
+      )}
+    </>
+  );
+}
 
-      <StatusLink userId={user.id} />
-
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("کارهای اخیر")}</h3>
-      {tasks === null ? (
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-      ) : tasks.length ? (
-        <div className="space-y-1">
-          {tasks.slice(0, 15).map((t) => {
+// What the colleague's agent asked for, and its raw MCP calls behind a fold (for debugging).
+function PeerWork({ userId, label }) {
+  const [tasks, setTasks] = useState(null);
+  const [calls, setCalls] = useState(null);
+  useEffect(() => {
+    api(`/api/peers/${userId}/tasks`).then((r) => setTasks(r.tasks), () => setTasks([]));
+    api(`/api/peers/${userId}/calls`).then((r) => setCalls(r.calls), () => setCalls([]));
+  }, [userId]);
+  if (tasks === null) return <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>;
+  return (
+    <>
+      {tasks.length ? (
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {tasks.slice(0, 20).map((t) => {
             const [dot, label] = TASK_STATE[t.state] || ["bg-muted-foreground", t.state];
             return (
-              <button key={t.id} type="button" onClick={() => navigate(t.chatId)} className="press flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-start text-xs hover:bg-muted">
+              <button key={t.id} type="button" onClick={() => navigate(t.chatId)} className="press flex w-full items-center gap-2 border-b px-3 py-2 text-start text-sm last:border-b-0 hover:bg-muted/60">
                 <span className={`size-2 shrink-0 rounded-full ${dot}`} />
-                <span className="min-w-0 flex-1 truncate" dir="auto">{t.title || t.id}</span>
-                <span className="shrink-0 text-muted-foreground">{label} · <span title={exactTime(t.updatedAt)}>{ago(t.updatedAt)}</span></span>
+                <span className="min-w-0 flex-1 truncate" dir="auto">{taskTitle(t.title, label) || t.id}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{label} · <span title={exactTime(t.updatedAt)}>{ago(t.updatedAt)}</span></span>
               </button>
             );
           })}
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground">{t("هنوز کاری نخواسته.")}</p>
+        <p className="rounded-xl border bg-card px-4 py-6 text-center text-sm text-muted-foreground">{t("هنوز کاری نخواسته.")}</p>
       )}
-
-      <h3 className="mb-1.5 mt-4 text-xs font-medium text-muted-foreground">{t("تماس‌های ایجنتش (MCP)")}</h3>
-      {calls === null ? (
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-      ) : calls.length ? (
-        <div className="space-y-1">
-          {calls.slice(0, 15).map((c) => (
-            <div key={c.id} className="flex items-start gap-2 rounded-lg px-2 py-1.5 text-xs">
-              <span className={`mt-1 size-2 shrink-0 rounded-full ${c.outcome === "ok" ? "bg-emerald-500" : "bg-red-500"}`} />
-              <div className="min-w-0 flex-1">
-                <span className="ltr inline-block font-mono">{c.tool || c.method}{c.arg_keys ? `(${c.arg_keys})` : ""}</span>
-                {c.detail ? <div className="ltr truncate text-start text-muted-foreground" title={c.detail}>{c.detail}</div> : null}
+      {calls?.length ? (
+        <details className="mt-4 text-xs">
+          <summary className="cursor-pointer text-muted-foreground">جزئیات فنی: آخرین تماس‌های MCP ({calls.length.toLocaleString("fa-IR")})</summary>
+          <div className="mt-2 space-y-1">
+            {calls.slice(0, 15).map((c) => (
+              <div key={c.id} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
+                <span className={`mt-1 size-2 shrink-0 rounded-full ${c.outcome === "ok" ? "bg-ok" : "bg-bad"}`} />
+                <div className="min-w-0 flex-1">
+                  <span className="ltr inline-block font-mono">{c.tool || c.method}{c.arg_keys ? `(${c.arg_keys})` : ""}</span>
+                  {c.detail ? <div className="ltr truncate text-start text-muted-foreground" title={c.detail}>{c.detail}</div> : null}
+                </div>
+                <span className="shrink-0 text-muted-foreground" title={exactTime(c.at)}>{ago(c.at)}</span>
               </div>
-              <span className="shrink-0 text-muted-foreground" title={exactTime(c.at)}>{ago(c.at)}</span>
-            </div>
-          ))}
-          {calls.every((c) => c.method !== "tools/call") ? (
-            <p className="rounded-lg bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">
-              {t("ایجنتش فقط وصل شده و فهرست ابزار گرفته — هیچ‌وقت ابزاری صدا نزده. یعنی مشکل سمت کلاینت اوست، نه گریفین.")}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">{t("هنوز تماسی نگرفته.")}</p>
-      )}
-    </section>
+            ))}
+            {calls.every((c) => c.method !== "tools/call") ? (
+              <p className="rounded-lg bg-muted/60 px-2 py-1.5 text-muted-foreground">ایجنتش فقط وصل شده و فهرست ابزار گرفته و هیچ‌وقت ابزاری صدا نزده؛ یعنی مشکل سمت کلاینت اوست، نه {BRAND.name}.</p>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -327,10 +440,10 @@ const compact = (n) => {
 };
 const WINDOW_NAME = { hourly: t("یک ساعت"), daily: t("۲۴ ساعت") };
 
-// One token window as a bar: primary, warn from 80%, bad at the cap; grey without a cap.
+// One token window as a bar (from Karsara): ok, warn from 80%, bad at the cap; grey without a cap.
 function UsageMeter({ window, used, limit }) {
   const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  const tone = !limit ? "bg-muted-foreground/40" : pct >= 100 ? "bg-bad" : pct >= 80 ? "bg-warn" : "bg-primary";
+  const tone = !limit ? "bg-muted-foreground/40" : pct >= 100 ? "bg-bad" : pct >= 80 ? "bg-warn" : "bg-ok";
   return (
     <div className="min-w-0 flex-1">
       <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
@@ -382,7 +495,6 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
     <div className="rounded-lg bg-muted/40 px-3 py-2">
       <div className="mb-1 flex items-center gap-2 text-xs">
         <span className="font-medium">{quota.label}</span>
-        <span className="ltr font-mono text-muted-foreground">{quota.agent}</span>
         {editing ? (
           <span className="ms-auto flex gap-1">
             <button type="button" onClick={save} className="press flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-primary-foreground"><Check className="size-3.5" /> {t("ذخیره")}</button>
@@ -392,7 +504,14 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
           <button type="button" onClick={() => setEditing(true)} className="press ms-auto rounded-full px-2.5 py-0.5 text-primary hover:bg-muted">{t("ویرایش")}</button>
         )}
       </div>
-      {tools.length ? (
+      {tools.length && !editing ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground">{tools.length.toLocaleString("fa-IR")} ابزار مجاز</summary>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {tools.map((t) => <span key={t} className="ltr rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">{t}</span>)}
+          </div>
+        </details>
+      ) : tools.length ? (
         <div className="flex flex-wrap gap-1">
           {tools.map((tool) => (
             <span key={tool} className="ltr flex items-center gap-1 rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">

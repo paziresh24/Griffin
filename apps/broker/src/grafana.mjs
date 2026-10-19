@@ -34,6 +34,11 @@ export function createGrafanaTools({ kube, grafanas = DEFAULT_GRAFANA, fetchImpl
     const result = await kube.withFallback(cluster, {
       viaApi: async () => (await kube.publicRequest(cluster, `/api/v1/namespaces/${namespace}/secrets/${name}`)).body,
       viaSsh: async () => JSON.parse(await kube.emergency(cluster, ["get", "secret", name, "-n", namespace, "-o", "json"])),
+    }).catch((error) => {
+      if (!error?.forbidden) throw error;
+      throw new Error(
+        `Grafana is not available to this install: its token is the platform's (${namespace}/${name} on ${cluster}) and this credential may not read it. Ask the platform owner for Grafana data (or set GRIFFIN_GRAFANA=off to hide these tools).`,
+      );
     });
     const value = result.value?.data?.[key];
     if (!value) throw new Error(`no Grafana service-account token in ${cluster} ${namespace}/${name}`);

@@ -69,7 +69,11 @@ export function connectTunnel(proxy, host, port) {
   };
 
   raw.on("connect", () => {
-    raw.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`);
+    // http://user:pass@host:port: the same credentials fetch sends (setGlobalProxyFromEnv).
+    const auth = proxy.username
+      ? `Proxy-Authorization: Basic ${Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64")}\r\n`
+      : "";
+    raw.write(`CONNECT ${host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n${auth}\r\n`);
   });
   raw.on("data", onHead);
   raw.on("end", () => duplex.push(null));
@@ -112,7 +116,7 @@ export function installCursorEgress(proxyUrl, { log = console } = {}) {
   const original = tls.connect;
   const patched = function connect(...args) {
     const { options, callback, host, port } = normalizeArgs(args);
-    if (options.socket || !isAgentHost(host)) return original.apply(this, args);
+    if (options.socket || !patched.__proxy || !isAgentHost(host)) return original.apply(this, args);
     const socket = connectTunnel(patched.__proxy, host, port);
     return original.call(this, { ...options, host, port, servername: options.servername || host, socket }, callback);
   };
@@ -121,6 +125,11 @@ export function installCursorEgress(proxyUrl, { log = console } = {}) {
   tls.connect = patched;
   log.info?.(`[egress] Cursor/Anthropic TLS via ${proxy.host}`);
   return true;
+}
+
+/** The setup wizard cleared the proxy: agent streams go direct again, without a restart. */
+export function removeCursorEgress() {
+  if (tls.connect.__griffinEgress) tls.connect.__proxy = null;
 }
 
 // An engine whose health probe got no HTTP answer at all (timeout, DNS, refused, a dead Xray in

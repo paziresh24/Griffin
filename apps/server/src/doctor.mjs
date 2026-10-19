@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import { kindOf } from "./providers/ids.mjs";
+import { CLAUDE_CODE_LOGIN } from "./providers/claude.mjs";
+import { isCreditError } from "./engine-state.mjs";
+import { resetFromText } from "./plan-fallback.mjs";
 
 // Self-check and self-repair. Born from a fresh install where a Claude subscription token went in
 // as an API key, health said ok, and every run finished empty. The doctor probes each engine for real, reads the last runs, and
@@ -46,6 +49,8 @@ export const CAUSE_ADVICE = {
   region: "سرویس از این کشور/IP جواب نمی‌دهد — یک پراکسی خروجی لازم است",
   network: "سرور به این موتور نمی‌رسد (شبکه/DNS/فیلتر) — پراکسی خروجی را چک کن",
   quota: "سهمیه یا اعتبار این موتور تمام شده",
+  limited: "به سقف مصرف پلن (۵ ساعته یا هفتگی) خورده؛ تا باز شدن سقف کار به موتور بعدی می‌رود",
+  credit: "اعتبار (Credit) این حساب تمام شده؛ حساب را شارژ کنید یا کلید دیگری بگذارید",
   model: "این مدل یا آدرس پایه پیدا نشد",
   forbidden: "دسترسی رد شد (۴۰۳)",
   other: "خطای ناشناخته",
@@ -55,7 +60,7 @@ const PERSISTENT = new Set(["no_key", "bad_key", "region", "model"]);
 
 const isOAuth = (key) => String(key || "").startsWith("sk-ant-oat");
 
-export function createDoctor({ store, runner, providers, providerKey, providerConfig, openaiBaseUrl = () => "", engineIds, dataDir, integrations = null, fetchImpl = globalThis.fetch, now = () => Date.now() }) {
+export function createDoctor({ store, runner, providers, providerKey, providerConfig, openaiBaseUrl = () => "", engineIds, dataDir, integrations = null, backups = null, fetchImpl = globalThis.fetch, now = () => Date.now(), onProbe = () => {} }) {
   async function call(url, init, timeoutMs = 15_000) {
     try {
       const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
@@ -67,7 +72,15 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
   }
 
   // A real call per engine — reachability alone said «ok» for a rejected key.
+  // Every probe's verdict also goes to onProbe: index.mjs stores a spent plan or credit for routing.
   async function probeEngine(id) {
+    const result = await probeOnce(id);
+    try {
+      onProbe(id, result);
+    } catch {}
+    return result;
+  }
+  async function probeOnce(id) {
     const started = now();
     const key = providerKey(id);
     const config = providerConfig(id) || {};
@@ -85,6 +98,23 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
         headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
         body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
       }, 30_000);
+    } else if (kind === "claude" && providers[id]?.endpoint) {
+      // Claude Code on another vendor's Anthropic-compatible endpoint: one real message, as Claude Code sends it.
+      const endpoint = providers[id].endpoint;
+      r = await call(`${endpoint.baseUrl.replace(/\/+$/, "")}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}`, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify({ model: providers[id].defaultModel || endpoint.defaultModel, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }),
+      }, 30_000);
+    } else if (kind === "claude" && typeof providers[id]?.probe === "function") {
+      // A real tiny turn (claude.mjs probe): a spent plan or credit shows only there.
+      const p = await providers[id].probe();
+      if (p?.ok) return done({ ok: true, status: 200, ...(key === CLAUDE_CODE_LOGIN ? { login: "claude-code" } : {}) });
+      if (p?.state) return done({ ok: false, cause: p.state, state: p.state, until: p.until || null, detail: p.detail });
+      r = { ok: false, status: 0, text: p?.detail || "no answer", network: p?.detail === "timeout" };
+    } else if (kind === "claude" && key === CLAUDE_CODE_LOGIN) {
+      // Host install: Claude Code uses its own login folder; the marker is no key to send anywhere.
+      return done({ ok: true, login: "claude-code" });
     } else if (kind === "claude") {
       r = await call("https://api.anthropic.com/v1/models", {
         headers: {
@@ -103,6 +133,11 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     if (r.ok) return done({ ok: true, status: r.status });
     const cause = classifyEngineError(r);
     if (cause === "busy") return done({ ok: true, busy: true, status: r.status, detail: r.text });
+    // A spent quota is either no money left or a plan window with a reset (engine-state.mjs).
+    if (cause === "quota") {
+      const state = r.status === 402 || isCreditError(r.text) ? "credit" : "limited";
+      return done({ ok: false, status: r.status, cause: state, state, until: state === "limited" ? resetFromText(r.text) : null, detail: r.text });
+    }
     return done({ ok: false, status: r.status, cause, detail: r.text });
   }
 
@@ -115,13 +150,14 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     // node:sqlite is synchronous: a scan of a large events table froze the whole app for minutes.
     // Runs come from the runs index; output is probed per run through the chat index with LIMIT 1.
     const rows = store.db.prepare(
-      `SELECT r.id, r.chat_id, r.status, r.error, r.started_at
+      `SELECT r.id, r.chat_id, r.status, r.error, r.started_at, r.shown
          FROM runs r JOIN chats c ON c.id = r.chat_id
         WHERE r.status != 'running' AND c.parent_chat_id IS NULL
         ORDER BY r.started_at DESC LIMIT ?`,
     ).all(limit);
     const output = store.db.prepare("SELECT 1 FROM events WHERE chat_id = ? AND run_id = ? AND type IN ('text','tool.started') LIMIT 1");
-    return rows.map((row) => ({ ...row, empty: row.status === "finished" && !output.get(row.chat_id, row.id) }));
+    // runs.shown (set as events arrive) answers without the probe; NULL = a run from before it.
+    return rows.map(({ shown, ...row }) => ({ ...row, empty: row.status === "finished" && (shown == null ? !output.get(row.chat_id, row.id) : !shown) }));
   }
 
   function stuckRuns(maxMs = 45 * 60_000) {
@@ -200,6 +236,9 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     const free = diskFree();
     if (free != null && free < 1024 ** 3) add({ id: "disk", level: free < 200 * 1024 ** 2 ? "error" : "warn", title: "فضای دیسک داده کم است: {mb} مگابایت", vars: { mb: Math.round(free / 1024 ** 2) } });
 
+    const backup = backups?.health?.();
+    if (backup) add({ id: "backup", ...backup, fix: { id: "backup", title: "بکاپ همین حالا" } });
+
     const level = checks.some((c) => c.level === "error") ? "error" : checks.some((c) => c.level === "warn") ? "warn" : "ok";
     const result = { at: new Date(now()).toISOString(), level, engines, checks, errors: recentErrors().slice(-15) };
     store.setKv("doctor:last", JSON.stringify({ at: result.at, level }));
@@ -238,6 +277,11 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
       integrations.update(a, { enabled: true });
       return { ok: true, done: `integration ${a} restarted` };
     }
+    if (kind === "backup" && backups) {
+      const r = await backups.run("doctor");
+      if (!r.ok) throw new Error(r.error);
+      return { ok: true, done: `backup ${r.file}` };
+    }
     throw new Error(`unknown fix: ${fixId}`);
   }
 
@@ -266,7 +310,7 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
   const tools = {
     self_check: {
       description:
-        "Check Griffin's own health for real: each engine (live call; why it fails — bad key, region block, network, quota), agents on a dead engine, recent failed/empty runs, stuck runs, messenger connections, disk, and the last server errors. Use when something «does not work», before guessing.",
+        "Check this app's own health for real: each engine (live call; why it fails — bad key, region block, network, quota), agents on a dead engine, recent failed/empty runs, stuck runs, messenger connections, disk, and the last server errors. Use when something «does not work», before guessing.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       async execute() {
         const r = await report();

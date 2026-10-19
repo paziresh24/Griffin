@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, sortChats } from "../src/chat-list.js";
-import { clampSidebarWidth, isPlainClick, loadSidebarWidth, SIDEBAR_WIDTH } from "../src/sidebar-width.js";
+import { clampSidebarWidth, isPlainClick, isSidebarToggle, loadSidebarHidden, loadSidebarWidth, SIDEBAR_WIDTH } from "../src/sidebar-width.js";
 import { copyText } from "../src/copy.js";
 
 const NOW = new Date("2026-10-07T12:00:00.000Z");
@@ -178,6 +178,18 @@ test("sidebar width: clamped, half the window at most, the skin's start width wh
   assert.equal(isPlainClick({ button: 0, ctrlKey: true }), false);
 });
 
+test("Ctrl/⌘+B hides the sidebar on any layout; the choice survives blocked storage", () => {
+  assert.equal(isSidebarToggle({ key: "b", ctrlKey: true }), true);
+  assert.equal(isSidebarToggle({ key: "B", metaKey: true }), true);
+  assert.equal(isSidebarToggle({ key: "ذ", code: "KeyB", ctrlKey: true }), true, "Persian layout: the physical key");
+  assert.equal(isSidebarToggle({ key: "x", code: "KeyB", ctrlKey: true }), false, "Dvorak: Ctrl+X stays Cut");
+  assert.equal(isSidebarToggle({ key: "b" }), false);
+  assert.equal(isSidebarToggle({ key: "b", ctrlKey: true, repeat: true }), false);
+  assert.equal(isSidebarToggle({ key: "b", ctrlKey: true, shiftKey: true }), false);
+  assert.equal(loadSidebarHidden({ getItem: () => "1" }), true);
+  assert.equal(loadSidebarHidden({ getItem: () => { throw new Error("blocked"); } }), false);
+});
+
 test("copyText falls back to a textarea when there is no clipboard API (plain HTTP)", async () => {
   const removed = [];
   const saved = { navigator: globalThis.navigator, document: globalThis.document };
@@ -196,4 +208,17 @@ test("copyText falls back to a textarea when there is no clipboard API (plain HT
     if (saved.document === undefined) delete globalThis.document;
     else globalThis.document = saved.document;
   }
+});
+
+test("sidebar search: a chat matches by title or by the server's message hits", async () => {
+  const { searchChats } = await import("../src/chat-list.js");
+  const list = [{ id: "a", title: "کلاستر" }, { id: "b", title: "بی‌عنوان" }, { id: "c", title: "دیگر" }];
+  assert.deepEqual(searchChats(list, "کلاس").map((c) => c.id), ["a"]);
+  assert.deepEqual(searchChats(list, "سرور", new Set(["b"])).map((c) => c.id), ["b"]);
+  assert.deepEqual(searchChats(list, "  ").map((c) => c.id), ["a", "b", "c"]);
+});
+
+test("by repo (like Claude Desktop's folders), pinned chats stay on top", () => {
+  const list = [{ id: "a", repo: "infra-repo" }, { id: "p", repo: "infra-repo", pinned: true }, { id: "b" }];
+  assert.deepEqual(groupChats(list, "repo").map((s) => [s.title, s.chats.map((c) => c.id)]), [["سنجاق‌شده", ["p"]], ["infra-repo", ["a"]], ["بدون مخزن", ["b"]]]);
 });

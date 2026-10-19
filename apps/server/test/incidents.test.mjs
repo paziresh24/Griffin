@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
 import { groupAlerts, incidentKey } from "../src/incidents/group.mjs";
-import { createIncidentStore, createIntake } from "../src/incidents/index.mjs";
+import { createIncidentStore, createIntake, vaultAlerts } from "../src/incidents/index.mjs";
 import { createIncidentTools, createOpsRoom, digestMessage, OPS_CHARTER } from "../src/incidents/opsroom.mjs";
 import { resolveEnabledTools, rootCallerOf } from "../src/agents/profiles.mjs";
 import { seedExampleAgents } from "./fixture-agents.mjs";
@@ -322,17 +322,60 @@ test("the list puts critical first and says how much it left out", async () => {
   assert.deepEqual(s.byCluster, { "prod-b": { warning: 2 }, "prod-a": { critical: 1 } });
 });
 
-test("ops room critical mode: warnings and the backlog never run; a new critical does", async () => {
+test("ops room critical mode: the backlog never runs; a new critical and a new warning do", async () => {
   const t = setup();
   const sent = [];
   const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, ...msg }) };
   const room = createOpsRoom({ store: t.store, runner, incidents: t.incidents, mode: "critical", log: { error() {} } });
-  t.set({ clusters: ok("asia"), alerts: [alert(), watchdog("asia")] });
+  t.set({ clusters: ok("prod-b"), alerts: [alert(), watchdog("prod-b")] });
   room.push(await t.intake.poll(), { bootstrap: true });
   assert.equal(room.pendingCount(), 0);
-  t.set({ clusters: ok("asia"), alerts: [alert(), alert({ alertname: "DiskFailingCritical", severity: "critical", labels: {} }), watchdog("asia")] });
+  t.set({ clusters: ok("prod-b"), alerts: [alert(), alert({ alertname: "DiskFailingCritical", severity: "critical", labels: {} }), watchdog("prod-b")] });
   room.push(await t.intake.poll());
   assert.equal(room.pendingCount(), 1);
   await room.flush();
   assert.match(sent[0].text, /حالت critical/);
+  t.set({ clusters: ok("prod-b"), alerts: [alert(), alert({ alertname: "DiskFailingCritical", severity: "critical", labels: {} }), alert({ alertname: "KubePodCrashLooping" }), watchdog("prod-b")] });
+  room.push(await t.intake.poll());
+  assert.equal(room.pendingCount(), 1, "a new warning is queued too");
+});
+
+test("ops room budget: warnings wait when the hour is spent, a critical still gets through", async () => {
+  const t = setup();
+  const sent = [];
+  const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, ...msg }) };
+  const room = createOpsRoom({ store: t.store, runner, incidents: t.incidents, mode: "critical", maxRunsPerHour: 1, log: { error() {} } });
+  const change = (alertname, severity) => ({ kind: "opened", incident: t.incidents.insert({ key: alertname, cluster: "prod-b", alertname, severity, scope: "", owner: null, summary: "", members: ["-"], seenFrom: ["prod-b"], startsAt: null }) });
+  room.push([change("W1", "warning")]);
+  assert.ok(await room.flush());
+  room.push([change("W2", "warning")]);
+  assert.equal(await room.flush(), null, "warning waits for the budget");
+  room.push([change("C1", "critical")]);
+  assert.ok(await room.flush(), "critical goes over the warning budget");
+  assert.equal(sent.length, 2);
+});
+
+test("tell_owner: silent in shadow, once per incident per 6h unless worse", async () => {
+  const t = setup();
+  const row = t.incidents.insert({ key: "tell-k", cluster: "prod-b", alertname: "S3Full", severity: "critical", scope: "", owner: null, summary: "", members: ["-"], seenFrom: ["prod-b"], startsAt: null });
+  const shadow = createIncidentTools({ incidents: t.incidents });
+  assert.equal((await shadow.tell_owner.execute({ text: "S3 اصلی تا ۱۰ ساعت دیگر پر می‌شود", ids: [row.id] })).isError, true);
+  const sent = [];
+  const tools = createIncidentTools({ incidents: t.incidents, notify: async (text) => (sent.push(text), true) });
+  const args = { text: "S3 اصلی تا ۱۰ ساعت دیگر پر می‌شود", ids: [row.id.slice(0, 8)] };
+  assert.ok(!(await tools.tell_owner.execute(args)).isError);
+  assert.equal((await tools.tell_owner.execute(args)).isError, true);
+  assert.ok(!(await tools.tell_owner.execute({ ...args, worse: true })).isError);
+  assert.equal(sent.length, 2);
+  assert.ok(t.incidents.logs(row.id).some((l) => l.kind === "told_owner"));
+});
+
+test("vault health: a refused token is a critical incident, a healthy or unconfigured vault is none", () => {
+  assert.deepEqual(vaultAlerts(null), []);
+  assert.deepEqual(vaultAlerts({ configured: false, ok: false }), []);
+  assert.deepEqual(vaultAlerts({ configured: true, ok: true }), []);
+  const [a] = vaultAlerts({ configured: true, ok: false, error: "renew refused (http_403)", at: "2026-10-15T06:00:00Z" });
+  assert.equal(a.alertname, "VaultTokenUnhealthy");
+  assert.equal(a.severity, "critical");
+  assert.match(a.summary, /renew refused/);
 });

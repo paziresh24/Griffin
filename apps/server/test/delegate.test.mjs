@@ -8,6 +8,7 @@ import { createAsks } from "../src/asks.mjs";
 import { createPeers } from "../src/peers.mjs";
 import { createPeerTasks } from "../src/peer-tasks.mjs";
 import { seedExampleAgents } from "./fixture-agents.mjs";
+import { ensureMother, openThreads } from "../src/integrations/mother.mjs";
 
 // Fake runner: per-chat scripts; a chat without a script finishes at once with "ok".
 function setup() {
@@ -188,4 +189,21 @@ test("an identical ask_agent / delegate already in flight is joined, not run twi
   const second = JSON.parse((await d.execute({ agent: "arvan-ban", request: "کش" })).content[0].text);
   assert.equal(second.subtask, first.subtask);
   assert.equal(children, 2);
+});
+
+test("a mother chat's delegate {shared:true} opens a general thread for the main list; elsewhere shared is not offered", async () => {
+  const { store, peers } = setup();
+  const mother = ensureMother(store, { integrationId: "i1", key: "77", name: "علی", agent: "griffin" });
+  const tool = peers.delegateTool(mother);
+  assert.ok(tool.inputSchema.properties.shared, "a mother chat may open a shared thread");
+  const r = JSON.parse((await tool.execute({ agent: "platform", request: "گیت‌لب برای همه قطع است\nجزئیات", shared: true })).content[0].text);
+  assert.ok(store.getKv(`sharedthread:${r.subtask}`));
+  assert.equal(store.getChat(r.subtask).title, "🧵 گیت‌لب برای همه قطع است");
+  assert.ok(store.listChatsBySource().some((c) => c.id === r.subtask), "listed in the main sidebar");
+  assert.ok(openThreads(store).find((t) => t.thread === r.subtask)?.shared);
+
+  const plain = store.createChat({ title: "p", agent: "griffin" });
+  assert.equal(peers.delegateTool(plain.id).inputSchema.properties.shared, undefined);
+  const q = JSON.parse((await peers.delegateTool(plain.id).execute({ agent: "platform", request: "دیسک", shared: true })).content[0].text);
+  assert.equal(store.getKv(`sharedthread:${q.subtask}`), null, "only a mother chat opens a shared thread");
 });

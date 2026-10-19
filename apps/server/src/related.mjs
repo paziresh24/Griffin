@@ -5,6 +5,7 @@
 
 import { isGlobalChat } from "./integrations/mother.mjs";
 import { ownerLabel } from "./guard.mjs";
+import { inertText } from "./redact.mjs";
 
 export const RELATED_TOOL = "related_chat_send";
 
@@ -85,7 +86,8 @@ export const PEER_HEAD = "📥 محتوای شخص ثالث از ";
 // Tools that would carry a chat's content out of it; refused while it holds third-party text. The
 // Telegram desk's (desk.mjs) count: tell_person and thread_join reach a colleague's mother chat as
 // the owner's note, telegram_pause silences every automatic answer.
-export const FORWARDING_TOOLS = ["telegram_send", RELATED_TOOL, "chat_send", "tell_person", "thread_join", "telegram_pause"];
+// consult hands the chat's content to another model on the owner's keys: a colleague's text stops here too.
+export const FORWARDING_TOOLS = ["telegram_send", RELATED_TOOL, "chat_send", "tell_person", "thread_join", "telegram_pause", "consult"];
 const PEER_SEND_MAX = 3;
 const PEER_SEND_WINDOW_MS = 10 * 60_000;
 const PEER_GLOBAL_MAX = 10;
@@ -106,8 +108,8 @@ export function cleanLabel(name, max = 80) {
   return [...flat].slice(0, max).join("").trim();
 }
 
-// No live @mention and no leading "/" command (a zero-width space before each makes them text).
-export const inertText = (text) => String(text ?? "").replace(/@(?=\w)/g, "@\u200b").replace(/^(\s*)\//gm, "$1\u200b/");
+// No live @mention and no leading "/" command (redact.mjs).
+export { inertText };
 
 // A backtick fence longer than any run of backticks inside `text`, so the text cannot close it.
 export const fenceFor = (text) => "`".repeat(Math.max(2, ...[...String(text).matchAll(/`+/g)].map((m) => m[0].length)) + 1);
@@ -115,7 +117,7 @@ export const fenceFor = (text) => "`".repeat(Math.max(2, ...[...String(text).mat
 // An owner chat a colleague may reach: the owner's own, open, in the sidebar — not a job's, a
 // colleague's, a child, a side chat, one linked to Telegram (its replies are posted out there), or
 // the Telegram desk (it tells colleagues things from the owner's account).
-const peerReachable = (store, chat) =>
+export const peerReachable = (store, chat) =>
   chat && (chat.caller || "owner") === "owner" && !chat.parent_chat_id && !chat.side_of && !chat.job_id && !chat.sim && !chat.archived && !store.linksForChat?.(chat.id)?.length && !isGlobalChat(store, chat.id);
 
 const reply = (value, isError = false) => ({ ...(isError ? { isError: true } : {}), content: [{ type: "text", text: JSON.stringify(value) }] });

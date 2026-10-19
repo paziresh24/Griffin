@@ -3,17 +3,19 @@ import { AnimatePresence, motion } from "motion/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { BRAND, agentMeta } from "../brand.js";
-import { textDir } from "../dir.js";
+import { targetLook, textDir } from "../dir.js";
 import { api, navigate, useRoute } from "../api.js";
 import { AskCard } from "./Ask.jsx";
+import { buildEditDiff } from "../edit-diff.js";
 import { MediaView } from "./Media.jsx";
 import { ChartCard } from "./Chart.jsx";
+import { PreviewCard } from "./Preview.jsx";
 import { AgentGlyph } from "./Controls.jsx";
 import { t, num } from "../i18n.js";
-import { useSkin } from "../skin.js";
+import { useLook } from "../ui-prefs.js";
 import { sentStatus } from "../telegram.js";
 import {
-  AlertTriangle, Boxes, Check, ChevronDown, CircleDashed, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
+  AlertTriangle, AppWindow, Boxes, Check, ChevronDown, CircleDashed, CircleHelp, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
   Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox,
 } from "lucide-react";
@@ -38,7 +40,7 @@ const TOOLS = {
   readTodos: { icon: ListChecks, label: t("خواندن برنامهٔ کار") },
   todo_write: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
   inbox_list: { icon: Inbox, label: t("کارهای منتظر صاحب") },
-  owner_task: { icon: ListChecks, label: t("کار برای شما"), subtitle: (a) => a.title },
+  owner_task: { icon: ListChecks, label: t("دسترسی لازم"), subtitle: (a) => a.access || a.title, open: true },
   webSearch: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.searchTerm || a.query },
   webFetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
   task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description },
@@ -51,8 +53,17 @@ const TOOLS = {
   metrics_query: { icon: Search, label: t("کوئری Prometheus"), subtitle: (a) => [a.cluster, a.range, a.promql].filter(Boolean).join(" · "), open: false },
   pg_query: { icon: Database, label: t("کوئری Postgres"), subtitle: (a) => `${a.cluster}/${a.namespace}/${a.name}${a.database ? `/${a.database}` : ""}${a.write ? " ✎" : ""}`, open: true },
   show_media: { icon: FileText, label: t("نمایش فایل"), subtitle: (a) => a.title || a.path || a.url, open: true },
+  // preview_start draws its own card (PreviewCard); the rest are plain rows.
+  preview_start: { icon: AppWindow, label: t("پیش‌نمایش اپ"), subtitle: (a) => a.title || a.command, open: true },
+  preview_restart: { icon: AppWindow, label: t("اجرای دوبارهٔ پیش‌نمایش"), subtitle: (a) => a.id },
+  preview_stop: { icon: AppWindow, label: t("توقف پیش‌نمایش"), subtitle: (a) => a.id },
+  preview_list: { icon: AppWindow, label: t("پیش‌نمایش‌های این گفتگو") },
+  preview_logs: { icon: ScrollText, label: t("لاگ پیش‌نمایش"), subtitle: (a) => a.id },
   telegram_dialogs: { icon: Send, label: t("گفتگوهای تلگرام"), subtitle: (a) => a.query },
   telegram_read: { icon: Send, label: t("خواندن تلگرام"), subtitle: (a) => a.chat, open: true },
+  telegram_media: { icon: FileText, label: t("دریافت فایل از تلگرام"), subtitle: (a) => [a.chat, a.messageId].filter(Boolean).join(" · "), open: true },
+  telegram_ledger: { icon: Send, label: t("دفتر ارسال تلگرام"), subtitle: (a) => a.peerId },
+  inbox_route: { icon: Send, label: t("مسیردهی صندوق تلگرام"), subtitle: (a) => a.chatId },
   telegram_send: { icon: Send, label: t("ارسال در تلگرام"), subtitle: (a) => a.chat, open: true },
   // Telegram v2: the mother chat's threads and the one way text reaches a colleague.
   delegate: { icon: Workflow, label: t("ترد تازه"), subtitle: (a) => String(a.request || "").split("\n")[0] },
@@ -62,10 +73,11 @@ const TOOLS = {
   send_to_person: { icon: Send, label: t("📤 فرستادن به همکار"), open: true },
   edit_sent: { icon: Send, label: t("✏️ ویرایش پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : ""), open: true },
   delete_sent: { icon: Send, label: t("🗑 برداشتن پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : "") },
+  react: { icon: Send, label: t("واکنش روی پیام"), subtitle: (a) => `${a.emoji || t("برداشتن واکنش")}${a.id != null ? ` · #${String(a.id).replace(/^#/, "")}` : ""}` },
   tell_person: { icon: Send, label: t("سپردن به چت مادر"), subtitle: (a) => a.person, open: true },
   telegram_people: { icon: Users, label: t("فهرست افراد") },
   feed_read: { icon: ScrollText, label: t("گزارش‌ها") },
-  telegram_pause: { icon: Pause, label: t("توقف/ادامهٔ {name}", { name: BRAND.name }), subtitle: (a) => (a.paused ? t("توقف") : t("ادامه")) },
+  telegram_pause: { icon: Pause, get label() { return t("توقف/ادامهٔ {name}", { name: BRAND.name }); }, subtitle: (a) => (a.paused ? t("توقف") : t("ادامه")) },
   grafana_search: { icon: Search, label: t("جستجوی داشبورد Grafana"), subtitle: (a) => [a.cluster, a.query].filter(Boolean).join(" / ") },
   grafana_dashboard: { icon: Boxes, label: t("خواندن داشبورد Grafana"), subtitle: (a) => a.uid },
   grafana_panel_query: { icon: Database, label: t("دادهٔ پنل Grafana"), subtitle: (a) => `${a.uid} #${a.panelId}${a.from ? ` · ${a.from}` : ""}`, open: true },
@@ -99,6 +111,8 @@ const TOOLS = {
   arvan_cache_purge: { icon: Cloud, label: t("پاک‌کردن کش آروان"), subtitle: (a) => [a.domain, a.scope].filter(Boolean).join(" · "), open: true },
   dns_lookup: { icon: Network, label: t("جست‌وجوی DNS"), subtitle: (a) => `${a.type || "A"} ${a.name || ""}`.trim(), open: true },
   http_check: { icon: Globe, label: t("بررسی HTTP"), subtitle: (a) => a.url, open: true },
+  web_search: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.query },
+  web_fetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
   tls_check: { icon: Lock, label: t("بررسی گواهی TLS"), subtitle: (a) => a.host, open: true },
   nsin_edge_ranges: { icon: Network, label: t("رنج‌های لبهٔ NSIN") },
   nsin_domains: { icon: Cloud, label: t("دامنه‌های NSIN"), subtitle: (a) => a.search },
@@ -164,6 +178,10 @@ const TOOLS = {
   Skill: { icon: BookOpen, label: t("مهارت"), subtitle: (a) => a.skill },
   ToolSearch: { icon: Search, label: t("یافتن ابزار"), subtitle: (a) => a.query },
   ExitPlanMode: { icon: ListChecks, label: t("پایان نقشه"), open: true },
+  // Claude Code's built-in question; its ask_owner twin, when there is one, is dropped (Work.jsx).
+  AskUserQuestion: { icon: CircleHelp, label: t("پرسش از شما"), subtitle: (a) => a.questions?.[0]?.question },
+  // consult (peers.mjs): another model's answer inside one call; the body is ConsultBody.
+  consult: { icon: Users, label: t("مشورت با مدل دیگر"), subtitle: (a) => [a.provider, a.model].filter(Boolean).join(" · "), open: true },
 };
 
 // A running step under the Karsara skin: a thin spinning ring instead of a spinner icon.
@@ -179,8 +197,13 @@ export function shortTarget(value) {
 export function ToolCard(props) {
   if (props.toolName === "ask_owner") return <AskCard {...props} />;
   if (props.toolName === "visualize") return <ChartCard {...props} />;
+  if (props.toolName === "preview_start") return <PreviewCard {...props} />;
   if (props.toolName === "ask_agent") return <PeerCard {...props} />;
   if (props.toolName === "task") return <TaskCard {...props} />;
+  // A consult that ran but got no answer (timeout, the asking chat stopped) is a failure on the row too.
+  if (props.toolName === "consult") return <GenericToolCard {...props} isError={props.isError || props.result?.state === "failed"} />;
+  // The board's "open" scrolls to this card (focus.js): by the chore id, or by title for older ones.
+  if (props.toolName === "owner_task") return <div data-chore={props.result?.id || ""} data-chore-title={props.args?.access ? `دسترسی: ${props.args.access}` : props.args?.title || ""}><GenericToolCard {...props} /></div>; // i18n-ignore: matches the server's chore title
   return <GenericToolCard {...props} />;
 }
 
@@ -204,7 +227,7 @@ function PeerCard({ args = {}, result, isError, status }) {
       ? t("{agent} · خطا", { agent: meta.label })
       : t("{agent} · انجام شد", { agent: meta.label });
   // Karsara: the same content in a flat frame (a tool row, the body in its own box).
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
 
   return (
     <div
@@ -305,6 +328,42 @@ function PeerCard({ args = {}, result, isError, status }) {
   );
 }
 
+// A consult's answer (peers.mjs consultTool: { consultId, state, from, answer, error }). Shared by both
+// skins: the frame around it is GenericToolCard's, so only this body is new.
+function ConsultBody({ args = {}, result }) {
+  const failed = result?.state === "failed";
+  const answer = String(result?.answer || "").trim();
+  const question = String(args.prompt || "").trim();
+  return (
+    <div className="space-y-2">
+      {question ? (
+        <details>
+          <summary className="cursor-pointer text-xs text-muted-foreground">{t("پرسش")}</summary>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm" dir="auto">{question}</p>
+        </details>
+      ) : null}
+      {failed ? <p className="text-xs text-bad" dir="auto">{t("به جواب نرسید: {error}", { error: result.error || t("خطا") })}</p> : null}
+      {answer ? <PeerMarkdown text={answer} /> : failed ? null : <p className="text-xs text-muted-foreground">{t("جوابی نیامد.")}</p>}
+      {result?.from || result?.consultId ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {result?.from ? <span className="ltr min-w-0 truncate font-mono" title={t("مدلی که جواب داد")}>{result.from}</span> : null}
+          {result?.consultId ? (
+            <button
+              type="button"
+              onClick={() => navigate(result.consultId)}
+              className="ms-auto inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium hover:bg-muted"
+              title={t("باز کردن چتِ این مشورت")}
+            >
+              <ExternalLink className="size-3" />
+              {t("دیدن چت")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PeerMarkdown({ text }) {
   const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
   return (
@@ -395,7 +454,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
   const summary = taskFinalText(steps);
   const hasBody = Boolean(summary || steps.length || isError);
   const toolCount = steps.filter((s) => s?.toolCall).length;
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
 
   const openSubchat = async (e) => {
     e.stopPropagation();
@@ -421,7 +480,7 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
           className="flex min-w-0 flex-1 items-start gap-2.5 text-start hover:opacity-90"
           disabled={running || !hasBody}
         >
-          <Workflow className={`mt-0.5 size-4 shrink-0 ${running ? "animate-pulse text-primary" : "text-muted-foreground"}`} />
+          <Workflow className={`mt-0.5 size-4 shrink-0 ${running ? "animate-pulse text-signal" : "text-muted-foreground"}`} />
           <div className="min-w-0 flex-1 space-y-0.5">
             <p className={`font-medium leading-snug ${running ? "shimmer" : ""}`} dir="auto">
               {running ? t("زیرایجنت در حال انجام {task}…", { task: description }) : t("زیرایجنت · {task}", { task: description })}
@@ -506,6 +565,21 @@ export function stepTitle(toolName, args) {
   return own ? own.replace(/\s+/g, " ").trim() : place(args || {});
 }
 
+// One plain line for a step in progress: its own title, else "label — target" from TOOLS, else null.
+export function stepLine(toolName, args) {
+  const own = stepTitle(toolName, args);
+  if (own) return own;
+  const meta = TOOLS[toolName];
+  if (!meta) return null;
+  let target = "";
+  try {
+    target = meta.subtitle ? String(meta.subtitle(args || {}) || "") : "";
+  } catch {
+    target = "";
+  }
+  return target ? `${meta.label} — ${target}` : meta.label;
+}
+
 function GenericToolCard({ toolName, args = {}, result, isError, status }) {
   const meta = TOOLS[toolName] || { icon: Server, label: toolName };
   const running = status?.type === "running" || result === undefined;
@@ -514,12 +588,12 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
   const Icon = meta.icon;
   const plain = stepTitle(toolName, args);
   const subtitle = plain ? (running || isError ? args.command : "") : safe(() => meta.subtitle?.(args));
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
 
   if (karsara) {
     // Karsara: no card — a flat row (icon · name · «·» · short target), no ✓ on success, a ring while
     // running; the opened body is its own box. Claude Code's tools keep their English name.
-    const name = /^[A-Z]/.test(toolName || "") ? toolName : meta.label;
+    const name = /^[A-Z]/.test(toolName || "") && toolName !== "AskUserQuestion" ? toolName : meta.label;
     const target = plain ? "" : subtitle;
     return (
       <div className="my-0.5">
@@ -533,7 +607,7 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
           {target ? (
             <>
               <span aria-hidden>·</span>
-              <span className="ltr min-w-0 truncate font-mono text-xs" title={String(target)}>{shortTarget(target)}</span>
+              <span dir={targetLook(target).dir} className={targetLook(target).className} title={String(target)}>{shortTarget(target)}</span>
             </>
           ) : null}
           <span className="ms-auto flex shrink-0 items-center gap-2">
@@ -629,6 +703,8 @@ function ToolBody({ toolName, args, result, isError }) {
       </div>
     );
   }
+  // A consult that ran keeps its own body when it failed: the reason, any partial answer, its chat.
+  if (isError && toolName === "consult" && result?.consultId) return <ConsultBody args={args} result={result} />;
   if (isError) return <ErrorBody result={result} />;
   // Any tool may return a file; show it the same way everywhere.
   if (result?.media?.mediaId && toolName !== "s3_get") {
@@ -637,6 +713,12 @@ function ToolBody({ toolName, args, result, isError }) {
   switch (toolName) {
     case "edit":
       return result?.diffString ? <Diff text={result.diffString} /> : <Json value={result} />;
+    case "Edit":
+    case "MultiEdit":
+    case "Write": {
+      const diff = buildEditDiff(args);
+      return diff ? <Diff text={diff} /> : <Json value={result} />;
+    }
     case "read":
       return <Code text={result?.content} footer={result?.totalLines ? t("{n} خط", { n: num(result.totalLines) }) : null} />;
     case "updateTodos":
@@ -763,6 +845,10 @@ function ToolBody({ toolName, args, result, isError }) {
     case "delete_sent":
     case "tell_person":
       return <SentText text={args.text} result={result} toPerson={toolName !== "tell_person"} />;
+    case "owner_task":
+      return args.why || args.detail ? <p className="whitespace-pre-wrap break-words text-sm" dir="auto">{args.why || args.detail}</p> : <p className="text-sm" dir="auto">{args.access || args.title}</p>;
+    case "react":
+      return <p className="text-sm">{result?.reacted ? t("✓ {emoji} روی پیام #{id}", { emoji: result.emoji || t("واکنش برداشته شد"), id: result.id }) : result?.held ? t("نرفت: شما در گفتگو بودید یا پاسخ‌ها خاموش است") : result?.error ? t("نرفت: {error}", { error: result.error }) : t("نرفت")}</p>;
     case "telegram_send":
       return <p className="text-sm">{result?.sent ? t("✓ فرستاده شد به «{chat}»", { chat: result.chat }) : result?.reason ? t("فرستاده نشد ({reason})", { reason: result.reason }) : t("فرستاده نشد")}</p>;
     case "grafana_search":
@@ -788,6 +874,8 @@ function ToolBody({ toolName, args, result, isError }) {
       );
     case "s3_get":
       return <S3Object value={result} />;
+    case "consult":
+      return <ConsultBody args={args} result={result} />;
     case "gitlab_version":
       return <p className="ltr font-mono">{result?.version} <span className="text-muted-foreground">({result?.revision})</span></p>;
     default:

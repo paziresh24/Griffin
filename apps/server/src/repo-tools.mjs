@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { gitIdentity } from "./persona.mjs";
 
 // File and git tools for a chat that works on a repo (its own worktree, worktrees.mjs). Every
 // engine gets them — a plain chat-completions engine has no file tools of its own — and they reach only that worktree: no path
@@ -27,10 +28,11 @@ function git(args, cwd, { input, timeout = 60_000 } = {}) {
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: "0",
-          GIT_AUTHOR_NAME: "Griffin",
-          GIT_AUTHOR_EMAIL: process.env.GRIFFIN_GIT_EMAIL || "griffin@localhost",
-          GIT_COMMITTER_NAME: "Griffin",
-          GIT_COMMITTER_EMAIL: process.env.GRIFFIN_GIT_EMAIL || "griffin@localhost",
+          // Commits carry the owner's git identity when set, else the assistant's own name (persona.mjs).
+          GIT_AUTHOR_NAME: gitIdentity().name,
+          GIT_AUTHOR_EMAIL: gitIdentity().email,
+          GIT_COMMITTER_NAME: gitIdentity().name,
+          GIT_COMMITTER_EMAIL: gitIdentity().email,
           // No repo hooks (husky etc.) run inside the app container.
           GIT_CONFIG_COUNT: "2",
           GIT_CONFIG_KEY_0: "safe.directory",
@@ -180,10 +182,14 @@ export function createRepoChatTools({ dir, repo, branch, push }) {
     },
 
     repo_push: {
-      description: `Push this chat's branch (${branch}) of ${repo} to GitLab (never another branch, never force). Commit first with repo_git. The answer carries the link to open a merge request.`,
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      async execute() {
-        return push({ repo, branch });
+      description: `Push this chat's branch (${branch}) of ${repo} to GitLab (never another branch, never force). Commit first with repo_git. With mrTitle it also opens a Draft merge request to the default branch (or returns the one already open); merging stays with a person.`,
+      inputSchema: {
+        type: "object",
+        properties: { mrTitle: { type: "string", maxLength: 200 }, mrDescription: { type: "string", maxLength: 20000 } },
+        additionalProperties: false,
+      },
+      async execute(args = {}) {
+        return push({ repo, branch, ...(args?.mrTitle ? { mrTitle: String(args.mrTitle), mrDescription: String(args.mrDescription || "") } : {}) });
       },
     },
   };

@@ -10,11 +10,13 @@ import { locale, num, t } from "./i18n.js";
 const STATES = {
   sent: { label: t("📤 جواب رفت"), tone: "ok" },
   edited: { label: t("✏️ پیام قبلی به‌روز شد"), tone: "muted" },
+  reacted: { label: t("👍 واکنش گذاشت"), tone: "ok" },
   working: { label: t("⏳ در حال کار"), tone: "primary" },
   waiting: { label: t("🙋 منتظر شما"), tone: "warn" },
   no_reply: { label: t("💬 جوابی لازم نبود"), tone: "muted" },
   owner: { label: t("🔇 خودتان جواب دادید"), tone: "muted" },
   queued: { label: t("🕒 در صف"), tone: "muted" },
+  greeting: { label: t("👋 فقط سلام؛ منتظر پیام اصلی"), tone: "muted" },
   failed: { label: t("⚠️ ارسال نشد"), tone: "bad" },
   paused: { label: t("⏸ متوقف"), tone: "muted" },
 };
@@ -63,13 +65,13 @@ export function stripSender(text, name) {
   const value = String(text ?? "");
   if (!name) return value;
   const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return value.replace(new RegExp(`^\\s*«?${escaped}»?\\s*:\\s*`), "");
+  return value.replace(new RegExp(`^\\s*«?${escaped}»?(?:\\s*\\(#\\d+\\))?\\s*:\\s*`), ""); // «name» (#id): the desk's line
 }
 
 // The owner's web note reaches the agent framed («<owner> از داخل <platform> — …»: …); the bubble
 // already says it is his private note, so the frame is not shown.
 export function stripOwnerFrame(text) {
-  return String(text ?? "").replace(/^\s*«[^«»]* از داخل [^»]*»\s*:\s*/, ""); // i18n-ignore: matches the server's frame
+  return String(text ?? "").replace(/^\s*«[^»]*?از داخل [^»]*»\s*:\s*/, ""); // i18n-ignore: matches the server's frame
 }
 
 export const isNoReply = (text) => String(text ?? "").trim() === "[NO_REPLY]";

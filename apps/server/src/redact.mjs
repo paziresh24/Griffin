@@ -25,8 +25,8 @@ const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
 // the owner's Telegram inside an approval question because it followed "login ", not "token=".
 const TOKEN_LITERAL = /\b(?:glpat|ghp|gho|ghu|github_pat|sk-ant|sk-proj|sk-svcacct|sk-none|xox[bporsa])-[A-Za-z0-9_-]{10,}\b/g;
 // ArvanCloud API keys are the literal "apikey" + a UUID, no separator — key-based and literal
-// patterns both missed it when a command embedded {"key":"apikey…"} (2026-10-01: Ghaene's Arvan
-// key sat raw in debug_exec transcripts; the agent itself reported the leak two days later).
+// patterns both missed it when a command embedded {"key":"apikey…"} (such a key once sat
+// raw in debug_exec transcripts).
 const ARVAN_TOKEN = /\bapikey[a-z0-9]{8}-(?:[a-z0-9]{4}-){3}[a-z0-9]{12}\b/g;
 
 // Tools whose result *is* the secret: which fields hold it.
@@ -114,4 +114,36 @@ export function redactResult(name, result) {
 // Free-text masking for places that embed tool args into a string (the guard's approval question).
 export function maskText(value) {
   return maskString(String(value ?? ""), { literals: true });
+}
+
+// Text the owner did not type, made inert for the Claude CLI before it reaches the agent. The CLI
+// reads "@/any/path" (or "@.env", "@~/…") anywhere in a user message into the message (no tool
+// call, no permission check), and runs a message starting with "/" as a local command or skill. A
+// zero-width space after such an "@" and before a line's leading "/" keeps both as plain text. An
+// "@" inside a word (an email, git@host:repo) is not a mention and stays. Applying it twice adds
+// nothing.
+export const inertText = (text) => String(text ?? "").replace(/(?<![\p{L}\p{N}_.+-])@(?!\u200b)/gu, "@\u200b").replace(/^(\s*)\//gm, "$1\u200b/");
+
+// The way out: an agent copies what it read, so an inert "@\u200busername" can come back in a
+// Telegram send or a chat lookup, where it is no longer a mention or a resolvable handle. Every
+// outgoing messenger text and every agent-supplied chat target drops exactly the marker inertText
+// adds (a zero-width space right after "@", or before a line's leading "/"); any other zero-width
+// character (the Persian half-space included) stays. A "@\u200b" someone typed on purpose is
+// indistinguishable from the marker and loses its zero-width space too.
+export const withoutInertMarks = (text) => String(text ?? "").replace(/@\u200b/g, "@").replace(/^(\s*)\u200b\//gm, "$1/");
+
+// The same for one channel delivery, before any prefix ("❓ ", "🤖 ") pushes a "/" off its line
+// start: the text, the status line, a question with its options, a close note, file captions.
+export function withoutInertMarksIn(message) {
+  if (!message || typeof message !== "object") return message;
+  const out = { ...message };
+  const clean = (value) => (typeof value === "string" ? withoutInertMarks(value) : value);
+  for (const key of ["text", "status"]) out[key] = clean(out[key]);
+  if (out.question) {
+    out.question = { ...out.question, question: clean(out.question.question) };
+    if (Array.isArray(out.question.options)) out.question.options = out.question.options.map((o) => ({ ...o, label: clean(o.label), description: clean(o.description) }));
+  }
+  if (out.closeQuestion) out.closeQuestion = { ...out.closeQuestion, note: clean(out.closeQuestion.note) };
+  if (Array.isArray(out.files)) out.files = out.files.map((f) => ({ ...f, caption: clean(f.caption) }));
+  return out;
 }

@@ -36,7 +36,8 @@ export function inPeek(message) {
   return !isSystemText(text) && !PEER_TEXT.test(text);
 }
 
-/** The peek's items, oldest (next to run) first: { key, eventId, text, images, sendState }. One on
+/** The peek's items, oldest (next to run) first: { key, eventId, text, images, files, sendState }
+ *  (files: the names and sizes of the files it carries; the page keeps no bytes of them). One on
  *  its way has no eventId yet (nothing to take out) and its send state; the key is its client id,
  *  which the landed copy keeps, so the row stays put when it lands. */
 export function waitingQueued(messages) {
@@ -48,9 +49,20 @@ export function waitingQueued(messages) {
       eventId: landed ? Number(m.id.slice(1)) : null,
       text: stripOwnerFrame(messageText(m)),
       images: custom.images || 0,
+      files: Array.isArray(custom.files) ? custom.files : [],
       sendState: landed ? null : custom.sendState,
     };
   });
+}
+
+/** The confirm before «ویرایش» takes a message back into the box, or null when nothing is lost:
+ *  its pictures and files stay with the server copy, which the take-back removes. */
+export function editLossWarning(item) {
+  const lost = [];
+  if (item?.images) lost.push(t("تصویرهای"));
+  if (item?.files?.length) lost.push(`فایل‌های پیوستِ (${item.files.map((f) => `«${f.name}»`).join(t("، "))})`);
+  if (!lost.length) return null;
+  return `${lost.join(t(" و "))} این پیام به جعبهٔ پیام برنمی‌گردند و باید دوباره پیوست شوند. ادامه؟`;
 }
 
 // The failed run's bar has «دوباره» and «حل شد» (Thread.jsx KeptActions), no «حذف» of its own.

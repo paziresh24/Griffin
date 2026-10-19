@@ -249,6 +249,12 @@ class M2:
         return M2._key_header(key_tuple) + bytes([0x08]) + struct.pack('<I', value)
 
     @staticmethod
+    def encode_uint(key_tuple, value):
+        """u8 while it fits, else u32. Session ids pass 255 on a long-running router; the u8
+        encoding then truncated them and RouterOS silently dropped all input (Griffin patch)."""
+        return M2.encode_u8(key_tuple, value) if value <= 0xFF else M2.encode_u32(key_tuple, value)
+
+    @staticmethod
     def encode_u32_user(key_id, value):
         """u32 with user namespace key."""
         return M2._user_key_header(key_id) + bytes([0x08]) + struct.pack('<I', value)
@@ -325,7 +331,7 @@ class M2:
         body += M2.encode_u32_array(M2.SYS_TO, [76])
         body += M2.encode_u32_array(M2.SYS_FROM, [0, source_id])
         body += M2.encode_u32_user(3, counter)       # key_3 = counter
-        body += M2.encode_u8(M2.SESSION_ID, session_id)
+        body += M2.encode_uint(M2.SESSION_ID, session_id)
         body += M2.encode_u32(M2.SYS_CMD, 0x0A0067)
         if data is not None:
             body += M2.encode_raw_user(2, data)      # key_2 = raw terminal data
@@ -747,7 +753,7 @@ class WinboxTerminalClient:
         body += M2.encode_bool(M2.SYS_REQUEST, True)
         rid = self._next_req_id()
         body += M2.encode_u8(M2.SYS_REQID, rid)
-        body += M2.encode_u8(M2.SESSION_ID, session_id)
+        body += M2.encode_uint(M2.SESSION_ID, session_id)
         msg = b'M2' + body
         self._send_raw_m2(msg)
         # Drain any response (not always expected, but some routers may reply)
@@ -769,7 +775,7 @@ class WinboxTerminalClient:
         body += M2.encode_bool(M2.SYS_REQUEST, True)
         rid = self._next_req_id()
         body += M2.encode_u8(M2.SYS_REQID, rid)
-        body += M2.encode_u8(M2.SESSION_ID, session_id)
+        body += M2.encode_uint(M2.SESSION_ID, session_id)
         msg = b'M2' + body
 
         resp = self._send_and_recv_raw(msg)
@@ -797,7 +803,7 @@ class WinboxTerminalClient:
         body += M2.encode_bool(M2.SYS_REQUEST, True)
         rid = self._next_req_id()
         body += M2.encode_u8(M2.SYS_REQID, rid)
-        body += M2.encode_u8(M2.SESSION_ID, session_id)
+        body += M2.encode_uint(M2.SESSION_ID, session_id)
         body += M2.encode_string_user(1, username)
         body += M2.encode_raw_user(9, salt)
         body += M2.encode_raw_user(10, hashed)

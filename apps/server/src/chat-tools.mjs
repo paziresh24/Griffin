@@ -153,3 +153,14 @@ export function createChatTools({ store, chatId, isValidRepo = () => false, chec
     },
   };
 }
+
+// --- side chats: change files like the main chat unless the owner turned edits off when starting
+// it (from Karsara, owner 2026-10-11). A read-only side chat reads the main chat's folder and asks.
+const sideEditsKey = (chatId) => `side-edits:${chatId}`;
+export const setSideAllowEdits = (store, chatId, allow) => (allow === false ? store.setKv(sideEditsKey(chatId), false) : store.deleteKv(sideEditsKey(chatId)));
+export const sideAllowsEdits = (store, chat) => Boolean(chat?.side_of) && store.getKv(sideEditsKey(chat.id)) !== false;
+export const sideIsReadOnly = (store, chat) => Boolean(chat?.side_of) && !sideAllowsEdits(store, chat);
+export const SIDE_READ_ONLY_TOOLS = ["ask_owner", "chat_read", "repo_list", "repo_read", "repo_search", "visualize", "show_media"];
+export function restrictForReadOnlySide(tools) {
+  return Object.fromEntries(Object.entries(tools || {}).filter(([name]) => SIDE_READ_ONLY_TOOLS.includes(name)));
+}

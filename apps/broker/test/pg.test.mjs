@@ -12,7 +12,7 @@ test("CSV parsing handles quotes, commas, newlines and Persian text", () => {
 
 function fakeKube({ psqlOutput = "id,key\n1,a\n", psqlError = null } = {}) {
   const calls = [];
-  return {
+  const kube = {
     calls,
     withFallback: async (_c, { viaApi }) => ({ value: await viaApi(), source: "public-api test" }),
     publicRequest: async (_c, path) => {
@@ -25,6 +25,15 @@ function fakeKube({ psqlOutput = "id,key\n1,a\n", psqlError = null } = {}) {
       return psqlOutput;
     },
   };
+  // the real kube.exec builds this kubectl line for the emergency path
+  kube.exec = async (c, { namespace, pod, container, command, ...options }) => {
+    try {
+      return { value: await kube.emergency(c, ["exec", "-n", namespace, pod, "-c", container, "--", ...command], options), source: "emergency-ssh test" };
+    } catch (error) {
+      throw Object.assign(new Error("all paths failed"), { attempts: [{ path: "emergency-ssh", ok: false, error: error.message }] });
+    }
+  };
+  return kube;
 }
 
 test("pg_query runs psql in the current primary, read-only by default", async () => {

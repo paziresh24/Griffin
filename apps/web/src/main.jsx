@@ -4,10 +4,14 @@ import App from "./App.jsx";
 import { AuthGate } from "./components/Login.jsx";
 import { PublicChat, shareToken } from "./Public.jsx";
 import { PeerStatus, peerStatusToken } from "./PeerStatus.jsx";
+import { GuestChat } from "./Guest.jsx";
+import { guestToken } from "./guest.js";
 import "./styles.css";
+import "./karsara.css";
 import { applyDocumentLang } from "./i18n.js";
-import { loadBrand } from "./brand.js";
+import { BRAND, loadBrand } from "./brand.js";
 import { startVersionWatch } from "./new-version.js";
+import { watchErrors } from "./feedback.js";
 
 applyDocumentLang();
 
@@ -17,13 +21,17 @@ try {
   // storage unavailable: keep the default dark theme
 }
 
-// A shared link (#/s/<token>) is a separate, login-free page; switching between the two reloads.
+// A shared link (#/s/<token>) and a private one (#/p/<token>) are separate, login-free pages;
+// switching between them and the app reloads.
 const token = shareToken();
 const statusToken = peerStatusToken();
+const guest = guestToken();
 window.addEventListener("hashchange", () => {
-  if (shareToken() !== token || peerStatusToken() !== statusToken) window.location.reload();
+  if (shareToken() !== token || peerStatusToken() !== statusToken || guestToken() !== guest) window.location.reload();
 });
 
+// This page's errors, for "send feedback" (feedback.js).
+watchErrors();
 // After an update an open tab finds out by itself and moves to the new version (new-version.js).
 startVersionWatch();
 // The service worker only shows Web Push notifications; registering it asks nothing — the permission
@@ -36,11 +44,15 @@ if ("serviceWorker" in navigator) {
 }
 
 // The assistant's name comes from the server; render once it is known (defaults on failure).
-loadBrand().finally(() =>
+loadBrand().finally(() => {
+  // Before sign-in the tab names the install: the product title on a Karsara-look install, else the assistant.
+  document.title = BRAND.title;
   createRoot(document.getElementById("root")).render(
     <StrictMode>
       {token ? (
         <PublicChat token={token} />
+      ) : guest ? (
+        <GuestChat token={guest} />
       ) : statusToken ? (
         <PeerStatus token={statusToken} />
       ) : (
@@ -49,5 +61,5 @@ loadBrand().finally(() =>
         </AuthGate>
       )}
     </StrictMode>,
-  ),
-);
+  );
+});

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { genv } from "./env.mjs";
 import { eventsFromUpdate } from "./updates.mjs";
-import { maskText } from "./redact.mjs";
+import { inertText, maskText } from "./redact.mjs";
+import { fileMeta, forEngine, mergeMessages, toSdkMessage } from "./attachments.mjs";
+import { ASK_TOOL } from "./asks.mjs";
+import { accountMoveNote, doneTools, droppedNote, ENGINE_UNAVAILABLE, resetFromText, FALLBACK_KEY, FALLBACK_OFFERS_KEY, fallbackNote, fallbackQuestion, saidWait, saidYes, storableMessage, withLeadNote } from "./plan-fallback.mjs";
 
 // Kept messages: the owner's message whose run ended in an error before anything
 // reached them (no text, no tool) is kept in the store's kv, oldest first, until a retry gets
@@ -23,6 +27,8 @@ export const keptIds = (store, chatId) => keptList(store, chatId).map((k) => k.i
 const runqKey = (chatId) => `runq:${chatId}`;
 const RESUME_KEY = "resume:pending";
 const resumesKey = (chatId) => `resumes:${chatId}`;
+// Config CLAUDE_BACKGROUND_TASKS: { chatId: [task] } of the background tasks running now.
+export const BG_TASKS_KEY = "background-tasks";
 // ponytail: continues per chat per hour, so a turn that kills the process cannot restart-loop it;
 // any new message to the chat resets the count.
 const MAX_RESUMES = 3;
@@ -64,6 +70,9 @@ export const setFastWanted = (store, chatId, on) => (on ? store.setKv(FAST_KEY(c
 // colleague's thread or a chat linked to a messenger.
 export function ownerTyped(store, chat) {
   if (!chat || (chat.caller || "owner") !== "owner" || chat.job_id || chat.parent_chat_id || chat.side_of || chat.person_id) return false;
+  // A chat that does not exist yet (GET /api/agents asks which engine a new chat of an agent would
+  // run on) has no links; binding an undefined id made the whole agents page answer «internal error».
+  if (!chat.id) return true;
   return !store.linksForChat?.(chat.id)?.length;
 }
 
@@ -101,8 +110,17 @@ export function createRunner({
   // Only for an explicit cancel (user / API), not for every run end.
   onUserCancel = () => {},
   onFinished = () => {},
-  // onPlanLimit(chat, error) -> true when the chat should be retried once on another provider.
+  // onPlanLimit(chat, error, provider) -> true when the chat should be retried once on another provider.
   onPlanLimit = () => false,
+  // PLAN_FALLBACK=ask (plan-fallback.mjs): askFallback(chat) -> true when a plan limit in this chat
+  // asks the owner on a card instead of moving the run; fallbackFor(chat) -> the engine it would go
+  // on with ({ provider, model, name, fromName }) or null. Default: never ask (auto-fallback).
+  askFallback = () => false,
+  fallbackFor = () => null,
+  // accountHop(chat) -> { from, account } when the chat runs on another account of the same model
+  // because its own is at the plan limit: automatic even in ask mode (answer quality is the same),
+  // but labelled so the owner sees which account answered. null otherwise.
+  accountHop = () => null,
   // limitResetAt(chat, error) -> ms when the chat can run again after a plan limit, or null.
   limitResetAt = (chat, error) => error?.resetsAt || null,
   // Settings switches (config.mjs): continue after the limit resets; Claude's next-message suggestions.
@@ -118,6 +136,9 @@ export function createRunner({
   // annotate(chatId) -> a line the model reads before this message (not shown as the message):
   // in a Telegram mother chat, what the assistant already sent that person and is unanswered (desk.mjs).
   annotate = () => null,
+  // notResumable(chat) -> true for a chat nobody waits on after a restart (a consult: the call
+  // that waited for its answer is gone), so a cut or crashed run there is not continued.
+  notResumable = () => false,
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
@@ -129,6 +150,66 @@ export function createRunner({
   // failing with «Invalid API key» in every chat that had run once (2026-10-13). Such an agent is
   // dropped and the session resumed with the new provider.
   const madeBy = new WeakMap();
+  // Config CLAUDE_BACKGROUND_TASKS: chats whose kept Claude Code process runs background tasks. The
+  // live list is saved (kv BG_TASKS_KEY), so a restart, which ends those processes, says which ones
+  // it stopped.
+  const bgAgents = new Map(); // chatId -> agent
+  const taskOutputs = new Map(); // chatId -> Map(taskId -> output file of an ended task)
+  const usedAt = new Map(); // chatId -> when its agent was last taken (Settings' MCP view)
+  const bgSaved = () => store.getKv?.(BG_TASKS_KEY) || {};
+  const saveBg = (chatId, tasks) => {
+    const all = bgSaved();
+    if (tasks.length) all[chatId] = tasks;
+    else delete all[chatId];
+    if (Object.keys(all).length) store.setKv?.(BG_TASKS_KEY, all);
+    else store.deleteKv?.(BG_TASKS_KEY);
+  };
+  const BG_STATUS = { completed: "تمام شد", failed: "شکست خورد", stopped: "متوقف شد", killed: "متوقف شد" };
+  const taskName = (task) => task.description || task.id;
+  function wireBackground(chatId, agent) {
+    if (typeof agent?.setBackgroundListener !== "function") return;
+    agent.setBackgroundListener((event) => {
+      if (event.type === "tasks") {
+        if (event.tasks.length) bgAgents.set(chatId, agent);
+        else if (bgAgents.get(chatId) === agent) bgAgents.delete(chatId);
+        if (!stopping) saveBg(chatId, event.tasks);
+        store.bus?.emit?.("chats", { type: "live", chatId });
+      } else if (event.type === "ended") {
+        const summary = event.summary ? `: ${event.summary.slice(0, 500)}` : "";
+        // Its output file (a background shell's log) stays readable by task id, never by path.
+        if (event.outputFile) {
+          const files = taskOutputs.get(chatId) || new Map();
+          files.set(event.task.id, { file: event.outputFile, description: event.task.description || "", type: event.task.type || null, status: event.status || "completed", endedAt: Date.now() });
+          while (files.size > 30) files.delete(files.keys().next().value);
+          taskOutputs.set(chatId, files);
+        }
+        store.appendEvent(chatId, null, "note", { text: `کار پس‌زمینه ${BG_STATUS[event.status] || event.status} (${taskName(event.task)})${summary}`, ...(event.outputFile ? { taskId: event.task.id } : {}) });
+      } else if (event.type === "lost" && !stopping) {
+        store.appendEvent(chatId, null, "note", { text: `این کارهای پس‌زمینه با بسته شدن Claude Code متوقف شدند: ${event.tasks.map(taskName).join("، ")}` });
+      }
+    });
+  }
+  // Boot: what the last process stopped is said in its chat, once.
+  for (const [chatId, tasks] of Object.entries(bgSaved())) {
+    if (store.getChat(chatId) && Array.isArray(tasks) && tasks.length) {
+      store.appendEvent(chatId, null, "note", { text: `این کارهای پس‌زمینه با راه‌اندازی دوبارهٔ برنامه متوقف شدند: ${tasks.map(taskName).join("، ")}` });
+    }
+  }
+  store.deleteKv?.(BG_TASKS_KEY);
+  // An archived or deleted chat's background tasks stop with it.
+  store.bus?.on?.("chats", (change) => {
+    const agent = bgAgents.get(change?.chatId);
+    if (!agent) return;
+    if (change.type === "deleted" || (change.type === "updated" && store.getChat(change.chatId)?.archived)) {
+      bgAgents.delete(change.chatId);
+      saveBg(change.chatId, []);
+      try {
+        agent.close?.();
+      } catch {
+        /* already closed */
+      }
+    }
+  });
   let stopping = false; // shutdown() began: nothing new starts, cut turns are recorded for the next boot
 
   // A «در صف» message reached the agent (started) or will never run (dropped): its label follows
@@ -137,7 +218,7 @@ export function createRunner({
     for (const userEventId of ids || []) store.appendEvent(chatId, null, "user.queue", { userEventId, state });
   };
   const messagesOf = (items) => items.map((item) => item.message);
-  const idsOf = (items) => items.flatMap((item) => (item.id ? [item.id] : []));
+  const idsOf = (items) => items.flatMap((item) => [...(item.id ? [item.id] : []), ...(Array.isArray(item.ids) ? item.ids : [])]);
 
   const runq = {
     get: (chatId) => store.getKv?.(runqKey(chatId)) || { turn: null, queue: [] },
@@ -180,18 +261,152 @@ export function createRunner({
     list: (chatId) => keptList(store, chatId),
     save: (chatId, list) => (list.length ? store.setKv(keptKey(chatId), list) : store.deleteKv(keptKey(chatId))),
     // ids: the «در صف» events this message carries, so their labels follow it.
-    push: (chatId, message, ids = []) =>
-      kept.save(chatId, [...kept.list(chatId), { id: `k${randomUUID().replace(/-/g, "").slice(0, 12)}`, message, fails: 0, ...(ids.length ? { ids } : {}) }]),
+    // raw: the message without a system lead note, when it has one.
+    push: (chatId, message, ids = [], raw = null) =>
+      kept.save(chatId, [...kept.list(chatId), { id: `k${randomUUID().replace(/-/g, "").slice(0, 12)}`, message, fails: 0, ...(ids.length ? { ids } : {}), ...(raw != null ? { raw } : {}) }]),
     // The oldest kept message still retried on its own, or -1.
     next: (chatId) => kept.list(chatId).findIndex((k) => k.fails < MAX_KEPT_RETRIES),
     update: (chatId, id, fn) => kept.save(chatId, kept.list(chatId).flatMap((k) => (k.id === id ? fn(k) : [k]))),
   };
   const startKept = (chatId, index) => {
     const item = kept.list(chatId)[index];
-    return item ? startRun(chatId, item.message, [], { keptId: item.id, ids: item.ids || [] }) : null;
+    return item ? startRun(chatId, item.message, [], { keptId: item.id, ids: item.ids || [], raw: item.raw ?? null }) : null;
   };
 
   const live = (chatId) => store.bus?.emit("chats", { type: "live", chatId });
+
+  // Open «go on with X?» cards (PLAN_FALLBACK=ask). The store is the source of truth, so a card
+  // survives a restart and a click on any other card (stale, withdrawn) is refused by the answer
+  // route. Only the stopped message's pictures and files live in memory (askId -> message).
+  const offers = () => store.getKv?.(FALLBACK_OFFERS_KEY) || {};
+  const liveMessages = new Map();
+  function forgetOffer(chatId) {
+    const all = offers();
+    const offer = all[chatId];
+    if (!offer) return null;
+    delete all[chatId];
+    if (Object.keys(all).length) store.setKv(FALLBACK_OFFERS_KEY, all);
+    else store.deleteKv(FALLBACK_OFFERS_KEY);
+    liveMessages.delete(offer.askId);
+    return offer;
+  }
+  const closeCard = (chatId, offer, result) =>
+    store.appendEvent(chatId, offer.runId ?? null, "tool.done", { callId: offer.callId, name: ASK_TOOL, args: { ...offer.args, askId: offer.askId }, result });
+  // Anything new in the chat (a message, a continue after the reset, an archive) answers the card:
+  // it is closed as withdrawn and is never clickable again.
+  function withdrawFallback(chatId) {
+    const offer = forgetOffer(chatId);
+    if (offer) closeCard(chatId, offer, { answered: false, reason: "withdrawn" });
+    return Boolean(offer);
+  }
+  // After a yes, the note the new engine reads before the first message it runs (an older kept
+  // message, the stopped one, or the boot queue's): { note, provider }. Kept messages store the
+  // owner's text only, so a retry elsewhere (back on the old engine) never carries a stale note.
+  const NOTE_KEY = (chatId) => `plan-fallback-note:${chatId}`;
+  // The label a run gets while the chat is on the engine the owner moved it to.
+  function fallbackLabel(chatId, provider) {
+    const moved = store.getKv?.(FALLBACK_KEY(chatId));
+    return moved && moved.provider === provider ? { movedFrom: { from: String(moved.from || "") } } : {};
+  }
+
+  function offerFallback(chatId, runId, provider, message, resetsAt, keptId) {
+    const chat = store.getChat(chatId);
+    if (!chat || chat.archived || !askFallback(chat)) return;
+    const picked = fallbackFor(chat);
+    if (!picked?.provider || picked.provider === provider) return;
+    // A second hop back to where the chat came from: its own session waits there.
+    const moved = store.getKv(FALLBACK_KEY(chatId));
+    const back = Boolean(moved && moved.provider === provider && moved.fromProvider === picked.provider && moved.fromAgentId);
+    const to = { ...picked, ...(back ? { back: true } : {}) };
+    const done = doneTools(store, runId);
+    const askId = randomUUID().replace(/-/g, "").slice(0, 8);
+    const callId = `plan-fallback-${askId}`;
+    const args = { ...fallbackQuestion(to, resetsAt, Date.now(), done.count), askId, ...(done.list.length ? { done: done.list.slice(0, 10).map((t) => `${t.name} ${t.args}`), doneMore: done.count - Math.min(10, done.list.length) } : {}) };
+    withdrawFallback(chatId);
+    liveMessages.set(askId, message);
+    store.setKv(FALLBACK_OFFERS_KEY, { ...offers(), [chatId]: { askId, callId, runId, message: storableMessage(message), to, done, from: provider, keptId: keptId || null, args } });
+    // On the run that hit the limit, so the card shows under its answer.
+    store.appendEvent(chatId, runId, "tool.started", { callId, name: ASK_TOOL, args });
+  }
+
+  // The owner clicked an option on a plan-limit card. false: not this chat's open card (stale,
+  // answered, withdrawn) — the route refuses it, so a stale click never becomes a message.
+  function answerFallback(chatId, askId, selected = []) {
+    const offer = offers()[chatId];
+    if (!offer || !askId || offer.askId !== askId) return false;
+    // Only the card's two options answer it; anything else leaves it open (the route says 409).
+    if (!saidWait(selected) && !saidYes(selected, offer.to)) return false;
+    const message = liveMessages.get(askId);
+    forgetOffer(chatId);
+    const answer = String(selected[0] || "");
+    closeCard(chatId, offer, { answered: true, answer, selected: answer ? [answer] : [] });
+    const { to } = offer;
+    if (saidWait(selected)) return true;
+    const note = (text) => store.appendEvent(chatId, null, "note", { text });
+    const now = store.getChat(chatId);
+    if (!now) return true;
+    if (now.archived) {
+      note(`گفتگو بایگانی شده بود؛ به ${to.name} نرفت. اگر هنوز لازم است، از بایگانی درش بیاورید و پیام بدهید.`);
+      return true;
+    }
+    if (active.has(chatId)) {
+      note(`گفتگو همین حالا مشغول است؛ به ${to.name} نرفت. اگر هنوز لازم است، مدل را از انتخاب‌گر عوض کنید.`);
+      return true;
+    }
+    clearLimitResume(chatId);
+    // The kept copy of the stopped message (nothing had reached the owner) is this rerun now: run
+    // as that kept item, so a success delivers it and the messages queued behind it follow.
+    const keptId = offer.keptId && kept.list(chatId).some((k) => k.id === offer.keptId) ? offer.keptId : null;
+    let text = message ?? offer.message;
+    if (message == null && text && typeof text === "object") text = text.dropped ? withLeadNote(text.text, droppedNote(text.dropped)) : text.text;
+    const moved = store.getKv(FALLBACK_KEY(chatId));
+    if (to.back && moved?.fromAgentId) {
+      // Back where it started: that engine's own session resumes, no label any more.
+      store.updateChat(chatId, { model: moved.fromModel ?? null, provider: moved.fromProvider });
+      store.deleteKv(FALLBACK_KEY(chatId));
+      store.setAgentId(chatId, moved.fromAgentId);
+    } else {
+      // The way back: the first engine, its model and session are kept through any later hop.
+      const first = moved && moved.provider === offer.from ? moved : { from: to.fromName || offer.from, fromProvider: offer.from, fromModel: now.model ?? null, fromAgentId: now.agent_id || null };
+      store.setKv(FALLBACK_KEY(chatId), { ...first, provider: to.provider, model: to.model });
+      store.updateChat(chatId, { model: `${to.provider}:${to.model}`, provider: to.provider });
+      store.setAgentId(chatId, null);
+    }
+    // The model is told what it does not see and what the stopped run did, so it is not redone:
+    // on the first message it runs, whichever that is (startRun).
+    store.setKv(NOTE_KEY(chatId), { note: fallbackNote(to, offer.done), provider: to.provider });
+    const noted = text;
+    if (stopping) {
+      // Shutting down: nothing starts now. The rerun waits in runq for the next boot (behind the
+      // kept FIFO if one is waiting), never as a second copy next to the kept one.
+      const ids = keptId ? kept.list(chatId).find((k) => k.id === keptId)?.ids || [] : [];
+      if (keptId) kept.update(chatId, keptId, () => []);
+      const waiting = runq.get(chatId);
+      runq.save(chatId, waiting.turn, [...waiting.queue, { message: noted, id: null, ...(ids.length ? { ids } : {}) }]);
+      pending.add(chatId, false);
+      return true;
+    }
+    // The kept FIFO keeps its order: an older kept message goes first, this one in its own place.
+    if (keptId) kept.update(chatId, keptId, (k) => [{ ...k, message: text, fails: 0 }]);
+    else if (kept.next(chatId) >= 0) kept.push(chatId, text, []);
+    if (kept.next(chatId) >= 0) startKept(chatId, kept.next(chatId));
+    else startRun(chatId, text, [], { turnText: typeof text === "string" ? text : text?.text || "" });
+    return true;
+  }
+
+  // Archived by any path (the page, the idle sweep, Telegram's mother/manager): the card closes now.
+  store.bus?.on?.("chats", (change) => {
+    if (change?.type !== "updated" || !change.chatId || !offers()[change.chatId]) return;
+    if (store.getChat(change.chatId)?.archived) withdrawFallback(change.chatId);
+  });
+
+  // Boot: a card whose chat is gone, archived or no longer asks is closed; the others stay open.
+  for (const [chatId, offer] of Object.entries(offers())) {
+    const chat = store.getChat(chatId);
+    if (chat && !chat.archived && askFallback(chat)) continue;
+    forgetOffer(chatId);
+    if (chat) closeCard(chatId, offer, { answered: false, reason: "withdrawn" });
+  }
   const limitResumes = () => store.getKv?.(LIMIT_RESUME_KEY) || {};
   function clearLimitResume(chatId) {
     const all = limitResumes();
@@ -309,23 +524,46 @@ export function createRunner({
     return error?.name === "AgentNotFoundError" || error?.code === "agent_not_found" || AGENT_GONE.test(errorText(error));
   }
 
+  // A replaced agent's kept process (config CLAUDE_BACKGROUND_TASKS) ends with it, so it never holds
+  // the session or tasks nobody can stop any more.
+  const placedAs = new WeakMap(); // agent -> placement(chat) when it was made
+  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${(chat.mode || "agent") === "agent"}`;
+  const liveAgent = (chatId) => {
+    const chat = store.getChat(chatId);
+    return bgAgents.get(chatId) || (chat?.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null) || null;
+  };
+  const evict = (chat, agentId) => {
+    const old = agents.get(agentKey(chat, agentId));
+    agents.delete(agentKey(chat, agentId));
+    try {
+      old?.close?.();
+    } catch {
+      /* already closed */
+    }
+  };
+
   async function createFresh(chat) {
-    if (chat.agent_id) agents.delete(agentKey(chat, chat.agent_id));
+    if (chat.agent_id) evict(chat, chat.agent_id);
     store.setAgentId(chat.id, null);
     const options = await agentOptions({ ...chat, agent_id: null });
     const provider = sdkFor(chat);
     const agent = await withRetry(() => provider.create(options));
     madeBy.set(agent, provider);
+    placedAs.set(agent, placement(chat));
     agents.set(agentKey(chat, agent.agentId), agent);
+    wireBackground(chat.id, agent);
     store.setAgentId(chat.id, agent.agentId);
     return agent;
   }
 
   async function agentFor(chat, { forceFresh = false } = {}) {
+    usedAt.set(chat.id, Date.now());
     if (forceFresh) return createFresh(chat);
     const cached = chat.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null;
-    if (cached && madeBy.get(cached) === sdkFor(chat)) return cached;
-    if (cached) agents.delete(agentKey(chat, chat.agent_id));
+    // An agent keeps the options it was made with: one made for the other side (host / container,
+    // the chat's menu or config CLAUDE_HOST) is replaced, the session resumes on the new side.
+    if (cached && madeBy.get(cached) === sdkFor(chat) && placedAs.get(cached) === placement(chat)) return cached;
+    if (cached) evict(chat, chat.agent_id);
     const options = await agentOptions(chat);
     const provider = sdkFor(chat);
     try {
@@ -333,7 +571,9 @@ export function createRunner({
         ? await withRetry(() => provider.resume(chat.agent_id, options))
         : await withRetry(() => provider.create(options));
       madeBy.set(agent, provider);
+      placedAs.set(agent, placement(chat));
       agents.set(agentKey(chat, agent.agentId), agent);
+      wireBackground(chat.id, agent);
       if (agent.agentId !== chat.agent_id) store.setAgentId(chat.id, agent.agentId);
       return agent;
     } catch (error) {
@@ -349,6 +589,8 @@ export function createRunner({
     let agent = await agentFor(chat);
     const provider = sdkFor(chat);
     try {
+      // A PDF reaches only an engine that reads one; the others are told it is there.
+      message = forEngine(message, provider?.kind);
       return await withRetry(() => agent.send(message, sendOpts));
     } catch (error) {
       if (!isAgentBusy(error) && !isAgentGone(error)) throw error;
@@ -381,6 +623,8 @@ export function createRunner({
       log.error?.(`[runner] annotate ${chatId}: ${error.message}`);
     }
     if (!note) return message;
+    // The note quotes what the agent sent a colleague, which that colleague may have steered: inert.
+    note = inertText(note);
     return typeof message === "string" ? `${note}\n\n${message}` : { ...message, text: `${note}\n\n${message?.text || ""}` };
   }
 
@@ -400,12 +644,18 @@ export function createRunner({
       const chat = store.getChat(chatId);
       emit("run.phase", { phase: "connecting" });
       const label = runLabel(chat);
+      // The account this run is on: a plan limit marks this one, not whatever the chat routes to
+      // when the error comes back (the owner may have moved the agent meanwhile — 2026-10-18 the
+      // API-key account got marked with the subscription's weekly limit and every chat stalled).
+      entry.provider = label.provider;
       const run = await startSdkRun(chat, sdkMessage, {
         ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}),
         ...(label.effort ? { effort: label.effort } : {}),
-        mode: chat.mode === "plan" ? "plan" : "agent",
+        // A permission mode (auto/ask/edits) is Claude's; other engines read only «plan».
+        mode: chat.mode || "agent",
         // Claude only: other engines' SDKs get no options they do not know.
-        ...(sdkFor(chat)?.kind === "claude" ? ownerExtras(chat) : {}),
+        // userMessageId: the turn's file checkpoint, used where Claude keeps one (run.checkpoint).
+        ...(sdkFor(chat)?.kind === "claude" ? { ...ownerExtras(chat), userMessageId: randomUUID() } : {}),
         onDelta: ({ update }) => {
           if (update?.type === "fast-mode") {
             const before = fastStates.get(chatId);
@@ -423,6 +673,8 @@ export function createRunner({
       });
       entry.run = run;
       store.setSdkRunId(runId, run.id);
+      // A rewind to this turn's message puts the files it edits back (rewindFiles below).
+      if (run.checkpoint) emit("run.checkpoint", run.checkpoint);
       // The engine has the turn: its «در صف» messages leave the waiting list now, not at the first
       // text — a long think kept them «در صف» above the box while the agent worked on them.
       reached(chatId, entry);
@@ -430,9 +682,29 @@ export function createRunner({
       const result = await run.wait();
       status = normalizeStatus(result.status, entry.cancelRequested);
       if (status === "error") error = result.error?.message || "run failed";
-      if (status === "error" && result.error?.code === "plan_limit") {
+      const limitCode = result.error?.code;
+      const asking = status === "error" && askFallback(store.getChat(chatId));
+      // Auto mode moves exactly where it did before (autoFallback; engines that do not say: both
+      // codes). Ask mode acts only on a spent plan.
+      const autoMoves = result.error?.autoFallback ?? (limitCode === "plan_limit" || limitCode === ENGINE_UNAVAILABLE);
+      if (status === "error" && (asking ? limitCode === "plan_limit" : autoMoves)) {
+        entry.limitMove = true;
         // Marks this account limited even on the fallback's own retry; moves once at most.
-        if (onPlanLimit(store.getChat(chatId), result.error) && !entry.retried) entry.retryOnFallback = true;
+        const limitedChat = store.getChat(chatId);
+        const moves = onPlanLimit(limitedChat, result.error, entry.provider);
+        // PLAN_FALLBACK=ask: never moves by itself; the owner is asked once the run has ended.
+        if (askFallback(limitedChat)) {
+          // Same model on another account: no card, the run moves (labelled); else ask.
+          const hop = moves && !entry.retried ? accountHop(limitedChat) : null;
+          if (hop) {
+            entry.retryOnFallback = true;
+            entry.hop = hop;
+          }
+          else {
+            entry.limitError = result.error;
+            entry.offerFallback = { provider: entry.provider || runLabel(limitedChat).provider };
+          }
+        } else if (moves && !entry.retried) entry.retryOnFallback = true;
         else entry.limitError = result.error;
       }
       // A session the provider only discovers is gone at send time: retry once on a fresh one.
@@ -456,7 +728,9 @@ export function createRunner({
         if (!keep && !cont && !entry.retryOnFallback && !entry.run) markQueued(chatId, entry.turn.ids, "dropped");
         runq.save(chatId, cont ? entry.turn : null, entry.queue);
         // entry.carried, not turn.ids: reached() emptied those when the engine accepted the turn.
-        if (keep && !entry.keptId) kept.push(chatId, message, entry.carried);
+        if (keep && !entry.keptId) kept.push(chatId, entry.raw ?? message, entry.carried);
+        if (keep && entry.leadNote && !store.getKv(NOTE_KEY(chatId))) store.setKv(NOTE_KEY(chatId), entry.leadNote);
+        if (keep && entry.offerFallback) entry.offerFallback.keptId = entry.keptId || kept.list(chatId).at(-1)?.id || null;
         if (keep && entry.keptId) {
           kept.update(chatId, entry.keptId, (k) => [{ ...k, fails: k.fails + 1 }]);
           if (kept.list(chatId).find((k) => k.id === entry.keptId)?.fails === MAX_KEPT_RETRIES) {
@@ -484,13 +758,28 @@ export function createRunner({
       if (cont || entry.queue.length) pending.add(chatId, cont);
       return;
     }
+    // No card when a queued message is about to start (it would be withdrawn at once) or on a Stop.
+    const keptFollows = kept.next(chatId) >= 0 && (entry.keptDelivered || entry.keptGaveUp || entry.drainKept);
+    if (entry.offerFallback && status === "error" && !entry.cancelRequested && !entry.queue.length && !keptFollows) {
+      // The reset time as the engine said it; never a guess shown as «تا ساعت X».
+      const resetsAt = entry.limitError?.resetsAt || resetFromText(entry.limitError?.message);
+      offerFallback(chatId, runId, entry.offerFallback.provider, entry.raw ?? message, resetsAt, entry.offerFallback.keptId);
+    }
     if (entry.retryOnFallback) {
+      // A same-model move between Claude accounts (ask mode) keeps the session: both accounts share
+      // one Claude Code config folder, only the token differs. Without a session to keep, the
+      // rerun is told what it does not see and what the stopped run already did.
+      const keepSession = Boolean(entry.hop && store.getChat(chatId)?.agent_id);
+      if (entry.hop && !keepSession) {
+        const raw = entry.raw ?? message;
+        entry.rerunMessage = withLeadNote(raw, accountMoveNote(entry.hop, doneTools(store, runId)));
+      }
       // The session handle belongs to the limited provider; the next run starts fresh elsewhere.
-      store.setAgentId(chatId, null);
+      if (!keepSession) store.setAgentId(chatId, null);
       // An automatic continue that moved engines is still that continue (its try count stays).
       const carry = limitTries.has(chatId);
       if (carry) autoSending.add(chatId);
-      const retryId = startRun(chatId, message, entry.queue.splice(0), { ids: entry.carried, turnText: entry.turn.text, fallback: true });
+      const retryId = startRun(chatId, entry.rerunMessage ?? message, entry.queue.splice(0), { ids: entry.carried, turnText: entry.turn.text, fallback: true, limitMove: Boolean(entry.limitMove), ...(entry.hop ? { raw: entry.raw ?? message } : {}) });
       if (carry) autoSending.delete(chatId);
       const next = active.get(chatId);
       if (next?.runId === retryId) next.retried = true;
@@ -516,12 +805,8 @@ export function createRunner({
     }
   }
 
-  function mergeQueued(messages) {
-    if (messages.length === 1) return messages[0];
-    const text = messages.map((m) => (typeof m === "string" ? m : m.text)).join("\n\n");
-    const images = messages.flatMap((m) => (typeof m === "string" ? [] : m.images || []));
-    return images.length ? { text, images } : text;
-  }
+  // Several queued messages as one turn: their texts, pictures and PDFs together (attachments.mjs).
+  const mergeQueued = mergeMessages;
 
   // The turn's queued messages reached the agent: their labels say so now, once.
   function reached(chatId, entry) {
@@ -534,18 +819,38 @@ export function createRunner({
   // queue: { message, id } each (id: its «در صف» user event). ids: the «در صف» events this turn
   // carries. turnText: what a continue after a restart quotes (a continue's own message is the
   // resume prompt, not the request it continues).
-  function startRun(chatId, message, queue = [], { keptId = null, ids = [], turnText = null, fallback = false } = {}) {
+  // raw: the message without a system lead note (a plan-limit rerun), for a later card or kept copy.
+  function startRun(chatId, message, queue = [], { keptId = null, ids = [], turnText = null, fallback = false, raw = null, limitMove = false } = {}) {
     const runId = store.startRun(chatId);
     const chat = store.getChat(chatId);
     const text = turnText ?? (typeof message === "string" ? message : message?.text || "");
     // carried: the «در صف» ids this turn holds, kept after reached() empties turn.ids, so a kept or
     // fallback copy of the turn still carries them.
-    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId, turn: { text, ids }, carried: [...ids] };
+    const entry = { runId, run: null, cancelRequested: false, cancelRequestedAt: null, forcedDone: false, queue, lastEventAt: Date.now(), keptId, turn: { text, ids }, carried: [...ids], raw };
     active.set(chatId, entry);
     persist(chatId, entry);
     if (suggestions.delete(chatId)) live(chatId);
     if (!autoSending.has(chatId)) limitTries.delete(chatId);
+    withdrawFallback(chatId);
     const label = runLabel(chat);
+    const lead = store.getKv?.(NOTE_KEY(chatId));
+    if (lead) {
+      store.deleteKv(NOTE_KEY(chatId));
+      // Only on the engine it was written for: back on the old one, the note is stale and dropped.
+      if (lead.provider === label.provider) {
+        entry.raw = entry.raw ?? message;
+        entry.leadNote = lead;
+        message = withLeadNote(message, lead.note);
+      }
+    }
+    const moved = store.getKv?.(FALLBACK_KEY(chatId));
+    const hopNow = askFallback(chat) ? accountHop(chat) : null;
+    if (moved && moved.provider !== label.provider && !hopNow) {
+      // Moved off the fallback engine (the picker, a profile change): back on the engine that hit
+      // the limit, its own session (with the conversation) resumes.
+      if (label.provider === moved.fromProvider && moved.fromAgentId && !store.getChat(chatId)?.agent_id) store.setAgentId(chatId, moved.fromAgentId);
+      store.deleteKv(FALLBACK_KEY(chatId));
+    }
     store.appendEvent(chatId, runId, "run.started", {
       model: label.model,
       mode: chat.mode,
@@ -554,14 +859,27 @@ export function createRunner({
       ...(keptId ? { retry: true } : {}),
       // «چرا؟»: this run is the same message again on another engine after a plan limit.
       ...(fallback ? { fallback: true } : {}),
+      // This rerun moved because of a plan limit (not a lost session): read by peers' envelope.
+      ...(limitMove ? { limitMove: true } : {}),
+      ...(hopNow ? { movedFrom: { from: String(hopNow.from || ""), account: String(hopNow.account || "") } } : fallbackLabel(chatId, label.provider)),
     });
     execute(chatId, entry, message);
     return runId;
   }
 
-  function toSdkMessage({ text, images }) {
-    if (!images?.length) return text;
-    return { text, images: images.map((image) => ({ data: image.data, mimeType: image.mimeType })) };
+
+  // Best effort: a picture that cannot be stored must not stop the message.
+  function keepAttachments(chatId, images, files) {
+    const keep = (name, mimeType, data) => {
+      try {
+        return store.saveMedia({ chatId, mimeType, data: Buffer.from(String(data), "base64"), meta: { name, source: "attachment" } });
+      } catch {
+        return null;
+      }
+    };
+    const imageIds = images.map((image, i) => keep(`image-${i + 1}`, image.mimeType || "image/png", image.data)).filter(Boolean);
+    const fileIds = files.map((file) => keep(file.name, file.mimeType, file.data));
+    return { imageIds, fileIds };
   }
 
   const api = {
@@ -569,13 +887,21 @@ export function createRunner({
     // clientId: the page's own id for this message (app.mjs de-duplicates resends by it).
     // from: who wrote it when it is not the owner ({ kind, name, personId }; a colleague's Telegram
     // message in a mother chat) — kept on the user event so the page can say so.
-    async send(chatId, { text, images = [], intent = "send", clientId = null, from = null }) {
+    // ownerText: the owner wrote this text (the composer, a new or side chat, an edit, a note). Any
+    // other text — a peer agent, a colleague, a job, chat_send, a suggestion — reaches the agent
+    // inert (redact.mjs inertText): no live "@path" and no leading "/" command. The event keeps
+    // the text as written.
+    // files: PDFs and text files the owner attached (attachments.mjs); a text file goes inside the text.
+    async send(chatId, { text, images = [], files = [], intent = "send", clientId = null, from = null, ownerText = false }) {
       const current = active.get(chatId);
       let effective = intent;
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
-      const message = toSdkMessage({ text, images });
+      const message = toSdkMessage({ text: ownerText ? text : inertText(text), images, files });
       if (current && stopping) effective = "queue";
-      const userData = { text, images: images.length, ...(current ? { intent: effective } : {}), ...(clientId ? { clientId } : {}), ...(from ? { from } : {}) };
+      // The pictures and files stay in the chat's media (the event holds only their ids), so the thread
+      // can show them later — not just say that the message «has a picture».
+      const stored = keepAttachments(chatId, images, files);
+      const userData = { text, images: images.length, ...(stored.imageIds.length ? { imageIds: stored.imageIds } : {}), ...(files.length ? { files: fileMeta(files).map((meta, i) => (stored.fileIds[i] ? { ...meta, mediaId: stored.fileIds[i] } : meta)) } : {}), ...(current ? { intent: effective } : {}), ...(clientId ? { clientId } : {}), ...(from ? { from } : {}), ...(ownerText ? { ownerText: true } : {}) };
       // tracked: user.queue events settle this «در صف» label (older ones the timeline settles).
       const queueEvent = () => store.appendEvent(chatId, null, "user", { ...userData, intent: "queue", tracked: true }).id;
       store.deleteKv?.(resumesKey(chatId));
@@ -601,15 +927,27 @@ export function createRunner({
         return { runId: startRun(chatId, mergeQueued([...messagesOf(carried), message]), [], { ids: idsOf(carried) }), delivered: "run" };
       }
       if (effective === "send") throw new BusyError();
-      if (effective === "steer" && current.run?.steer) {
-        const outcome = await current.run.steer(message).catch(() => "revert_to_followup");
+      if ((effective === "steer" || effective === "force") && current.run?.steer) {
+        const outcome = await current.run.steer(forEngine(message, sdkFor(store.getChat(chatId))?.kind)).catch(() => "revert_to_followup");
         if (outcome === "complete_delivered") {
-          store.appendEvent(chatId, current.runId, "user", userData);
+          store.appendEvent(chatId, current.runId, "user", { ...userData, ...(effective === "force" ? { intent: "steer" } : {}) });
           return { runId: current.runId, delivered: "steered" };
         }
       }
       current.queue.push({ message, id: queueEvent() });
       persist(chatId, current);
+      // «فوری» (force): the owner wants this message in now. An engine that can take it mid-turn
+      // already did (steer above); otherwise the current turn is interrupted — not the owner's Stop:
+      // delegated work and what queued stay — and the queue (this message with it) starts at once
+      // as the next turn of the same session.
+      if (effective === "force" && !current.cancelRequested) {
+        current.forced = true;
+        current.cancelRequested = true;
+        current.cancelRequestedAt = Date.now();
+        store.appendEvent(chatId, current.runId, "note", { text: "کار قبلی برای پیام فوری قطع شد؛ ایجنت با همین پیام ادامه می‌دهد." });
+        if (current.run) await cancelSdkRun(current.run);
+        return { runId: current.runId, delivered: "forced" };
+      }
       return { runId: current.runId, delivered: "queued" };
     },
 
@@ -730,6 +1068,48 @@ export function createRunner({
       return active.has(chatId);
     },
 
+    // Config CLAUDE_BACKGROUND_TASKS: the chat's live background tasks and a stop for each.
+    backgroundTasks(chatId) {
+      return bgAgents.get(chatId)?.backgroundTasks?.() || [];
+    },
+    async stopTask(chatId, taskId) {
+      const agent = bgAgents.get(chatId);
+      if (typeof agent?.stopTask !== "function") return false;
+      return agent.stopTask(String(taskId));
+    },
+
+    // The output file Claude Code named for one of the chat's ended tasks, never a path from outside.
+    taskOutputFile(chatId, taskId) {
+      return taskOutputs.get(chatId)?.get(String(taskId))?.file || null;
+    },
+    // The chat's ended tasks that left an output file, newest first (never the path).
+    endedTasks(chatId) {
+      return [...(taskOutputs.get(chatId)?.entries() || [])].map(([id, t]) => ({ id, description: t.description, type: t.type, status: t.status, endedAt: t.endedAt })).reverse();
+    },
+
+    // The open Claude Code process's MCP servers for a chat (null without one) and their controls.
+    async mcpStatus(chatId) {
+      const agent = liveAgent(chatId);
+      return typeof agent?.mcpStatus === "function" ? agent.mcpStatus() : null;
+    },
+    async mcpControl(chatId, action, name, enabled) {
+      const agent = liveAgent(chatId);
+      return typeof agent?.mcpControl === "function" ? agent.mcpControl(action, name, enabled) : false;
+    },
+    // The owner chat whose open process was used last, or null.
+    latestSessionChat() {
+      const ids = [...usedAt.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+      return ids.find((id) => (store.getChat(id)?.caller || "owner") === "owner" && liveAgent(id)?.hasOpenProcess?.()) || null;
+    },
+
+    // The cached agent's own context reading (Claude: SDK getContextUsage at the last result), or
+    // null — never creates or resumes an agent to measure.
+    contextUsage(chatId) {
+      const chat = store.getChat(chatId);
+      const agent = chat?.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null;
+      return agent?.contextUsage?.() ?? null;
+    },
+
     runIdOf(chatId) {
       return active.get(chatId)?.runId ?? null;
     },
@@ -760,14 +1140,17 @@ export function createRunner({
     // thread does not show it either (a Stop's «dropped» stays visible as «اجرا نشد»). False when
     // it is not waiting: already started, dropped or removed, or carried by the turn in flight.
     // Throws code "merged" for one merged with others into a kept item: it cannot leave alone.
-    unqueue(chatId, userEventId) {
+    // onRemoved(message): a message from the live queue that will now never reach the engine (its
+    // PDFs leave the budget). Not for a kept message: its run had already handed it to the engine.
+    unqueue(chatId, userEventId, onRemoved = null) {
       const id = Number(userEventId);
       const entry = active.get(chatId);
       const waiting = entry ? null : runq.get(chatId);
       const queue = entry ? entry.queue : waiting.queue;
       const at = queue.findIndex((item) => item.id === id);
       if (at >= 0) {
-        queue.splice(at, 1);
+        const [removed] = queue.splice(at, 1);
+        onRemoved?.(removed.message);
         if (entry) persist(chatId, entry);
         else runq.save(chatId, waiting.turn, queue);
         markQueued(chatId, [id], "removed");
@@ -805,6 +1188,10 @@ export function createRunner({
       return active.size;
     },
 
+    activeChatIds() {
+      return [...active.keys()];
+    },
+
     // When the chat will continue by itself after the plan limit resets (ms), or null.
     limitResumeAt(chatId) {
       return Number(limitResumes()[chatId]?.at) || null;
@@ -815,6 +1202,14 @@ export function createRunner({
       limitTries.delete(chatId);
     },
     sweepLimitResumes,
+
+    // PLAN_FALLBACK=ask: the owner's click on a plan-limit card (true when it was the open one),
+    // the open card's id, and withdrawing it (an archive).
+    answerFallback,
+    openFallbackCard(chatId) {
+      return offers()[chatId]?.askId || null;
+    },
+    withdrawFallback,
 
     // The suggested next message for the chat's composer, or null.
     suggestion(chatId) {
@@ -836,6 +1231,31 @@ export function createRunner({
       return store.getKv(`${COMMANDS_KEY}:${chat?.repo || ""}`) || store.getKv(COMMANDS_KEY) || [];
     },
 
+    // Rewind: the files Claude edited from this user event on, back as they were before it — from the
+    // first checkpointed turn at or after it. null when there is none or the engine cannot (then the
+    // rewind only cuts the conversation); { restored } or { error } otherwise. Never throws.
+    // ponytail: a turn already running when the event was queued is not rewound (only later turns).
+    // dryRun: a preview { canRewind, changed, insertions, deletions } for the rewind dialog.
+    async rewindFiles(chat, fromEventId, { dryRun = false } = {}) {
+      let mark = null;
+      for (const event of store.allEvents(chat.id, Number(fromEventId) - 1)) {
+        if (event.type === "run.checkpoint") {
+          mark = event.data;
+          break;
+        }
+      }
+      const provider = sdkFor(chat);
+      if (!mark?.userMessageId || typeof provider?.rewindFiles !== "function") return null;
+      try {
+        const result = await provider.rewindFiles(mark.sessionId, mark.userMessageId, { cwd: mark.cwd, dryRun });
+        if (dryRun) return { canRewind: Boolean(result?.canRewind), changed: result?.filesChanged?.length || 0, insertions: Number(result?.insertions) || 0, deletions: Number(result?.deletions) || 0 };
+        return result?.canRewind ? { restored: result.filesChanged?.length || 0 } : { error: result?.error || "checkpoint not found" };
+      } catch (error) {
+        log.error?.(`[runner] rewind files ${chat.id}: ${error?.message || error}`);
+        return { error: String(error?.message || error) };
+      }
+    },
+
     // A copy of a Claude session up to one entry, for a fork; null when the chat's engine cannot.
     async forkSession(chat, { sessionId, upToMessageId }) {
       const provider = sdkFor(chat);
@@ -851,7 +1271,7 @@ export function createRunner({
   async function resumeOne({ chatId, cont }) {
     const chat = store.getChat(chatId);
     // Materialized Cursor-task transcripts are read-only; a job run has its own trigger and timeout.
-    if (!chat || chat.caller === "task") return void takeWaiting(chatId);
+    if (!chat || chat.caller === "task" || notResumable(chat)) return void takeWaiting(chatId);
     let continuing = cont && !chat.job_id;
     const count = store.getKv?.(resumesKey(chatId));
     const fresh = !count || Date.now() - count.at > 60 * 60_000;
@@ -910,7 +1330,7 @@ async function cancelSdkRun(run) {
 }
 
 // Events that do not mean anything reached the owner (a run that only emitted these failed silently).
-const QUIET_EVENTS = new Set(["run.phase", "usage", "status", "thinking", "thinking.done"]);
+const QUIET_EVENTS = new Set(["run.phase", "usage", "usage.request", "status", "thinking", "thinking.done"]);
 
 function normalizeStatus(status, cancelRequested) {
   const value = String(status || "").toLowerCase();

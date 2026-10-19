@@ -25,6 +25,10 @@ test("clone/fetch/push: the token goes in env, only a chat branch is pushed, not
   assert.ok(calls.every((c) => !c.args.join(" ").includes("tok-123")), "never in argv");
 
   await assert.rejects(tools.git_push.execute({ repo: "app", branch: "main" }), /chat branch/);
+  // Branches carry the assistant's name; a branch named like a release still is not a chat branch.
+  await tools.git_push.execute({ repo: "app", branch: "nova/ab12cd34" });
+  assert.deepEqual(calls.at(-1).args, ["push", "--porcelain", "origin", "refs/heads/nova/ab12cd34:refs/heads/nova/ab12cd34"]);
+  await assert.rejects(tools.git_push.execute({ repo: "app", branch: "release/2026" }), /chat branch/);
   await assert.rejects(tools.git_push.execute({ repo: "../x", branch: "griffin/ab12cd34" }), /invalid repo/);
   await assert.rejects(tools.git_clone.execute({ project: "g/app" }), /already exists/);
   await assert.rejects(tools.git_clone.execute({ project: "../../etc" }), /group\/name/);
@@ -32,4 +36,30 @@ test("clone/fetch/push: the token goes in env, only a chat branch is pushed, not
   const cloned = await tools.git_clone.execute({ project: "infra/new-repo" });
   assert.equal(cloned.repo, "new-repo");
   assert.deepEqual(calls.find((c) => c.args[0] === "clone").args, ["clone", "-q", "https://gitlab.example.com/infra/new-repo.git", path.join(root, "new-repo")]);
+});
+
+test("git_push with mrTitle opens one Draft MR per branch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-repos-"));
+  fs.mkdirSync(path.join(root, "app", ".git"), { recursive: true });
+  const git = async (args) => (args[0] === "remote" ? { stdout: "https://gitlab.example.com/root/app.git\n", stderr: "" } : { stdout: "", stderr: "" });
+  const seen = [];
+  let open = [];
+  const fetchImpl = async (url, init = {}) => {
+    seen.push(`${init.method || "GET"} ${url}`);
+    if (url.includes("/merge_requests?state=opened")) return Response.json(open);
+    if (url.endsWith("/merge_requests")) {
+      const body = JSON.parse(init.body);
+      open = [{ iid: 7, web_url: "https://x/7" }];
+      return Response.json({ iid: 7, web_url: "https://x/7", title: body.title });
+    }
+    return Response.json({ default_branch: "main" });
+  };
+  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root, git, fetchImpl });
+  const first = await tools.git_push.execute({ repo: "app", branch: "nova/ab12cd34", mrTitle: "feat: x" });
+  assert.equal(first.mergeRequest.iid, 7);
+  assert.equal(first.mergeRequest.existing, false);
+  assert.ok(seen.some((s) => s.startsWith("POST") && s.includes("root%2Fapp")));
+  const again = await tools.git_push.execute({ repo: "app", branch: "nova/ab12cd34", mrTitle: "feat: x" });
+  assert.equal(again.mergeRequest.existing, true);
+  assert.equal(seen.filter((s) => s.startsWith("POST")).length, 1);
 });

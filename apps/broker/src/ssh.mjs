@@ -3,6 +3,19 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+// A key pasted into a settings box often arrives with Windows line ends, or with its base64 body
+// squashed onto one line or indented; ssh then refuses it ("error in libcrypto"). Rebuild the PEM
+// frame with LF ends and the body wrapped at 70 columns. Anything that is not a PEM block is only
+// trimmed, so a keyFile in another format still works as before.
+export function normalizeKey(raw) {
+  const text = String(raw ?? "").replace(/\r\n?/g, "\n").trim();
+  const m = /^(-----BEGIN [A-Z0-9 ]+-----)\s*([\s\S]*?)\s*(-----END [A-Z0-9 ]+-----)$/.exec(text);
+  // Encrypted legacy PEM carries "Proc-Type:" headers inside the block; leave those alone.
+  if (!m || m[2].includes(":")) return `${text}\n`;
+  const body = m[2].replace(/\s+/g, "");
+  return `${m[1]}\n${(body.match(/.{1,70}/g) ?? []).join("\n")}\n${m[3]}\n`;
+}
+
 // Runs one remote command with the owner key from the vault (or the target's own keyFile — the
 // sandbox has a dedicated key, never the owner's). The key lives in a 0600 temp file only for the
 // duration of the call.
@@ -12,7 +25,7 @@ export function createSsh({ vault, knownHosts, keySlug = "ssh-bastion__owner-key
     const keyPath = path.join(work, "key");
     try {
       const key = target.keyFile ? await readFile(target.keyFile, "utf8") : await vault.item(target.keySlug || keySlug);
-      await writeFile(keyPath, `${key.trim()}\n`, { mode: 0o600 });
+      await writeFile(keyPath, normalizeKey(key), { mode: 0o600 });
       const args = [
         "-i", keyPath,
         "-o", "IdentitiesOnly=yes",

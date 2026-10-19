@@ -4,7 +4,7 @@ import { ApiBase } from "./base.js";
 import { GriffinRuntime } from "./runtime.jsx";
 import { Thread } from "./components/Thread.jsx";
 import { t } from "./i18n.js";
-import { BRAND } from "./brand.js";
+import { BRAND, iconUrl } from "./brand.js";
 
 export function shareToken(hash = window.location.hash) {
   return hash.match(/^#\/s\/([A-Za-z0-9_-]{32})$/)?.[1] || null;
@@ -31,7 +31,7 @@ export function PublicChat({ token }) {
         const body = await response.json();
         if (!alive) return;
         setState({ chat: body.chat, timeline: body.timeline });
-        document.title = `${body.chat.title} · ${BRAND.name}`;
+        document.title = `${body.chat.title} · ${BRAND.title}`;
         const running = body.timeline.messages.some((m) => m.role === "assistant" && m.status === "running");
         if (running) timer = setTimeout(load, 4000);
       } catch (error) {
@@ -48,7 +48,7 @@ export function PublicChat({ token }) {
   if (state.error || state.loading) {
     return (
       <div className="flex h-dvh flex-col items-center justify-center gap-3 p-6 text-center">
-        <img src="/icon.svg" alt="" className="size-12 opacity-80" />
+        <img src={iconUrl()} alt="" className="size-12 opacity-80" />
         <p className="text-muted-foreground">{state.error || t("در حال بارگذاری…")}</p>
       </div>
     );
@@ -62,7 +62,7 @@ export function PublicChat({ token }) {
             readOnly
             header={
               <header className="flex items-center gap-2 border-b px-3 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
-                <img src="/icon.svg" alt="" className="size-6" />
+                <img src={iconUrl()} alt="" className="size-6" />
                 <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir="auto">{state.chat.title}</h1>
                 <span className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
                   <Globe className="size-3.5" /> {t("فقط خواندنی")}

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, pickCommand, shownNextStep, slashQuery,
+  acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, nextStepReturnsOn, pickCommand, setNextStepReturns, shownNextStep, slashQuery,
 } from "../src/assist.js";
 
 test("«/» list: a lone /word filters, exact and prefix first; Enter completes only an unfinished name", () => {
@@ -44,4 +44,18 @@ test("fast mode note and fork availability", () => {
   assert.equal(forkRunId({ runId: "r1", status: "running" }, owner), null);
   assert.equal(forkRunId({ runId: "r1", status: "error" }, { caller: "owner", sideOf: "p" }), null);
   assert.equal(forkRunId({ runId: "r1", status: "finished" }, { caller: "team" }), null);
+});
+
+test("next step: off (default) typing puts it aside for good; NEXT_STEP_RETURNS on brings it back once the box is empty", () => {
+  const suggestion = "آزمون‌ها را اجرا کن";
+  const dismissed = dismissNextStep(null, { suggestion, text: "س" });
+  assert.equal(shownNextStep({ suggestion, text: "", running: false, dismissed }), null);
+  assert.equal(shownNextStep({ suggestion, text: "س", running: false, dismissed, returns: true }), null, "still hidden while typing");
+  assert.equal(shownNextStep({ suggestion, text: "", running: false, dismissed, returns: true }), suggestion);
+  assert.equal(shownNextStep({ suggestion, text: "", running: true, dismissed, returns: true }), null, "not while a turn runs");
+  assert.equal(nextStepReturnsOn(), false, "off until the chat list says otherwise");
+  setNextStepReturns(true);
+  assert.equal(nextStepReturnsOn(), true);
+  setNextStepReturns("on");
+  assert.equal(nextStepReturnsOn(), false, "only true turns it on");
 });

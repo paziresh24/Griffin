@@ -1,0 +1,639 @@
+/* Karsara's own component styles, copied from Karsara (karsara-live apps/web/src/styles.css, release
+   a9c3e3ee51bc), kc-* classes only. Only the Karsara skin's components use these classes, so
+   Griffin's skin is untouched. Re-copy when Karsara changes them. */
+/* Small circular status: idle ring, spinning ring while running. */
+.kc-status {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--kc-muted);
+  opacity: 0.7;
+}
+.kc-status[data-running="true"] {
+  border-color: color-mix(in srgb, var(--kc-muted) 35%, transparent);
+  border-top-color: var(--kc-accent);
+  opacity: 1;
+  animation: kc-spin 0.9s linear infinite;
+}
+@keyframes kc-spin { to { transform: rotate(360deg); } }
+.kc-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--signal); flex-shrink: 0; }
+/* The running dot pulses — it is activity, not a status flag. */
+.kc-dot-run { animation: kc-pulse 1.5s ease-in-out infinite; }
+@keyframes kc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .kc-dot-run { animation: none; } }
+/* Unread badge: bigger and haloed, at the row's end — the opposite end from the running dot,
+ * so «چیزی این‌جا در جریان است» و «چیزی این‌جا ندیده‌ام» هرگز یک‌شکل نمی‌شوند. */
+.kc-unread { width: 8px; height: 8px; border-radius: 999px; background: var(--signal); flex-shrink: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal) 20%, transparent); }
+.kc-list-row [data-unread] { font-weight: 600; }
+/* The thread header's token chip: the chat's total, with per-model numbers once the chat
+ * changed models mid-work (the tooltip always carries the full per-model list). */
+.kc-chat-tokens { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--kc-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kc-chat-tokens-models { overflow: hidden; max-width: 38vw; text-overflow: ellipsis; opacity: 0.75; }
+
+
+:root {
+  --kc-bg: var(--background);
+  --kc-surface: var(--card);
+  --kc-menu: var(--card);
+  --kc-chip: var(--muted);
+  --kc-border: var(--border);
+  --kc-text: var(--foreground);
+  --kc-muted: var(--muted-foreground);
+  --kc-accent: var(--primary);
+  --kc-warn: var(--warn);
+  --kc-bad: var(--bad);
+  --kc-radius-box: 12px;
+  --kc-radius-menu: 10px;
+  --kc-radius-chip: 6px;
+  --kc-font: var(--font-sans);
+}
+.kc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 11rem;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--kc-radius-chip);
+  background: var(--kc-chip);
+  color: var(--kc-text);
+  font-size: 13px; line-height: 1; font-family: var(--kc-font);
+  transition: background-color 120ms;
+}
+.kc-pill:hover, .kc-pill[data-state="open"] { background: color-mix(in srgb, var(--kc-chip) 80%, var(--kc-text) 20%); }
+.kc-plain { color: var(--kc-muted); font-size: 13px; line-height: 1; font-family: var(--kc-font); }
+.kc-menu {
+  padding: 4px;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius-menu);
+  background: var(--kc-menu);
+  color: var(--kc-text);
+  font-size: 14px; line-height: 1.3; font-family: var(--kc-font);
+}
+.kc-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--kc-text);
+}
+.kc-row:hover:not(:disabled), .kc-row:focus-visible { background: var(--kc-chip); outline: none; }
+.kc-row:disabled { opacity: 0.45; cursor: not-allowed; }
+.kc-muted { color: var(--kc-muted); }
+.kc-check { color: var(--kc-accent); flex-shrink: 0; }
+.kc-shortcut { color: var(--kc-muted); font-size: 12px; min-width: 1ch; text-align: end; }
+.kc-tag { padding: 1px 6px; border-radius: 4px; background: var(--kc-chip); color: var(--kc-muted); font-size: 11px; }
+.kc-divider { height: 1px; margin: 4px 6px; background: var(--kc-border); }
+.kc-note { color: var(--kc-muted); font-size: 12px; line-height: 1.5; font-family: var(--kc-font); }
+.kc-input {
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--kc-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kc-text);
+  font-size: 13px; font-family: var(--kc-font);
+  outline: none;
+}
+.kc-input:focus { border-color: var(--kc-accent); }
+
+
+/* --- App-wide Claude-desktop pieces (composer, sidebar list, thread rows, boxes). --- */
+.kc-composer {
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius-box);
+  background: var(--kc-surface);
+  transition: border-color 120ms;
+}
+.kc-composer:focus-within { border-color: color-mix(in srgb, var(--kc-accent) 50%, var(--kc-border)); }
+/* The suggested next message sits in the same cell as the input, so a long one makes the box
+   taller instead of being cut. Clicks pass through to the input; only its key takes them. */
+.kc-next-step-cell { display: grid; min-width: 0; flex: 1 1 0%; }
+.kc-next-step-cell > * { grid-area: 1 / 1; min-width: 0; }
+.kc-next-step {
+  pointer-events: none;
+  padding: 0.5rem 0.375rem;
+  font-size: 15px;
+  line-height: 1.75rem;
+  text-align: start;
+  color: var(--color-muted-foreground);
+  overflow-wrap: anywhere;
+  max-height: 7rem;
+  overflow: hidden;
+}
+.kc-next-step-key {
+  pointer-events: auto;
+  margin-inline-start: 0.5rem;
+  border: 1px solid var(--kc-border);
+  border-radius: 6px;
+  padding: 0 0.375rem;
+  font-size: 11px;
+  line-height: 1.25rem;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.kc-next-step-key:hover { color: var(--color-foreground); border-color: var(--kc-accent); }
+@media (pointer: coarse) {
+  .kc-next-step-key { padding: 0.125rem 0.625rem; font-size: 12px; line-height: 1.5rem; }
+}
+/* Voice dictation while recording: a red dot and the clock; a tap stops. */
+.kc-dictating { display: inline-flex; height: 2rem; flex-shrink: 0; align-items: center; gap: 6px; border-radius: 9999px; padding: 0 0.625rem; font-size: 12px; color: var(--color-foreground); background: color-mix(in srgb, #e5484d 16%, transparent); }
+.kc-dictating-dot { width: 8px; height: 8px; border-radius: 9999px; background: #e5484d; animation: kc-dictate 1.2s ease-in-out infinite; }
+@keyframes kc-dictate { 50% { opacity: 0.25; } }
+/* The «/» list of commands and skills, opening upward from the composer. */
+.kc-slash {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  max-height: min(18rem, 45dvh);
+  overflow-y: auto;
+  border: 1px solid var(--kc-border);
+  border-radius: var(--kc-radius-box);
+  background: var(--kc-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  padding: 4px;
+}
+.kc-slash-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 0.75rem;
+  border-radius: 8px;
+  padding: 0.375rem 0.5rem;
+  text-align: start;
+  font-size: 13px;
+}
+.kc-slash-item:hover, .kc-slash-item[data-active="true"] { background: color-mix(in srgb, var(--kc-accent) 14%, transparent); }
+.kc-slash-name { flex-shrink: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; unicode-bidi: isolate; }
+.kc-slash-desc { min-width: 0; flex: 1 1 0%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted-foreground); font-size: 12px; }
+.kc-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.kc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 14rem;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--kc-radius-chip);
+  background: var(--kc-chip);
+  color: var(--kc-muted);
+  font-size: 13px; line-height: 1; font-family: var(--kc-font);
+  white-space: nowrap;
+}
+.kc-chip > svg { width: 14px; height: 14px; flex-shrink: 0; stroke-width: 1.75; }
+.kc-chip > span { overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+button.kc-chip:hover, .kc-chip[data-state="open"] { color: var(--kc-text); background: color-mix(in srgb, var(--kc-chip) 85%, var(--kc-text) 15%); }
+.kc-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: var(--kc-muted);
+}
+.kc-icon-btn:hover:not(:disabled) { color: var(--kc-text); background: var(--kc-chip); }
+.kc-icon-btn:disabled { opacity: 0.35; }
+.kc-icon-btn > svg { width: 16px; height: 16px; stroke-width: 1.75; }
+/* Send is the composer's default action: the one filled button; «بعداً» and the microphone stay plain (owner 2026-10-12). */
+.kc-send-btn:not(:disabled) { background: var(--kc-accent); color: var(--primary-foreground); }
+.kc-send-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--kc-accent) 85%, var(--kc-text)); color: var(--primary-foreground); }
+.kc-text-btn { color: var(--kc-muted); font-size: 13px; line-height: 1; font-family: var(--kc-font); padding: 8px 4px; border-radius: 6px; white-space: nowrap; }
+.kc-text-btn:hover { color: var(--kc-text); }
+@media (pointer: coarse) {
+  .kc-icon-btn { width: 44px; height: 44px; }
+  .kc-chip, .kc-pill { height: 36px; }
+  .kc-text-btn { padding: 14px 6px; }
+}
+.kc-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--kc-text);
+  font-size: 14px; line-height: 1.3; font-family: var(--kc-font);
+}
+.kc-list-row:hover { background: color-mix(in srgb, var(--kc-chip) 70%, transparent); }
+.kc-list-row[aria-current="page"], .kc-list-row[data-active="true"] { background: var(--kc-chip); }
+@media (pointer: coarse) { .kc-list-row { min-height: 44px; } }
+.kc-time { color: var(--kc-muted); font-size: 12px; flex-shrink: 0; }
+.kc-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+  color: var(--kc-text);
+  font-size: 13px; font-family: var(--kc-font);
+}
+.kc-search:focus-within { border-color: var(--kc-accent); }
+@media (pointer: coarse) { .kc-search { height: 44px; } }
+.kc-tool-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--kc-muted);
+  font-size: 13px; line-height: 1.3; font-family: var(--kc-font);
+  text-align: start;
+}
+.kc-tool-head:hover { color: var(--kc-text); background: color-mix(in srgb, var(--kc-chip) 60%, transparent); }
+@media (pointer: coarse) { .kc-tool-head { min-height: 44px; } }
+.kc-tool-body {
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+  background: var(--kc-surface);
+  font-size: 13px;
+}
+.kc-box {
+  border: 1px solid var(--kc-border);
+  border-radius: 10px;
+  background: var(--kc-surface);
+}
+.kc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+  color: var(--kc-text);
+  font-size: 14px; font-family: var(--kc-font);
+}
+.kc-btn:hover:not(:disabled) { background: var(--kc-chip); }
+.kc-btn:disabled { opacity: 0.45; }
+.kc-btn-primary { background: var(--kc-text); color: var(--kc-bg); border-color: transparent; }
+.kc-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--kc-text) 85%, var(--kc-bg)); }
+@media (pointer: coarse) { .kc-btn { min-height: 44px; } }
+.kc-user-bubble {
+  max-width: 88%;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--kc-chip);
+  color: var(--kc-text);
+}
+
+/* --- Phone widths (owner, 2026-09-28: at 375px the thread scrolled sideways). Nothing inside the
+   thread may be wider than the screen: flex children shrink, code scrolls inside its own block,
+   the composer's bottom bar truncates its text buttons instead of pushing the row wider. --- */
+.kc-thread :is(pre, table, .kc-tool-body, [data-streamdown="code-block"]) { max-width: 100%; }
+.kc-thread :is(pre, .kc-tool-body) { overflow-x: auto; }
+.kc-chip, .kc-pill { max-width: min(14rem, 100%); min-width: 0; }
+.kc-bar > * { min-width: 0; }
+.kc-bar .kc-text-btn { flex-shrink: 1; overflow: hidden; }
+.kc-bar .kc-pill { flex-shrink: 0; }
+@media (max-width: 480px) {
+  /* One row of chips that scrolls inside itself, so the composer does not grow tall. */
+  .kc-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 0; margin-top: -4px; margin-bottom: 2px; }
+  .kc-chips::-webkit-scrollbar { display: none; }
+  .kc-chip { flex-shrink: 0; max-width: 11rem; }
+}
+@media (pointer: coarse) {
+  /* Tap targets >= 44px on touch screens. */
+  .kc-tap, .kc-thread button[data-streamdown] { min-width: 44px; min-height: 44px; }
+  .kc-text-btn { min-height: 44px; padding-top: 0; padding-bottom: 0; display: inline-flex; align-items: center; }
+  /* Pills and chip buttons keep their 36px look; an invisible halo makes the hit area 44px. */
+  .kc-pill, button.kc-chip { position: relative; }
+  .kc-pill::after, button.kc-chip::after { content: ""; position: absolute; inset: -4px 0; }
+  .kc-input { height: 44px; }
+}
+/* `.kc-icon-btn` is unlayered, so it beat Tailwind's `md:hidden` and the phone menu button showed on desktop. */
+@media (min-width: 48rem) { .kc-icon-btn.md\:hidden { display: none; } }
+
+/* Usage popover (composer status ring → context window + plan limits), like the desktop app. */
+.kc-usage-trigger { display: inline-flex; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; border-radius: 999px; font-size: 11px; }
+.kc-usage-trigger:hover { background: var(--kc-chip); }
+.kc-usage-ring { width: 15px; height: 15px; transform: rotate(-90deg); fill: none; stroke-width: 2; }
+.kc-usage-ring circle { stroke: color-mix(in srgb, var(--kc-muted) 45%, transparent); }
+.kc-usage-ring circle[data-fill] { stroke: var(--kc-accent); stroke-linecap: round; }
+.kc-usage { width: min(20rem, calc(100vw - 32px)); padding: 12px 14px; font-size: 13px; }
+.kc-usage section { display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
+.kc-usage .kc-divider { margin: 10px 0; }
+.kc-usage-title { font-weight: 600; }
+.kc-usage-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.kc-usage-num { color: var(--kc-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kc-usage-bar { display: flex; height: 4px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--kc-muted) 22%, transparent); direction: ltr; }
+.kc-usage-bar > span { height: 100%; background: var(--kc-accent); }
+/* A gauge nearing its end speaks up: amber from 75% used, red from 90% (usageLevel). The
+ * segmented context bar keeps its per-kind colours — level applies to the plain fill bars. */
+.kc-usage-bar:not(.kc-usage-seg)[data-level="warn"] > span { background: var(--kc-warn); }
+.kc-usage-bar:not(.kc-usage-seg)[data-level="danger"] > span { background: var(--kc-bad); }
+.kc-usage-ring[data-level="warn"] circle[data-fill] { stroke: var(--kc-warn); }
+.kc-usage-ring[data-level="danger"] circle[data-fill] { stroke: var(--kc-bad); }
+.kc-usage-seg { gap: 2px; background: transparent; }
+.kc-usage-seg > span { border-radius: 1px; }
+:is(.kc-usage-seg > span, .kc-usage-legend i)[data-kind="messages"] { background: var(--kc-accent); }
+:is(.kc-usage-seg > span, .kc-usage-legend i)[data-kind="tools"] { background: color-mix(in srgb, var(--kc-accent) 60%, var(--kc-muted)); }
+:is(.kc-usage-seg > span, .kc-usage-legend i)[data-kind="system"] { background: color-mix(in srgb, var(--kc-accent) 30%, var(--kc-muted)); }
+:is(.kc-usage-seg > span, .kc-usage-legend i)[data-kind="buffer"] { background: color-mix(in srgb, var(--kc-muted) 45%, transparent); }
+:is(.kc-usage-seg > span, .kc-usage-legend i)[data-kind="free"] { background: color-mix(in srgb, var(--kc-muted) 20%, transparent); }
+.kc-usage-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--kc-muted); font-size: 11px; }
+.kc-usage-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; }
+.kc-usage-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.kc-usage-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 1px solid var(--kc-border); border-radius: var(--kc-radius-chip); color: var(--kc-text); font-size: 12px; font-family: var(--kc-font); text-decoration: none; }
+.kc-usage-btn:hover:not(:disabled) { background: var(--kc-chip); }
+.kc-usage-btn:disabled { color: var(--kc-muted); cursor: default; }
+.kc-usage-btn[data-armed] { border-color: color-mix(in srgb, #d33 60%, var(--kc-border)); color: #d33; }
+.kc-usage-limit { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+
+/* The always-visible host readout in the composer bar: two tiny vertical bars (CPU, RAM) plus
+   the percentages, so the server's state is readable without opening anything. */
+
+/* Floating toolbar over a selection inside an answer («به گفتگو» / «به چت کناری»). */
+.kc-sel-actions {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--kc-border);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 8px 24px color-mix(in srgb, black 22%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.kc-sel-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--kc-text);
+}
+.kc-sel-btn:hover { background: var(--kc-chip); }
+.kc-sel-sep { width: 1px; height: 16px; background: var(--kc-border); }
+@media (pointer: coarse) { .kc-sel-btn { height: 36px; padding: 0 12px; } .kc-sel-actions { font-size: 13px; } }
+
+/* «به گفتگو»: the popup that takes a note about the selection, and the folded quotes it leaves
+   above the composer's input. */
+.kc-quote-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(24rem, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid var(--kc-border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 12px 32px color-mix(in srgb, black 26%, transparent);
+  font-size: 13px;
+}
+.kc-quote-text {
+  max-height: 6.5em;
+  overflow-y: auto;
+  padding: 2px 10px;
+  border-inline-start: 2px solid var(--kc-accent);
+  color: var(--kc-muted);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kc-quote-note {
+  width: 100%;
+  min-height: 4.5em;
+  max-height: 30dvh;
+  padding: 6px 8px;
+  border: 1px solid var(--kc-border);
+  border-radius: 8px;
+  background: var(--kc-surface);
+  color: var(--kc-text);
+  font-size: 14px; line-height: 1.7; font-family: var(--kc-font);
+  resize: none;
+  outline: none;
+}
+.kc-quote-note:focus { border-color: color-mix(in srgb, var(--kc-accent) 50%, var(--kc-border)); }
+.kc-quote-foot { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.kc-quote-add { height: 28px; padding: 0 12px; border-radius: 7px; background: var(--kc-accent); color: var(--kc-bg); font-size: 13px; font-family: var(--kc-font); }
+.kc-quotes { display: flex; flex-direction: column; gap: 4px; padding: 8px 8px 0; }
+.kc-quote-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-inline-start: 2px solid var(--kc-accent);
+  border-radius: 6px;
+  background: var(--kc-chip);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.kc-quote-chip-open { display: flex; flex: 1 1 0; align-items: center; gap: 6px; min-width: 0; padding: 0; border-radius: 4px; text-align: start; color: inherit; font-family: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; font-feature-settings: inherit; cursor: pointer; }
+.kc-quote-chip-open > svg { flex-shrink: 0; width: 13px; height: 13px; color: var(--kc-muted); }
+.kc-quote-chip-open > .kc-quote-chip-pen { width: 12px; height: 12px; opacity: 0; transition: opacity 120ms; }
+.kc-quote-chip-open:hover > .kc-quote-chip-pen, .kc-quote-chip-open:focus-visible > .kc-quote-chip-pen { opacity: 1; }
+.kc-quote-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border-inline-start: 2px solid var(--kc-accent);
+  border-radius: 6px;
+  background: var(--kc-chip);
+  font-size: 13px;
+}
+.kc-quote-edit .kc-quote-note { min-height: 3.6em; font-size: 13px; }
+.kc-quote-edit .kc-quote-edit-text { min-height: 4.5em; color: var(--kc-muted); }
+.kc-quote-add:disabled { opacity: 0.45; cursor: default; }
+.kc-quote-chip-text { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--kc-muted); }
+.kc-quote-chip-note { min-width: 0; flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--kc-text); }
+.kc-quote-chip-x { display: inline-flex; flex-shrink: 0; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 5px; color: var(--kc-muted); }
+.kc-quote-chip-x:hover { background: var(--kc-surface); color: var(--kc-text); }
+.kc-quote-chip-x svg { width: 12px; height: 12px; }
+@media (pointer: coarse) {
+  .kc-quote-chip-x { width: 28px; height: 28px; }
+  .kc-quote-chip-open > .kc-quote-chip-pen { opacity: 1; }
+  .kc-quote-chip-open { min-height: 28px; }
+  .kc-quote-add { height: 36px; }
+  /* A phone's keyboard covers the lower half: the popup sits at the top, full width. */
+  .kc-quote-pop { top: max(12px, env(safe-area-inset-top)) !important; left: 12px !important; width: calc(100vw - 24px); }
+}
+
+/* The sidebar's edge: drag to resize, double click for the usual width. */
+.kc-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px; /* outside the list: an RTL list draws its scrollbar on its left edge */
+  z-index: 20;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.kc-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background 120ms; }
+.kc-resize:hover::after, .kc-resize[data-dragging="true"]::after { background: color-mix(in srgb, var(--kc-accent) 60%, transparent); }
+@media (max-width: 480px) {
+  /* Phones: a bottom sheet instead of a floating popover. */
+  [data-radix-popper-content-wrapper]:has(> .kc-usage) { position: fixed !important; inset: auto 0 0 0 !important; transform: none !important; min-width: 0 !important; }
+  .kc-usage { width: 100%; max-height: 80vh; overflow-y: auto; border-radius: var(--kc-radius-menu) var(--kc-radius-menu) 0 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); }
+}
+
+/* --- Chat tools: suggested chats, chapters, side chat (Claude-desktop style: flat, small). --- */
+.kc-badge { display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--kc-chip); color: var(--kc-text); font-size: 11px; line-height: 18px; font-family: var(--kc-font); text-align: center; flex-shrink: 0; }
+.kc-icon-btn > .kc-badge, .kc-toc-btn > .kc-badge { background: var(--signal); color: var(--signal-foreground); min-width: 16px; height: 16px; padding: 0 4px; line-height: 16px; font-size: 10px; pointer-events: none; }
+.kc-suggest { display: flex; flex-direction: column; gap: 6px; max-width: 100%; margin: 8px 0; padding: 10px 12px; }
+.kc-suggest:not([data-status="open"]) { background: transparent; color: var(--kc-muted); }
+.kc-suggest-title { font-size: 14px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.kc-suggest-tldr { color: var(--kc-muted); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.kc-suggest-note { height: auto; min-height: 52px; padding: 6px 8px; line-height: 1.7; resize: vertical; }
+.kc-suggest-edits { margin: 0; padding: 0; border: 0; min-inline-size: 0; }
+.kc-suggest-pos { cursor: pointer; border: 1px solid transparent; }
+.kc-suggest-pos[aria-checked="true"] { border-color: var(--kc-accent); color: var(--kc-text); }
+.kc-suggest-prompt { max-height: 40vh; margin: 4px 0 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--kc-border, color-mix(in srgb, currentColor 15%, transparent)); border-radius: 8px; font-family: inherit; font-feature-settings: inherit; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; text-align: start; }
+.kc-side-switch { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 6px; padding: 0 4px; color: var(--kc-muted); font-size: 13px; }
+.kc-side-switch-track { display: inline-flex; width: 30px; height: 18px; padding: 2px; border-radius: 999px; background: color-mix(in srgb, currentColor 30%, transparent); transition: background 0.15s; }
+.kc-side-switch-thumb { width: 14px; height: 14px; border-radius: 999px; background: var(--background, #fff); transition: transform 0.15s; }
+.kc-side-switch[data-state="on"] { color: inherit; }
+.kc-side-switch[data-state="on"] .kc-side-switch-track { background: var(--kc-accent, currentColor); }
+.kc-side-switch[data-state="on"] .kc-side-switch-thumb { transform: translateX(-12px); }
+@media (pointer: coarse) { .kc-side-switch { min-height: 44px; } }
+/* Suggestion lists (sidebar, this chat's list): each suggestion is its own box (owner 2026-10-14). */
+.kc-suggest-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 4px 0 0; list-style: none; }
+.kc-suggest-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px; border: 1px solid var(--kc-border); border-radius: 10px; background: var(--kc-surface); }
+.kc-suggest-item-title { font-size: 13px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.kc-suggest-source { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; color: var(--kc-muted); font-size: 11.5px; text-align: start; }
+.kc-suggest-source-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kc-suggest-source-link { align-self: flex-start; }
+.kc-suggest-source-link:hover { color: var(--kc-text); text-decoration: underline; }
+:is(.kc-suggest, .kc-suggest-item) .kc-btn { min-height: 30px; padding: 0 12px; font-size: 13px; }
+.kc-suggest-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; font-size: 12px; }
+.kc-suggest-runs { display: inline-flex; gap: 4px; min-width: 0; white-space: nowrap; }
+.kc-suggest-runs-name { display: inline-block; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.kc-suggest-list-pop { padding: 0 6px 6px; }
+.kc-suggest-settings { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--kc-chip) 55%, transparent); }
+.kc-chapter { display: flex; align-items: center; gap: 10px; min-width: 0; margin: 18px 0 10px; color: var(--kc-muted); font-size: 12px; scroll-margin-top: 12px; }
+.kc-chapter::before, .kc-chapter::after { content: ""; flex: 1 1 0; min-width: 12px; height: 1px; background: var(--kc-border); }
+.kc-toc-btn { display: flex; width: 36px; height: 36px; align-items: center; justify-content: center; border: 1px solid var(--kc-border); border-radius: 999px; background: var(--card); color: var(--kc-muted); }
+.kc-toc-btn:hover, .kc-toc-btn[data-state="open"] { color: var(--kc-text); }
+.kc-toc { width: min(18rem, calc(100vw - 24px)); max-height: 50vh; overflow-y: auto; }
+/* Side chat: a fixed column beside the thread; on a phone, a full-height sheet over it. */
+.kc-side { display: flex; flex-direction: column; flex-shrink: 0; min-width: 0; width: min(23.75rem, 40vw); border-right: 1px solid var(--kc-border); background: var(--kc-bg); }
+@media (max-width: 767px) {
+  .kc-side { position: fixed; inset: 0; z-index: 40; width: 100%; border: 0; animation: kc-sheet 160ms ease-out; }
+}
+@keyframes kc-sheet { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .kc-side { animation: none; } }
+@media (pointer: coarse) {
+  :is(.kc-suggest, .kc-suggest-item) .kc-btn, .kc-toc .kc-row, .kc-toc-btn { min-height: 44px; }
+  .kc-toc-btn { min-width: 44px; }
+  :is(.kc-suggest, .kc-suggest-item) .kc-text-btn { min-width: 44px; justify-content: center; }
+  .kc-suggest-source-link { min-height: 44px; }
+  .kc-suggest-pos { min-height: 44px; padding-inline: 10px; }
+}
+
+/* «مصرف توکن» page (Tokens.jsx). Series colours are shared by the chart, legend and table dots. */
+:root { --kc-series-0: var(--signal); --kc-series-1: #a85a12; --kc-series-2: #2f9e6e; --kc-series-3: #8a5fd1; --kc-series-4: #c9507e; --kc-series-5: #7d8590; }
+.dark { --kc-series-0: var(--signal); --kc-series-1: #eba052; --kc-series-2: #4cc38a; --kc-series-3: #a98be6; --kc-series-4: #e57aa3; --kc-series-5: #8b949e; }
+.kc-tok-ranges { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--kc-chip); font-size: 13px; }
+.kc-tok-ranges button { min-height: 28px; padding: 0 12px; border-radius: 999px; color: var(--kc-muted); }
+.kc-tok-ranges button[data-active] { background: var(--kc-bg); color: var(--kc-text); box-shadow: 0 0 0 1px var(--kc-border); }
+.kc-tok-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 8px; }
+.kc-tok-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--kc-border); border-radius: 12px; font-size: 12px; }
+.kc-tok-stat bdi { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: start; }
+.kc-tok-h { margin: 22px 0 8px; font-size: 14px; font-weight: 600; }
+.kc-tok-h .kc-muted { font-weight: 400; font-size: 12px; }
+.kc-tok-chart { display: flex; align-items: stretch; gap: 2px; height: 11rem; }
+.kc-tok-day { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 4px; }
+.kc-tok-col { display: flex; flex: 1; align-items: flex-end; border-bottom: 1px solid var(--kc-border); }
+.kc-tok-day:hover .kc-tok-col { background: color-mix(in srgb, var(--kc-text) 5%, transparent); }
+.kc-tok-stack { display: flex; width: 100%; min-height: 0; flex-direction: column-reverse; overflow: hidden; border-radius: 3px 3px 0 0; }
+.kc-tok-stack span { min-height: 1px; }
+.kc-tok-tick { height: 14px; overflow: visible; color: var(--kc-muted); font-size: 10px; line-height: 14px; text-align: center; white-space: nowrap; }
+.kc-tok-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--kc-muted); font-size: 12px; }
+.kc-tok-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.kc-tok-legend i, .kc-tok-dot { display: inline-block; width: 9px; height: 9px; flex-shrink: 0; border-radius: 2px; }
+.kc-tok-dot { margin-inline-end: 6px; }
+.kc-tok-table-wrap { overflow-x: auto; border: 1px solid var(--kc-border); border-radius: 12px; }
+.kc-tok-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.kc-tok-table th { padding: 8px 12px; color: var(--kc-muted); font-size: 12px; font-weight: 400; text-align: start; white-space: nowrap; }
+.kc-tok-table td { padding: 8px 12px; border-top: 1px solid var(--kc-border); text-align: start; white-space: nowrap; }
+.kc-tok-table td.ltr { direction: ltr; unicode-bidi: isolate; }
+.kc-tok-table td:first-child { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kc-tok-chat { display: block; max-width: 100%; overflow: hidden; text-align: start; text-overflow: ellipsis; white-space: nowrap; }
+.kc-tok-chat:hover { text-decoration: underline; }
+@media (pointer: coarse) { .kc-tok-ranges button { min-height: 36px; } .kc-tok-table td { padding-block: 11px; } }
+
+/* Chat state in the sidebar row: a question for the owner, or a background task still running. */
+.kc-state { width: 14px; height: 14px; flex-shrink: 0; }
+.kc-state-ask { color: var(--kc-warn); }
+.kc-state-bg { color: var(--kc-muted); animation: kc-pulse 2.4s ease-in-out infinite; }
+.kc-dot-bad { background: var(--kc-bad); }
+@media (prefers-reduced-motion: reduce) { .kc-state-bg { animation: none; } }
+/* Thread header: live background tasks of the open chat. */
+.kc-bg-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 2px 8px; border-radius: 999px; background: var(--kc-chip); color: var(--kc-muted); font-size: 12px; white-space: nowrap; }
+.kc-bg-chip svg { width: 12px; height: 12px; animation: kc-pulse 2.4s ease-in-out infinite; }
+/* Chat header info chips: one box that shrinks and clips before the title or any button does. */
+.kc-chat-info { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.kc-chip-short { display: none; }
+@media (min-width: 768px) { .kc-limit-row { display: none; } }
+/* A lost connection: in the header row on a wide screen; on a phone in a row of its own under it,
+   where the whole sentence fits (a tooltip cannot be opened by touch). */
+@media (min-width: 768px) { .kc-conn-row { display: none; } }
+/* Up to md, where the drawer's menu button shows: chips keep icon + number, the words go (the
+   full text stays in the tooltip), and each chip may shrink. */
+@media (max-width: 767px) {
+  .kc-chat-title { min-width: 4.5rem; }
+  .kc-chat-tokens-models, .kc-chip-label, .kc-chat-caller { display: none; }
+  .kc-chip-short { display: inline; }
+  .kc-conn-inline { display: none !important; }
+  .kc-chat-info { gap: 6px; }
+  .kc-chat-info > * { flex-shrink: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .kc-limit-inline { display: none; }
+  .kc-back { min-width: 32px; }
+}
+@media (max-width: 767px) and (pointer: coarse) { .kc-back { min-width: 44px; min-height: 44px; } .kc-conn button { min-height: 44px; } }
+/* Elapsed time under a message, shown while the pointer rests on it (always on touch). */
+.kc-msg-time { color: var(--kc-muted); font-size: 12px; opacity: 0; transition: opacity 0.12s; }
+/* Under a user bubble it takes no room of its own: it sits in the gap to the next message. */
+.kc-user-time { height: 0; overflow: visible; line-height: 16px; white-space: nowrap; }
+/* «برگشت به اینجا»: shown with the message's time (hover, or always on a touch screen). */
+.kc-rewind { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; line-height: 16px; color: var(--color-muted-foreground); opacity: 0; transition: opacity 120ms; }
+.group:hover .kc-rewind, .kc-rewind:focus-visible, .kc-rewind[data-state="open"] { opacity: 1; }
+.kc-rewind:hover { color: var(--color-foreground); }
+@media (pointer: coarse) { .kc-rewind { opacity: 1; } }
+.kc-state-wrap { display: inline-flex; flex-shrink: 0; }
+.group:hover .kc-msg-time, .group:focus-within .kc-msg-time { opacity: 1; }
+@media (hover: none) { .kc-msg-time { opacity: 0.8; } }
+.kc-origin { color: var(--kc-muted); opacity: 0.8; }
+
+/* Notes («بعداً», Notes.jsx): the composer's later button and the sidebar list. */
+.kc-note-item { padding: 6px 10px; border: 1px solid var(--kc-border); border-radius: 8px; }
+.kc-note-item[data-open="true"] { background: color-mix(in srgb, var(--kc-chip) 50%, transparent); }
+.kc-note-when { color: var(--kc-warn, #b45309); }
+@media (pointer: coarse) { .kc-note-item .kc-btn, .kc-note-item .kc-text-btn { min-height: 44px; } }
+
+/* The setup wizards in Karsara's look (owner 2026-10-17: «ویزاردها تو تم کارسرا نیستن»): flat cards,
+   the text colour as the one filled button, choices marked by their border, no decorative icons. */
+.g-setup[data-flat] .g-deco { display: none; }
+.g-setup[data-flat] .g-card { border-radius: 0.75rem; background: var(--card); box-shadow: 0 1px 2px rgb(0 0 0 / 0.05); }
+.g-setup[data-flat] .g-choice { border-radius: 8px; background: transparent; }
+.g-setup[data-flat] .g-choice:hover { background: var(--kc-chip); }
+.g-setup[data-flat] .g-choice-on { border-color: var(--foreground) !important; background: var(--kc-chip) !important; }
+.g-setup[data-flat] .g-input { height: 36px; padding: 0 10px; border-radius: 8px; font-size: 14px; }
+.g-setup[data-flat] textarea.g-input { height: auto; padding: 8px 10px; }
+.g-setup[data-flat] .g-btn { display: inline-flex; }
+.g-setup[data-flat] .bg-primary { background: var(--foreground); }
+.g-setup[data-flat] header { border-color: var(--border); }
+.g-setup[data-flat] .bg-primary.text-primary-foreground { color: var(--background); }

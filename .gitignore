@@ -19,3 +19,4 @@ config/ssh_known_hosts
 
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+apps/server/BUILD_COMMIT

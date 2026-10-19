@@ -349,6 +349,21 @@ describe("openai-compatible provider", () => {
     assert.equal(result.error.code, "plan_limit", "runner falls back to the other provider on this");
   });
 
+  it("a bare 1310 in the error text (a message index) is not a plan limit; Z.ai's code 1308 is", async () => {
+    const cwd = tempWorkspace();
+    mock.on(() => ({ status: 400, body: { error: { message: "Invalid value at messages.1310.content: expected a string" } } }));
+    const provider = providerFor(baseUrl);
+    const { result } = await runSend(provider.create({ cwd }), "go");
+    assert.equal(result.status, "error");
+    assert.equal(result.error.code, "engine_unavailable", "auto still moves on it (8d4b48b), ask mode does not");
+    assert.equal(result.error.autoFallback, true, "main moved on it: auto still does");
+    // 400: not retried (a 429 goes through main's retries first, unchanged).
+    mock.on(() => ({ status: 400, body: { error: { code: 1308, message: "limit for this window" } } }));
+    const { result: spent } = await runSend(provider.create({ cwd }), "go");
+    assert.equal(spent.error.code, "plan_limit", "ask mode: a spent plan");
+    assert.equal(spent.error.autoFallback, false, "main's text test misses it: auto does not move, as on main");
+  });
+
   it("maps reasoning deltas to thinking events", async () => {
     const cwd = tempWorkspace();
     mock.on((req, res) => {

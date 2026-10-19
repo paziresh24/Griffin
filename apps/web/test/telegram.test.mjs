@@ -52,6 +52,7 @@ test("who wrote a Telegram line: the colleague, the owner, another session, else
 test("a colleague's «name»: prefix is dropped (the bubble names them); other text is kept", () => {
   assert.equal(stripSender("«خانم احمدی»: سرور کند است", "خانم احمدی"), "سرور کند است");
   assert.equal(stripSender("رضایی: سلام", "رضایی"), "سلام");
+  assert.equal(stripSender("«کریمی» (#501): استیجینگ بالا اومد", "کریمی"), "استیجینگ بالا اومد", "the desk line carries its Telegram id");
   assert.equal(stripSender("رضایی گفت سلام", "رضایی"), "رضایی گفت سلام");
   assert.equal(stripSender("a.b: x", "a.b"), "x", "the name is literal, not a pattern");
   assert.equal(stripSender("aXb: x", "a.b"), "aXb: x");
@@ -192,10 +193,13 @@ test("waiting items: a draft sends, a braked batch runs, a failed answer is trie
 
 test("«جدید» stays in the sidebar under Telegram: the way back to the owner's own chats", () => {
   const side = fs.readFileSync(new URL("../src/components/Sidebar.jsx", import.meta.url), "utf8");
-  const head = side.slice(side.indexOf("<aside"), side.indexOf("<nav "));
-  const at = head.indexOf('label={t("جدید")}');
+  // «جدید» is nav.top: drawn by TabList whatever the tab, never behind a telegram check.
+  const tabs = side.slice(side.indexOf("function TabList("));
+  const head = tabs.slice(0, tabs.indexOf("<nav "));
+  const at = head.indexOf("{nav.top}");
   assert.ok(at > 0);
   assert.doesNotMatch(head.slice(0, at).split("</label>").pop(), /section === "telegram"/);
+  assert.match(side, /label=(\{t\()?"جدید"/);
 });
 
 const source = (path) => fs.readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");

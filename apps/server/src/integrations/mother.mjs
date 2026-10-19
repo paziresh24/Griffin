@@ -7,14 +7,18 @@
 //
 // Next to them one owner chat, «🌐 <assistant> — همه» (the global chat): every mother's outcome lands
 // there as a note, and the owner talks to the assistant about all of Telegram from it.
-import { OWNER_NAME } from "../owner.mjs";
-import { PERSONA } from "../persona.mjs";
+import { OWNER, outgoingSignature, PERSONA } from "../persona.mjs";
 import { DEFAULT_AGENT } from "../agents/registry.mjs";
 
 const MOTHER_OF = "motherof:"; // motherof:<chatId> -> { integrationId, key, personId, name }
 const MOTHER_AT = "mother:"; // mother:<integrationId>:<key> -> chatId
 const SUBS = "threadsubs:"; // threadsubs:<childChatId> -> [mother chat ids that joined it]
 const GLOBAL = "tg:global"; // -> chatId of the global chat
+// A thread about a general issue (an outage, CI, slowness — not one person's own thing): it is listed
+// in the main sidebar, every mother may hand it messages, and its result reaches every mother that
+// did.
+export const SHARED = "sharedthread:"; // sharedthread:<childChatId> -> { by: name, motherChat, at }
+export const isSharedThread = (store, chatId) => Boolean(chatId) && Boolean(store.getKv(`${SHARED}${chatId}`));
 
 // Who the assistant watches: the owner's per-person switch (person.access.watch), else everyone
 // marked «team».
@@ -91,7 +95,9 @@ export function openThreads(store) {
         const mother = mothers.get(d.parent);
         if (!mother || !["running", "done"].includes(d.state)) return null;
         const chat = store.getChat(childId);
-        return chat ? { thread: childId, title: chat.title, person: mother.name, personId: mother.personId || null, motherChat: d.parent, state: d.state } : null;
+        if (!chat) return null;
+        const shared = isSharedThread(store, childId);
+        return { thread: childId, title: chat.title, person: mother.name, personId: mother.personId || null, motherChat: d.parent, state: d.state, ...(shared ? { shared: true, waiting: joinedNames(store, childId) } : {}) };
       } catch {
         return null;
       }
@@ -119,13 +125,20 @@ export function syncMotherNames(store) {
 /** Mother chats that joined a thread besides its own parent, by name. */
 export const joinedNames = (store, thread) => (store.getKv(`${SUBS}${thread}`) || []).map((id) => motherInfo(store, id)?.name).filter(Boolean);
 
+/** A mother chat starts waiting on a thread: its result is reported there too (watchJoinedThreads). */
+export function subscribe(store, thread, motherChat) {
+  const subs = new Set(store.getKv(`${SUBS}${thread}`) || []);
+  if (subs.has(motherChat)) return false;
+  subs.add(motherChat);
+  store.setKv(`${SUBS}${thread}`, [...subs]);
+  return true;
+}
+
 /** A mother chat (chatId, the person called `name`) joins another person's open thread on the same issue. */
 export async function joinThread(store, runner, { thread, chatId, name, note = "" }) {
   const target = openThreads(store).find((t) => t.thread === thread);
   if (!target) return { error: "no such open thread; call team_threads" };
-  const subs = new Set(store.getKv(`${SUBS}${thread}`) || []);
-  subs.add(chatId);
-  store.setKv(`${SUBS}${thread}`, [...subs]);
+  subscribe(store, thread, chatId);
   const text = `[«${name}» هم همین مسئله را دارد${note ? `: ${String(note).slice(0, 400)}` : ""} — نتیجه به او هم می‌رسد]`;
   await runner.send(thread, { text, images: [], intent: runner.isActive(thread) ? "steer" : "queue" }).catch(() => {});
   return { joined: thread, title: target.title, owner: target.person };
@@ -137,19 +150,43 @@ export function motherContext(name) {
   return `
 This is the standing chat with «${name}» — every message they send reaches you here, and this chat never
 closes (there is no end_agent). Nothing you write here reaches them by itself:
-- send_to_person {text} is the ONLY way a message reaches «${name}». It goes out from ${OWNER_NAME}'s account,
-  signed «— ${PERSONA.name}», as a reply to their latest message. «[NO_REPLY]» anywhere in your rules
+- send_to_person {text} is the ONLY way a message reaches «${name}». It goes out from ${OWNER.name}'s account,
+  signed «${outgoingSignature()}», as a reply to their latest message; replyTo:"#id" replies to an earlier
+  one (their lines carry (#id)). react {emoji, id?} puts a reaction on a message instead of writing:
+  an «اوکی», a «حل شد», a done → 👍 / 🙏 / ❤ is often the whole answer. (A greeting or a thanks on its
+  own never reaches you: it waits for their next real message.) «[NO_REPLY]» anywhere in your rules
   means here: do not call send_to_person. If it (or edit_sent / delete_sent) answers {held: true},
-  nothing reached them: it waits for ${OWNER_NAME} as a draft (reason owner_replied: he wrote to them himself;
+  nothing reached them: it waits for ${OWNER.name} as a draft (reason owner_replied: he wrote to them himself;
   paused / unwatched: he stopped the answers) — say so in your report and do not try again.
-- Every colleague message gets either send_to_person or nothing. Small talk, thanks, a joke: one short
-  send, or nothing.
+- Every colleague message gets send_to_person, a reaction, or nothing. Small talk, thanks, a joke: a
+  reaction or one short send, or nothing.
 - Real work (a fix, an access request, an investigation): open a thread — one \`delegate\` per issue,
   a short clear title as the first line of the request — and send one short line («دارم بررسی می‌کنم»).
 - A follow-up about work already open: \`subtasks\` list, then \`steer\` that thread. Never a second
-  thread for the same issue.
+  thread for the same issue. Their review or follow-up on work ${OWNER.name} or one of his sessions started
+  (an MR, a fix) is work too: a thread for you, never a chore for ${OWNER.name}.
+- ${OWNER.name}'s own chats are threads too. The turn starts with «[کارهای خودِ …]»: his recent working chats
+  (and any that wrote to «${name}»), each with its title and the last things he asked in it. Judge every
+  message of theirs against those tasks: forward_to_chat {chat, why} only when it plainly continues
+  one — that chat wrote to them or asked for exactly this, or the message is about the very thing that
+  chat is doing (the same system and the same problem in its title or asks). The same product, the
+  same servers or a nearby topic is not enough: a message about an install being down does not belong
+  to a chat that updates installs. Then send nothing to them yourself; the chat's agent carries it on.
+  Anything else is yours as usual. Decide per message, not per person; when in doubt, keep it — a
+  wrong hand-over lands in the middle of ${OWNER.name}'s own work. The same list carries open shared threads
+  («رشتهٔ عمومی»): the same general issue from «${name}» → forward_to_chat to it (its result comes
+  back here), and tell them in one short line that it is being handled. A «[حادثه‌های باز اتاق
+  عملیات]» line lists alerts firing right now: «${name}» reporting that very problem (the site or a
+  service down, slow, erroring) → forward_to_chat {chat: "incident:…"} (the ops room takes it as the
+  human evidence) and tell them yourself in one short line that it is known and being looked at — no
+  thread of yours for it.
 - Before opening a thread, \`team_threads\`: if someone else has an open thread on the very same issue,
   \`thread_join\` it (its result comes here too) and tell them it is being handled.
+- A general issue — not «${name}»'s own thing but something others hit or will hit too (a site or
+  service down or slow, CI/runners broken, a shared tool, an alert-like report) — gets a shared
+  thread: \`delegate\` with shared:true. It is listed in ${OWNER.name}'s main list, others' messages on it
+  join it, and its result comes back here (and to everyone who joined). Their own app, their own
+  access, their own question stay an ordinary thread.
 - A thread reports back: send_to_person with the result, as one message.
 - You manage what you already sent. When some of your messages to «${name}» are still unanswered, the
   turn starts with «[پیام‌هایی که … فرستاده‌ای …]» listing them (#id, time, text). Before sending,
@@ -157,9 +194,16 @@ closes (there is no end_agent). Nothing you write here reaches them by itself:
   it instead of a second interim line; a final result → a new send_to_person (an edit does not notify
   them), then delete_sent the interim line it replaced if it would confuse; a wrong message → edit_sent
   it with the correction, or delete_sent and say so. Never send the same thing twice.
-- «${OWNER_NAME} از داخل گریفین …» is ${OWNER_NAME} writing to you privately: answer it in your final text; use
+- «${OWNER.nameFa} در تلگرام به ${name}» / «جلسهٔ Claude ${OWNER.nameFa} …» while you are working means he, or one of his
+  Claude sessions, is on this same issue now. Do not duplicate it: \`subtasks\` list, then either step
+  back (cancel the threads he now covers, send nothing) or keep only a part he is not doing. Your final
+  text says which, and what you already did or changed, so he and his session know.
+  Such a line covers only the issue it names, and only while it is fresh: a new request of theirs (an
+  access request, another finding) that came more than 30 minutes after the last «${OWNER.nameFa} …» /
+  «جلسهٔ Claude …» line, or on a different issue, is yours — handle it as usual.
+- «${OWNER.nameFa} از داخل اپ …» is ${OWNER.name} writing to you privately: answer it in your final text; use
   send_to_person only if he asks you to tell «${name}» something.
-- Your final text is NEVER sent to anyone. It is a one- or two-line Persian report for ${OWNER_NAME}, the way a
+- Your final text is NEVER sent to anyone. It is a one- or two-line Persian report for ${OWNER.name}, the way a
   watcher would put it: «علی پرسیده بود …؛ جواب دادم …» / «… منتظر شماست» / «پیام خودمانی بود، جواب ندادم».
 - Several of their messages may arrive in one turn: handle them together.
 `;
@@ -167,36 +211,54 @@ closes (there is no end_agent). Nothing you write here reaches them by itself:
 
 export function globalContext() {
   return `
-This is ${PERSONA.name}'s Telegram desk («🌐 ${PERSONA.name} — همه»). ${PERSONA.name} answers ${OWNER_NAME}'s colleagues
+This is ${PERSONA.name}'s Telegram desk («🌐 ${PERSONA.name} — همه»). ${PERSONA.name} answers ${OWNER.name}'s colleagues
 on his Telegram account: each watched person has a mother chat where their messages land, and real work
 becomes a thread beside it. Reports from those chats arrive here as notes (read them with feed_read).
-What ${OWNER_NAME} writes here reaches only you, never a colleague. Answer in short Persian.
+What ${OWNER.name} writes here reaches only you, never a colleague. Answer in short Persian.
 - Who is watched and how each conversation stands: telegram_people. Open threads: team_threads.
 - To tell a colleague something: tell_person {person, text} — it goes to that person's mother chat as
-  ${OWNER_NAME}'s note, and that chat decides what to send. A person whose watcher is off cannot be told; say so.
+  ${OWNER.name}'s note, and that chat decides what to send. A person whose watcher is off cannot be told; say so.
 - The same issue from someone else: thread_join {thread, person}.
 - Stop or resume all automatic answers: telegram_pause {paused}.
 - «👁» notes are the desk's own supervisor (code, every 10 minutes): a person who got many messages, a
-  conversation stuck with nothing running, drafts waiting for ${OWNER_NAME}, the same issue from two people.
-  If ${OWNER_NAME} asks about one, look at that mother chat (feed_read, telegram_people) and say what to do.
+  conversation stuck with nothing running, drafts waiting for ${OWNER.name}, the same issue from two people.
+  If ${OWNER.name} asks about one, look at that mother chat (feed_read, telegram_people) and say what to do.
 `;
 }
 
 const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 
 /** send_to_person / edit_sent / delete_sent / team_threads / thread_join for one mother chat. */
-export function createMotherTools({ store, runner, chatId, name, sendToPerson, editSent = async () => ({ error: "not available" }), deleteSent = async () => ({ error: "not available" }) }) {
+export function createMotherTools({ store, runner, chatId, name, sendToPerson, editSent = async () => ({ error: "not available" }), deleteSent = async () => ({ error: "not available" }), react = async () => ({ error: "not available" }), forwardToChat = async () => ({ error: "not available" }) }) {
   return {
     send_to_person: {
-      description: `Send a message to «${name}» in Telegram, from ${OWNER_NAME}'s account (signed by ${PERSONA.name}). The only way anything you write reaches them. Plain Persian, short. Returns {sent:true}, or {held:true, reason} when ${OWNER_NAME} wrote to them himself meanwhile or stopped the answers (nothing was sent).`,
+      description: `Send a message to «${name}» in Telegram, from ${OWNER.name}'s account (signed by ${PERSONA.name}). The only way anything you write reaches them. Plain Persian, short. Returns {sent:true}, or {held:true, reason} when ${OWNER.name} wrote to them himself meanwhile or stopped the answers (nothing was sent).`,
       inputSchema: {
         type: "object",
-        properties: { text: { type: "string", minLength: 1, maxLength: 3800 } },
+        properties: {
+          text: { type: "string", minLength: 1, maxLength: 3800 },
+          replyTo: { type: "string", description: "reply to this message of theirs instead of the latest, e.g. \"812\" (the (#812) on their line)" },
+        },
         required: ["text"],
         additionalProperties: false,
       },
-      async execute({ text }) {
-        return ok(await sendToPerson(String(text || "")));
+      async execute({ text, replyTo = null }) {
+        return ok(await sendToPerson(String(text || ""), replyTo ? { replyTo } : undefined));
+      },
+    },
+    react: {
+      description: `React on a message in the chat with «${name}» instead of writing (a thanks, an «اوکی», a done): 👍 ❤ 🙏 👌 🔥 👏 🤝 👀 ✍ 🫡 💯 😁 🎉 🤔. Without id: the message this turn answers. emoji "" takes your reaction back.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          emoji: { type: "string", description: "one of the reactions above, or \"\" to take yours back" },
+          id: { type: "string", description: "a message id, e.g. \"812\" (default: the message this turn answers)" },
+        },
+        required: ["emoji"],
+        additionalProperties: false,
+      },
+      async execute({ emoji, id = null }) {
+        return ok(await react(id, emoji));
       },
     },
     edit_sent: {
@@ -221,6 +283,18 @@ export function createMotherTools({ store, runner, chatId, name, sendToPerson, e
       },
       async execute({ id }) {
         return ok(await deleteSent(id));
+      },
+    },
+    forward_to_chat: {
+      description: `Hand «${name}»'s message(s) of this turn to one of ${OWNER.name}'s own chats (the «[کارهای خودِ …]» line lists them: chat id, title, what he asked in it), when the message belongs to what that chat is doing, or to an open shared thread on the same general issue. That chat's agent then carries the conversation (a chat at work gets it at once, mid-turn); you send nothing to «${name}» about it — except, for a shared thread or an incident, one short line that it is being handled. chat "incident:<id>" (from the «[حادثه‌های باز اتاق عملیات]» line) hands it to the ops room for that incident. note: one optional line for that chat.`,
+      inputSchema: {
+        type: "object",
+        properties: { chat: { type: "string", description: "the chat id from the «[کارهای خودِ …]» line, or incident:<id> from the «[حادثه‌های باز اتاق عملیات]» line" }, why: { type: "string", description: "one line: what in that chat's own work (its title or what it asked) this message continues — the same system and problem, not just a nearby topic" }, note: { type: "string" } },
+        required: ["chat", "why"],
+        additionalProperties: false,
+      },
+      async execute({ chat, why = "", note = "" }) {
+        return ok(await forwardToChat(chat, note, why));
       },
     },
     team_threads: {

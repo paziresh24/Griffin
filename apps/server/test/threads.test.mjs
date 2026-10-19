@@ -10,7 +10,7 @@ test("wantsGriffin matches only a call at the start", () => {
 
 test("messages carry who said what; the behavior lives once in the run's rules", async () => {
   assert.equal(threadInboundPrompt({ name: "کریمی", text: " خرابه " }), "«کریمی»: خرابه");
-  assert.equal(threadOwnerPrompt({ name: "کریمی", text: "الان" }), "«Owner در تلگرام به کریمی»: الان");
+  assert.equal(threadOwnerPrompt({ name: "کریمی", text: "الان" }), "«صاحب‌کار در تلگرام به کریمی»: الان");
   const { buildRules } = await import("../src/prompt.mjs");
   const rules = buildRules({ agent: "griffin", caller: "team" });
   assert.match(rules, /end_agent/);

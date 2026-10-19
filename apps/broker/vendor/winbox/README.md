@@ -3,7 +3,7 @@
 `winbox_terminal_client.py` is the MIT-licensed pure-Python implementation of MikroTik's Winbox
 (TCP 8291) terminal protocol from https://github.com/subixonfire/winbox-terminal-protocol
 (EC-SRP5 authentication + AES-128-CBC, the same protocol the Winbox app itself speaks).
-`LICENSE` is that project's license, kept verbatim. The file is unmodified.
+`LICENSE` is that project's license, kept verbatim. One local patch: `M2.encode_uint` sends the terminal session id as u32 once it passes 255 (the upstream u8 encoding truncated it and the router ignored all input).
 
 Why it is here: some routers deliberately keep the RouterOS **API** service off, and enabling a
 service just so an agent can read the config is the wrong trade. This gives Griffin the same door a

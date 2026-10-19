@@ -26,6 +26,6 @@ export function tabTitle({ page = null, section = "", chatId = null, chat = null
     // A blank title reads as the chat header does.
     parts.push(String(chat.title || "").trim() || t("گفتگوی جدید"));
   }
-  const title = [...parts.filter(Boolean), BRAND.name].join(" · ");
+  const title = [...parts.filter(Boolean), BRAND.title].join(" · ");
   return `${needs > 0 ? `(${needs.toLocaleString("fa-IR")}) ` : ""}${running ? "● " : ""}${title}`;
 }

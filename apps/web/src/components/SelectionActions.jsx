@@ -33,7 +33,7 @@ function selectionTarget(anchor) {
   return { text, rect };
 }
 
-export function SelectionActions() {
+export function SelectionActions({ canSide = false }) {
   const { boxId, chatId } = useRuntimeChat();
   const [target, setTarget] = useState(null); // { text, rect } while a quotable selection is open
   const [quoting, setQuoting] = useState(null); // { text, x, y } while the note popup is open
@@ -117,7 +117,7 @@ export function SelectionActions() {
         <button type="button" className={button} onClick={addToNewChat} title={t("با این نقل و خواسته‌ات، گفتگوی تازه‌ای شروع کن")}>
           <SquarePen className="size-3.5" /> {t("به چت جدید")}
         </button>
-        {inSide(anchor.current) ? null : (
+        {!canSide || inSide(anchor.current) ? null : (
           <>
             <span className="h-4 w-px bg-border" aria-hidden />
             <button type="button" className={button} onClick={addToSide} title={t("با این نقل، چت کناری را شروع کن")}>

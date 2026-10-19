@@ -109,9 +109,26 @@ test("GET /api/inbox, chores cleared from the board, and an answer for a questio
   assert.deepEqual(await ok.json(), { delivered: "tool" });
   assert.equal(JSON.parse((await asked).content[0].text).answer, "بله");
 
+  // Access he granted wakes the conversation that asked; the agent carries on itself.
+  const access = addOwnerTask(store, { title: "دسترسی: API key پنل n8n", chatId: chat.id, access: "API key پنل n8n" });
+  assert.equal(buildInbox({ store, asks }).items.find((i) => i.choreId === access.id).access, true);
+  assert.equal((await post(app, `/api/inbox/chores/${access.id}`, { action: "done" })).status, 200);
+  assert.equal(sent.at(-1).chatId, chat.id);
+  assert.match(sent.at(-1).text, /دسترسی را دادم: «API key پنل n8n»/);
+  assert.equal(sent.at(-1).from.kind, "owner_web");
+  // A thread asked: the root is told which one, to steer it; an archived root comes back first.
+  const child = store.createChat({ title: "رشتهٔ n8n", parentChatId: chat.id });
+  const fromThread = addOwnerTask(store, { title: "دسترسی: پنل n8n", chatId: chat.id, askedIn: child.id, access: "پنل n8n" });
+  store.updateChat(chat.id, { archived: true });
+  await post(app, `/api/inbox/chores/${fromThread.id}`, { action: "done" });
+  assert.match(sent.at(-1).text, new RegExp(`id ${child.id}`));
+  assert.equal(Boolean(store.getChat(chat.id).archived), false);
+  const woken = sent.length;
+
   assert.equal((await post(app, `/api/inbox/chores/${chore.id}`, { action: "later" })).status, 400);
   assert.equal((await post(app, `/api/inbox/chores/${chore.id}`, { action: "done" })).status, 200);
   assert.equal((await post(app, `/api/inbox/chores/${chore.id}`, { action: "dismiss" })).status, 404, "already gone");
+  assert.equal(sent.length, woken, "a plain chore done wakes nobody");
   assert.equal((await (await app.request("/api/inbox")).json()).count, 0);
 });
 
@@ -202,4 +219,29 @@ test("POST /answer: a stale card's text, with another question open on the chain
   assert.equal(asks.isWaiting(root.id), true, "the approval is untouched");
   asks.cancel(child.id);
   assert.equal((await approval).answered, false);
+});
+
+// A stopped run's card is now in view. With a new run active and nothing asked
+// yet, its answer was held — and handed to the next, different question as that one's answer.
+test("POST /answer: a stale card (stale: true) is a follow-up message even with nothing open — never held, never waited for", async () => {
+  const { store, asks } = setup();
+  const sent = [];
+  let held = 0;
+  const realHold = asks.holdEarly;
+  asks.holdEarly = (...args) => ((held += 1), realHold(...args));
+  const runner = { isActive: () => true, activeCount: () => 1, send: async (chatId, input) => (sent.push({ chatId, ...input }), { delivered: "queued" }) };
+  const app = createApp({ store, runner, asks });
+  const chat = store.createChat({ title: "ریشه" });
+  const started = Date.now();
+  const res = await post(app, `/api/chats/${chat.id}/answer`, { question: "دیپلوی روی پروداکشن؟", selected: ["بله"], stale: true });
+  assert.equal(res.status, 202);
+  assert.ok(Date.now() - started < 5_000, "no 15s wait for a question that is over");
+  assert.equal(held, 0);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /دیپلوی روی پروداکشن؟/);
+  const next = asks.confirm(chat.id, { question: "ایندکس قدیمی را پاک کنم؟" });
+  await tick();
+  assert.equal(asks.isWaiting(chat.id), true, "the next question waits for its own answer");
+  asks.cancel(chat.id);
+  assert.equal((await next).answered, false);
 });

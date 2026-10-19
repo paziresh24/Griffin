@@ -64,13 +64,23 @@ export const isClearCommand = (text) => String(text || "").trim() === "/clear";
 // --- the suggested next message (Claude's prompt suggestions, chat.suggestion) ---
 
 // What to show, or null. Anything in the box — even a space — is the owner's own text.
-export function shownNextStep({ suggestion, text, running, dismissed }) {
+// returns (the NEXT_STEP_RETURNS setting): clearing the box brings it
+// back, so Tab writes it in again (as in Claude Code) — what was put aside is ignored.
+export function shownNextStep({ suggestion, text, running, dismissed, returns = false }) {
   const next = typeof suggestion === "string" ? suggestion.trim() : "";
-  if (!next || running || text || next === dismissed) return null;
+  if (!next || running || text || (!returns && next === dismissed)) return null;
   return next;
 }
 
-// Typing puts the current suggestion aside for good: clearing the box does not bring it back.
+// The NEXT_STEP_RETURNS setting as the chat list last reported it (api.js useChats); off until then.
+let nextStepReturns = false;
+export const setNextStepReturns = (on) => {
+  nextStepReturns = on === true;
+};
+export const nextStepReturnsOn = () => nextStepReturns;
+
+// Typing puts the current suggestion aside for good: clearing the box does not bring it back
+// (unless NEXT_STEP_RETURNS is on).
 // A turn in between starts over, so the same words suggested again show again.
 export function dismissNextStep(dismissed, { suggestion, text, running = false }) {
   if (running) return null;

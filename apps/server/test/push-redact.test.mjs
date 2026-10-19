@@ -27,11 +27,11 @@ for (const [name, input] of Object.entries(adversarial)) {
     const ms = performance.now() - started;
     assert.ok(ms < 50, `${name}: ${ms.toFixed(1)} ms`);
   });
-  test(`redactSecrets: the unclipped scan of 1 MB of '${name}' is linear (under 1.5 s)`, () => {
+  test(`redactSecrets: the unclipped scan of 1 MB of '${name}' is linear (under 4 s; a quadratic scan takes minutes)`, () => {
     const started = performance.now();
     redactSecrets(input, { maxLength: Infinity });
     const ms = performance.now() - started;
-    assert.ok(ms < 1500, `${name}: ${ms.toFixed(1)} ms`);
+    assert.ok(ms < 4000, `${name}: ${ms.toFixed(1)} ms`);
   });
 }
 

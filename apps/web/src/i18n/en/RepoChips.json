@@ -17,5 +17,7 @@
   "ریپوی این گفتگو (انتخاب ریپوی دیگر = بردن گفتگو به آن، بعد از تأیید)": "This chat's repo (picking another one moves the chat there, after confirming)",
   "ریپوی این گفتگو": "This chat's repo",
   "این گفتگو در این گروه ساخته می‌شود": "This chat will be created in this group",
-  "بیرون از گروه بساز": "Create outside the group"
+  "بیرون از گروه بساز": "Create outside the group",
+  "محیط اجرا: کپسول": "Runs on: capsule",
+  "کپسول": "Capsule"
 }

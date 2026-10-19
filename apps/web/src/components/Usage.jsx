@@ -3,7 +3,8 @@ import { useState } from "react";
 import { usePolling } from "../api.js";
 import { BRAND } from "../brand.js";
 import { num, t } from "../i18n.js";
-import { useSkin } from "../skin.js";
+import { useLook } from "../ui-prefs.js";
+import { ClaudeLimits, ZaiQuota } from "./PlanLimits.jsx";
 
 const fa = (n) => num(Number(n || 0));
 const pct = (n) => num(Number(n || 0) / 100, { style: "percent" });
@@ -34,11 +35,11 @@ function percentOf(w) {
 // "Token usage" in the sidebar's settings menu (it left the chat header): the provider
 // plan windows (5-hour / weekly) at a glance, details unfold in place on click (a popover inside the
 // menu would close with it).
-export function UsageBadge() {
-  const [open, setOpen] = useState(false);
+export function UsageBadge({ open: startOpen = false } = {}) {
+  const [open, setOpen] = useState(startOpen);
   const data = usePolling("/api/usage", 60_000);
-  // The Karsara skin warns from 75%, the default skin from 70%; both turn red at 90%.
-  const warnAt = useSkin() === "karsara" ? 75 : 70;
+  // The Karsara look warns from 75%, the default look from 70%; both turn red at 90%.
+  const warnAt = useLook() === "karsara" ? 75 : 70;
   const windows = (data?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id })));
   const worst = windows.reduce((max, w) => Math.max(max, percentOf(w) ?? 0), 0);
   const tone = worst >= 90 ? "text-bad" : worst >= warnAt ? "text-warn" : "text-muted-foreground";
@@ -75,6 +76,9 @@ export function UsageBadge() {
               {(data?.providers || []).find((p) => p.error)?.error || t("پروایدر فعلی سهمیهٔ پلن گزارش نمی‌دهد.")}
             </div>
           )}
+          <div className="mb-1 mt-3 font-medium">{t("سقف دقیق اشتراک Claude")}</div>
+          <ClaudeLimits />
+          <ZaiQuota title={<div className="mb-1 mt-3 font-medium">Z.ai</div>} hideWhenUnused />
           <div className="mb-1 mt-3 font-medium">{t("مصرف خود {name}", { name: BRAND.name })}</div>
           {[[t("۵ ساعت اخیر"), data?.local?.last5h], [t("۷ روز اخیر"), data?.local?.last7d]].map(([label, u]) => (
             <div key={label} className="flex justify-between py-0.5">

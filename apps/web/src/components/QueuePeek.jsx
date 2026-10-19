@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronDown, ImagePlus, ListTodo, Loader2 } from "lucide-react";
+import { Check, ChevronDown, FileText, ImagePlus, ListTodo, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { textDir } from "../dir.js";
 import { num, t } from "../i18n.js";
 import { SENDING_LABEL, SENT_LABEL } from "../outbox.js";
-import { QUEUE_WAITING_LABEL, takeOutError, waitingQueued } from "../queue-peek.js";
+import { QUEUE_WAITING_LABEL, editLossWarning, takeOutError, waitingQueued } from "../queue-peek.js";
 
 const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
 
@@ -31,7 +31,8 @@ export function QueuePeek({ chatId, onEdit }) {
 
   const takeOut = async (item, edit) => {
     if (!edit && !window.confirm(t("این پیام از صف حذف شود؟"))) return;
-    if (edit && item.images && !window.confirm(t("تصویرهای این پیام برنمی‌گردند. ادامه؟"))) return;
+    const loss = edit ? editLossWarning(item) : null;
+    if (loss && !window.confirm(loss)) return;
     setBusy(item.eventId);
     try {
       await api(`/api/chats/${chatId}/queue/${item.eventId}`, { method: "DELETE" });
@@ -56,10 +57,10 @@ export function QueuePeek({ chatId, onEdit }) {
           className="g-peek relative z-0 mx-3 -mb-3 rounded-t-xl border border-b-0 bg-muted px-3 pb-3.5 pt-1.5 text-xs"
         >
           <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full min-w-0 items-center gap-1.5 py-0.5 text-start text-muted-foreground hover:text-foreground">
-            {items.some((item) => item.sendState === "sending") ? <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" /> : <ListTodo className="size-3.5 shrink-0 text-primary" />}
+            {items.some((item) => item.sendState === "sending") ? <Loader2 className="size-3.5 shrink-0 animate-spin text-signal" /> : <ListTodo className="size-3.5 shrink-0 text-primary" />}
             <span className="shrink-0 text-foreground">{QUEUE_WAITING_LABEL}</span>
             <span className="min-w-0 flex-1 truncate" dir={textDir(first.text)}>
-              {first.text.split("\n").find((line) => line.trim()) || (first.images ? t("تصویر") : "")}
+              {first.text.split("\n").find((line) => line.trim()) || (first.files?.length ? first.files[0].name : first.images ? t("تصویر") : "")}
             </span>
             {items.length > 1 ? <span className="g-tag shrink-0 tabular-nums" dir="ltr">+{num(items.length - 1)}</span> : null}
             <ChevronDown className={`size-3.5 shrink-0 transition-transform duration-200 ${open ? "" : "rotate-180"}`} />
@@ -79,6 +80,9 @@ export function QueuePeek({ chatId, onEdit }) {
                     <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px]" dir={textDir(item.text)}>{item.text}</p>
                     {item.images ? (
                       <p className="mt-0.5 flex items-center gap-1 text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(item.images) })}</p>
+                    ) : null}
+                    {item.files?.length ? (
+                      <p className="mt-0.5 flex min-w-0 items-center gap-1 text-muted-foreground"><FileText className="size-3 shrink-0" /> <span className="truncate" dir="auto">{item.files.map((f) => f.name).join(t("، "))}</span></p>
                     ) : null}
                     {item.sendState ? (
                       <p className="mt-1 flex items-center gap-1 text-muted-foreground">

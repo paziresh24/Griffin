@@ -7,7 +7,7 @@ import { GriffinRuntime } from "../runtime.jsx";
 import { isRtl, num, t } from "../i18n.js";
 import { Thread } from "./Thread.jsx";
 import { submitMode, useTouchPrimary } from "../touch.js";
-import { useSkin } from "../skin.js";
+import { useFlag, useLook } from "../ui-prefs.js";
 
 // The side panel sits on the reading end's far side: left in RTL, right in LTR.
 const SideIcon = isRtl ? PanelLeft : PanelRight;
@@ -18,6 +18,17 @@ const SideIcon = isRtl ? PanelLeft : PanelRight;
 
 /** Header button that opens the side chat of the current chat; count = this chat's side chats. */
 export function SideChatButton({ open, onClick, count = 0 }) {
+  // The "headerCounts" flag (ui-prefs.js): the karsara look's own chip.
+  const karsara = useFlag("headerCounts");
+  if (karsara) {
+    return (
+      <button type="button" onClick={onClick} className="kc-chip" data-state={open ? "open" : undefined} aria-pressed={open} aria-label={t("چت کناری")} title={t("چت کناری: یک سؤال جدا، بدون به‌هم‌زدن این گفتگو")}>
+        <SideIcon />
+        <span className="kc-chip-label">{t("چت کناری")}</span>
+        {count ? <span className="opacity-70">{num(count)}</span> : null}
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -81,7 +92,7 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
 // The same thread as the main chat, bound to the side chat: it streams, steers and queues alike.
 function SideThread({ chat, chatId, settings, agentLabel, onError }) {
   const { timeline } = useTimeline(chatId);
-  const karsara = useSkin() === "karsara";
+  const karsara = useFlag("sideChatSimple"); // the simple side chat
   return (
     <div className="min-h-0 flex-1">
       <GriffinRuntime chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
@@ -96,7 +107,8 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const touch = useTouchPrimary();
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
+  const simple = useFlag("sideChatSimple");
   const inputRef = useRef(null);
   useEffect(() => {
     if (!seed) return;
@@ -111,12 +123,14 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
+  // «اجازهٔ تغییر فایل» (from Karsara): off, the side chat only reads the main chat's folder and asks.
+  const [allowEdits, setAllowEdits] = useState(true);
   const send = async () => {
     const value = text.trim();
     if (!value || sending) return;
     setSending(true);
     try {
-      const { chat } = await api(sidePaths.create(parentId), { method: "POST", body: { text: value, images: [] } });
+      const { chat } = await api(sidePaths.create(parentId), { method: "POST", body: { text: value, images: [], allowEdits } });
       setText("");
       dispatch({ type: "created", chat });
     } catch (error) {
@@ -135,7 +149,7 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
               {sides.map((chat) => (
                 <li key={chat.id}>
                   <button type="button" className={`g-nav-row flex w-full items-center gap-2 text-start text-sm hover:bg-muted ${karsara ? "min-h-9 rounded-md px-2" : "rounded-lg px-2.5 py-2"}`} onClick={() => dispatch({ type: "select", id: chat.id })}>
-                    {chat.runStatus === "running" ? <span className="size-1.5 shrink-0 rounded-full bg-primary" title={t("در حال اجرا")} /> : null}
+                    {chat.runStatus === "running" ? <span className="size-1.5 shrink-0 rounded-full bg-signal" title={t("در حال اجرا")} /> : null}
                     <span className="min-w-0 flex-1 truncate" dir="auto">{chat.title || t("چت کناری")}</span>
                   </button>
                 </li>
@@ -144,7 +158,7 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
           </>
         ) : (
           <p className="px-2.5 py-6 text-center text-sm text-muted-foreground">
-            {karsara ? t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.") : t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد، ولی چت کناری آن را می‌بیند.")}
+            {simple ? t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.") : t("یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد، ولی چت کناری آن را می‌بیند.")}
           </p>
         )}
       </div>
@@ -172,6 +186,10 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
             {karsara ? <CornerDownLeft className="size-4" /> : <ArrowUp className="size-5" />}
           </button>
         </div>
+        <label className="mt-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+          <input type="checkbox" checked={allowEdits} onChange={(e) => setAllowEdits(e.target.checked)} className="accent-primary" />
+          {allowEdits ? t("اجازهٔ تغییر فایل‌ها") : t("اجازهٔ تغییر فایل‌ها — فقط می‌خواند و می‌پرسد")}
+        </label>
       </div>
     </div>
   );

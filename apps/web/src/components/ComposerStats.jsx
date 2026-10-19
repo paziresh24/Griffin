@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Popover } from "radix-ui";
-import { Gauge } from "lucide-react";
 import { api } from "../api.js";
+import { loadLevel } from "../host-health.js";
 import { isRtl, num, t } from "../i18n.js";
 
-// Two readouts at the end of the composer bar (Karsara skin): the server's live resources
-// (GET /api/host) and a ring for the chat's context window with the plan limits behind it
-// (GET /api/chats/:id/context, GET /api/usage).
-// Styles: .kc-host-* and .kc-usage-* in styles.css.
+// The server's live resources (GET /api/host) behind the sidebar's alert line (HostNotice), and the
+// composer's ring for the chat's context window with the plan limits behind it
+// (GET /api/chats/:id/context, GET /api/usage). There is no resources gauge in the composer: the
+// alerts say what matters.
+// Styles: .kc-usage-* in styles.css.
 
 const fa = (n) => num(Number(n || 0));
 const round1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : "—");
 const gb = (bytes) => round1((bytes || 0) / 1024 ** 3);
-const level = (percent) => (percent >= 90 ? "danger" : percent >= 75 ? "warn" : undefined);
+// Status colours (green / orange / red), whatever the install's palette (host-health.js).
+const level = loadLevel;
 
 function Bar({ percent, warnings = true }) {
   return (
@@ -35,94 +37,68 @@ function uptime(seconds) {
 }
 
 // Polls while the tab is visible; faster while the details are open.
-function useHost(open) {
+export function useHost(open, slow = 10_000) {
   const [host, setHost] = useState(null);
   const load = useCallback(() => api("/api/host").then(setHost, () => setHost({ available: false })), []);
   useEffect(() => {
     load();
-    const timer = setInterval(() => document.visibilityState !== "hidden" && load(), open ? 5_000 : 10_000);
+    const timer = setInterval(() => document.visibilityState !== "hidden" && load(), open ? 5_000 : slow);
     return () => clearInterval(timer);
   }, [load, open]);
   return host;
 }
 
-export function HostChip() {
-  const [open, setOpen] = useState(false);
-  const host = useHost(open);
-  const cpu = Math.round(host?.cpu?.percent ?? 0);
-  const mem = Math.round(host?.memory?.percent ?? 0);
-  const disk = host?.disk?.percent == null ? null : Math.round(host.disk.percent);
+// The details behind the sidebar's line when the server is busy (HostNotice).
+export function HostDetails({ host }) {
   const down = host?.available === false;
-  const label = down
-    ? t("منابع سرور: در دسترس نیست")
-    : disk == null
-      ? t("منابع سرور: پردازنده {cpu}٪، حافظه {mem}٪", { cpu: fa(cpu), mem: fa(mem) })
-      : t("منابع سرور: پردازنده {cpu}٪، حافظه {mem}٪، دیسک {disk}٪", { cpu: fa(cpu), mem: fa(mem), disk: fa(disk) });
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button type="button" className="kc-host-chip" aria-label={label} title={label}>
-          <Gauge className="size-3.5 shrink-0" aria-hidden />
-          <span className="kc-host-mini" aria-hidden>
-            <i><b style={{ height: `${cpu}%` }} /></i>
-            <i><b style={{ height: `${mem}%` }} /></i>
-            {disk == null ? null : <i><b style={{ height: `${disk}%` }} /></i>}
-          </span>
-          <span className="ltr max-[480px]:hidden">{down ? "—" : `${cpu}% · ${mem}%${disk == null ? "" : ` · ${disk}%`}`}</span>
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={6} collisionPadding={16} className="g-menu pop kc-usage z-50 rounded-xl border bg-card shadow-xl" dir={isRtl ? "rtl" : "ltr"}>
-          <section>
-            <div className="kc-usage-head kc-usage-title">
-              <span>{t("منابع سرور")}</span>
-              {host?.uptimeS ? <span className="kc-usage-num font-normal">{t("کارکرد {time}", { time: uptime(host.uptimeS) })}</span> : null}
+    <section>
+      <div className="kc-usage-head kc-usage-title">
+        <span>{t("منابع سرور")}</span>
+        {host?.uptimeS ? <span className="kc-usage-num font-normal">{t("کارکرد {time}", { time: uptime(host.uptimeS) })}</span> : null}
+      </div>
+      {!host ? (
+        <div className="kc-note">{t("در حال خواندن…")}</div>
+      ) : down ? (
+        <div className="kc-note">{t("در دسترس نیست")}</div>
+      ) : (
+        <>
+          <div className="kc-usage-limit">
+            <div className="kc-usage-head">
+              <span>{t("پردازنده")}</span>
+              <span className="ltr kc-usage-num">{round1(host.cpu?.percent)}% · {t("{n} هسته", { n: fa(host.cpu?.cores) })}</span>
             </div>
-            {!host ? (
-              <div className="kc-note">{t("در حال خواندن…")}</div>
-            ) : down ? (
-              <div className="kc-note">{t("در دسترس نیست")}</div>
-            ) : (
-              <>
-                <div className="kc-usage-limit">
-                  <div className="kc-usage-head">
-                    <span>{t("پردازنده")}</span>
-                    <span className="ltr kc-usage-num">{round1(host.cpu?.percent)}% · {t("{n} هسته", { n: fa(host.cpu?.cores) })}</span>
-                  </div>
-                  <Bar percent={host.cpu?.percent} />
-                </div>
-                <div className="kc-usage-limit">
-                  <div className="kc-usage-head">
-                    <span>{t("حافظه")}</span>
-                    <span className="ltr kc-usage-num">{gb(host.memory?.used)} / {gb(host.memory?.total)} GB ({host.memory?.percent}%)</span>
-                  </div>
-                  <Bar percent={host.memory?.percent} />
-                </div>
-                {host.disk ? (
-                  <div className="kc-usage-limit">
-                    <div className="kc-usage-head">
-                      <span>{t("دیسک")}</span>
-                      <span className="ltr kc-usage-num">{gb(host.disk.used)} / {gb(host.disk.total)} GB{host.disk.percent == null ? "" : ` (${host.disk.percent}%)`}</span>
-                    </div>
-                    <Bar percent={host.disk.percent} />
-                    <div className="kc-usage-head">
-                      <span className="kc-note">{t("آزاد")}</span>
-                      <span className="ltr kc-usage-num">{gb(host.disk.available)} GB</span>
-                    </div>
-                  </div>
-                ) : null}
-                {Array.isArray(host.load) ? (
-                  <div className="kc-usage-head">
-                    <span className="kc-note">{t("بار سیستم")}</span>
-                    <span className="ltr kc-usage-num">{host.load.map(round1).join(" · ")}</span>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </section>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+            <Bar percent={host.cpu?.percent} />
+          </div>
+          <div className="kc-usage-limit">
+            <div className="kc-usage-head">
+              <span>{t("حافظه")}</span>
+              <span className="ltr kc-usage-num">{gb(host.memory?.used)} / {gb(host.memory?.total)} GB ({host.memory?.percent}%)</span>
+            </div>
+            <Bar percent={host.memory?.percent} />
+          </div>
+          {host.disk ? (
+            <div className="kc-usage-limit">
+              <div className="kc-usage-head">
+                <span>{t("دیسک")}</span>
+                <span className="ltr kc-usage-num">{gb(host.disk.used)} / {gb(host.disk.total)} GB{host.disk.percent == null ? "" : ` (${host.disk.percent}%)`}</span>
+              </div>
+              <Bar percent={host.disk.percent} />
+              <div className="kc-usage-head">
+                <span className="kc-note">{t("آزاد")}</span>
+                <span className="ltr kc-usage-num">{gb(host.disk.available)} GB</span>
+              </div>
+            </div>
+          ) : null}
+          {Array.isArray(host.load) ? (
+            <div className="kc-usage-head">
+              <span className="kc-note">{t("بار سیستم")}</span>
+              <span className="ltr kc-usage-num">{host.load.map(round1).join(" · ")}</span>
+            </div>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
 

@@ -2,8 +2,12 @@
 # Packages come from the npm registry. A host that cannot reach it can ship a prepared
 # .build/npm-cache next to the source (see deploy/README.md); it is used offline when present.
 
+# Base images: Docker Hub by default; a build can pass mirrors (--build-arg NODE_SLIM=...).
+ARG NODE_SLIM=node:24-bookworm-slim
+ARG NODE_ALPINE=node:24-alpine
+
 # The Cursor SDK ships glibc native modules, so the app side uses Debian.
-FROM node:24-bookworm-slim AS deps
+FROM ${NODE_SLIM} AS deps
 WORKDIR /src
 # .build* matches nothing on a normal checkout; package.json keeps the COPY valid either way.
 COPY package.json package-lock.json .build* ./
@@ -23,16 +27,18 @@ RUN npm run build --workspace apps/web
 FROM deps AS prod-deps
 RUN npm prune --omit=dev --offline --no-audit --no-fund
 
-FROM node:24-bookworm-slim AS app
+FROM ${NODE_SLIM} AS app
 # git: per-chat worktrees and the repo_* file/git tools (apps/server/src/worktrees.mjs, repo-tools.mjs).
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+# openssh-client: config CLAUDE_HOST runs the owner's Claude Code on the host (providers/host-spawn.mjs).
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules
 # Workspace deps of apps/server may live under apps/server/node_modules (not hoisted).
 COPY --from=prod-deps /src/apps/server/node_modules apps/server/node_modules
 COPY packages/timeline/package.json packages/timeline/
-COPY apps/server/package.json apps/server/
+# BUILD_COMMIT (optionally stamped at build time) is what /healthz reports; the [T] glob keeps it optional.
+COPY apps/server/package.json apps/server/BUILD_COMMI[T] apps/server/CHANGELOG.jso[n] apps/server/
 COPY packages/timeline/src packages/timeline/src
 COPY apps/server/src apps/server/src
 COPY apps/server/assets apps/server/assets
@@ -54,7 +60,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 CMD ["node", "apps/server/src/index.mjs"]
 
-FROM node:24-alpine AS broker
+FROM ${NODE_ALPINE} AS broker
 # python3 + the two crypto libs are for the vendored Winbox client (apps/broker/vendor/winbox),
 # used for routers whose RouterOS API is off: their console is reached over Winbox itself.
 # git: clone/fetch/push of the repos chats work on (apps/broker/src/repos.mjs).

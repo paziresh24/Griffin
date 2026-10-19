@@ -8,5 +8,6 @@
   "پروایدر فعلی سهمیهٔ پلن گزارش نمی‌دهد.": "The current provider does not report a plan quota.",
   "مصرف خود {name}": "{name}'s own usage",
   "۵ ساعت اخیر": "Last 5 hours",
-  "۷ روز اخیر": "Last 7 days"
+  "۷ روز اخیر": "Last 7 days",
+  "سقف دقیق اشتراک Claude": "Exact Claude subscription limits"
 }

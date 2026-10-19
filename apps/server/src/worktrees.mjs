@@ -11,6 +11,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { gitPrefix } from "./persona.mjs";
 
 const FETCH_TIMEOUT_MS = 60_000;
 const GIT_TIMEOUT_MS = 20_000;
@@ -93,12 +94,35 @@ export function shortId(chatId) {
   return String(chatId || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "chat";
 }
 
-export function worktreeDir(reposRoot, chatId) {
-  return path.join(reposRoot, "_wt", `griffin-${shortId(chatId)}`);
+// A chat's tree and branch carry the assistant's name (persona.mjs agentSlug): <reposRoot>/_wt/<name>-<id8>
+// on <name>/<id8>. The name is the one the chat's tree was made with (chats from before 2026-10-17: griffin),
+// so a later rename of the assistant never strands a chat from its own worktree.
+const TREE_NAME = /^([a-z0-9][a-z0-9-]*)-([A-Za-z0-9]{8})(?:-2)?$/;
+export function chatPrefix(reposRoot, chatId, { readdirSync = fs.readdirSync } = {}) {
+  const id8 = shortId(chatId);
+  try {
+    for (const name of readdirSync(path.join(reposRoot, "_wt"))) {
+      const m = TREE_NAME.exec(String(name));
+      if (m && m[2] === id8) return m[1];
+    }
+  } catch {
+    // no _wt yet: a new chat
+  }
+  return gitPrefix();
 }
 
-export function branchName(chatId) {
-  return `griffin/${shortId(chatId)}`;
+export function worktreeDir(reposRoot, chatId, prefix = chatPrefix(reposRoot, chatId)) {
+  return path.join(reposRoot, "_wt", `${prefix}-${shortId(chatId)}`);
+}
+
+export function branchName(chatId, prefix = gitPrefix()) {
+  return `${prefix}/${shortId(chatId)}`;
+}
+
+/** The branch of a chat's stored tree path (<prefix>-<id8>[-2] → <prefix>/<id8>[-2]). */
+export function branchOfTree(treePath) {
+  const m = TREE_NAME.exec(path.basename(String(treePath || "")));
+  return m ? `${m[1]}/${path.basename(String(treePath)).slice(m[1].length + 1)}` : null;
 }
 
 // Default execFn: a real async, non-blocking child process (never execFileSync — that would
@@ -239,14 +263,14 @@ export async function worktreeProblem(dir, { execFn = defaultExecFn, existsSync 
 
 // The chat's worktrees in order: griffin-<id8>, then griffin-<id8>-2, -3, … Each one after the
 // first was made because the one before it looked unusable; that one is kept for the owner.
-const slotDir = (reposRoot, chatId, n) => (n === 1 ? worktreeDir(reposRoot, chatId) : `${worktreeDir(reposRoot, chatId)}-${n}`);
-const slotBranch = (chatId, n) => (n === 1 ? branchName(chatId) : `${branchName(chatId)}-${n}`);
+const slotDir = (reposRoot, chatId, n, prefix = chatPrefix(reposRoot, chatId)) => (n === 1 ? worktreeDir(reposRoot, chatId, prefix) : `${worktreeDir(reposRoot, chatId, prefix)}-${n}`);
+const slotBranch = (chatId, n, prefix) => (n === 1 ? branchName(chatId, prefix) : `${branchName(chatId, prefix)}-${n}`);
 
 // The chat's current worktree: the last slot whose folder exists (or the first, if none does).
 // A chat has at most two trees: its base tree and ONE replacement (-2). A -2 that is unusable too
 // fails the start instead of piling up -3, -4, ...
 export const MAX_SLOT = 2;
-const slotAt = (reposRoot, chatId, n) => ({ n, dir: slotDir(reposRoot, chatId, n), branch: slotBranch(chatId, n) });
+const slotAt = (reposRoot, chatId, n, prefix = chatPrefix(reposRoot, chatId)) => ({ n, dir: slotDir(reposRoot, chatId, n, prefix), branch: slotBranch(chatId, n, prefix) });
 export const chatSlots = (reposRoot, chatId) => [1, 2].map((n) => slotAt(reposRoot, chatId, n));
 
 // The chat's current tree. `currentDir` is the path stored on the chat (chats.worktree_path) and
@@ -708,7 +732,7 @@ function samePath(a, b) {
 }
 
 // griffin-<id8> (the base tree) and griffin-<id8>-2 (its one replacement).
-const SWEEP_NAME = /^griffin-([A-Za-z0-9]{8})(?:-(2))?$/;
+const SWEEP_NAME = /^([a-z0-9][a-z0-9-]*)-([A-Za-z0-9]{8})(?:-(2))?$/;
 
 // Startup sweep: worktrees under <reposRoot>/_wt that belong to chats that are archived or no
 // longer exist are removed (with their local griffin/<id8> branch) when nothing would be lost —
@@ -737,8 +761,8 @@ export async function sweepChatWorktrees({
   for (const entry of entries) {
     const match = entry.isDirectory() ? SWEEP_NAME.exec(entry.name) : null;
     if (!match) continue;
-    const id8 = match[1];
-    const slot = slotAt(reposRoot, id8, match[2] ? 2 : 1);
+    const id8 = match[2];
+    const slot = slotAt(reposRoot, id8, match[3] ? 2 : 1, match[1]);
     const dir = path.join(reposRoot, "_wt", entry.name);
     const result = { id8, dir, repo: null, action: "kept", reason: null };
     results.push(result);
@@ -760,7 +784,7 @@ export async function sweepChatWorktrees({
         continue;
       }
       result.repo = repo;
-      const state = chatState(id8);
+      const state = chatState(id8, match[1]);
       if (state !== "archived" && state !== "deleted") {
         result.reason = "chat is live";
         continue;

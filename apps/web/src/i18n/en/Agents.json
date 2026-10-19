@@ -67,5 +67,8 @@
   "بالا": "Up",
   "پایین": "Down",
   "جایگزین": "Fallback",
-  "ذخیرهٔ ترتیب": "Save order"
+  "ذخیرهٔ ترتیب": "Save order",
+  "معرفی کوتاه روی کارت (اختیاری)": "Short line on the card (optional)",
+  "({n} روشن)": "({n} on)",
+  "ساخته‌شده": "custom"
 }

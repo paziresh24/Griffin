@@ -114,3 +114,21 @@ test("archive: removing a worktree always deletes its local branch, even when th
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("startup sweep: another app's tree in a shared repos folder is never taken for a deleted chat", async () => {
+  const { root, reposRoot, repoDir } = setupRepo();
+  try {
+    // Karsara beside a Griffin trial (2026-10-17): its clean live chat trees looked like ours.
+    const theirs = path.join(reposRoot, "_wt", "karsara-abcd1234");
+    git(["worktree", "add", "-q", theirs, "origin/main", "-b", "karsara/abcd1234"], repoDir);
+    const seen = [];
+    const own = new Set(["griffin"]);
+    const results = await sweepChatWorktrees({ reposRoot, chatState: (id8, prefix) => (seen.push(prefix), own.has(prefix) ? "deleted" : "unknown") });
+    assert.deepEqual(seen, ["karsara"], "the sweep tells the policy whose name the tree carries");
+    assert.equal(results.find((r) => r.id8 === "abcd1234")?.action, "kept");
+    assert.ok(fs.existsSync(theirs));
+    assert.ok(branches(repoDir).includes("karsara/abcd1234"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

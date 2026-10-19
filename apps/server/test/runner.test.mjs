@@ -402,6 +402,40 @@ test("plan limit: the run is retried once on the fallback provider with the same
   }
 });
 
+// 2026-10-18: the owner moved the agents to the API-key account while a run on the subscription
+// was out; its weekly limit came back and marked the API-key account, so every chat stalled. The
+// limit marks the account the run was on (runLabel at its start), not the route at error time.
+test("a plan limit marks the account the run was on, not the route at error time", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-limit-acct-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  let route = "claude-2";
+  let first = true;
+  const sdk = {
+    async create() {
+      return {
+        agentId: "a",
+        async send() {
+          const hit = first;
+          first = false;
+          return { id: "r", supports: () => true, async cancel() {}, wait: async () => { if (hit) route = "claude-3"; return hit ? { status: "error", error: { message: "You've hit your weekly limit", code: "plan_limit" } } : { status: "finished" }; } };
+        },
+      };
+    },
+    async resume() { return this.create(); },
+  };
+  const marked = [];
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {}, runLabel: () => ({ provider: route, model: "sonnet" }), onPlanLimit: (_chat, _error, used) => (marked.push(used), true) });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => !store.runningRuns().length && marked.length === 1);
+    assert.deepEqual(marked, ["claude-2"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // 2026-10-10: a colleague thread died on every message — Claude resumes lazily, so a session it no
 // longer has fails at send ("No conversation found"). The runner retries once on a fresh session.
 test("a session lost at send time is retried once on a fresh one", async () => {
@@ -546,4 +580,72 @@ test("kept messages: a run that fails before anything reached the owner keeps th
   await until(() => finished().length === 5 && !runner.isActive(chat.id));
   assert.equal(runner.dropKept(chat.id, kept()[0].id), true);
   assert.deepEqual(kept(), []);
+});
+
+test("«فوری»: an engine that cannot steer has its turn interrupted, and the forced message runs next", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-force-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let cancels = 0;
+  const agent = {
+    agentId: "a1",
+    async send(message) {
+      sends.push(message);
+      const first = sends.length === 1;
+      return { id: `r${sends.length}`, supports: () => true, async cancel() { cancels += 1; release(); }, async wait() { if (first) await gate; return { status: first && cancels ? "cancelled" : "finished" }; } };
+    },
+    close() {},
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {} } });
+  const chat = store.createChat({ title: "t" });
+
+  await runner.send(chat.id, { text: "اول" });
+  await until(() => sends.length === 1);
+  await runner.send(chat.id, { text: "صفِ عادی", intent: "queue" });
+  const out = await runner.send(chat.id, { text: "فوری", intent: "force" });
+  assert.equal(out.delivered, "forced");
+  await until(() => sends.length === 2);
+  await until(() => !runner.isActive(chat.id));
+  assert.equal(cancels, 1, "the running turn is interrupted");
+  assert.equal(sends[1], "صفِ عادی\n\nفوری", "what queued goes with it, nothing is dropped");
+  assert.ok(store.eventsAfter(chat.id).some((e) => e.type === "note" && /فوری/.test(e.data.text)));
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("«فوری»: an engine that steers takes the message into the running turn", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-force-steer-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const steered = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const agent = {
+    agentId: "a1",
+    async send(message) {
+      sends.push(message);
+      return { id: `r${sends.length}`, supports: () => true, async steer(m) { steered.push(m); return "complete_delivered"; }, async cancel() {}, async wait() { await gate; return { status: "finished" }; } };
+    },
+    close() {},
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {} } });
+  const chat = store.createChat({ title: "t" });
+
+  await runner.send(chat.id, { text: "اول" });
+  await until(() => sends.length === 1);
+  const out = await runner.send(chat.id, { text: "فوری", intent: "force" });
+  assert.equal(out.delivered, "steered");
+  assert.equal(steered.length, 1);
+  release();
+  await until(() => !runner.isActive(chat.id));
+  assert.equal(sends.length, 1, "no second turn");
+  assert.equal(store.eventsAfter(chat.id).filter((e) => e.type === "user").at(-1).data.intent, "steer");
+
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

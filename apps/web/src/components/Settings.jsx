@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Languages, Loader2, LogOut, MessageSquare, Plus, RefreshCw, Send, ShieldOff, Sparkles, Trash2, UserRound, X } from "lucide-react";
+import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, Globe, KeyRound, Languages, Loader2, LogOut, MessageSquare, MessageSquareHeart, Plug, Plus, RefreshCw, Send, ShieldOff, Sparkles, Trash2, UserRound, Wallet, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
@@ -9,14 +9,23 @@ import { Group, Item, SectionHeader } from "./SettingsParts.jsx";
 import { BRAND, agentMeta } from "../brand.js";
 import { lang, num, setLang, t } from "../i18n.js";
 import { ProvidersSection } from "./Providers.jsx";
+import { FeedbackInbox } from "./Feedback.jsx";
+import { AccountingSection } from "./Accounting.jsx";
 import { DoctorSection } from "./Doctor.jsx";
 import { SecretsSection } from "./Secrets.jsx";
+import { McpServersSection } from "./McpServers.jsx";
 import { ConfigSection } from "./Config.jsx";
 import { profileChanged } from "../profile.js";
 import { TokensSection } from "./Tokens.jsx";
+import { UsageBadge } from "./Usage.jsx";
+import { SttSection } from "./PlanLimits.jsx";
+import { AgentsPage } from "./Agents.jsx";
 import { AppearanceSection } from "./Appearance.jsx";
 import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
-import { useSkin } from "../skin.js";
+import { useFlag, useLook } from "../ui-prefs.js";
+import { agoPhrase, connectionRows } from "../karsara-shell.js";
+import { exactTime } from "../elapsed.js";
+import { ProxyStep } from "./Setup.jsx";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -28,45 +37,91 @@ const KIND_META = {
 // «حساب», chat behaviour and this device's notifications one «گفتگو و اعلان», the live check and the
 // server's status one «سلامت». Old ids still open the right one (ALIASES).
 const SECTIONS = [
+  // The karsara look only, and first there: its connection checklist.
+  { id: "status", group: t("شما"), label: t("وضعیت"), icon: Activity, title: t("وضعیت اتصال‌ها"), description: "", karsaraOnly: true },
   { id: "account", group: t("شما"), label: t("حساب"), icon: UserRound, title: t("حساب"), description: t("نام شما در منو، زبان رابط و نشست‌های ورود.") },
-  { id: "appearance", group: t("شما"), label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("پوسته و بخش‌های بالای منو، روی همین مرورگر.") },
+  { id: "appearance", group: t("شما"), label: t("ظاهر و بخش‌ها"), icon: Palette, title: t("ظاهر و بخش‌ها"), description: t("ظاهر و بخش‌های برنامه، برای شما روی همهٔ دستگاه‌ها.") },
   { id: "chat", group: t("شما"), label: t("گفتگو و اعلان"), icon: MessageSquare, title: t("گفتگو و اعلان"), description: t("رفتار کادر پیام و ادامهٔ کار، و اعلان روی همین دستگاه.") },
+  { id: "agents", group: t("دستیار"), label: t("ایجنت‌ها"), icon: Bot, title: t("ایجنت‌ها"), description: t("هر ایجنت پروفایل خودش را دارد: موتور، مدل و ابزارهای روشن. برای تنظیم، روی کارت بزن.") },
   { id: "providers", group: t("دستیار"), label: t("موتورها"), icon: Cpu, title: t("موتورها"), description: t("حساب‌ها، کلیدها و مدل پیش‌فرض هر موتور.") },
   { id: "connections", group: t("دستیار"), label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد.", { name: BRAND.name }) },
+  { id: "proxy", group: t("دستیار"), label: t("پراکسی و VPN"), icon: Globe, title: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
+  { id: "mcp", group: t("دستیار"), label: t("سرورهای MCP"), icon: Plug, title: t("سرورهای MCP"), description: t("سرورهای MCP شخصی شما برای Claude Code کامل.") },
   { id: "knowledge", group: t("دستیار"), label: t("دانش"), icon: BookOpen, title: t("دانش"), description: t("فقط یادداشت‌های تأییدشده به قواعد ایجنت می‌روند.") },
   { id: "secrets", group: t("دستیار"), label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
   { id: "health", group: t("سیستم"), label: t("سلامت"), icon: Stethoscope, title: t("سلامت"), description: t("چک زنده و تعمیر با یک کلیک، و وضعیت سرور.") },
+  { id: "feedback", group: t("سیستم"), label: t("بازخوردها"), icon: MessageSquareHeart, title: t("بازخوردها"), description: t("بازخورد و درخواست پشتیبانی که به این نصب رسیده، با تصویر صفحه و جزئیات.") },
+  // Only on an install that answers GET /api/accounting (accounting.mjs).
+  { id: "accounting", group: t("سیستم"), label: t("حسابداری مصرف"), icon: Wallet, title: t("حسابداری مصرف"), description: t("مصرف همهٔ نصب‌ها از دیتابیس خودشان، اکانت‌های مشترک Claude و هشدارها. فقط روی همین نصب."), hubOnly: true },
   { id: "tokens", group: t("سیستم"), label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن روزبه‌روز، به تفکیک مدل و گفتگو.") },
   { id: "config", group: t("سیستم"), label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.") },
 ];
-const ALIASES = { profile: "account", notifications: "chat", doctor: "health", status: "health" };
-const sectionId = (id) => {
-  const next = ALIASES[id] || id;
-  return SECTIONS.some((s) => s.id === next) ? next : null;
+const ALIASES = { profile: "account", notifications: "chat", doctor: "health" };
+// The karsara look: its own list, in its order and words, with no group headings; after it only
+// what a Griffin install also needs (the token page the user menu opens, the look, secrets,
+// configuration). "Agents" is in the user menu there; the live check sits under "Status".
+const KARSARA_SECTIONS = [
+  { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت اتصال‌ها"), description: "" },
+  { id: "account", label: t("نام شما"), icon: UserRound, title: t("نام شما"), description: t("پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.") },
+  { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: "" },
+  { id: "proxy", label: t("پراکسی و VPN"), icon: Globe, title: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
+  { id: "notifications", label: t("اعلان‌ها"), icon: Bell, title: t("اعلان‌ها"), description: t("وقتی گفتگو تمام شود، سؤالی منتظر جواب باشد، یا یک کار پس‌زمینه نتیجه بدهد، حتی با صفحه خاموش خبر می‌رسد.") },
+  { id: "composer", label: t("گفتگو"), icon: MessageSquare, title: t("گفتگو"), description: t("رفتارهای خودکار گفتگو؛ همه را می‌شود خاموش کرد.") },
+  { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: "" },
+  { id: "mcp", label: "MCP", icon: Plug, title: t("سرورهای MCP"), description: "" },
+  { id: "providers", label: t("ارائه‌دهنده‌ها"), icon: KeyRound, title: t("ارائه‌دهنده‌ها"), description: "" },
+  ...["tokens", "feedback", "appearance", "secrets", "config"].map((id) => SECTIONS.find((s) => s.id === id)),
+];
+const KARSARA_ALIASES = { profile: "account", chat: "composer", health: "status", doctor: "status" };
+const sectionsFor = (karsara, hub = false) => (karsara ? KARSARA_SECTIONS : SECTIONS.filter((s) => !s.karsaraOnly && (hub || !s.hubOnly)));
+const sectionId = (id, karsara = false) => {
+  const next = karsara ? KARSARA_ALIASES[id] || id : ALIASES[id] || (id === "status" ? "health" : id);
+  return sectionsFor(karsara, true).some((s) => s.id === next) ? next : null;
 };
-const SECTION_GROUPS = [...new Set(SECTIONS.map((s) => s.group))];
 
-const readSection = () => {
+// Griffin opens Settings on "Health" or the section picked last. The karsara look always opens on
+// "Status"; a section asked for just before opening (the user bar's "Account", the composer's engines link) is
+// taken once and cleared, and a tab picked inside Settings is not remembered.
+const readSection = (karsara) => {
+  const first = karsara ? "status" : "health";
   try {
-    return sectionId(localStorage.getItem("griffin.settings.section")) || "health";
+    const asked = sectionId(localStorage.getItem("griffin.settings.section"), karsara);
+    if (karsara) localStorage.removeItem("griffin.settings.section");
+    return asked || first;
   } catch {
-    return "health";
+    return first;
   }
 };
 
 export function SettingsPage({ onBack, onSection }) {
-  const [section, setSectionState] = useState(readSection);
+  const karsara = useFlag("settingsList"); // the karsara settings list (ui-prefs.js)
+  const flat = useLook() === "karsara";
+  const [section, setSectionState] = useState(() => readSection(karsara));
+  // "Usage accounting" is there only where the server has it.
+  const [hub, setHub] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api("/api/accounting").then(() => alive && setHub(true), () => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const shownSections = sectionsFor(karsara, hub);
+  // The skin switched while Settings is open: a section the new skin lacks falls back to its first.
+  useEffect(() => {
+    if (!shownSections.some((s) => s.id === section)) setSectionState(readSection(karsara));
+  }, [karsara]); // eslint-disable-line react-hooks/exhaustive-deps
   // The open section names the browser tab (tab-title.js).
   useEffect(() => {
-    onSection?.(SECTIONS.find((s) => s.id === section)?.label || "");
+    onSection?.(shownSections.find((s) => s.id === section)?.label || "");
     return () => onSection?.("");
   }, [section, onSection]);
   const setSection = (id) => {
     setSectionState(id);
+    if (karsara) return;
     try { localStorage.setItem("griffin.settings.section", id); } catch { /* private mode */ }
   };
-  const current = SECTIONS.find((s) => s.id === section);
-  const karsara = useSkin() === "karsara";
+  const current = shownSections.find((s) => s.id === section) || shownSections.find((s) => s.id === (karsara ? "status" : "health"));
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
@@ -78,9 +133,9 @@ export function SettingsPage({ onBack, onSection }) {
           <h1 className="font-semibold">{t("تنظیمات")}</h1>
         </div>
         <nav className="space-y-0.5 px-3">
-          {SECTIONS.map(({ id, group, label, icon: Icon }, index) => {
+          {shownSections.map(({ id, group, label, icon: Icon }, index) => {
             const active = section === id;
-            const heading = SECTIONS[index - 1]?.group !== group;
+            const heading = !karsara && shownSections[index - 1]?.group !== group;
             return (
               <div key={id}>
               {heading ? <p className={`px-3 pb-1 text-[11px] font-medium text-muted-foreground ${index ? "pt-4" : ""}`}>{group}</p> : null}
@@ -111,7 +166,7 @@ export function SettingsPage({ onBack, onSection }) {
             <h1 className="font-semibold">{t("تنظیمات")}</h1>
           </div>
           <div className="g-settings-strip scrollbar-none -mx-4 mb-6 flex gap-1.5 overflow-x-auto px-4 sm:hidden">
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {shownSections.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
@@ -126,27 +181,50 @@ export function SettingsPage({ onBack, onSection }) {
             ))}
           </div>
 
-          <motion.div key={section} initial={karsara ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
-            {section === "connections" ? (
+          <motion.div key={section} initial={flat ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+            {current.id === "connections" ? (
               <ConnectionsSection meta={current} />
+            ) : current.id === "status" ? (
+              <KarsaraStatusSection title={current.title} onSection={setSection} />
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
-                {section === "health" ? (
+                {current.id === "health" ? (
                   <HealthSection />
                 ) : section === "secrets" ? (
                   <SecretsSection />
+                ) : section === "feedback" ? (
+                  <FeedbackInbox />
+                ) : section === "accounting" ? (
+                  <AccountingSection />
+                ) : section === "proxy" ? (
+                  <ProxyStep heading={false} />
+                ) : section === "mcp" ? (
+                  <McpServersSection />
                 ) : section === "config" ? (
                   <ConfigSection />
                 ) : section === "tokens" ? (
-                  <TokensSection />
+                  <div className="space-y-6">
+                    <div className="rounded-xl border p-1"><UsageBadge open /></div>
+                    <TokensSection />
+                  </div>
+                ) : section === "agents" ? (
+                  <AgentsPage embedded />
                 ) : section === "providers" ? (
                   <ProvidersSection />
                 ) : section === "knowledge" ? (
                   <KnowledgeSection />
+                ) : section === "notifications" ? (
+                  <PushSection />
+                ) : section === "composer" ? (
+                  <div className="space-y-6">
+                    <ChatPrefsSection />
+                    <SttSection />
+                  </div>
                 ) : section === "chat" ? (
                   <div className="space-y-6">
                     <ChatPrefsSection />
+                    <SttSection />
                     <PushSection />
                   </div>
                 ) : section === "appearance" ? (
@@ -162,6 +240,60 @@ export function SettingsPage({ onBack, onSection }) {
           </motion.div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Karsara skin: «وضعیت» — the connection checklist (karsara-shell.js connectionRows) from fast reads,
+// then the live check below it, as Karsara shows them.
+const STATUS_ICON = { ok: Check, warn: KeyRound, off: X };
+const STATUS_TINT = { ok: "bg-ok/12 text-ok", warn: "bg-warn/12 text-warn", off: "bg-muted text-muted-foreground" };
+function KarsaraStatusSection({ title, onSection }) {
+  const [reads, setReads] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const get = (path) => api(path).catch(() => null);
+    Promise.all([get("/api/setup"), get("/api/integrations"), get("/api/telegram-inbox/status"), get("/api/mcp-servers"), get("/api/setup/status")]).then(([setup, integrations, inbox, mcp, checks]) => {
+      if (!alive) return;
+      setReads({ setup, integrations: integrations?.integrations || [], inbox, mcp, checks });
+      setLoaded(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const rows = connectionRows(reads);
+  return (
+    <div className="space-y-6">
+      <SectionHeader title={title} />
+      <Group joined>
+        {!loaded ? (
+          <div className="flex justify-center py-8 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
+        ) : !rows.length ? (
+          <p className="px-4 py-6 text-center text-sm text-muted-foreground">{t("وضعیت اتصال‌ها خوانده نشد.")}</p>
+        ) : (
+          rows.map((row) => (
+            <Item
+              key={row.id}
+              icon={STATUS_ICON[row.level]}
+              tint={STATUS_TINT[row.level]}
+              title={row.title}
+              subtitle={row.subtitle}
+              trailing={row.action ? (
+                <button
+                  type="button"
+                  onClick={() => (row.action.href ? (window.location.hash = row.action.href.slice(1)) : onSection(row.action.section))}
+                  className="g-pill press rounded-lg border px-2.5 py-1 text-xs hover:bg-muted"
+                >
+                  {row.action.label}
+                </button>
+              ) : null}
+            />
+          ))
+        )}
+      </Group>
+      <DoctorSection bare />
     </div>
   );
 }
@@ -439,11 +571,12 @@ function IntegrationRow({ integration, onChange }) {
   );
 }
 
-// «گفتگو»: the two chat switches, on top of /api/config — both are
+// "Chat": the chat switches, on top of /api/config — all are
 // live there, so no restart. An unset key follows the env, else on.
 const CHAT_PREFS = [
   { key: "PROMPT_SUGGESTIONS", icon: Sparkles, title: t("پیشنهاد پیام بعدی"), subtitle: t("کم‌رنگ در کادر، Tab برای پذیرفتن؛ فقط Claude") },
   { key: "AUTO_CONTINUE", icon: RefreshCw, title: t("ادامهٔ خودکار بعد از سقف"), subtitle: t("با بازشدن سقف مصرف، حداکثر سه بار؛ پیام شما لغوش می‌کند") },
+  { key: "SIDE_CHAT", icon: MessageSquare, title: t("چت کناری"), subtitle: t("یک گفتگوی جدا کنار گفتگوی باز، با همان زمینه") },
 ];
 
 function ChatPrefsSection() {
@@ -600,12 +733,19 @@ function CopyButton({ text }) {
   );
 }
 
-// Owner's own Telegram account: api credentials from my.telegram.org, then the code Telegram sends,
-// then the two-step password if the account has one. Values go straight to the server and Telegram.
-function AccountLogin({ onDone }) {
+// Owner's own Telegram account: the phone (plus api credentials from my.telegram.org when this server
+// has no default app), then the code Telegram sends, then the two-step password if the account has one. Values go straight to the server and Telegram.
+export function AccountLogin({ onDone }) {
   const [step, setStep] = useState("phone");
   const [form, setForm] = useState({ apiId: "", apiHash: "", phone: "", code: "", password: "" });
+  // null = still asking the server; then true/false.
+  const [preset, setPreset] = useState(null);
+  const checkPreset = useCallback(() => api("/api/integrations/telegram-account/app").then((r) => setPreset(Boolean(r.preset)), () => setPreset(false)), []);
+  useEffect(() => {
+    checkPreset();
+  }, [checkPreset]);
   const [loginId, setLoginId] = useState(null);
+  const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (key) => (event) => setForm((f) => ({ ...f, [key]: event.target.value }));
 
@@ -614,7 +754,7 @@ function AccountLogin({ onDone }) {
     setBusy(true);
     try {
       if (step === "phone") {
-        const r = await api("/api/integrations/telegram-account/login", { method: "POST", body: { apiId: form.apiId.trim(), apiHash: form.apiHash.trim(), phone: form.phone.trim() } });
+        const r = await api("/api/integrations/telegram-account/login", { method: "POST", body: preset ? { phone: form.phone.trim() } : { apiId: form.apiId.trim(), apiHash: form.apiHash.trim(), phone: form.phone.trim() } });
         setLoginId(r.loginId);
         setStep("code");
         toast(r.viaApp ? t("کد به اپ تلگرامت فرستاده شد") : t("کد با پیامک فرستاده شد"));
@@ -622,6 +762,7 @@ function AccountLogin({ onDone }) {
         const body = step === "code" ? { code: form.code.trim() } : { password: form.password };
         const r = await api(`/api/integrations/telegram-account/login/${loginId}`, { method: "POST", body });
         if (r.needPassword) {
+          setHint(r.hint || "");
           setStep("password");
         } else {
           setForm({ apiId: "", apiHash: "", phone: "", code: "", password: "" });
@@ -631,6 +772,9 @@ function AccountLogin({ onDone }) {
       }
     } catch (error) {
       toast.error(error.message);
+      // The server's default app may have gone away since the form opened: ask again, so the id
+      // fields come back instead of the same refusal.
+      if (step === "phone" && preset) checkPreset();
     } finally {
       setBusy(false);
     }
@@ -649,19 +793,28 @@ function AccountLogin({ onDone }) {
       </ol>
       {step === "phone" ? (
         <>
-          <p className="text-xs leading-5 text-muted-foreground">
-            {linkBefore}<a className="text-primary underline" href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a>{linkAfter}
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <input value={form.apiId} onChange={set("apiId")} required inputMode="numeric" placeholder="api_id" className={`ltr col-span-1 font-mono ${input}`} />
-            <input value={form.apiHash} onChange={set("apiHash")} required autoComplete="off" spellCheck={false} placeholder="api_hash" className={`ltr col-span-2 font-mono ${input}`} />
-          </div>
+          {preset === false ? (
+            <>
+              <p className="text-xs leading-5 text-muted-foreground">
+                {linkBefore}<a className="text-primary underline" href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a>{linkAfter}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <input value={form.apiId} onChange={set("apiId")} required inputMode="numeric" placeholder="api_id" className={`ltr col-span-1 font-mono ${input}`} />
+                <input value={form.apiHash} onChange={set("apiHash")} required autoComplete="off" spellCheck={false} placeholder="api_hash" className={`ltr col-span-2 font-mono ${input}`} />
+              </div>
+            </>
+          ) : (
+            <p className="text-xs leading-5 text-muted-foreground">{t("شمارهٔ تلگرامت را با کد کشور بنویس؛ کد ورود به اپ تلگرامت می‌آید.")}</p>
+          )}
           <input value={form.phone} onChange={set("phone")} required inputMode="tel" placeholder="+98912…" className={`ltr font-mono ${input}`} />
         </>
       ) : step === "code" ? (
         <input value={form.code} onChange={set("code")} required autoFocus inputMode="numeric" autoComplete="one-time-code" placeholder={t("کد ورود")} className={`ltr text-center font-mono text-lg tracking-[0.4em] ${input}`} />
       ) : (
-        <input value={form.password} onChange={set("password")} required autoFocus type="password" autoComplete="current-password" placeholder={t("رمز تأیید دومرحله‌ای")} className={`ltr ${input}`} />
+        <>
+          <p className="text-xs leading-5 text-muted-foreground">{t("این اکانت رمز دوم (تأیید دومرحله‌ای) دارد؛ همان رمزی که در تلگرام گذاشته‌ای.")}{hint ? <> {t("راهنمایی که خودت گذاشته‌ای:")} <span className="font-medium text-foreground">{hint}</span></> : null}</p>
+          <input value={form.password} onChange={set("password")} required autoFocus type="password" autoComplete="current-password" placeholder={t("رمز تأیید دومرحله‌ای")} className={`ltr ${input}`} />
+        </>
       )}
       <button type="submit" disabled={busy} className="press flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-2.5 font-medium text-primary-foreground disabled:opacity-50">
         {busy ? <Loader2 className="size-4 animate-spin" /> : null} {step === "phone" ? t("ارسال کد") : t("ورود")}
@@ -754,6 +907,7 @@ const KNOWLEDGE_FILTERS = [
 ];
 
 function KnowledgeSection() {
+  const karsara = useFlag("timeAgo"); // «زمان به‌صورت «… پیش»»
   const [data, setData] = useState(null);
   const [filter, setFilter] = useState("pending");
   const [open, setOpen] = useState(null);
@@ -819,8 +973,9 @@ function KnowledgeSection() {
                   title={note.title}
                   subtitle={
                     <>
-                      <bdi dir="ltr">{note.at || note.file}</bdi>
+                      {karsara && note.at ? <span title={exactTime(note.at)}>{agoPhrase(note.at)}</span> : <bdi dir="ltr">{note.at || note.file}</bdi>}
                       {note.expires ? <> · {t("انقضا")} <bdi dir="ltr">{note.expires}</bdi></> : null}
+                      {note.autoTrusted ? <span title={t("از چتِ خودتان بدون محتوای شخص ثالث؛ بدون تأیید به چت‌های بعدی می‌رسد")}> · {t("خودکار")}</span> : null}
                     </>
                   }
                   onClick={() => setOpen(expanded ? null : key)}

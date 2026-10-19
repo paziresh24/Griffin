@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ChevronDown, ListChecks, Menu, Network, Square, Wifi, WifiOff, Zap } from "lucide-react";
+import { ChevronDown, ListChecks, Menu, Network, PanelRightOpen, Square, Wifi, WifiOff, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
 import { api, navigate, useChats, usePageRoute, useRoute, useTelegramPerson, useTimeline } from "./api.js";
 import { connectionNotice } from "./timeline-memo.js";
-import { onNewVersion, reloadNow } from "./new-version.js";
 import { lastRun } from "@griffin/timeline";
 import { tabTitle } from "./tab-title.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
@@ -13,6 +12,8 @@ import { AgentsPage } from "./components/Agents.jsx";
 import { JobsPage } from "./components/Jobs.jsx";
 import { IncidentsPage } from "./components/Incidents.jsx";
 import { PeersPage } from "./components/Peers.jsx";
+import { InboxPeoplePage } from "./components/InboxPeople.jsx";
+import { peopleRoute } from "./inbox-people.js";
 import { GlobalPanel, MotherPanel, TelegramRedirect, WatchPill } from "./components/Telegram.jsx";
 import { motherName } from "./telegram.js";
 import { SettingsPage } from "./components/Settings.jsx";
@@ -20,18 +21,21 @@ import { WorkbenchPage } from "./components/Workbench.jsx";
 import { SetupPage, setupFlowFromHash } from "./components/Setup.jsx";
 import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
+import { ServerDown } from "./components/ServerDown.jsx";
 import { AgentGlyph, ThemeToggle } from "./components/Controls.jsx";
 import { ShareButton } from "./components/Share.jsx";
 import { Toaster, toast } from "sonner";
+import { FeedbackButton, FeedbackDialogs } from "./components/Feedback.jsx";
+import { DEFAULT_ENGINE_EVENT } from "./components/Providers.jsx";
 import { Thread } from "./components/Thread.jsx";
 import { ChatRecord } from "./components/ComposerAssist.jsx";
 import { ChatChildrenContext } from "./components/Tool.jsx";
 import { SideChatButton, SidePanel } from "./components/SideChat.jsx";
 import { RepoChips } from "./components/RepoChips.jsx";
 import { emptySide, sideReducer } from "./side.js";
-import { useSkin } from "./skin.js";
-import { arriveAt, lookAt, seedSeen } from "./seen.js";
-import { SIDEBAR_WIDTH, clampSidebarWidth, loadSidebarWidth, saveSidebarWidth } from "./sidebar-width.js";
+import { loadUiPrefs, useFlag, useLook } from "./ui-prefs.js";
+import { arriveAt, lookAt, seedSeen, syncSeen } from "./seen.js";
+import { SIDEBAR_WIDTH, clampSidebarWidth, isSidebarToggle, loadSidebarHidden, loadSidebarWidth, saveSidebarHidden, saveSidebarWidth } from "./sidebar-width.js";
 import { badgeText } from "./chat-tools.js";
 import { useSuggestions } from "./components/ChatTools.jsx";
 import { quoteStore, withQuotes } from "./quotes.js";
@@ -67,7 +71,7 @@ export default function App() {
   const chatId = useRoute();
   const page = usePageRoute();
   const telegramPerson = useTelegramPerson();
-  const { chats, archived, groups } = useChats();
+  const { chats, archived, groups, sideChat, privateShare, loading: chatsLoading, failed: chatsFailed, retry: retryChats } = useChats();
   const { timeline, connection, reconnect } = useTimeline(chatId);
   const notice = connectionNotice(connection);
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
@@ -86,29 +90,17 @@ export default function App() {
     if (!chatId) return undefined;
     let alive = true;
     api(`/api/chats/${chatId}`)
-      .then((data) => alive && setChatUsage(data?.chat?.usage || null))
+      .then((data) => alive && setChatUsage(data?.chat ? { usage: data.chat.usage || null, billed: data.chat.usageBilled || null } : null))
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, [chatId, chat?.runStatus]);
-  const usageOfChat = chat?.usage || chatUsage;
+  // «سرصفحهٔ گفتگو مثل کارسرا»: the header counts everything billed, as Karsara's does (usageBilled).
+  const headerCounts = useFlag("headerCounts");
+  const billedHeader = headerCounts;
+  const usageOfChat = (billedHeader ? chatUsage?.billed || chat?.usageBilled : chat?.usage || chatUsage?.usage) || null;
 
-  // A new version after an update: a notice that stays until the owner reloads (a hidden tab
-  // reloads by itself — new-version.js).
-  useEffect(
-    () =>
-      onNewVersion(() =>
-        toast(t("نسخهٔ تازهٔ {name} آماده است.", { name: BRAND.name }), {
-          id: "new-version",
-          duration: Infinity,
-          dismissible: false,
-          description: t("با بارگذاری دوباره آن را می‌گیرید؛ پیش‌نویس پیام‌ها می‌ماند."),
-          action: { label: t("بارگذاری دوباره"), onClick: reloadNow },
-        }),
-      ),
-    [],
-  );
 
   useEffect(() => {
     if (!chatId || listed) {
@@ -132,7 +124,13 @@ export default function App() {
   // While a chat is the open route and the tab is visible, its content counts as seen (seen.js): a
   // run that finishes in a hidden tab, or after the owner moved on, leaves it unread.
   useEffect(() => {
-    if (chats.length) seedSeen([...chats, ...archived]);
+    if (!chats.length) return;
+    // The read state lives on the server (seen.js); only when it cannot be reached does this
+    // browser's own baseline stand in.
+    const all = [...chats, ...archived];
+    syncSeen(all).then((ok) => {
+      if (!ok) seedSeen(all);
+    });
   }, [chats, archived]);
   const seenTarget = chat?.updatedAt;
   const seenState = useRef({ chat: null, pending: false });
@@ -145,13 +143,19 @@ export default function App() {
     document.addEventListener("visibilitychange", see);
     return () => document.removeEventListener("visibilitychange", see);
   }, [chatId, seenTarget]);
-  const karsara = useSkin() === "karsara";
+  // The look (appearance only): the header's icon buttons, the drawer and the list's starting width.
+  const karsara = useLook() === "karsara";
+  const SidebarView = Sidebar;
+  // The owner's look and flags from the server; the first load after the update saves this browser's.
+  useEffect(() => {
+    loadUiPrefs();
+  }, []);
   const openSuggestionCount = useSuggestions().open.length;
-  // The assistant's work: what waits for the owner and what runs, on the home page (Board.jsx).
+  // «کارهای دستیار»: what waits for the owner and what runs, on the home page (Board.jsx).
   const inbox = useInbox();
   const menuBadge = openSuggestionCount + inbox.count;
   const board = useMemo(
-    () => (!chatId && hasBoard(inbox, chats, openSuggestionCount) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} /> } : null),
+    () => (!chatId && hasBoard(inbox, chats, openSuggestionCount) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} />, count: inbox.count + openSuggestionCount } : null),
     [chatId, inbox, chats, openSuggestionCount],
   );
 
@@ -167,6 +171,22 @@ export default function App() {
     return parent?.source || null;
   }, [chat, chats, archived]);
   const [drawer, setDrawer] = useState(false);
+  // The desktop list can be hidden for a wide chat (button or Ctrl/⌘+B, from Karsara); on a phone the
+  // same keys open and close the drawer. Only in a chat: the other pages have no header to bring it back.
+  const [sidebarHidden, setSidebarHidden] = useState(() => loadSidebarHidden(browserStorage()));
+  useEffect(() => saveSidebarHidden(browserStorage(), sidebarHidden), [sidebarHidden]);
+  const listHidden = sidebarHidden && !page;
+  useEffect(() => {
+    if (page) return undefined;
+    const onKey = (event) => {
+      if (!isSidebarToggle(event)) return;
+      event.preventDefault();
+      if (window.matchMedia("(min-width: 768px)").matches) setSidebarHidden((hidden) => !hidden);
+      else setDrawer((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [page]);
   // The sidebar's filter for this visit: held here so it outlives the phone drawer (which unmounts)
   // and a visit to Settings; a reload clears it.
   const [sidebarFilter, setSidebarFilter] = useState("all");
@@ -185,6 +205,16 @@ export default function App() {
     repo: null, // null = the server's default repo; "" = none
     groupId: "", // the owner's group a chat from a group's «+» goes into; that one new chat only
   }));
+
+  // «پیش‌فرض کن» on an engine: new chats stop carrying the model last picked here (Providers.jsx).
+  useEffect(() => {
+    const onDefault = () => {
+      writeSetting(STORAGE.model, "");
+      setDraft((d) => ({ ...d, model: "" }));
+    };
+    window.addEventListener(DEFAULT_ENGINE_EVENT, onDefault);
+    return () => window.removeEventListener(DEFAULT_ENGINE_EVENT, onDefault);
+  }, []);
 
   // First run (no engine key, wizard never finished): open the setup wizard once.
   useEffect(() => {
@@ -240,13 +270,14 @@ export default function App() {
   }, [page, settingsSection, chatId, chatTitle, running, inbox.count]);
   // The login form replaces the app on a 401: the tab must not keep the last chat's name.
   useEffect(() => () => {
-    document.title = BRAND.name;
+    document.title = BRAND.title;
   }, []);
 
   // The sidebar's "new" (no group) and a group heading's "+" (that group). The group is for the new
   // chat on screen: opening a chat or another page (jobs, settings…) lets it go.
-  const newChatIn = useCallback((groupId) => {
-    setDraft((d) => ({ ...d, groupId: groupId || "" }));
+  // A repository's «+» (sidebar grouped by repo) also picks the new chat's repository.
+  const newChatIn = useCallback((groupId, { repo } = {}) => {
+    setDraft((d) => ({ ...d, groupId: groupId || "", ...(repo ? { repo } : {}) }));
     navigate(null);
   }, []);
   useEffect(() => {
@@ -310,7 +341,8 @@ export default function App() {
   // Side chat of the open chat: state per parent; a quote from «به چت کناری» opens it seeded.
   const [side, sideDispatch] = useReducer(sideReducer, emptySide());
   const [sideSeed, setSideSeed] = useState(null);
-  const sideParent = chatId && chat && !chat.parentChatId && !chat.sideOf && (chat.caller || "owner") === "owner" ? chatId : null;
+  // Off with the SIDE_CHAT switch (config.mjs; it rides on the chat list).
+  const sideParent = sideChat && chatId && chat && !chat.parentChatId && !chat.sideOf && (chat.caller || "owner") === "owner" ? chatId : null;
   useEffect(() => {
     sideDispatch({ type: "parent", id: sideParent });
     setSideSeed(null);
@@ -399,11 +431,11 @@ export default function App() {
         <SettingsPage onBack={() => navigate(null)} onSection={setSettingsSection} />
       ) : (
         <>
-          <ResizableSidebar initial={karsara ? SIDEBAR_WIDTH.karsara : SIDEBAR_WIDTH.initial}>
-            <Sidebar
+          <ResizableSidebar initial={karsara ? SIDEBAR_WIDTH.karsara : SIDEBAR_WIDTH.initial} hidden={listHidden}>
+            <SidebarView
               chats={chats}
               archived={archived}
-              groups={groups}
+              groups={groups} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
               filter={sidebarFilter}
               onFilter={setSidebarFilter}
               onNewChat={newChatIn}
@@ -414,16 +446,17 @@ export default function App() {
               agent={settings.agent}
               onAgentChange={selectAgent}
               agentLocked={chat?.runStatus === "running"}
+              onHide={page ? undefined : () => setSidebarHidden(true)}
             />
           </ResizableSidebar>
           {drawer ? (
             <div className="fixed inset-0 z-40 md:hidden">
               <div className={`absolute inset-0 ${karsara ? "bg-black/40" : "bg-black/50"}`} onClick={() => setDrawer(false)} />
               <div className={`absolute inset-y-0 start-0 ${karsara ? "w-[86%] max-w-80 border-e" : "w-[90%] max-w-96 shadow-xl"}`}>
-                <Sidebar
+                <SidebarView
                   chats={chats}
                   archived={archived}
-                  groups={groups}
+                  groups={groups} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
                   filter={sidebarFilter}
                   onFilter={setSidebarFilter}
                   onNewChat={newChatIn}
@@ -441,19 +474,24 @@ export default function App() {
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
-            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramRedirect personId={telegramPerson} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
+            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "inbox" ? <InboxPeoplePage peerId={peopleRoute(window.location.hash)?.peerId || null} onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramRedirect personId={telegramPerson} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
               <ChatChildrenContext.Provider value={chat?.children || []}>
               <ChatRecord.Provider value={chat}>
               <Thread
                 header={
                   <header className="border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)] sm:px-4">
                     <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => setDrawer(true)} className="relative rounded-lg p-2 hover:bg-muted md:hidden" aria-label={t("منو")}>
-                      <Menu className="size-5" />
+                    <button type="button" onClick={() => setDrawer(true)} className={karsara ? "kc-icon-btn relative md:hidden" : "relative rounded-lg p-2 hover:bg-muted md:hidden"} aria-label={t("منو")}>
+                      <Menu className={karsara ? undefined : "size-5"} />
                       {badgeText(menuBadge) ? (
-                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-primary px-1 text-[10px] leading-4 text-primary-foreground" aria-label={t("{n} مورد منتظر شما", { n: num(menuBadge) })}>{badgeText(menuBadge)}</span>
+                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-signal px-1 text-[10px] leading-4 text-signal-foreground" aria-label={`${menuBadge} مورد منتظر شما`}>{badgeText(menuBadge)}</span>
                       ) : null}
                     </button>
+                    {listHidden ? (
+                      <button type="button" onClick={() => setSidebarHidden(false)} className={karsara ? "kc-icon-btn hidden md:inline-flex" : "hidden shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex"} aria-label={t("نمایش فهرست گفتگوها")} title={t("نمایش فهرست گفتگوها (Ctrl+B یا ⌘B)")}>
+                        <PanelRightOpen className={karsara ? undefined : "size-4"} />
+                      </button>
+                    ) : null}
                     {chat?.personId && chat.caller === "team" && !chat.parentChatId && !chat.mother ? (
                       <button
                         type="button"
@@ -481,8 +519,8 @@ export default function App() {
                       </button>
                     ) : null}
                     {chatId && notice ? (
-                      // Under the Karsara skin a lost connection moves to its own row on a phone (below).
-                      <ConnectionNotice notice={notice} onRetry={reconnect} hideTextOnPhone={Boolean(notice.action)} className={karsara && notice.action ? "hidden sm:flex" : "flex"} />
+                      // «سرصفحهٔ گفتگو مثل کارسرا»: a lost connection moves to its own row on a phone (below).
+                      <ConnectionNotice notice={notice} onRetry={reconnect} hideTextOnPhone={Boolean(notice.action)} className={headerCounts && notice.action ? "hidden sm:flex" : "flex"} />
                     ) : null}
                     {usageOfChat?.total ? (
                       <span
@@ -500,29 +538,30 @@ export default function App() {
                         {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
                     ) : null}
-                    {karsara && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="hidden sm:flex" /> : null}
+                    {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="hidden sm:flex" /> : null}
                     {sideParent ? <SideChatButton open={side.open} count={side.sides.length} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
                     {chat?.parentChatId && chat.runStatus === "running" ? (
                       <button type="button" onClick={() => stopChat(chat.id)} className="press inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs text-bad hover:bg-bad/10">
                         <Square className="size-3.5" /> {t("توقف")}
                       </button>
                     ) : null}
-                    <ShareButton chatId={chatId} />
+                    <ShareButton chatId={chatId} privateShare={privateShare} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
                     </div>
-                    {karsara && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="mt-2 flex w-fit sm:hidden" /> : null}
-                    {karsara && chatId && notice?.action ? <ConnectionNotice notice={notice} onRetry={reconnect} className="mt-2 flex sm:hidden" wrap /> : null}
+                    {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="mt-2 flex w-fit sm:hidden" /> : null}
+                    {headerCounts && chatId && notice?.action ? <ConnectionNotice notice={notice} onRetry={reconnect} className="mt-2 flex sm:hidden" wrap /> : null}
                     {/* One live region that stays in the page, so a screen reader hears each change once. */}
                     <span className="sr-only" role="status" aria-live="polite">{chatId && notice && notice.tone !== "muted" && notice.text ? t(notice.text) : ""}</span>
                   </header>
                 }
                 runInfo={<>{chat?.mother ? null : <SubagentsBar chat={chat} />}<TodoProgress timeline={timeline} /></>}
                 readOnly={chat?.caller === "task" || Boolean(chat?.parentChatId)}
+                canSide={Boolean(sideParent)}
                 agentLabel={agentMeta(settings.agent).label}
                 agent={settings.agent}
                 fresh={!chatId}
                 board={board}
-                recentTitles={karsara ? [] : recentTitles}
+                recentTitles={recentTitles}
                 placeholder={
                   // A phone's box is a few words wide: the short form there (the panel says the rest).
                   chat?.mother
@@ -574,7 +613,10 @@ export default function App() {
         </>
       )}
 
-      <Toaster position="top-center" theme={theme} dir={isRtl ? "rtl" : "ltr"} toastOptions={{ className: "font-sans" }} />
+      <Toaster position="top-center" theme={theme} dir="rtl" closeButton toastOptions={{ className: "font-sans" }} />
+      <ServerDown />
+      <FeedbackDialogs />
+      {chatId && !page ? <FeedbackButton /> : null}
     </div>
   );
 }
@@ -635,8 +677,8 @@ function SubagentsBar({ chat }) {
       <Popover.Trigger asChild>
         <button type="button" className="g-box press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
           <Network className="size-3.5 text-primary" />
-          <span>{t("{n} زیرایجنت", { n: num(count) })}</span>
-          {running ? <span className="flex items-center gap-1 text-primary"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{t("{n} در حال کار", { n: num(running) })}</span> : null}
+          <span>{count} زیرایجنت</span>
+          {running ? <span className="flex items-center gap-1 text-signal"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{running} در حال کار</span> : null}
           <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
       </Popover.Trigger>
@@ -657,7 +699,7 @@ function SubagentsBar({ chat }) {
                 <AgentGlyph id={child.agent} className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
                 {child.runStatus === "running" ? (
-                  <span className="agent-dots shrink-0 text-primary" aria-hidden><i /><i /><i /></span>
+                  <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>
                 ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
                   <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
                 ) : null}
@@ -705,7 +747,7 @@ function browserStorage() {
   }
 }
 
-function ResizableSidebar({ initial, children }) {
+function ResizableSidebar({ initial, hidden = false, children }) {
   const box = useRef(null);
   const [width, setWidth] = useState(() => loadSidebarWidth(browserStorage(), window.innerWidth, initial));
   const [dragging, setDragging] = useState(false);
@@ -749,7 +791,7 @@ function ResizableSidebar({ initial, children }) {
     commit(clampSidebarWidth(width + (outward ? 16 : -16), window.innerWidth));
   };
   return (
-    <div ref={box} className="relative hidden shrink-0 border-e md:block" style={{ width }}>
+    <div ref={box} className="relative hidden shrink-0 border-e md:block" style={{ width, display: hidden ? "none" : undefined }}>
       {children}
       <div
         className="absolute inset-y-0 -end-1 z-10 w-2 cursor-col-resize touch-none outline-none hover:bg-primary/25 focus-visible:bg-primary/40 data-[dragging=true]:bg-primary/40"

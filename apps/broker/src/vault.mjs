@@ -18,6 +18,13 @@ export function createVault({
   fetchImpl = fetch,
 } = {}) {
   const cache = new Map();
+  // What the app's incident intake reads from /healthz: a refused token or a failed renewal is an
+  // incident before (and while) every tool fails with it.
+  const health = { ok: true, ttlHours: null, error: null, at: null };
+  const mark = (ok, error = null, ttl = undefined) => {
+    Object.assign(health, { ok, error, at: new Date().toISOString() });
+    if (ttl !== undefined) health.ttlHours = ttl === null ? null : Math.round(ttl / 3600);
+  };
   // OpenBao counts only when its token and identity are actually mounted (a fresh install has none;
   // compose binds /dev/null there, which is not a file).
   const isFile = (f) => {
@@ -51,6 +58,7 @@ export function createVault({
         headers: { "X-Vault-Token": await machineToken(), Accept: "application/json" },
         signal: AbortSignal.timeout(10_000),
       });
+      if (response.status === 401 || response.status === 403) mark(false, `vault read refused (http_${response.status})`);
       if (!response.ok) throw new Error(`emergency vault http_${response.status}`);
       const value = (await response.json())?.data?.data?.value;
       if (typeof value !== "string" || !value) throw new Error(`emergency vault item ${slug} empty`);
@@ -92,6 +100,29 @@ export function createVault({
         return { backend: "openbao", items, error: `cannot list OpenBao items (${error.message})` };
       }
     },
+
+    // The machine token is periodic: it lives as long as it is renewed within its period. A token
+    // with a max TTL that nothing renews eventually expires and every vault read goes 403.
+    // Returns the remaining seconds, or null when there is no OpenBao.
+    async renew() {
+      if (!bao) return null;
+      const response = await fetchImpl(`${url}/v1/auth/token/renew-self`, {
+        method: "POST",
+        headers: { "X-Vault-Token": await machineToken(), "Content-Type": "application/json" },
+        body: "{}",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        mark(false, `renew refused (http_${response.status})`);
+        throw new Error(`emergency vault renew http_${response.status}`);
+      }
+      const ttl = (await response.json())?.auth?.lease_duration ?? null;
+      if (ttl !== null && ttl < 7 * 86_400) mark(false, `token expires in ${Math.round(ttl / 3600)}h and is not periodic`, ttl);
+      else mark(true, null, ttl);
+      return ttl;
+    },
+
+    state: () => ({ configured: bao, ...health }),
 
     async remove(slug) {
       cache.delete(slug);

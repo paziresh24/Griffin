@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Quote, X } from "lucide-react";
+import { MessagesSquare, Pencil, Quote, Reply, X } from "lucide-react";
 import { quotePreview, quoteStore } from "../quotes.js";
 import { textDir } from "../dir.js";
 import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
-import { useSkin } from "../skin.js";
+import { useFlag, useLook } from "../ui-prefs.js";
 
 // One waiting quote above the input. A click opens it in place: the quoted text and
 // the note are both editable, saved or cancelled before the message goes (Esc cancels; Enter in the
@@ -12,7 +12,7 @@ import { useSkin } from "../skin.js";
 // the edit, so a send never carries the old quote.
 export function QuoteChip({ chatId, quote, onDone }) {
   const touch = useTouchPrimary();
-  const karsara = useSkin() === "karsara";
+  const karsara = useLook() === "karsara";
   const [draft, setDraft] = useState(null);
   const textBox = useRef(null);
   const closing = useRef(false);
@@ -107,5 +107,49 @@ export function QuoteChip({ chatId, quote, onDone }) {
         <X className="size-3" />
       </button>
     </div>
+  );
+}
+
+// A sent message's quotes as the owner saw them in the box (quotes.js parseQuoted): each a reply
+// card above the words about it, not a raw ">". A long quote folds to four lines (a click opens it);
+// "to a new chat" ends with a link to the chat the quote came from.
+export function QuotedText({ parts }) {
+  return (
+    <div className="flex flex-col gap-1.5 whitespace-normal">
+      {parts.map((part, i) =>
+        part.type === "quote" ? (
+          <SentQuote key={i} text={part.text} />
+        ) : part.type === "origin" ? (
+          <a
+            key={i}
+            href={`#/c/${part.chatId}`}
+            className="g-quote-origin inline-flex w-fit max-w-full items-center gap-1.5 rounded-full border bg-background/60 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/60 hover:text-foreground"
+            title={t("باز کردن گفتگویی که این بخش از آن آمده")}
+          >
+            <MessagesSquare className="size-3.5 shrink-0" />
+            <span className="truncate">{part.title ? t("از گفتگوی «{title}»", { title: part.title }) : t("از گفتگوی دیگر")}</span>
+          </a>
+        ) : (
+          <div key={i} className="whitespace-pre-wrap" dir={textDir(part.text)}>{part.text}</div>
+        ),
+      )}
+    </div>
+  );
+}
+
+function SentQuote({ text }) {
+  const [open, setOpen] = useState(false);
+  const long = text.split("\n").length > 4 || text.length > 320;
+  return (
+    <button
+      type="button"
+      onClick={() => long && setOpen(!open)}
+      className={`g-sent-quote flex w-full items-start gap-1.5 rounded-lg border-s-2 border-primary/70 bg-background/55 px-2.5 py-1.5 text-start text-[13px] leading-6 text-muted-foreground ${long ? "cursor-pointer hover:bg-background/80" : "cursor-text select-text"}`}
+      title={long ? (open ? t("بستن") : t("نمایش کامل")) : undefined}
+      aria-expanded={long ? open : undefined}
+    >
+      <Reply className="mt-1 size-3.5 shrink-0 opacity-70" />
+      <span className={`min-w-0 flex-1 whitespace-pre-wrap break-words ${long && !open ? "line-clamp-4" : ""}`} dir={textDir(text)}>{text}</span>
+    </button>
   );
 }

@@ -1,6 +1,8 @@
 // Settings building blocks: a titled group of rows in one card, and one row.
 
-export function Group({ title, action, children }) {
+// `joined`: the Karsara skin draws this group as one divided card (its status and live-check lists)
+// instead of a card per row; the Griffin skin always draws one card.
+export function Group({ title, action, children, joined = false }) {
   return (
     <section>
       {title || action ? (
@@ -9,7 +11,7 @@ export function Group({ title, action, children }) {
           {action ? <div className="ms-auto">{action}</div> : null}
         </div>
       ) : null}
-      <div className="g-group divide-y overflow-hidden rounded-2xl border bg-card">{children}</div>
+      <div className="g-group divide-y overflow-hidden rounded-2xl border bg-card" data-joined={joined || undefined}>{children}</div>
     </section>
   );
 }

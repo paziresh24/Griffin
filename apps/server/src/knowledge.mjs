@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
+import { agentSlug } from "./persona.mjs";
 
-// Local knowledge tree under the workspace. Authoritative on the capsule; GitLab push is
+// Local knowledge tree under the workspace. Authoritative on this server; GitLab push is
 // best-effort and out of scope here. Nothing unreviewed is injected into the prompt —
 // these tools only write/list files the owner can read later.
 
@@ -41,7 +42,10 @@ const listSchema = {
   additionalProperties: false,
 };
 
-export function createKnowledge({ store, root, git = true } = {}) {
+// autoTrust (GRIFFIN_KNOWLEDGE_AUTO_TRUST=1) / trust (knowledge-trust.mjs createChatTrust:
+// recordNote, isTrustedNote). Notes are recorded whenever trust is given, so turning the flag on
+// later trusts notes written while it was off too.
+export function createKnowledge({ store, root, git = true, autoTrust = false, trust = null } = {}) {
   if (!root) throw new Error("knowledge root required");
   fs.mkdirSync(root, { recursive: true });
   ensureGit(root, git, store);
@@ -86,8 +90,9 @@ export function createKnowledge({ store, root, git = true } = {}) {
     tool(chatId) {
       return {
         [KNOWLEDGE_WRITE]: {
-          description:
-            "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. Notes are NOT auto-injected into future prompts until the owner reviews them.",
+          description: autoTrust
+            ? "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. A note written in the owner's own chat that read no third-party content (a colleague, Telegram, the web, another chat) reaches later chats automatically; others wait for the owner's review."
+            : "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. Notes are NOT auto-injected into future prompts until the owner reviews them.",
           inputSchema: writeSchema,
           async execute(args) {
             const chat = store.getChat(chatId);
@@ -129,6 +134,7 @@ export function createKnowledge({ store, root, git = true } = {}) {
               "",
             ].join("\n");
             fs.writeFileSync(file, front, "utf8");
+            trust?.recordNote(agentId, path.basename(file), chatId, front);
             writeDirectory(root);
             const committed = commit(root, git, `knowledge: ${agentId}/${slug}`);
             const rel = path.relative(root, file);
@@ -140,7 +146,9 @@ export function createKnowledge({ store, root, git = true } = {}) {
                   agent: agentId,
                   reviewed: false,
                   committed,
-                  note: "saved locally; not injected into prompts until reviewed",
+                  note: autoTrust
+                    ? "saved locally; reaches later chats automatically if this chat read no third-party content, otherwise after the owner's review"
+                    : "saved locally; not injected into prompts until reviewed",
                 }),
               }],
             };
@@ -156,28 +164,55 @@ export function createKnowledge({ store, root, git = true } = {}) {
             if (!resolveAgentMeta(agentId)) {
               return { isError: true, content: [{ type: "text", text: `unknown agent: ${agentId}` }] };
             }
+            // With auto-trust on, a note's title and body are content: only notes the prompt may
+            // carry (reviewed or auto-trusted) and the playbook are named or served, so listing
+            // never brings an untrusted chat's words into this one.
+            const trusted = (name, text) => {
+              const front = frontmatter(text);
+              if (front.get("expires") && Date.parse(front.get("expires")) <= Date.now()) return false;
+              return front.get("reviewed") === "true" || Boolean(trust?.isTrustedNote(agentId, name, text));
+            };
             if (args?.file) {
+              const own = readAgentNote(root, agentId, String(args.file));
+              if (autoTrust && own != null && !trusted(String(args.file), own)) {
+                return { isError: true, content: [{ type: "text", text: `note ${args.file} waits for the owner's review (written in a chat that read third-party content)` }] };
+              }
               const text = readNote(root, agentId, String(args.file));
               if (text == null) return { isError: true, content: [{ type: "text", text: `no such note: ${args.file}` }] };
               return { content: [{ type: "text", text }] };
             }
             const dir = agentDir(agentId);
-            const notes = fs.readdirSync(dir)
+            let notes = fs.readdirSync(dir)
               .filter((name) => name.endsWith(".md"))
               .slice(0, 200)
               .map((name) => {
-                const front = frontmatter(fs.readFileSync(path.join(dir, name), "utf8"));
+                const text = fs.readFileSync(path.join(dir, name), "utf8");
+                const front = frontmatter(text);
                 return {
                   file: name,
                   title: noteTitle(front, name),
                   reviewed: front.get("reviewed") === "true",
                   expires: front.get("expires") || null,
+                  text,
                 };
               });
+            let unlisted = 0;
+            if (autoTrust) {
+              const listed = notes.filter((n) => trusted(n.file, n.text));
+              unlisted = notes.length - listed.length;
+              notes = listed;
+            }
+            notes = notes.map(({ text: _text, ...note }) => note);
             return {
               content: [{
                 type: "text",
-                text: JSON.stringify({ agent: agentId, notes, total: notes.length, source: "local-knowledge" }),
+                text: JSON.stringify({
+                  agent: agentId,
+                  notes,
+                  total: notes.length,
+                  ...(autoTrust ? { unlisted, unlistedWhy: "notes from chats that read third-party content, waiting for the owner's review" } : {}),
+                  source: "local-knowledge",
+                }),
               }],
             };
           },
@@ -191,13 +226,13 @@ function ensureGit(root, enabled, store = null) {
   if (!enabled) return;
   if (fs.existsSync(path.join(root, ".git"))) return;
   spawnSync("git", ["init"], { cwd: root, stdio: "ignore" });
-  spawnSync("git", ["config", "user.email", "griffin@local"], { cwd: root, stdio: "ignore" });
-  spawnSync("git", ["config", "user.name", "griffin"], { cwd: root, stdio: "ignore" });
+  spawnSync("git", ["config", "user.email", `${agentSlug()}@local`], { cwd: root, stdio: "ignore" });
+  spawnSync("git", ["config", "user.name", agentSlug()], { cwd: root, stdio: "ignore" });
   const readme = path.join(root, "README.md");
   if (!fs.existsSync(readme)) {
     fs.writeFileSync(
       readme,
-      "# Griffin agent knowledge\n\nLocal source of truth on the capsule. `rules/` and `AGENT.md` need owner review before they change behaviour. `knowledge/` may auto-commit but is never auto-injected into prompts.\n",
+      "# Agent knowledge\n\nLocal source of truth on this server. `rules/` and `AGENT.md` need owner review before they change behaviour. `knowledge/` may auto-commit but is never auto-injected into prompts.\n",
       "utf8",
     );
   }
@@ -288,6 +323,16 @@ export function playbookIndex(root, { max = 250 } = {}) {
   return out;
 }
 
+// One of the agent's own notes, raw (null when it is not there or the name is not a note file).
+function readAgentNote(root, agentId, file) {
+  if (!NOTE_FILE.test(file)) return null;
+  try {
+    return fs.readFileSync(path.join(root, "agents", agentId, "knowledge", file), "utf8");
+  } catch {
+    return null;
+  }
+}
+
 function readNote(root, agentId, file) {
   if (!NOTE_FILE.test(file)) return null;
   const dirs = [agentId && path.join(root, "agents", agentId, "knowledge"), path.join(root, "playbook")].filter(Boolean);
@@ -342,6 +387,69 @@ export function setNoteReviewed(root, agentId, file, reviewed, { git = true } = 
   fs.writeFileSync(full, text, "utf8");
   commit(root, git, `knowledge: ${reviewed ? "review" : "unreview"} ${agentId}/${file}`);
   return true;
+}
+
+// Notes the prompt may carry when auto-trust is on: reviewed notes, plus notes isTrustedNote vouches
+// for (knowledge-trust.mjs: unchanged since knowledge_write saved them in a chat that was clean up
+// to then). Trust is decided at read time. Returns
+// { full, index, omitted }: `full` — reviewed first, then auto-trusted, each newest first, up to
+// `max` bodies / `maxChars`; `index` — every other injectable note as { title, file, trust }.
+export function injectableNotes(root, agentId, { isTrustedNote = () => false, max = 24, maxChars = 24000, indexChars = 2500, now = Date.now() } = {}) {
+  const dir = path.join(root, "agents", agentId, "knowledge");
+  let names;
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith(".md"));
+  } catch {
+    return { full: [], index: [], omitted: 0 };
+  }
+  const notes = [];
+  for (const name of names) {
+    const full = path.join(dir, name);
+    let text;
+    try {
+      text = fs.readFileSync(full, "utf8");
+    } catch {
+      continue;
+    }
+    const front = frontmatter(text);
+    const expires = front.get("expires");
+    if (expires && Date.parse(expires) <= now) continue;
+    const trust = front.get("reviewed") === "true" ? "reviewed" : isTrustedNote(agentId, name, text) ? "auto" : null;
+    if (!trust) continue;
+    const body = noteBody(text);
+    if (!body) continue;
+    let at = Date.parse(front.get("at") || "");
+    if (!Number.isFinite(at)) {
+      try {
+        at = fs.statSync(full).mtimeMs;
+      } catch {
+        at = 0;
+      }
+    }
+    notes.push({ file: name, title: noteTitle(front, name), body, trust, at });
+  }
+  notes.sort((a, b) => (a.trust === b.trust ? b.at - a.at || a.file.localeCompare(b.file) : a.trust === "reviewed" ? -1 : 1));
+  const full = [];
+  const index = [];
+  let budget = maxChars;
+  let indexBudget = indexChars;
+  let omitted = 0;
+  for (const note of notes) {
+    if (full.length < max && budget > 0) {
+      const chunk = note.body.length > budget ? `${note.body.slice(0, budget)}\n… (cut here; the rest: knowledge_list {file: "${note.file}"})` : note.body;
+      full.push({ file: note.file, title: note.title, body: chunk, trust: note.trust });
+      budget -= chunk.length + note.title.length;
+      continue;
+    }
+    const cost = note.title.length + note.file.length + 6;
+    if (cost > indexBudget) {
+      omitted += 1;
+      continue;
+    }
+    index.push({ title: note.title, file: note.file, trust: note.trust });
+    indexBudget -= cost;
+  }
+  return { full, index, omitted };
 }
 
 export function findSecrets(text) {

@@ -10,5 +10,7 @@
   "سؤال کناری‌ات را بنویس": "Write your side question",
   "ارسال": "Send",
   "چت کناری ({n}): یک سؤال جدا، بدون به‌هم‌زدن این گفتگو": "Side chat ({n}): a separate question without disturbing this conversation",
-  "یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.": "Ask a separate question; the main conversation stays untouched."
+  "یک سؤال جدا بپرس؛ گفتگوی اصلی دست نمی‌خورد.": "Ask a separate question; the main conversation stays untouched.",
+  "اجازهٔ تغییر فایل‌ها": "Allow file changes",
+  "اجازهٔ تغییر فایل‌ها — فقط می‌خواند و می‌پرسد": "Allow file changes — it only reads and asks"
 }

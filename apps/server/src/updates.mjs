@@ -23,6 +23,9 @@ export function eventsFromUpdate(update) {
       return [{ type: "tool.done", data: { ...toolData(update), result: redactResult(nameOf(update), clip(update.toolCall?.result ?? null)) } }];
     case "turn-ended":
       return update.usage ? [{ type: "usage", data: clip(update.usage) }] : [];
+    // One request of a Claude turn (claude-events.mjs): the context meter's, never added to a total.
+    case "request-usage":
+      return update.usage ? [{ type: "usage.request", data: clip(update.usage) }] : [];
     // The engine took a steered message into its next request: the thread places it there.
     case "user-message-appended":
       return [{ type: "user.read", data: {} }];

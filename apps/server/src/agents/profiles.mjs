@@ -7,8 +7,14 @@ export const SELF_MGMT_TOOLS = [
   "agent_tools_disable",
   "agent_settings_get",
   "agent_settings_set",
+  "agent_create",
+  "agent_delete",
   "self_check",
   "self_fix",
+  // The agents' network (network.mjs): only the owner's own chats talk to colleagues' agents.
+  "network_agents",
+  "network_ask",
+  "network_reply",
 ];
 
 /** Tools the app itself provides (no broker, no credentials beyond what the owner connected). */
@@ -22,6 +28,14 @@ export const APP_TOOL_NAMES = [
   "peer_connection",
   "visualize",
   "show_media",
+  // Run an app in the sandbox and show it live in the chat (previews.mjs), owner chats only.
+  "preview_start",
+  "preview_restart",
+  "preview_stop",
+  "preview_list",
+  "preview_logs",
+  "web_search",
+  "web_fetch",
   "knowledge_write",
   "knowledge_list",
   "jobs_list",
@@ -38,12 +52,23 @@ export const APP_TOOL_NAMES = [
   "incident_update",
   "incident_ack",
   "incident_history",
-  // A colleague's own conversation only, through its quota (related.mjs).
+  "tell_owner",
+  // A colleague's own conversation through its quota (related.mjs); the owner's own chats when the
+  // install sets OWNER_CHAT_TOOLS=on (owner-chat-tools.mjs), with chat_read and notify_owner.
   "chat_list",
   "chat_send",
+  "chat_read",
+  "chat_archive",
+  "notify_owner",
+  // The owner's own MCP server list (mcp-server-tools.mjs), owner chats only.
+  "mcp_server_list",
+  "mcp_server_add",
+  "mcp_server_login",
+  "mcp_server_remove",
   "chat_suggest",
   "chat_dismiss_suggestion",
   "chat_chapter",
+  "consult",
   ...SELF_MGMT_TOOLS,
 ];
 
@@ -51,6 +76,7 @@ export const APP_TOOL_NAMES = [
 export function seedProfilesFromRegistry({ provider = "cursor" } = {}) {
   const rows = [];
   for (const [id, agent] of Object.entries(AGENTS)) {
+    if (agent.custom) continue; // made at run time: its own row is the truth
     const callers = {};
     for (const [callerId, quota] of Object.entries(agent.callers || {})) {
       callers[callerId] = { tools: quota.tools };
@@ -127,7 +153,7 @@ export function publicProfile(profile) {
     label: profile.label,
     domain: profile.domain,
     blurb: profile.blurb || "",
-    instructions: profile.instructions || "",
+    instructions: profile.instructions || profile.meta?.instructions || "",
     provider: profile.provider || "cursor",
     model: profile.model || null,
     effort: profile.meta?.effort || null,

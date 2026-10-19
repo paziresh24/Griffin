@@ -7,6 +7,7 @@ import { api, usePolling } from "../api.js";
 import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-switch.js";
 import { t } from "../i18n.js";
 import { copyText } from "../copy.js";
+import { useFlag, useLook } from "../ui-prefs.js";
 
 // The row above the composer: where the chat runs, the repo it works on (picked
 // before the first message; then fixed), its own branch and its worktree. Each chip does something:
@@ -51,11 +52,18 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
   // A new chat with no choice yet starts on the server's default repo (GRIFFIN_DEFAULT_REPO, if set).
   const repos = usePolling("/api/repos", 5 * 60_000);
   const repo = chosen ?? (locked ? "" : repos?.default || "");
+  const karsara = useFlag("repoCapsule"); // the "capsule" chip (ui-prefs.js)
   return (
     <div className="mb-1.5 flex flex-wrap items-center gap-1.5 px-1">
-      <span className={chip} title={t("اجرا روی سرور گریفین؛ build و تست در sandbox همان سرور")}>
-        <Server /> <span>{t("سرور گریفین")}</span>
-      </span>
+      {karsara ? (
+        <span className={chip} title={t("محیط اجرا: کپسول")}>
+          <Server /> <span>{t("کپسول")}</span>
+        </span>
+      ) : (
+        <span className={chip} title={t("اجرا روی سرور گریفین؛ build و تست در sandbox همان سرور")}>
+          <Server /> <span>{t("سرور گریفین")}</span>
+        </span>
+      )}
       {locked && chatId && repo ? (
         <RepoPicker repo={repo} moving onChange={(next) => next && next !== repo && switchFolder(chatId, next)} />
       ) : locked || !onRepoChange ? (
@@ -67,7 +75,8 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
       {repo ? (
         worktreePath ? (
           <CopyChip icon={<FolderGit2 />} value={worktreePath} label="worktree" title={t("کپی مسیر worktree: {path}", { path: worktreePath })} />
-        ) : (
+        ) : karsara && !branch ? null : (
+          // The karsara look shows the not-yet-made worktree only once the chat has its branch.
           <span className={chip} title={t("این گفتگو worktree و شاخهٔ جدای خودش را می‌گیرد؛ با اولین پیام ساخته می‌شود")}>
             <FolderGit2 /> <span>worktree</span>
           </span>

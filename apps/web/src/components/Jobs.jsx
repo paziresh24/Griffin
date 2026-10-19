@@ -1,12 +1,46 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { AlarmClock, ArrowRight, CalendarClock, Check, ChevronDown, Clock, Loader2, MessageSquare, Play, Plus, Send, Trash2, X } from "lucide-react";
+import { AlarmClock, ArrowRight, CalendarClock, Check, ChevronDown, Clock, Loader2, Lock, MessageSquare, Play, Plus, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND, agentMeta } from "../brand.js";
-import { locale, num, t } from "../i18n.js";
-import { AgentPicker } from "./Controls.jsx";
+import { AgentPicker, MODES } from "./Controls.jsx";
+import { t } from "../i18n.js";
+
+// A job's mode: the chat's mode list (Controls.jsx) plus «محدود» (owner 2026-10-19). What each means in
+// a job, which nobody watches while it runs (jobs/owner-jobs.mjs); a job someone else wrote is always
+// «محدود».
+const JOB_HINTS = {
+  agent: t("همهٔ ابزارهای گفتگوهای خودتان؛ هیچ چیزی نمی‌پرسد"),
+  auto: t("همان ابزارها؛ کار حساس را از شما می‌پرسد و تا ۳۰ دقیقه منتظر جواب می‌ماند"),
+  ask: t("همان ابزارها؛ کار حساس را از شما می‌پرسد و تا ۳۰ دقیقه منتظر جواب می‌ماند"),
+  edits: t("همان ابزارها؛ کار حساس را از شما می‌پرسد و تا ۳۰ دقیقه منتظر جواب می‌ماند"),
+  plan: t("فقط نقشهٔ کار را می‌نویسد و تغییری نمی‌دهد"),
+  limited: t("سهمیهٔ محدود زمان‌بند؛ کار حساس را بدون پرسیدن رد می‌کند"),
+};
+const JOB_MODES = [...MODES.map((m) => ({ ...m, hint: JOB_HINTS[m.value] || m.hint })), { value: "limited", label: t("محدود"), icon: Lock, hint: JOB_HINTS.limited }];
+
+function JobModePicker({ mode, onChange }) {
+  const current = JOB_MODES.find((m) => m.value === mode) || JOB_MODES.find((m) => m.value === "agent");
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {JOB_MODES.map((m) => {
+          const Icon = m.icon;
+          const on = m.value === current.value;
+          return (
+            <button key={m.value} type="button" onClick={() => onChange(m.value)} title={m.hint} className={`press flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${on ? "border-primary bg-primary/10" : "hover:bg-muted"}`}>
+              <Icon className="size-3.5" />
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">{current.hint}</p>
+    </div>
+  );
+}
 
 // The server describes a schedule in Persian ("هر 30 دقیقه"); show it in the UI language.
 const EVERY = /^هر (\d+) (دقیقه|ساعت|روز)$/; // i18n-ignore
@@ -20,7 +54,7 @@ function scheduleText(text) {
 const EVERY_PRESETS = ["5m", "15m", "30m", "1h", "3h", "6h", "12h", "1d"];
 
 const STATUS = {
-  running: ["bg-primary animate-pulse", t("در حال اجرا")],
+  running: ["bg-signal animate-pulse", t("در حال اجرا")],
   held: ["bg-warn animate-pulse", t("منتظر برگشت موتور — بعدش یک بار اجرا می‌شود")],
   finished: ["bg-ok", t("موفق")],
   error: ["bg-bad", t("خطا")],
@@ -206,6 +240,7 @@ const EMPTY = {
   name: "",
   prompt: "",
   agent: "griffin",
+  mode: "agent",
   triggerType: "schedule",
   trigger: { every: "30m" },
   delivery: { targets: [], notify: "always" },
@@ -280,6 +315,11 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
             <div>
               <span className="mb-1 block text-xs text-muted-foreground">{t("کدام ایجنت اجرا کند")}</span>
               <AgentPicker agent={form.agent || "griffin"} onChange={(agent) => set({ agent })} className="w-full" />
+            </div>
+
+            <div>
+              <span className="mb-1 block text-xs text-muted-foreground">{t("حالت اجرا")}</span>
+              <JobModePicker mode={form.mode || "agent"} onChange={(mode) => set({ mode })} />
             </div>
 
             <div>

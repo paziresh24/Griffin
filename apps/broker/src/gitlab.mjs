@@ -17,7 +17,19 @@ const FANOUT_MAX_PROJECTS = 300;
 const FANOUT_CACHE_TTL_MS = 10 * 60_000;
 const fanoutCache = new Map(); // key -> { at, value }
 
+const MEMBER_LEVELS = { reporter: 20, developer: 30 };
 const MR_MERGE_STATES = new Set(["merge", "squash", "rebase_merge", "ff"]);
+
+// Writes (push, MR, merge, pipeline) go out under `gitlab__write-token` when the vault has one —
+// e.g. the owner's own identity, so GitLab shows a person rather than the bot user. Reads, and every
+// write when it is absent, use `gitlab__token`.
+export async function gitlabToken(vault, write = false) {
+  if (write) {
+    const own = await vault.item("gitlab__write-token").catch(() => "");
+    if (String(own || "").trim()) return String(own).trim();
+  }
+  return String(await vault.item("gitlab__token")).trim();
+}
 
 export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => true, host = "" }) {
   const HOST = String(host || "").replace(/\/+$/, "");
@@ -26,7 +38,7 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
     return HOST;
   };
   async function api(path, { params, raw = false, method = "GET", json } = {}) {
-    const token = (await vault.item("gitlab__token")).trim();
+    const token = await gitlabToken(vault, method !== "GET");
     const url = new URL(`${requireHost()}/api/v4${path}`);
     for (const [k, v] of Object.entries(params || {})) if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
     let lastError;
@@ -305,15 +317,16 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
 
     gitlab_propose: {
       description:
-        "Propose a change as a GitLab merge request: one commit (create/update/delete files) on a new branch `griffin/<name>` from the target branch, then a Draft MR. With update=true, adds a commit to an existing griffin/<name> branch (its MR updates). Never pushes to non-griffin branches and never merges.",
+        "Propose a change as a GitLab merge request: one commit (create/update/edit/delete files) on a new branch `<your name>/<name>` from the target branch, then a Draft MR. With update=true, adds a commit to that existing branch (its MR updates). Never pushes to other branches and never merges. For a small change to an existing file use action \"edit\" with edits [{find, replace}]: the broker reads the file itself and swaps only that exact text (find must match exactly once, or set all=true), so the rest of the file stays byte-for-byte untouched. Never rewrite a whole file with \"update\" for a one-line change (a copy read through a tool may have secrets masked as ***).",
       inputSchema: {
         type: "object",
         properties: {
           project: { type: "string" },
-          branch: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{2,60}$", description: "short name; the branch becomes griffin/<branch>" },
+          branch: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{2,60}$", description: "short name; the branch becomes <your name>/<branch>" },
+          prefix: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{0,31}$", description: "set by the app (the assistant's name); not for the model" },
           targetBranch: { type: "string", maxLength: 255, description: "default: the project's default branch" },
           title: { type: "string", minLength: 5, maxLength: 200 },
-          update: { type: "boolean", description: "commit to the existing griffin/<branch> instead of creating a new branch + MR" },
+          update: { type: "boolean", description: "commit to the existing <your name>/<branch> instead of creating a new branch + MR" },
           description: { type: "string", maxLength: 20_000 },
           actions: {
             type: "array",
@@ -322,9 +335,25 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
             items: {
               type: "object",
               properties: {
-                action: { type: "string", enum: ["create", "update", "delete"] },
+                action: { type: "string", enum: ["create", "update", "edit", "delete"] },
                 path: { type: "string", minLength: 1, maxLength: 500 },
-                content: { type: "string", maxLength: 500_000 },
+                content: { type: "string", maxLength: 500_000, description: "whole new file (create/update)" },
+                edits: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 50,
+                  description: "for action edit: exact text swaps applied in order",
+                  items: {
+                    type: "object",
+                    properties: {
+                      find: { type: "string", minLength: 1, maxLength: 20_000, description: "exact text to replace (include enough neighbouring lines to be unique)" },
+                      replace: { type: "string", maxLength: 20_000 },
+                      all: { type: "boolean", description: "replace every occurrence instead of requiring exactly one" },
+                    },
+                    required: ["find", "replace"],
+                    additionalProperties: false,
+                  },
+                },
               },
               required: ["action", "path"],
               additionalProperties: false,
@@ -337,20 +366,27 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
       async execute(args) {
         if (!canMutate()) throw new ToolInputError("GitLab changes are not enabled for this caller");
         const project = projectRef(args.project);
-        const branch = `griffin/${String(args.branch)}`;
-        if (!/^griffin\/[a-z0-9][a-z0-9._-]{2,60}$/.test(branch)) throw new ToolInputError("invalid branch name");
+        // The branch carries the assistant's name (the app passes it); older proposals used griffin/<name>.
+        const prefix = /^[a-z0-9][a-z0-9-]{0,31}$/.test(String(args.prefix || "")) ? String(args.prefix) : "agent";
+        let branch = `${prefix}/${String(args.branch)}`;
+        if (!/^[a-z0-9][a-z0-9-]{0,31}\/[a-z0-9][a-z0-9._-]{2,60}$/.test(branch)) throw new ToolInputError("invalid branch name");
         let target = args.targetBranch ? String(args.targetBranch) : null;
         if (target && !REF.test(target)) throw new ToolInputError("invalid target branch");
         if (!target) target = (await api(`/projects/${project}`)).body.default_branch || "main";
         if (target === branch) throw new ToolInputError("target and source branch are the same");
-        const actions = args.actions.map((a) => {
+        const seen = new Set();
+        const cleaned = args.actions.map((a) => {
           const filePath = String(a.path).replace(/^\/+/, "");
           if (!filePath || filePath.includes("..") || /[\0]/.test(filePath)) throw new ToolInputError(`invalid path ${a.path}`);
-          if (a.action !== "delete" && typeof a.content !== "string") throw new ToolInputError(`content is required for ${a.action} ${filePath}`);
-          return { action: a.action, file_path: filePath, ...(a.action !== "delete" ? { content: a.content } : {}) };
+          if (seen.has(filePath)) throw new ToolInputError(`${filePath} appears twice — one action per file (put all edits in one edit action)`);
+          seen.add(filePath);
+          if (a.action === "edit") {
+            if (!Array.isArray(a.edits) || !a.edits.length) throw new ToolInputError(`edits are required for edit ${filePath}`);
+          } else if (a.action !== "delete" && typeof a.content !== "string") {
+            throw new ToolInputError(`content is required for ${a.action} ${filePath}`);
+          }
+          return { ...a, filePath };
         });
-        const total = actions.reduce((n, a) => n + (a.content?.length || 0), 0);
-        if (total > 1_000_000) throw new ToolInputError("change is too large (max 1MB)");
         let exists = true;
         try {
           await api(`/projects/${project}/repository/branches/${encodeURIComponent(branch)}`);
@@ -358,6 +394,56 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
           if (error.status !== 404) throw error;
           exists = false;
         }
+        if (args.update && !exists) {
+          // A proposal opened before branches carried the assistant's name.
+          const older = `griffin/${String(args.branch)}`;
+          try {
+            await api(`/projects/${project}/repository/branches/${encodeURIComponent(older)}`);
+            branch = older;
+            exists = true;
+          } catch (error) {
+            if (error.status !== 404) throw error;
+          }
+        }
+        // Edits read the file where the change will land: the proposal's own branch when updating, else the target.
+        const readRef = args.update && exists ? branch : target;
+        const readRaw = async (filePath) => {
+          try {
+            return (await api(`/projects/${project}/repository/files/${encodeURIComponent(filePath)}/raw`, { params: { ref: readRef }, raw: true })).text;
+          } catch (error) {
+            if (error.status === 404) return null;
+            throw error;
+          }
+        };
+        const maskCount = (t) => (String(t).match(/\*\*\*/g) || []).length;
+        const actions = [];
+        for (const a of cleaned) {
+          if (a.action === "delete") {
+            actions.push({ action: "delete", file_path: a.filePath });
+          } else if (a.action === "edit") {
+            let text = await readRaw(a.filePath);
+            if (text === null) throw new ToolInputError(`${a.filePath} does not exist on ${readRef} — use create`);
+            a.edits.forEach((e, i) => {
+              const find = String(e.find);
+              const count = text.split(find).length - 1;
+              if (count === 0) throw new ToolInputError(`edit ${i + 1} of ${a.filePath}: the text to find is not in the file (exact match, whitespace included)`);
+              if (count > 1 && !e.all) throw new ToolInputError(`edit ${i + 1} of ${a.filePath}: the text to find occurs ${count} times — add neighbouring lines to make it unique, or set all=true`);
+              text = text.split(find).join(String(e.replace));
+            });
+            actions.push({ action: "update", file_path: a.filePath, content: text });
+          } else {
+            if (a.action === "update") {
+              // A whole-file rewrite that brings in masked values is a copy read through a redacting tool: refuse it.
+              const original = await readRaw(a.filePath);
+              if (original !== null && maskCount(a.content) > maskCount(original)) {
+                throw new ToolInputError(`${a.filePath}: the new content has *** that the file on ${readRef} does not — a masked copy would overwrite real values. Use action edit with find/replace instead of rewriting the file.`);
+              }
+            }
+            actions.push({ action: a.action, file_path: a.filePath, content: a.content });
+          }
+        }
+        const total = actions.reduce((n, a) => n + (a.content?.length || 0), 0);
+        if (total > 1_000_000) throw new ToolInputError("change is too large (max 1MB)");
         if (args.update) {
           if (!exists) throw new ToolInputError(`branch ${branch} does not exist — nothing to update`);
           const { body: commit } = await api(`/projects/${project}/repository/commits`, { method: "POST", json: { branch, commit_message: String(args.title), actions } });
@@ -369,7 +455,7 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
           method: "POST",
           json: { branch, start_branch: target, commit_message: String(args.title), actions },
         });
-        const description = `${String(args.description || "").trim()}\n\n---\nپیشنهاد خودکار گریفین؛ بازبینی و merge با انسان.`.trim();
+        const description = `${String(args.description || "").trim()}\n\n---\nپیشنهاد خودکار ایجنت؛ بازبینی و merge با انسان.`.trim();
         const { body: mr } = await api(`/projects/${project}/merge_requests`, {
           method: "POST",
           json: { source_branch: branch, target_branch: target, title, description, remove_source_branch: true },
@@ -403,6 +489,45 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
       },
     },
 
+    gitlab_project_member: {
+      description:
+        "Give a GitLab user a role on one project (reporter or developer only; never lowers an existing higher role). Needs the owner's approval, which the app asks for itself. Use it when a colleague must push to a repo (e.g. Developer on group/project).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string" },
+          username: { type: "string", minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9_.-]+$" },
+          role: { type: "string", enum: ["reporter", "developer"] },
+        },
+        required: ["project", "username", "role"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        if (!canMutate()) throw new ToolInputError("GitLab changes are not enabled for this caller");
+        const project = projectRef(args.project);
+        const level = MEMBER_LEVELS[args.role];
+        if (!level) throw new ToolInputError("role must be reporter or developer");
+        const { body: users } = await api("/users", { params: { username: args.username } });
+        const user = (users || []).find((u) => u.username === args.username);
+        if (!user) throw new ToolInputError(`no GitLab user "${args.username}"`);
+        if (user.state !== "active") throw new ToolInputError(`GitLab user "${args.username}" is ${user.state}, not active`);
+        let current = null;
+        try {
+          current = (await api(`/projects/${project}/members/all/${user.id}`)).body;
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+        if (current && current.access_level >= level) {
+          return { project: args.project, username: args.username, accessLevel: current.access_level, changed: false, source: "gitlab api" };
+        }
+        const { body } = await api(`/projects/${project}/members${current ? `/${user.id}` : ""}`, {
+          method: current ? "PUT" : "POST",
+          json: current ? { access_level: level } : { user_id: user.id, access_level: level },
+        });
+        return { project: args.project, username: args.username, accessLevel: body.access_level, changed: true, source: "gitlab api" };
+      },
+    },
+
     gitlab_pipeline: {
       description: "Read a GitLab pipeline: status and each job (stage, status, failure_reason), with the log tail of failed jobs. Without id: the project's recent pipelines (id, ref, status, time) — use that to find the one to read.",
       inputSchema: {
@@ -420,7 +545,7 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
       async execute(args) {
         const project = projectRef(args.project);
         // No id used to become /pipelines/NaN, and the agent fell back to curl with someone
-        // else's token from the secret store just to list pipelines (2026-10-06).
+        // else's token from the secret store just to list pipelines.
         if (args.id == null) {
           if (args.playJob || args.retryFailed) throw new ToolInputError("id is required to play or retry");
           const { body: list } = await api(`/projects/${project}/pipelines`, { params: { per_page: 20, order_by: "id", sort: "desc" } });
@@ -470,10 +595,17 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
     },
 
     gitlab_file: {
-      description: "Read one file from a GitLab project at a ref (default the project's default branch). project = id or path like group/name.",
+      description:
+        "Read one file from a GitLab project at a ref (default the project's default branch). project = id or path like group/name. A big file comes back in line ranges: give startLine/endLine (1-based, inclusive); without them a file over ~1500 lines or 60k characters returns its first part with totalLines and nextStartLine — read on from there instead of guessing. To review a change, prefer gitlab_mr_changes (the diff) over reading two whole versions.",
       inputSchema: {
         type: "object",
-        properties: { project: { type: "string" }, path: { type: "string", minLength: 1, maxLength: 500 }, ref: { type: "string", maxLength: 255 } },
+        properties: {
+          project: { type: "string" },
+          path: { type: "string", minLength: 1, maxLength: 500 },
+          ref: { type: "string", maxLength: 255 },
+          startLine: { type: "integer", minimum: 1, description: "first line to return (1-based)" },
+          endLine: { type: "integer", minimum: 1, description: "last line to return (inclusive)" },
+        },
         required: ["project", "path"],
         additionalProperties: false,
       },
@@ -489,8 +621,128 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
           branch = body.default_branch || "main";
         }
         const { text } = await api(`/projects/${project}/repository/files/${encodeURIComponent(filePath)}/raw`, { params: { ref: branch }, raw: true });
-        return { project: args.project, path: filePath, ref: branch, content: text.length > 200_000 ? `${text.slice(0, 200_000)}\n… [truncated]` : text, source: "gitlab repository/files" };
+        return { project: args.project, path: filePath, ref: branch, ...sliceLines(text, args), source: "gitlab repository/files" };
+      },
+    },
+
+    gitlab_mr_changes: {
+      description:
+        "The diff of a merge request (iid), or of two refs (from → to, e.g. main → a branch): every changed file with added/removed line counts, and the unified diff of as many files as fit (~60k characters). Files left out are listed with diffOmitted; ask for one of them with path (a long one-file diff pages with startLine). Use this to review a change instead of reading whole files.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string" },
+          iid: { type: "integer", minimum: 1, description: "merge request iid" },
+          from: { type: "string", maxLength: 255, description: "base ref (with to; instead of iid)" },
+          to: { type: "string", maxLength: 255, description: "head ref" },
+          path: { type: "string", maxLength: 500, description: "only this file's diff" },
+          startLine: { type: "integer", minimum: 1, description: "with path: first diff line to return" },
+        },
+        required: ["project"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const project = projectRef(args.project);
+        let diffs;
+        let head = null;
+        if (args.iid != null) {
+          const iid = Number(args.iid);
+          if (!Number.isInteger(iid) || iid < 1) throw new ToolInputError("invalid merge request iid");
+          const { body: mr } = await api(`/projects/${project}/merge_requests/${iid}`);
+          head = { iid, title: mr.title, state: mr.state, sourceBranch: mr.source_branch, targetBranch: mr.target_branch, sha: mr.sha, webUrl: mr.web_url };
+          diffs = [];
+          for (let page = 1; page <= 25; page += 1) {
+            const { body, headers } = await api(`/projects/${project}/merge_requests/${iid}/diffs`, { params: { page, per_page: 20 } });
+            diffs.push(...(body || []));
+            const total = Number(headers.get?.("x-total-pages")) || 0;
+            if (!body?.length || body.length < 20 || (total && page >= total)) break;
+          }
+        } else {
+          const from = String(args.from || "");
+          const to = String(args.to || "");
+          if (!REF.test(from) || !REF.test(to)) throw new ToolInputError("give iid, or both from and to");
+          const { body } = await api(`/projects/${project}/repository/compare`, { params: { from, to, straight: false } });
+          head = { from, to, commits: (body?.commits || []).map((c) => ({ id: c.short_id, title: c.title })).slice(0, 50) };
+          diffs = body?.diffs || [];
+        }
+        return { project: args.project, ...head, ...packDiffs(diffs, args), source: "gitlab api" };
       },
     },
   };
 }
+
+const FILE_MAX_CHARS = 60_000;
+const FILE_MAX_LINES = 1_500;
+
+// A whole big file can blow past the agent's tool-output limit, where the agent cannot read it —
+// so files come in line windows.
+export function sliceLines(text, { startLine, endLine } = {}) {
+  const lines = String(text).split("\n");
+  const totalLines = lines.length;
+  const start = Math.max(1, Number(startLine) || 1);
+  if (start > totalLines) throw new ToolInputError(`startLine ${start} is past the end (${totalLines} lines)`);
+  const wanted = Math.min(totalLines, Number(endLine) || totalLines);
+  let end = wanted;
+  if (end < start) throw new ToolInputError("endLine is before startLine");
+  if (end - start + 1 > FILE_MAX_LINES) end = start + FILE_MAX_LINES - 1;
+  let out = lines.slice(start - 1, end);
+  let size = 0;
+  let kept = 0;
+  for (const line of out) {
+    if (kept && size + line.length + 1 > FILE_MAX_CHARS) break;
+    size += line.length + 1;
+    kept += 1;
+  }
+  out = out.slice(0, kept);
+  end = start + kept - 1;
+  const whole = start === 1 && end === totalLines;
+  return {
+    content: out.join("\n"),
+    ...(whole ? {} : { startLine: start, endLine: end, totalLines }),
+    ...(end < wanted ? { truncated: true, nextStartLine: end + 1 } : {}),
+  };
+}
+
+const DIFF_BUDGET = 60_000;
+
+function countLines(diff) {
+  let added = 0;
+  let removed = 0;
+  for (const line of String(diff || "").split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added += 1;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed += 1;
+  }
+  return { added, removed };
+}
+
+export function packDiffs(diffs, { path, startLine } = {}) {
+  const files = (diffs || []).map((d) => ({
+    path: d.new_path || d.old_path,
+    ...(d.old_path && d.old_path !== d.new_path ? { oldPath: d.old_path } : {}),
+    ...(d.new_file ? { newFile: true } : {}),
+    ...(d.deleted_file ? { deleted: true } : {}),
+    ...(d.renamed_file ? { renamed: true } : {}),
+    ...countLines(d.diff),
+    ...(d.too_large || d.collapsed ? { tooLargeForGitlab: true } : {}),
+    diff: String(d.diff || ""),
+  }));
+  if (path) {
+    const want = String(path).replace(/^\/+/, "");
+    const file = files.find((f) => f.path === want || f.oldPath === want);
+    if (!file) throw new ToolInputError(`${want} is not among the changed files (${files.map((f) => f.path).slice(0, 40).join(", ")})`);
+    const { content, ...window } = sliceLines(file.diff, { startLine });
+    return { files: [{ ...file, diff: content, ...window }] };
+  }
+  let used = 0;
+  const out = files.map((f) => {
+    if (used + f.diff.length > DIFF_BUDGET) {
+      const { diff, ...rest } = f;
+      return { ...rest, diffOmitted: true };
+    }
+    used += f.diff.length;
+    return f;
+  });
+  const omitted = out.filter((f) => f.diffOmitted).length;
+  return { fileCount: files.length, files: out, ...(omitted ? { note: `${omitted} file diff(s) left out to fit; ask again with path=<file> for each` } : {}) };
+}
+

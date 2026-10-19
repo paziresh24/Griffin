@@ -1,8 +1,12 @@
 // The owner's name and photo at the foot of the sidebar. The connected Telegram
 // account gives both; a name typed in Settings («نام شما») wins over Telegram's; with neither, name
 // and photo are null and the page keeps its default. This is the owner, not the assistant (persona.mjs).
-// The photo is served from memory (the Telegram channel downloads it), never stored.
+// The photo is served from memory (the Telegram channel downloads it), never stored. While Telegram
+// gives none (not connected, or switched off), the last saved ones stand in: kv "profile".telegramName and
+// <data>/profile-photo.jpg (an install moved from another tool can carry them over).
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 const MAX_NAME = 60;
 // One plain line: controls, bidi marks/overrides/isolates and invisible joiners other than ZWNJ/ZWJ
@@ -27,15 +31,28 @@ export function nameOf(value) {
 export const isJpeg = (bytes) => Buffer.isBuffer(bytes) && bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 const versionOf = (photo) => crypto.createHash("sha1").update(photo).digest("hex").slice(0, 12);
 
-export function profileRoutes(app, { store, telegramProfile = () => null }) {
+export function profileRoutes(app, { store, telegramProfile = () => null, configuredName = null, dataDir = null }) {
+  const savedPhoto = () => {
+    try {
+      const bytes = dataDir ? fs.readFileSync(path.join(dataDir, "profile-photo.jpg")) : null;
+      return isJpeg(bytes) ? bytes : null;
+    } catch {
+      return null;
+    }
+  };
   const telegram = async () => {
     const profile = (await telegramProfile()) || {};
-    return { name: nameOf(profile.name), photo: isJpeg(profile.photo) ? profile.photo : null };
+    return {
+      name: nameOf(profile.name) || nameOf(store.getKv("profile")?.telegramName),
+      photo: isJpeg(profile.photo) ? profile.photo : savedPhoto(),
+    };
   };
   const view = async () => {
     const typedName = nameOf(store.getKv("profile")?.name);
     const { name: telegramName, photo } = await telegram();
-    return { name: typedName || telegramName, photo: photo ? `/api/profile/photo?v=${versionOf(photo)}` : null, typedName, telegramName };
+    // Neither typed nor from Telegram: the owner this install was configured for (GRIFFIN_OWNER_*),
+    // so the sidebar never says «Owner» on an install that knows its owner's name.
+    return { name: typedName || telegramName || nameOf(configuredName), photo: photo ? `/api/profile/photo?v=${versionOf(photo)}` : null, typedName, telegramName };
   };
 
   app.get("/api/profile", async (c) => c.json(await view()));

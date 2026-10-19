@@ -25,7 +25,7 @@ test("coverageCommand: only /agent and /agent off", () => {
 
 test("the owner's web note in a colleague chat is framed for the agent, not the colleague", () => {
   const note = coverageOwnerNote("سارا کریمی", "پاسخ داد سارا");
-  assert.match(note, /^«Owner از داخل گریفین — برای تو، نه برای سارا کریمی»: پاسخ داد سارا$/);
+  assert.match(note, /^«[^»]+ از داخل (اپ|گریفین) — برای تو، نه برای سارا کریمی»: پاسخ داد سارا$/);
 });
 
 test("end_agent tool notifies onEnd", async () => {

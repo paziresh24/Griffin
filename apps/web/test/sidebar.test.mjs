@@ -24,21 +24,35 @@ test("groups: a search, a filter or the archive hides the empty ones; nothing to
 
 test("only «جدید» and the search stay fixed; the pages scroll with the list", () => {
   const side = src("components/Sidebar.jsx");
-  const head = side.slice(side.indexOf("<aside"), side.indexOf("<nav "));
-  const list = side.slice(side.indexOf("<nav "), side.indexOf("</nav>"));
-  assert.match(head, /placeholder=\{t\("جستجوی گفتگوها"\)\}/);
-  assert.match(head, /<NavButton active=\{!page && !activeId\}[^>]*label=\{t\("جدید"\)\}/, "«جدید» is lit only on the new-chat screen");
-  // The section rows (sidebar-nav.js, set in Settings → ظاهر) scroll with the list.
-  assert.doesNotMatch(head, /<SidebarNav /);
-  assert.match(list, /<SidebarNav /);
-  const nav = src("sidebar-nav.js");
+  assert.match(side, /<NavButton k=\{k\} active=\{!page && !activeId\}[^>]*label=(\{t\()?"جدید"/, "«جدید» is lit only on the new-chat screen");
+  // Both lists: the search and «جدید» (nav.top) above the scrolling <nav>; the section rows (Settings →
+  // «ظاهر و بخش‌ها») scroll with the list.
+  for (const [file, from] of [["components/Sidebar.jsx", "function TabList("], ["components/SidebarOneList.jsx", "export function OneList("]]) {
+    const body = src(file).slice(src(file).indexOf(from));
+    const head = body.slice(0, body.indexOf("<nav "));
+    const list = body.slice(body.indexOf("<nav "), body.indexOf("</nav>"));
+    assert.match(head, /placeholder=(\{t\()?"جستجوی گفتگوها"/, file);
+    assert.match(head, /\{nav\??\.top\}/, file);
+    assert.match(list, /\{nav\??\.sections\}/, file);
+  }
+  assert.match(side, /sections: <SidebarNav /);
+  const nav = src("ui-prefs.js");
   for (const label of ["تلگرام", "جاب", "حادثه‌ها", "ایجنت‌های همکاران", "میز کار"]) assert.match(nav, new RegExp(`label: t\\("${label}"\\)`));
 });
 
-test("labels: token usage under the settings menu, no «همتا» shown anywhere", () => {
+test("the foot holds the profile menu, Settings and log out; agents and token usage live in Settings, no «همتا»", () => {
   const side = src("components/Sidebar.jsx");
-  const menu = side.slice(side.indexOf("function UserBar"), side.indexOf("function MenuRow"));
-  assert.match(menu, /<UsageBadge \/>\s*<MenuRow icon=\{Settings2\} label=\{t\("تنظیمات"\)\}/);
+  const foot = side.slice(side.indexOf("function UserBar"));
+  const aria = (label) => new RegExp(`aria-label=(\\{t\\()?"${label}"`);
+  assert.match(foot, aria("تنظیمات"));
+  assert.match(foot, aria("خروج"));
+  // The profile opens its own menu (edit profile, about, support, feedback), not Settings.
+  assert.match(foot, aria("منوی پروفایل"));
+  assert.match(foot, /PROFILE_ITEMS\.map/);
+  assert.doesNotMatch(side, /UsageBadge|MenuRow/);
+  const settings = src("components/Settings.jsx");
+  assert.match(settings, /id: "agents"/);
+  assert.match(settings, /<UsageBadge open \/>/);
   assert.doesNotMatch(src("App.jsx"), /UsageBadge/, "token usage left the chat header");
   const code = (text) => text.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
   for (const file of ["components/Sidebar.jsx", "components/Peers.jsx", "tab-title.js"]) assert.doesNotMatch(code(src(file)), /همتا/, file);

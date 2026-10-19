@@ -15,7 +15,7 @@ const OWNER_TASKS_MAX = 100;
 // talk to). Unlike ask_owner nothing waits on it; it stays on his board until he clears it.
 // `who` is the chain it came from, like a question's: a colleague's agent can make the assistant write
 // one, and its card must not read as the assistant's own.
-export function addOwnerTask(store, { title, detail = "", chatId = null, agent = null } = {}) {
+export function addOwnerTask(store, { title, detail = "", chatId = null, askedIn = null, agent = null, access = null } = {}) {
   const clean = maskText(String(title || "")).trim().slice(0, 120);
   if (!clean) return null;
   const root = chatId ? store.getChat(store.rootChatId?.(chatId) ?? chatId) : null;
@@ -26,6 +26,8 @@ export function addOwnerTask(store, { title, detail = "", chatId = null, agent =
     chatId: chatId || null,
     agent: agent || null,
     who: root ? whoOf(store, root) : null,
+    ...(access ? { access: maskText(String(access)).trim().slice(0, 110) } : {}),
+    ...(askedIn && askedIn !== chatId ? { askedIn } : {}),
     at: new Date().toISOString(),
   };
   store.setKv(OWNER_TASKS, [...listOwnerTasks(store), task].slice(-OWNER_TASKS_MAX));
@@ -37,13 +39,12 @@ export const listOwnerTasks = (store) => {
   return Array.isArray(list) ? list : [];
 };
 
-/** Done or let go — either way it leaves the board. False when it was not there. */
+/** Done or let go — either way it leaves the board. The task, or null when it was not there. */
 export function removeOwnerTask(store, id) {
   const list = listOwnerTasks(store);
-  const rest = list.filter((task) => task.id !== id);
-  if (rest.length === list.length) return false;
-  store.setKv(OWNER_TASKS, rest);
-  return true;
+  const task = list.find((t) => t.id === id) || null;
+  if (task) store.setKv(OWNER_TASKS, list.filter((t) => t.id !== id));
+  return task;
 }
 
 /** { done, total, current } of a todo:<chat> row, or null when it has no steps. */
@@ -154,6 +155,7 @@ export function buildInbox({ store, asks }) {
     id: `chore:${t.id}`,
     kind: "chore",
     choreId: t.id,
+    access: Boolean(t.access),
     title: t.title,
     detail: t.detail || "",
     chatId: t.chatId || null,

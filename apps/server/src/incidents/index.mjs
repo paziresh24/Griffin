@@ -247,6 +247,23 @@ export function isTeamReport(person, text) {
 }
 
 // Meta incidents about the alert pipeline itself.
+// The broker's vault health (/healthz) as an alert source: an expired or rejected vault token makes
+// every broker tool fail with http_403, and the tools alone do not say why.
+export function vaultAlerts(state) {
+  if (!state?.configured || state.ok !== false) return [];
+  return [{
+    cluster: "vault",
+    seenFrom: "vault",
+    owner: null,
+    fingerprint: null,
+    startsAt: state.at || null,
+    alertname: "VaultTokenUnhealthy",
+    severity: "critical",
+    labels: { job: "griffin-broker" },
+    summary: `خزانهٔ ابزارهای بروکر: ${state.error || "توکن رد شد"}. وقتی توکن رد شود، همهٔ ابزارهای کلاستر، گیت‌لب، گرافانا، دیتابیس و سکرت‌ها با http_403 شکست می‌خورند. ایجنت‌ها نمی‌توانند درستش کنند (کلید unseal فقط روی هاست است). رفع روی هاست بروکر: یک توکن تازه (periodic) برای بروکر بسازید و جایگزین کنید.`.slice(0, 600),
+  }];
+}
+
 function metaGroup(cluster, alertname, summary) {
   return { key: `${cluster}|${alertname}|`, cluster, alertname, severity: "warning", scope: "", owner: null, summary, members: [cluster], seenFrom: [cluster], startsAt: null };
 }

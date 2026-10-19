@@ -43,3 +43,18 @@ test("title cleanup", () => {
   assert.equal(cleanTitle(""), null);
   assert.equal(cleanTitle("این یک جملهٔ خیلی طولانی است که اصلاً عنوان نیست و باید رد شود"), null);
 });
+
+// A keyless install wrote «گفتگو» as every chat's title: renamed later.
+test("a chat stuck on «گفتگو» gets its real title", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "titles-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const titler = createTitler({ store, log: {}, generate: async () => "عنوان خلاصه گفتگوها" });
+  try {
+    const chat = chatWithRun(store, "چرا عنوان‌ها خلاصه نمی‌شوند؟", "جواب");
+    store.updateChat(chat.id, { title: "گفتگو" });
+    assert.equal(await titler(chat.id, { backfill: true }), "عنوان خلاصه گفتگوها");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

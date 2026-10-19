@@ -2,7 +2,7 @@
 // owner has not seen — including the «بازش کرده بودم ولی جواب بعداً کامل شد» case.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { arriveAt, isUnreadChat, lookAt, markSeen, markUnread, seenOf, seedSeen } from "../src/seen.js";
+import { arriveAt, isUnreadChat, lookAt, markSeen, markUnread, onStorageChange, resetSyncForTests, seenOf, seedSeen, syncSeen } from "../src/seen.js";
 
 test("a finished chat is unread until its updatedAt is seen; running never is", () => {
   const at = "2026-10-05T05:07:01.509Z";
@@ -110,4 +110,104 @@ test("opening a chat clears a hand-made unread mark once per arrival, at the fir
   assert.equal(unread("b"), true, "a hidden tab has not been read");
   lookAt(other, "b", at, true);
   assert.equal(unread("b"), false);
+});
+
+test("a read in another tab reaches this one through the storage event", () => {
+  const store = new Map();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+  };
+  onStorageChange({ key: null });
+  try {
+    const id = "cross-tab-chat";
+    const at = "2026-10-18T06:00:00.000Z";
+    markSeen(id, "2026-10-18T05:00:00.000Z");
+    // the other tab opens the chat at its new updatedAt and writes the shared storage
+    const other = JSON.parse(store.get("griffin.seen.v1"));
+    other[id] = at;
+    store.set("griffin.seen.v1", JSON.stringify(other));
+    assert.notEqual(seenOf(id), at, "stale until the event arrives");
+    assert.equal(onStorageChange({ key: "unrelated" }), false);
+    assert.equal(onStorageChange({ key: "griffin.seen.v1" }), true);
+    assert.equal(seenOf(id), at);
+  } finally {
+    globalThis.localStorage = prev;
+    onStorageChange({ key: null });
+  }
+});
+
+test("the read state is the server's: the first device uploads a baseline, another adopts it, reads are sent back", async () => {
+  const at = "2026-10-19T05:00:00.000Z";
+  const later = "2026-10-19T06:00:00.000Z";
+  const server = { seen: null, rev: 0 };
+  const calls = [];
+  const request = async (url, opts = {}) => {
+    calls.push([opts.method || "GET", url]);
+    if (opts.method === "PUT") {
+      const { set, init } = opts.body;
+      if (init && server.seen) return { seen: server.seen, rev: server.rev };
+      server.seen = { ...(server.seen || {}), ...set };
+      server.rev += 1;
+      return { rev: server.rev, ...(init ? { seen: server.seen } : {}) };
+    }
+    return server.seen ? { seen: server.seen, rev: server.rev } : { seen: null, rev: 0 };
+  };
+  // nothing on the server yet: this device's list becomes the baseline, a read before the sync is kept
+  markSeen("early-chat", at);
+  assert.equal(await syncSeen([{ id: "listed-chat", updatedAt: at }], { request }), true);
+  // the baseline upload, then the read made before the sync (sent again: it is cheap and idempotent)
+  assert.deepEqual(calls.map((c) => c[0]), ["GET", "PUT", "PUT"]);
+  assert.equal(server.seen["listed-chat"], at);
+  assert.equal(server.seen["early-chat"], at);
+  assert.equal(isUnreadChat({ id: "listed-chat", updatedAt: at, runStatus: "finished" }, seenOf("listed-chat")), false);
+  // a read after the sync reaches the server (batched)
+  markSeen("listed-chat", later);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(server.seen["listed-chat"], later);
+  // later calls share the first answer
+  assert.equal(await syncSeen([], { request }), true);
+  assert.equal(calls.filter((c) => c[0] === "GET").length, 1);
+});
+
+test("a browser that never shared its read state keeps its own unread marks when the server already has a copy", async () => {
+  const at = "2026-10-19T05:00:00.000Z";
+  const store = new Map();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+  };
+  resetSyncForTests();
+  try {
+    // this browser marked a chat unread before the update; another device already uploaded a baseline
+    store.set("griffin.seen.v1", JSON.stringify({ "marked-chat": "unread", "old-chat": at }));
+    const server = { seen: { "marked-chat": at, "old-chat": at, "phone-chat": at }, rev: 3 };
+    const puts = [];
+    const request = async (url, opts = {}) => {
+      if (opts.method === "PUT") {
+        puts.push(opts.body);
+        Object.assign(server.seen, opts.body.set);
+        server.rev += 1;
+        return { rev: server.rev };
+      }
+      return { seen: server.seen, rev: server.rev };
+    };
+    assert.equal(await syncSeen([], { request }), true);
+    assert.equal(seenOf("marked-chat"), "unread", "the mark survives the adoption");
+    assert.equal(seenOf("phone-chat"), at, "the other device's state arrived");
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    assert.equal(server.seen["marked-chat"], "unread", "and went to the server for the other devices");
+    assert.equal(store.get("griffin.seen.synced.v1"), "1");
+    // a browser that has shared before takes the server's copy as it is
+    resetSyncForTests();
+    store.set("griffin.seen.v1", JSON.stringify({ "marked-chat": at }));
+    server.seen["marked-chat"] = at;
+    assert.equal(await syncSeen([], { request }), true);
+    assert.equal(seenOf("marked-chat"), at);
+  } finally {
+    globalThis.localStorage = prev;
+    resetSyncForTests();
+  }
 });

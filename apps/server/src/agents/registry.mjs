@@ -1,4 +1,5 @@
 import { PERSONA } from "../persona.mjs";
+import { genv } from "../env.mjs";
 
 // Agent registry: authority is who is calling, not a property of the agent itself.
 // Quota is enforced by filterTools (tools not in customTools cannot be called). Prompt text
@@ -20,6 +21,8 @@ export const CORE_TOOLS = [
   "subtasks",
   "visualize",
   "show_media",
+  "web_search",
+  "web_fetch",
   "knowledge_write",
   "knowledge_list",
   "jobs_list",
@@ -35,13 +38,14 @@ export const CORE_TOOLS = [
   "chat_suggest",
   "chat_dismiss_suggestion",
   "chat_chapter",
+  "consult",
 ];
 
 /** What an unattended caller (a scheduled job) may use: work, but never ask a human. */
 const SCHEDULER_TOOLS = ["ask_agent", "delegate", "subtasks", "visualize", "show_media", "knowledge_list", "knowledge_write"];
 
 /** What a person talking through a messenger bridge may use. */
-const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "knowledge_list", "end_agent", "peer_connection"];
+const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "web_search", "web_fetch", "knowledge_list", "end_agent", "peer_connection"];
 
 export const AGENTS = {
   griffin: {
@@ -53,7 +57,7 @@ export const AGENTS = {
       scheduler: { tools: SCHEDULER_TOOLS },
       // Unattended triage; its own ask_owner reaches the owner with a timeout (asks.mjs), approvals
       // for irreversible calls stay refused there.
-      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write", "incidents_list", "incident_update", "incident_history", "ask_owner"] },
+      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write", "incidents_list", "incident_update", "incident_history", "ask_owner", "tell_owner"] },
       team: { tools: TEAM_TOOLS },
     },
   },
@@ -64,8 +68,16 @@ export const CALLER_LABELS = {
   scheduler: "زمان‌بند",
   ops: "اتاق عملیات",
   team: "همکار (پیام‌رسان)",
-  griffin: PERSONA.name,
+  get griffin() {
+    return PERSONA.name;
+  },
 };
+
+// Built-in specialists an install may seed besides the mother agent. A fresh public install has
+// none; GRIFFIN_SPECIALISTS=off drops any that were seeded (db.mjs removes their rows too).
+export const SPECIALIST_AGENTS = [];
+export const specialistsOff = (env = process.env) => genv("SPECIALISTS", "", env) === "off";
+if (specialistsOff()) for (const id of SPECIALIST_AGENTS) delete AGENTS[id];
 
 export function callerQuota(agentId, callerId) {
   const agent = AGENTS[agentId];
@@ -119,6 +131,39 @@ export function listAgents() {
 /** A usable agent id, or the default. Custom agents live in the database, so this only
  *  checks the shape — callers that need to know an agent exists ask the store. */
 export const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+// --- agents the owner (or the mother agent, with his yes) makes at run time -------------------------
+// They live in agent_profiles (db.mjs) and are mirrored here so everything keyed on AGENTS (the
+// working folder, the rules, the caller names, the knowledge folder) knows them too.
+
+// Caller ids share a namespace with agent ids (a quota row is keyed by the caller), so none of these
+// can be an agent's id.
+export const RESERVED_AGENT_IDS = new Set(["owner", "scheduler", "ops", "team", "peer", "system", "all", "new", "auto", "default", ...Object.keys(AGENTS), ...SPECIALIST_AGENTS]);
+const NEW_AGENT_ID = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
+
+/** Why `id` cannot name a new agent, or null. */
+export function agentIdError(id) {
+  const value = String(id ?? "");
+  if (!NEW_AGENT_ID.test(value)) return "agent id: 3–32 characters, lowercase letters, digits and dashes, starting with a letter";
+  if (RESERVED_AGENT_IDS.has(value) || value.startsWith("peer")) return `agent id «${value}» is reserved`;
+  return null;
+}
+
+export function registerAgent(profile) {
+  if (!profile?.id || profile.built_in || profile.builtIn) return;
+  if (AGENTS[profile.id] && !AGENTS[profile.id].custom) return;
+  AGENTS[profile.id] = {
+    custom: true,
+    label: profile.label,
+    domain: profile.domain || "",
+    tools: Array.isArray(profile.tools) ? profile.tools : [],
+    callers: profile.meta?.callers && typeof profile.meta.callers === "object" ? profile.meta.callers : {},
+  };
+}
+
+export function unregisterAgent(id) {
+  if (AGENTS[id]?.custom) delete AGENTS[id];
+}
 
 export function resolveAgentId(agentId) {
   const id = String(agentId || "");

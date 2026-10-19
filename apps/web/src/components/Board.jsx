@@ -12,6 +12,8 @@ import { waitingKind, waitingSend } from "../telegram.js";
 import { api, navigate } from "../api.js";
 import { exactTime } from "../elapsed.js";
 import { num, t } from "../i18n.js";
+import { focusChore } from "../focus.js";
+import { useFlag } from "../ui-prefs.js";
 
 // The assistant's work on the home page: what waits for the owner (answered or acted on in place) above
 // the composer, what runs and what just ended under it. The data is board.js / inbox.js.
@@ -66,11 +68,11 @@ function InboxCard({ item }) {
   return (
     <article className="g-box w-full rounded-xl border bg-card px-3 py-2.5 text-sm">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className={tag}>{TAGS[item.kind] || item.kind}</span>
+        <span className={tag}>{item.access ? t("دسترسی") : TAGS[item.kind] || item.kind}</span>
         {title ? <span className="min-w-0 flex-1 truncate font-medium text-foreground" dir="auto">{title}</span> : <span className="flex-1" />}
         <span className="shrink-0" title={exactTime(item.at)}>{ago(item.at)}</span>
         {open ? (
-          <a href={`#/c/${open}`} className="flex shrink-0 items-center gap-1 hover:text-foreground pointer-coarse:min-h-11">
+          <a href={`#/c/${open}`} onClick={item.kind === "chore" ? () => focusChore(item) : undefined} className="flex shrink-0 items-center gap-1 hover:text-foreground pointer-coarse:min-h-11">
             <ExternalLink className="size-3.5" /> {t("باز کردن")}
           </a>
         ) : null}
@@ -129,7 +131,7 @@ function InboxCard({ item }) {
             ) : item.kind === "chore" ? (
               <>
                 <button type="button" disabled={busy} className={primaryBtn} onClick={() => act(() => api(`/api/inbox/chores/${item.choreId}`, { method: "POST", body: { action: "done" } }))}>
-                  <Check className="size-3.5" /> {t("انجام شد")}
+                  <Check className="size-3.5" /> {item.access ? t("دادم") : t("انجام شد")}
                 </button>
                 <button type="button" disabled={busy} className={btn} onClick={() => act(() => api(`/api/inbox/chores/${item.choreId}`, { method: "POST", body: { action: "dismiss" } }))}>
                   <X className="size-3.5" /> {t("ولش کن")}
@@ -164,7 +166,7 @@ export function TaskLists({ chats, inbox }) {
           <ul>
             {done.map((chat) => {
               const dot = isUnreadChat(chat, seenOf(chat.id))
-                ? "bg-primary"
+                ? "bg-signal"
                 : chat.runStatus === "error" ? "bg-bad" : chat.runStatus === "cancelled" ? "bg-muted-foreground" : null;
               return (
                 <li key={chat.id}>
@@ -185,12 +187,13 @@ export function TaskLists({ chats, inbox }) {
 
 function WorkingRow({ row }) {
   const { chat } = row;
+  const logos = useFlag("agentLogos");
   const source = sourceTag(chat);
   const request = (path, method, done) => api(path, { method }).then(() => toast.success(done), (e) => toast.error(e.message));
   return (
     <li className="g-list-row flex min-w-0 items-center gap-1 rounded-lg hover:bg-muted">
       <button type="button" onClick={() => navigate(chat.id)} className="flex min-w-0 flex-1 items-start gap-2 px-2.5 py-2 text-start pointer-coarse:min-h-11">
-        <AgentGlyph id={chat.agent} className="mt-0.5 size-4 shrink-0" />
+        {logos ? <AgentGlyph id={chat.agent} className="mt-0.5 size-4 shrink-0" /> : null}
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2 text-sm">
             <span className="min-w-0 truncate" dir="auto">{chat.title || t("گفتگوی جدید")}</span>

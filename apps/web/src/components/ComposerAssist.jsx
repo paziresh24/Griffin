@@ -4,9 +4,9 @@ import { ChevronDown, GitFork, RefreshCw, Sparkles, X, Zap } from "lucide-react"
 import { Popover } from "radix-ui";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
-import { useSkin } from "../skin.js";
+import { useFlag, useLook } from "../ui-prefs.js";
 import {
-  acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, pickCommand, shownNextStep, slashQuery,
+  acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, nextStepReturnsOn, pickCommand, shownNextStep, slashQuery,
 } from "../assist.js";
 import { isRtl, locale, t } from "../i18n.js";
 import { MENU } from "./Controls.jsx";
@@ -24,10 +24,10 @@ function useCommandInfo(chatId, model) {
   const [info, setInfo] = useState(null);
   useEffect(() => {
     setInfo(null);
-    if (!chatId) return undefined;
-    const key = `${chatId}|${model || ""}`;
+    // No chat yet (the new-chat page): the list of the engine a new chat runs on.
+    const key = `${chatId || ""}|${model || ""}`;
     const cached = commandInfo.get(key);
-    if (!cached || Date.now() - cached.at > 60_000) commandInfo.set(key, { at: Date.now(), promise: api(`/api/commands?chat=${chatId}`).catch(() => null) });
+    if (!cached || Date.now() - cached.at > 60_000) commandInfo.set(key, { at: Date.now(), promise: api(`/api/commands${chatId ? `?chat=${chatId}` : ""}`).catch(() => null) });
     let alive = true;
     commandInfo.get(key).promise.then((d) => alive && d && setInfo(d));
     return () => {
@@ -45,7 +45,7 @@ export function useNextStep() {
   const running = useAuiState((s) => s.thread.isRunning);
   const [dismissed, setDismissed] = useState(null);
   useEffect(() => setDismissed((d) => dismissNextStep(d, { suggestion: chat?.suggestion, text, running })), [text, running, chat?.suggestion]);
-  return shownNextStep({ suggestion: chat?.suggestion, text, running, dismissed });
+  return shownNextStep({ suggestion: chat?.suggestion, text, running, dismissed, returns: nextStepReturnsOn() });
 }
 
 // Above the composer's input: the «/» list, the suggested next message (Tab), the auto-continue
@@ -54,13 +54,14 @@ export function useNextStep() {
 // sits in the toolbar under it and the auto-continue notice in the header, so none show here.
 export function ComposerAssist({ inputRef, next = null }) {
   const chat = useContext(ChatRecord);
-  const karsara = useSkin() === "karsara";
+  const headerResume = useFlag("headerCounts"); // the auto-continue notice sits in the header instead
+  const ghost = useFlag("nextGhost"); // the next step is ghost text in the box instead
   const { value: text, setText } = unstable_useComposerInput();
   const [index, setIndex] = useState(0);
   const [moved, setMoved] = useState(false);
   const chatId = chat?.id || null;
   const info = useCommandInfo(chatId, chat?.model);
-  const query = chatId ? slashQuery(text) : null;
+  const query = slashQuery(text);
   const list = query == null ? [] : filterCommands(info?.commands || [], query);
 
   useEffect(() => {
@@ -116,10 +117,10 @@ export function ComposerAssist({ inputRef, next = null }) {
     return () => input.removeEventListener("keydown", onKey);
   }, [inputRef, setText]);
 
-  if (!chat) return null;
+  // On the new-chat page (no chat yet) only the «/» list.
   const cancelResume = () => api(`/api/chats/${chat.id}/limit-resume`, { method: "DELETE" }).catch((e) => toast.error(e.message));
-  const resumeShown = Boolean(chat.limitResumeAt) && !karsara;
-  const nextShown = next && !karsara;
+  const resumeShown = Boolean(chat?.limitResumeAt) && !headerResume;
+  const nextShown = next && !ghost;
   if (!list.length && !nextShown && !resumeShown) return null;
 
   return (

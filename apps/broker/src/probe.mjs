@@ -7,11 +7,21 @@ export function createProbe({ clusters, kube, timeoutMs = 5_000, ttlMs = 30_000 
 
   // A real authenticated read, so "ok" means the broker can use the API — not just that the
   // gateway answered (it answers 302 to login when the credential is rejected).
+  // A namespace-bound credential (a colleague's install) is refused the cluster-wide list by RBAC —
+  // the gateway let it in, so the check reads the one namespace it may read instead.
   async function apiCheck(name) {
     const started = Date.now();
     try {
-      await kube.publicRequest(name, "/api/v1/namespaces?limit=1");
-      return { ok: true, ms: Date.now() - started };
+      try {
+        await kube.publicRequest(name, "/api/v1/namespaces?limit=1");
+        return { ok: true, ms: Date.now() - started };
+      } catch (error) {
+        if (!error?.forbidden || !kube.homeNamespace) throw error;
+        const home = await kube.homeNamespace(name);
+        if (!home) throw error;
+        await kube.publicRequest(name, `/api/v1/namespaces/${home}/pods?limit=1`);
+        return { ok: true, scope: "namespace", namespace: home, ms: Date.now() - started };
+      }
     } catch (error) {
       const message = error?.name === "TimeoutError" ? "timeout" : String(error?.cause?.code || error?.message || error);
       return { ok: false, error: message, ms: Date.now() - started };

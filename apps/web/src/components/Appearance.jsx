@@ -2,21 +2,22 @@ import { useEffect, useState } from "react";
 import { Switch } from "radix-ui";
 import { Check } from "lucide-react";
 import { Group, Item } from "./SettingsParts.jsx";
-import { applySkin, readSkin } from "../skin.js";
+import { BrandPicker } from "./BrandPicker.jsx";
+import { FLAGS, LOOKS, NAV_ITEMS, applyPreset, installPreset, presetOf, resetUiPrefs, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
 import { t } from "../i18n.js";
-import { NAV_ITEMS, NAV_PRESETS, NAV_STYLES, setNavPrefs, useNavPrefs } from "../sidebar-nav.js";
 
 // Preview colours are written out here: the skin tokens live on <html>, so a small card cannot
-// borrow the other skin's palette from CSS. Keep them in step with styles.css.
+// borrow the other skin's palette from CSS. Keep them in step with styles.css. Griffin's colour is
+// the install's own (--brand: stock orange, or what the owner picked under logo and colour).
 const SKINS = [
   {
     id: "griffin",
     label: t("گریفین"),
-    note: t("نارنجی، گوشه‌های گرد، وزیرمتن"),
+    note: t("رنگ و لوگوی همین نصب، گوشه‌های گرد، وزیرمتن"),
     font: '"Vazirmatn Variable", sans-serif',
     radius: 16,
-    light: { bg: "oklch(0.985 0.002 250)", card: "#fff", bubble: "oklch(0.95 0.04 55)", line: "oklch(0.9 0.008 250)", primary: "oklch(0.7 0.15 55)", text: "oklch(0.2 0.02 255)" },
-    dark: { bg: "oklch(0.16 0.012 255)", card: "oklch(0.2 0.014 255)", bubble: "oklch(0.28 0.05 50)", line: "oklch(0.3 0.015 255)", primary: "oklch(0.78 0.14 55)", text: "oklch(0.93 0.008 250)" },
+    light: { bg: "oklch(0.985 0.002 250)", card: "#fff", bubble: "color-mix(in oklch, var(--brand) 16%, white)", line: "oklch(0.9 0.008 250)", primary: "var(--brand)", text: "oklch(0.2 0.02 255)" },
+    dark: { bg: "oklch(0.16 0.012 255)", card: "oklch(0.2 0.014 255)", bubble: "color-mix(in oklch, var(--brand) 25%, oklch(0.2 0.014 255))", line: "oklch(0.3 0.015 255)", primary: "var(--brand)", text: "oklch(0.93 0.008 250)" },
   },
   {
     id: "karsara",
@@ -54,101 +55,95 @@ function Preview({ skin, dark }) {
   );
 }
 
+// Settings → Appearance (one UI, personalised per user): the look (appearance only), the install's
+// logo and colour, then every structural choice as a switch. The two presets are
+// starting points; whatever is changed here is saved for this user on every device (ui-prefs.js).
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const AREAS = [...new Set(FLAGS.map((f) => f.area))];
+
 export function AppearanceSection() {
-  const [skin, setSkin] = useState(readSkin);
+  const { look, flags } = useUiPrefs();
   const dark = useDark();
+  const matching = LOOKS.find((l) => l.id === look && same(presetOf(l.id).flags, flags))?.id;
+  const chip = (active) =>
+    `press rounded-full border px-3 py-1 text-xs transition-colors ${active ? "border-primary/40 bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`;
+  const hidden = flags.navHidden || [];
   return (
     <div className="space-y-6">
-    <Group title={t("پوسته")}>
-      <div role="radiogroup" aria-label={t("پوسته")} className="grid gap-3 p-3 sm:grid-cols-2">
-        {SKINS.map((s) => {
-          const active = skin === s.id;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => setSkin(applySkin(s.id))}
-              className={`overflow-hidden rounded-xl border text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}
-            >
-              <Preview skin={s} dark={dark} />
-              <span className="flex items-center gap-2 px-3 py-2">
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium">{s.label}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{s.note}</span>
+      <Group title={t("ظاهر")}>
+        <div role="radiogroup" aria-label={t("ظاهر")} className="grid gap-3 p-3 sm:grid-cols-2">
+          {SKINS.map((s) => {
+            const active = look === s.id;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setUiPrefs({ look: s.id })}
+                className={`overflow-hidden rounded-xl border text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}
+              >
+                <Preview skin={s} dark={dark} />
+                <span className="flex items-center gap-2 px-3 py-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">{s.label}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{s.note}</span>
+                  </span>
+                  {active ? <Check className="size-4 shrink-0 text-primary" /> : null}
                 </span>
-                {active ? <Check className="size-4 shrink-0 text-primary" /> : null}
-              </span>
+              </button>
+            );
+          })}
+        </div>
+      </Group>
+      <Group title={t("لوگو و رنگ")}>
+        <div className="p-3">
+          <BrandPicker />
+        </div>
+      </Group>
+      <Group title={t("همه با هم")}>
+        <div className="flex flex-wrap items-center gap-1.5 p-3">
+          {LOOKS.map((l) => (
+            <button key={l.id} type="button" onClick={() => applyPreset(l.id)} className={chip(matching === l.id)}>
+              {t("همه مثل {name}", { name: l.label })}
             </button>
-          );
-        })}
-      </div>
-    </Group>
-    <SidebarNavPrefs />
+          ))}
+          <button type="button" onClick={() => resetUiPrefs()} className={chip(false)} title={t("پیش‌فرض این نصب: {name}", { name: LOOKS.find((l) => l.id === installPreset())?.label || "" })}>
+            {t("برگرداندن به پیش‌فرض نصب")}
+          </button>
+        </div>
+      </Group>
+      {AREAS.map((area) => (
+        <Group key={area} title={area}>
+          {FLAGS.filter((f) => f.area === area).map((f) => (
+            <Item key={f.key} title={f.label} subtitle={<span className="block whitespace-normal leading-5">{f.hint}</span>} trailing={<Toggle on={Boolean(flags[f.key])} label={f.label} onChange={(on) => setUiPrefs({ flags: { [f.key]: on } })} />} />
+          ))}
+          {area === t("فهرست گفتگوها")
+            ? NAV_ITEMS.map((item) => (
+                <Item
+                  key={item.id}
+                  title={t("بخش «{name}»", { name: item.label })}
+                  subtitle={!hidden.includes(item.id) ? t("در منو") : flags.navMore ? t("زیر «بیشتر»") : t("پنهان")}
+                  trailing={<Toggle on={!hidden.includes(item.id)} label={t("{name} در منو", { name: item.label })} onChange={(on) => setUiPrefs({ flags: { navHidden: on ? hidden.filter((id) => id !== item.id) : [...hidden, item.id] } })} />}
+                />
+              ))
+            : null}
+        </Group>
+      ))}
     </div>
   );
 }
 
-// The sidebar's top sections: as rows or one row of icons, and which show (the rest under «بیشتر»).
-function SidebarNavPrefs() {
-  const prefs = useNavPrefs();
-  const shown = (id) => !prefs.hidden.includes(id);
-  const preset = NAV_PRESETS.find((p) => p.hidden.length === prefs.hidden.length && p.hidden.every((id) => prefs.hidden.includes(id)))?.id;
-  const chip = (active) =>
-    `press rounded-full border px-3 py-1 text-xs transition-colors ${active ? "border-primary/40 bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`;
+function Toggle({ on, label, onChange }) {
   return (
-    <Group
-      title={t("بخش‌های بالای منو")}
-      action={
-        <div className="flex gap-1.5">
-          {NAV_PRESETS.map((p) => (
-            <button key={p.id} type="button" onClick={() => setNavPrefs({ hidden: p.hidden })} className={chip(preset === p.id)}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-      }
+    <Switch.Root
+      checked={on}
+      onCheckedChange={onChange}
+      dir="ltr"
+      className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
+      aria-label={label}
     >
-      <div role="radiogroup" aria-label={t("شکل بخش‌ها")} className="grid grid-cols-2 gap-2 p-3">
-        {NAV_STYLES.map((style) => {
-          const active = prefs.style === style.id;
-          return (
-            <button
-              key={style.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => setNavPrefs({ style: style.id })}
-              className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">{style.label}</span>
-                <span className="block text-xs leading-5 text-muted-foreground">{style.note}</span>
-              </span>
-              {active ? <Check className="mt-0.5 size-4 shrink-0 text-primary" /> : null}
-            </button>
-          );
-        })}
-      </div>
-      {NAV_ITEMS.map((item) => (
-        <Item
-          key={item.id}
-          title={item.label}
-          subtitle={shown(item.id) ? t("در منو") : t("زیر «بیشتر»")}
-          trailing={
-            <Switch.Root
-              checked={shown(item.id)}
-              onCheckedChange={(on) => setNavPrefs({ hidden: on ? prefs.hidden.filter((id) => id !== item.id) : [...prefs.hidden, item.id] })}
-              dir="ltr"
-              className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-              aria-label={t("{name} در منو", { name: item.label })}
-            >
-              <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
-            </Switch.Root>
-          }
-        />
-      ))}
-    </Group>
+      <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
+    </Switch.Root>
   );
 }

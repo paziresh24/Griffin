@@ -69,17 +69,20 @@ test("watchTodos: copies Claude's and Cursor's lists, only on a change, and clea
   stop();
 });
 
-test("owner_task: a chore on the owner's board, linked to the root chat", async () => {
+test("owner_task: an access request on the owner's board, linked to the root chat", async () => {
   const store = fresh();
-  const root = store.createChat({ title: "توکن" });
+  const root = store.createChat({ title: "سرچ" });
   const tool = ownerTaskTool({ store, chatId: root.id, agent: "griffin" });
-  assert.equal((await tool.execute({ title: "  " })).isError, true);
-  const done = await tool.execute({ title: "توکن PAT را عوض کن", detail: "در لاگ Z.ai دیده شد" });
+  assert.equal((await tool.execute({ access: "  " })).isError, true);
+  assert.deepEqual(tool.inputSchema.required, ["access"], "not a chore: the access it needs");
+  const done = await tool.execute({ access: "Maintainer برای griffin روی alice/search-service", why: "اصلاح‌های MR 45" });
   assert.equal(done.isError, undefined);
   const [chore] = listOwnerTasks(store);
-  assert.equal(chore.title, "توکن PAT را عوض کن");
+  assert.equal(chore.title, "دسترسی: Maintainer برای griffin روی alice/search-service");
+  assert.equal(chore.access, "Maintainer برای griffin روی alice/search-service");
   assert.equal(chore.chatId, root.id);
   assert.equal(chore.agent, "griffin");
+  assert.equal(JSON.parse(done.content[0].text).id, chore.id, "the card can be found from the board");
 });
 
 test("every agent and caller works as tasks, right after decide-and-report", () => {

@@ -1,0 +1,12 @@
+{
+  "«{name}» خالی است": "“{name}” is empty",
+  "فایل": "File",
+  "«{name}» پیوست نمی‌شود: فقط تصویر، PDF یا فایل متنی": "“{name}” can't be attached: only images, PDFs or text files",
+  "«{name}» بزرگ‌تر از {mb} مگابایت است (سقف PDF)": "“{name}” is larger than {mb} MB (the PDF limit)",
+  "«{name}» بزرگ‌تر از {mb} مگابایت است": "“{name}” is larger than {mb} MB",
+  "حداکثر {n} فایل در یک پیام": "At most {n} files in one message",
+  "PDFهای یک پیام روی هم حداکثر {mb} مگابایت": "The PDFs of one message add up to at most {mb} MB",
+  "حداکثر {n} تصویر در یک پیام": "At most {n} images in one message",
+  "این فایل را ببین.": "Look at this file.",
+  "این تصویر را ببین.": "Look at this image."
+}

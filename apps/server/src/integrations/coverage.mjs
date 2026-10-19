@@ -24,7 +24,10 @@ export function coverageCommand(text) {
  * colleague and its answer went to them: «چه جوابی داده؟ متنش رو بفرست» reached the colleague.
  */
 // How the owner's web-UI note to a covered thread starts (the bridge recognizes it as internal).
-export const OWNER_NOTE_PREFIX = `«${OWNER_NAME} از داخل گریفین`;
+// Older notes said «… از داخل گریفین»; both are still recognized.
+export const OWNER_NOTE_PREFIX = `«${OWNER_NAME} از داخل اپ`;
+export const OWNER_NOTE_PREFIXES = [OWNER_NOTE_PREFIX, `«${OWNER_NAME} از داخل گریفین`];
+export const isOwnerNote = (text) => OWNER_NOTE_PREFIXES.some((p) => String(text || "").startsWith(p));
 
 export function coverageOwnerNote(peerName, text) {
   return `${OWNER_NOTE_PREFIX} — برای تو، نه برای ${peerName || "همکار"}»: ${String(text || "").trim()}`;
