@@ -4,6 +4,7 @@ import { emptyTimeline } from "@griffin/timeline";
 import { createTimelineMemo } from "./timeline-memo.js";
 import { keepOpen } from "./stream-keeper.js";
 import { catchUpTimeline, openTimeline } from "./timeline-stream.js";
+import { readChatsCache, writeChatsCache } from "./chats-cache.js";
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -22,6 +23,8 @@ export async function api(path, { method = "GET", body } = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401) window.dispatchEvent(new Event("griffin:unauthorized"));
+  // The install requires two-step sign-in and it is not set up yet (auth.mjs): the setup screen shows.
+  if (response.status === 403 && data?.setupRequired) window.dispatchEvent(new Event("griffin:setup-2fa"));
   if (!response.ok) throw new ApiError(response.status, data);
   return data;
 }
@@ -32,25 +35,33 @@ export const INBOX_EVENT = "griffin:inbox";
 
 // Chat list, refreshed whenever the server says something changed.
 export function useChats() {
-  const [state, setState] = useState({ chats: [], archived: [], groups: [], sideChat: true, privateShare: false, loading: true, failed: false, retry: () => {} });
+  const [state, setState] = useState(() => {
+    // The last list seen shows at once; the server's answer replaces it (chats-cache.js).
+    const cached = readChatsCache();
+    return { chats: cached?.chats || [], archived: [], groups: cached?.groups || [], looseAt: cached?.looseAt ?? null, sideChat: true, privateShare: false, loading: !cached?.chats.length, failed: false, retry: () => {} };
+  });
   useEffect(() => {
     let alive = true;
     let retryTimer = null;
     const load = async () => {
       clearTimeout(retryTimer);
+      // The three reads go out together, but the list is drawn as soon as the first arrives: the
+      // archive and the groups are the slow ones and no longer hold the sidebar back.
+      const activeRead = api("/api/chats");
+      // The owner's chat groups ride along: a group change emits the same list event.
+      const archivedRead = api("/api/chats?archived=1").catch(() => null);
+      const groupsRead = api("/api/groups").catch(() => null);
       try {
-        // The owner's chat groups ride along: a group change emits the same list event.
-        const [active, archived, groups] = await Promise.all([
-          api("/api/chats"),
-          api("/api/chats?archived=1"),
-          api("/api/groups").catch(() => null),
-        ]);
-        // A failed groups read keeps the last list: an empty one would drop a chosen group silently.
-        if (alive) {
-          setNextStepReturns(active.nextStepReturns === true);
-          setState((s) => ({ ...s, chats: active.chats, archived: archived.chats, groups: groups ? groups.groups || [] : s.groups, sideChat: active.sideChat !== false, privateShare: active.privateShare === true, loading: false, failed: false }));
-          window.dispatchEvent(new Event(INBOX_EVENT));
-        }
+        const active = await activeRead;
+        if (!alive) return;
+        setNextStepReturns(active.nextStepReturns === true);
+        setState((s) => ({ ...s, chats: active.chats, sideChat: active.sideChat !== false, privateShare: active.privateShare === true, loading: false, failed: false }));
+        window.dispatchEvent(new Event(INBOX_EVENT));
+        const [archived, groups] = await Promise.all([archivedRead, groupsRead]);
+        if (!alive) return;
+        // A failed archive or groups read keeps the last list: an empty one would drop a chosen group silently.
+        setState((s) => ({ ...s, archived: archived ? archived.chats : s.archived, groups: groups ? groups.groups || [] : s.groups, looseAt: groups ? groups.looseAt ?? null : s.looseAt }));
+        writeChatsCache(active.chats, groups ? groups.groups || [] : null, undefined, groups ? groups.looseAt ?? null : undefined);
       } catch {
         // A read that failed is not an empty list: say so, and try again until it works.
         if (alive) {
@@ -101,6 +112,7 @@ export function useTimeline(chatId) {
   const reloaded = useRef(0);
   const openRef = useRef(null);
   const reconnect = useCallback(() => openRef.current?.retryNow(), []);
+  const loadOlder = useCallback(() => openRef.current?.loadOlder() ?? Promise.resolve(false), []);
 
   useEffect(() => {
     const bump = () => setReloadKey((k) => k + 1);
@@ -137,10 +149,10 @@ export function useTimeline(chatId) {
 
   // Until the effect for a newly chosen chat has run, state still belongs to the previous one:
   // show the remembered copy (or nothing), never another chat's thread.
-  if (!chatId) return { timeline: EMPTY, connection: "idle", reconnect };
-  if (state.chatId === chatId) return { timeline: state.timeline, connection: state.connection, reconnect };
+  if (!chatId) return { timeline: EMPTY, connection: "idle", reconnect, loadOlder };
+  if (state.chatId === chatId) return { timeline: state.timeline, connection: state.connection, reconnect, loadOlder };
   const remembered = memo.recall(chatId);
-  return { timeline: remembered?.timeline || EMPTY, connection: remembered ? "refreshing" : "loading", reconnect };
+  return { timeline: remembered?.timeline || EMPTY, connection: remembered ? "refreshing" : "loading", reconnect, loadOlder };
 }
 
 export function usePolling(path, intervalMs) {
@@ -177,7 +189,7 @@ function subscribeHash(callback) {
 // "#/settings" and "#/jobs" are pages that replace the thread.
 export function usePageRoute() {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
-  const match = /^#\/(settings|jobs|agents|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?)$/.exec(hash);
+  const match = /^#\/(settings|jobs|agents(?:\/new)?|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?|m\/[a-z0-9-]{2,32}\/[a-z0-9-]{1,40})$/.exec(hash);
   return match ? match[1].split("/")[0] : null;
 }
 

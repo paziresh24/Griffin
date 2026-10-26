@@ -11,7 +11,9 @@ export const MCP_TOOLS = [
       "Returns within waitSec: the final answer if it finished, a question if Griffin needs input (answer with griffin_reply), " +
       "or state=working with a taskId — then keep calling griffin_wait until the state is completed/failed/canceled. " +
       "Never assume a working task failed; it is still running. Omit contextId to start a new conversation (tasks in " +
-      "different contexts run in parallel); pass the contextId of a finished task to follow up in the same conversation.",
+      "different contexts run in parallel); pass the contextId of a finished task to follow up in the same conversation. Without contextId, a message that follows up one of your requests of the " +
+      "last 3 hours (a correction, an addition, a cancel, a reminder) joins that request: the reply says followUp:true and " +
+      "carries its taskId/contextId. fresh:true always starts a new conversation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -20,6 +22,7 @@ export const MCP_TOOLS = [
         agent: { type: "string", description: "Optional specialist: griffin (default), platform, arvan-ban, nsin-ban." },
         model: { type: "string", description: "Optional model (\"account:model\") for a new conversation or to switch one; must be one of your allowedModels from griffin_limits. Default: the owner's choice for you." },
         messageId: { type: "string", description: "Idempotency key: resending the same messageId returns the same task." },
+        fresh: { type: "boolean", description: "Start a new conversation even if the message looks like a follow-up of a recent request." },
         waitSec: { type: "number", description: "Seconds to wait for a result before returning (default 10; up to 55 when the client accepts SSE, else 12)." },
       },
       required: ["message"],

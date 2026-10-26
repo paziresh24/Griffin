@@ -12,6 +12,7 @@
     "@assistant-ui/react": "^0.15.19",
     "@fontsource-variable/vazirmatn": "*",
     "@griffin/timeline": "*",
+    "@simplewebauthn/browser": "^14.0.0",
     "@streamdown/code": "^1.1.1",
     "cmdk": "^1.1.1",
     "html-to-image": "1.11.13",

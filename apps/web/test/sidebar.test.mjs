@@ -22,9 +22,12 @@ test("groups: a search, a filter or the archive hides the empty ones; nothing to
   assert.deepEqual(groupSections([], [], {}), []);
 });
 
-test("only «جدید» and the search stay fixed; the pages scroll with the list", () => {
+test("only «فضای کار» and the search stay fixed; the pages scroll with the list", () => {
   const side = src("components/Sidebar.jsx");
-  assert.match(side, /<NavButton k=\{k\} active=\{!page && !activeId\}[^>]*label=(\{t\()?"جدید"/, "«جدید» is lit only on the new-chat screen");
+  assert.match(side, /<NavButton k=\{k\} active=\{!page && !activeId\}[^>]*label=(\{t\()?"فضای کار"/, "«فضای کار» is lit only on the home / new-chat screen");
+  // Mr. Rezaei 2026-10-24: «فضای کار» with a «+» beside it; both go home, as does the logo.
+  assert.match(side, /aria-label=(\{t\()?"گفتگوی جدید"/);
+  assert.match(side, /aria-label=(\{t\()?"فضای کار"/);
   // Both lists: the search and «جدید» (nav.top) above the scrolling <nav>; the section rows (Settings →
   // «ظاهر و بخش‌ها») scroll with the list.
   for (const [file, from] of [["components/Sidebar.jsx", "function TabList("], ["components/SidebarOneList.jsx", "export function OneList("]]) {
@@ -40,12 +43,15 @@ test("only «جدید» and the search stay fixed; the pages scroll with the lis
   for (const label of ["تلگرام", "جاب", "حادثه‌ها", "ایجنت‌های همکاران", "میز کار"]) assert.match(nav, new RegExp(`label: t\\("${label}"\\)`));
 });
 
-test("the foot holds the profile menu, Settings and log out; agents and token usage live in Settings, no «همتا»", () => {
+test("the foot holds the profile menu, Settings and feedback; log out is in the profile menu; agents and token usage live in Settings, no «همتا»", () => {
   const side = src("components/Sidebar.jsx");
   const foot = side.slice(side.indexOf("function UserBar"));
   const aria = (label) => new RegExp(`aria-label=(\\{t\\()?"${label}"`);
+  // Mr. Rezaei 2026-10-24: nobody used «خروج» there; its place is «ارسال بازخورد» (a bug icon).
   assert.match(foot, aria("تنظیمات"));
-  assert.match(foot, aria("خروج"));
+  assert.match(foot, /<FeedbackBarButton /);
+  assert.doesNotMatch(foot, aria("خروج"));
+  assert.match(src("components/Feedback.jsx"), /\{ id: "logout", icon: LogOut, label: (t\()?"خروج"/);
   // The profile opens its own menu (edit profile, about, support, feedback), not Settings.
   assert.match(foot, aria("منوی پروفایل"));
   assert.match(foot, /PROFILE_ITEMS\.map/);

@@ -39,8 +39,10 @@ test("row and running work log use the sentence; the command stays visible runni
   assert.match(card, /plain \? \(running \|\| isError \? args\.command : ""\)/);
   assert.match(work, /stepTitle\(current\.name, current\.args\)/);
   const toolBody = src.slice(src.indexOf("function ToolBody"), src.indexOf("switch (toolName)"));
-  const withCommand = toolBody.indexOf("<Code text={args.command} />");
+  const withCommand = toolBody.indexOf("<ShellCommand command={args.command} />");
   assert.ok(withCommand >= 0 && withCommand < toolBody.indexOf("if (isError) return <ErrorBody"), "a failed step shows its command above the error");
   const shell = src.slice(src.indexOf('case "debug_exec":'), src.indexOf('case "mikrotik_print":'));
-  assert.match(shell, /<Code text=\{args\.command\} \/>/);
+  assert.match(shell, /<ShellBody toolName=\{toolName\} args=\{args\} result=\{result\} \/>/);
+  const views = fs.readFileSync(new URL("../src/components/ToolViews.jsx", import.meta.url), "utf8");
+  assert.match(views, /<ShellCommand command=\{args\.command\} \/>/, "the opened body shows the command above the output");
 });

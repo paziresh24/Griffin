@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { genv } from "./env.mjs";
+import { fromThisMachine } from "./listen.mjs";
 import { VpnError, reasonOf as vpnReason } from "./vpn.mjs";
 
 // What a new user still has to set up for full use, each read from the real state on this server
@@ -479,18 +480,13 @@ export function setupRoutes(api, { checks }) {
   });
 }
 
-const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
 // `vault-run` on this machine gets the Infisical token here: the caller must be this machine (a
 // loopback peer, or the server's own address), must not come through a proxy, and must show the
 // owner token from the data folder. Outside /api/*, so no browser cookie ever opens it.
 export function localVaultRoute(app, { checks, ownerTokenFile }) {
   app.get("/local/v1/vault-token", (c) => {
     c.header("cache-control", "no-store");
-    const socket = c.env?.incoming?.socket;
-    const peer = String(socket?.remoteAddress || "");
-    const sameHost = LOOPBACK.test(peer) || (peer !== "" && peer === String(socket?.localAddress || ""));
-    const proxied = ["x-forwarded-for", "forwarded", "x-real-ip", "x-forwarded-host", "x-forwarded-proto", "true-client-ip", "via"].some((h) => c.req.header(h));
-    if (!sameHost || proxied) return c.json({ error: "local only" }, 403);
+    if (!fromThisMachine(c)) return c.json({ error: "local only" }, 403);
     let owner = "";
     try {
       owner = fs.readFileSync(ownerTokenFile, "utf8").trim();

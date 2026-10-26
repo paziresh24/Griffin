@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { unstable_useComposerInput, useAuiState } from "@assistant-ui/react";
-import { ChevronDown, GitFork, RefreshCw, Sparkles, X, Zap } from "lucide-react";
+import { AtSign, Bot, ChevronDown, GitFork, MessagesSquare, RefreshCw, Sparkles, X, Zap } from "lucide-react";
+import { insertMention, mentionHandle, mentionQuery, mentionSpans } from "@griffin/timeline";
 import { Popover } from "radix-ui";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
@@ -10,6 +11,9 @@ import {
 } from "../assist.js";
 import { isRtl, locale, t } from "../i18n.js";
 import { MENU } from "./Controls.jsx";
+import { readChatsCache } from "../chats-cache.js";
+import { SECTION, mentionRows, ownAgents, recentChats } from "../mention-pick.js";
+import { MentionText } from "./Mention.jsx";
 
 // The open chat's record (App provides it): suggestion, auto-continue time, fast mode.
 // A side chat's thread is outside it and gets none of this.
@@ -35,6 +39,77 @@ function useCommandInfo(chatId, model) {
     };
   }, [chatId, model]);
   return info;
+}
+
+// The agents «@» can tag: this install's own (GET /api/agents) and the colleagues' on the network
+// (GET /api/network, connected ones) — one request a minute each, shared by every composer on the page.
+// The owner's recent chats come from the sidebar's own list (chats-cache.js) when «@» is typed.
+let tagSources = { at: 0, promise: null };
+function useMentionables() {
+  const [sources, setSources] = useState({ profiles: [], network: [] });
+  useEffect(() => {
+    if (!tagSources.promise || Date.now() - tagSources.at > 60_000) {
+      tagSources = {
+        at: Date.now(),
+        promise: Promise.all([
+          api("/api/agents").then((d) => d?.agents || [], () => []),
+          api("/api/network").then((d) => (d?.agents || []).filter((a) => a.connected), () => []),
+        ]).then(([profiles, network]) => ({ profiles, network })),
+      };
+    }
+    let alive = true;
+    tagSources.promise.then((v) => alive && setSources(v));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return sources;
+}
+
+// The composer's «@» tags as chips (owner 2026-10-21, «مثل دیسکورد»): a copy of the box's text sits
+// right behind the textarea, its words see-through, only the tags painted — so the owner's own text,
+// caret and selection stay the textarea's. Only a tag that names a known agent (or a closed @«chat»)
+// is a chip; a half-typed «@so» is not. Kept on the textarea's box: size, font, padding and scroll.
+const MIRRORED = ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "paddingTop", "paddingBottom", "paddingInlineStart", "paddingInlineEnd", "direction", "textAlign"];
+export function MentionBackdrop({ inputRef }) {
+  const chat = useContext(ChatRecord);
+  const { value: text } = unstable_useComposerInput();
+  const sources = useMentionables();
+  const ref = useRef(null);
+  const agents = [...ownAgents(sources.profiles, chat?.agent), ...sources.network];
+  const handles = agents.map((a) => mentionHandle(a, agents));
+  const tagged = mentionSpans(text, handles).some((s) => s.tag);
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    const box = ref.current;
+    if (!input || !box) return undefined;
+    const sync = () => {
+      const cs = getComputedStyle(input);
+      for (const k of MIRRORED) box.style[k] = cs[k];
+      // The scrollbar's side: start of the line in a right-to-left box.
+      const bar = input.offsetWidth - input.clientWidth - input.clientLeft * 2;
+      box.style.top = `${input.offsetTop + input.clientTop}px`;
+      box.style.left = `${input.offsetLeft + input.clientLeft + (cs.direction === "rtl" ? bar : 0)}px`;
+      box.style.width = `${input.clientWidth}px`;
+      box.style.height = `${input.clientHeight}px`;
+      box.scrollTop = input.scrollTop;
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(input);
+    input.addEventListener("scroll", sync);
+    return () => {
+      ro.disconnect();
+      input.removeEventListener("scroll", sync);
+    };
+  }, [inputRef, tagged, text]);
+  if (!tagged) return null;
+  return (
+    <div ref={ref} aria-hidden="true" className="g-mention-backdrop pointer-events-none absolute z-0 overflow-hidden whitespace-pre-wrap break-words text-transparent">
+      <MentionText text={text} handles={handles} />
+      {"\u200b"}
+    </div>
+  );
 }
 
 // The suggested next message shown for the open chat (null when none). The composer asks once and
@@ -63,11 +138,23 @@ export function ComposerAssist({ inputRef, next = null }) {
   const info = useCommandInfo(chatId, chat?.model);
   const query = slashQuery(text);
   const list = query == null ? [] : filterCommands(info?.commands || [], query);
+  // «@» tags our own agents, the colleagues' agents and the owner's recent chats (owner 2026-10-20): the
+  // server tells the chat's agent to work with them here (mention-pick.js, mentions.mjs).
+  const sources = useMentionables();
+  const caret = inputRef.current?.selectionStart ?? String(text || "").length;
+  const at = !list.length ? mentionQuery(text, caret) : null;
+  const [dismissedAt, setDismissedAt] = useState(null);
+  const own = ownAgents(sources.profiles, chat?.agent);
+  const agents = [...own, ...sources.network]; // every taggable agent: the handles' twin rule reads them all
+  const mentions = at && at.start !== dismissedAt ? mentionRows({ own, network: sources.network, chats: recentChats(readChatsCache()?.chats, chatId), query: at.query }) : [];
 
   useEffect(() => {
     setIndex(0);
     setMoved(false);
-  }, [query]);
+  }, [query, at?.query]);
+  useEffect(() => {
+    if (!at) setDismissedAt(null);
+  }, [at?.start]);
 
   const choose = (command) => {
     if (command.local && command.name === "clear") {
@@ -76,8 +163,17 @@ export function ComposerAssist({ inputRef, next = null }) {
     } else setText(pickCommand(command));
     inputRef.current?.focus();
   };
+  const tag = (agent) => {
+    const input = inputRef.current;
+    const out = insertMention(text, input?.selectionStart ?? String(text || "").length, agent, agents);
+    setText(out.text);
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange?.(out.caret, out.caret);
+    });
+  };
   const state = useRef(null);
-  state.current = { list, index, moved, query, next, text, choose };
+  state.current = { list, index, moved, query, next, text, choose, mentions, tag, at };
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return undefined;
@@ -102,6 +198,23 @@ export function ComposerAssist({ inputRef, next = null }) {
           return;
         }
       }
+      if (s.mentions.length) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          stop(e);
+          setIndex(moveIndex(s.index, s.mentions.length, e.key === "ArrowDown" ? 1 : -1));
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          stop(e);
+          s.tag(s.mentions[s.index] || s.mentions[0]);
+          return;
+        }
+        if (e.key === "Escape") {
+          stop(e);
+          setDismissedAt(s.at?.start ?? null);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey && isClearCommand(s.text)) {
         stop(e);
         setText("");
@@ -121,7 +234,7 @@ export function ComposerAssist({ inputRef, next = null }) {
   const cancelResume = () => api(`/api/chats/${chat.id}/limit-resume`, { method: "DELETE" }).catch((e) => toast.error(e.message));
   const resumeShown = Boolean(chat?.limitResumeAt) && !headerResume;
   const nextShown = next && !ghost;
-  if (!list.length && !nextShown && !resumeShown) return null;
+  if (!list.length && !mentions.length && !nextShown && !resumeShown) return null;
 
   return (
     <div className="flex flex-col gap-1 px-2 pt-2 text-xs">
@@ -142,6 +255,43 @@ export function ComposerAssist({ inputRef, next = null }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {mentions.length ? (
+        <div className="overflow-hidden rounded-lg border bg-card">
+          <ul role="listbox" aria-label={t("تگ با @")} className="scrollbar-thin max-h-72 overflow-y-auto pb-1">
+            {mentions.map((a, i) => {
+              const kind = a.kind || "network";
+              const heading = i === 0 || (mentions[i - 1].kind || "network") !== kind;
+              return (
+                <li key={`${kind}:${a.id}`} role="option" aria-selected={i === index}>
+                  {heading ? (
+                    <p className={`flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] text-muted-foreground ${i ? "mt-1 border-t" : ""}`}>
+                      <AtSign className="size-3 shrink-0" />
+                      {SECTION[kind]}
+                    </p>
+                  ) : null}
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => tag(a)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-start ${i === index ? "bg-muted" : "hover:bg-muted/60"}`}
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-medium text-primary">
+                      {kind === "chat" ? <MessagesSquare className="size-3.5" /> : kind === "agent" ? <Bot className="size-3.5" /> : (a.name || "?").slice(0, 1)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate" dir="auto">
+                      <span className="font-medium text-foreground">{a.name}</span>
+                      {kind === "network" && a.owner ? <span className="text-muted-foreground"> · ایجنتِ {a.owner}</span> : null}
+                      {kind === "agent" && a.domain ? <span className="text-muted-foreground"> · {a.domain}</span> : null}
+                      {kind === "chat" && a.runStatus === "running" ? <span className="text-muted-foreground"> {t("· در حال کار")}</span> : null}
+                    </span>
+                    {kind === "chat" ? null : <span className="shrink-0 text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}</span>}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : null}
       {resumeShown ? (
         <div className="flex items-center gap-2 rounded-lg bg-muted/60 ps-2 text-muted-foreground">

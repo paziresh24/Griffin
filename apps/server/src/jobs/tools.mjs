@@ -43,7 +43,9 @@ export function createJobTools({ jobs, targets = () => [], chatId = null, writer
     if (!Array.isArray(deliverTo) || !deliverTo.length) return [];
     const available = targets();
     const resolved = [];
-    for (const want of deliverTo) {
+    for (const raw of deliverTo) {
+      // The model copies a target from jobs_list as the whole object {integrationId, chat} (2026-10-21).
+      const want = raw && typeof raw === "object" ? raw.chat ?? raw.name ?? "" : raw;
       const q = String(want || "").trim().toLowerCase();
       if (!q) continue;
       const hit =
@@ -110,7 +112,7 @@ export function createJobTools({ jobs, targets = () => [], chatId = null, writer
           every: { type: "string", description: "interval such as 30m, 1h, 6h, 1d (owner's wall clock)" },
           cron: { type: "string", description: "5-field cron in the owner's time zone, e.g. 0 8 * * *" },
           triggerType: { type: "string", enum: ["schedule", "manual"] },
-          deliverTo: { type: "array", items: { type: "string" }, description: "names of paired messenger chats from jobs_list" },
+          deliverTo: { type: "array", items: { type: ["string", "object"] }, description: "paired messenger chats from jobs_list: a name, a chat id, or the {integrationId, chat} entry itself" },
           notify: { type: "string", enum: ["always", "error", "never"] },
           enabled: { type: "boolean" },
         },
@@ -139,7 +141,7 @@ export function createJobTools({ jobs, targets = () => [], chatId = null, writer
           every: { type: "string" },
           cron: { type: "string" },
           triggerType: { type: "string", enum: ["schedule", "manual"] },
-          deliverTo: { type: "array", items: { type: "string" } },
+          deliverTo: { type: "array", items: { type: ["string", "object"] } },
           notify: { type: "string", enum: ["always", "error", "never"] },
           enabled: { type: "boolean" },
         },

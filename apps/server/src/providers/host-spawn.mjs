@@ -10,6 +10,7 @@
 // host is the deploy's call, which sections do is the owner's (config CLAUDE_HOST).
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { genv } from "../env.mjs";
 
 // What the host process needs from Griffin's env: the Claude login and Claude Code's own switches,
@@ -25,6 +26,15 @@ export function hostTarget(env = process.env) {
   return { target, key, port: genv("CLAUDE_HOST_PORT", "22", env), knownHosts: genv("CLAUDE_HOST_KNOWN_HOSTS", "", env) };
 }
 
+// A folder login (claude-account-dir.mjs) lives under the app's data folder; the host sees the same
+// folder at GRIFFIN_CLAUDE_HOST_DATA. Null when the host path is unknown or the folder is elsewhere.
+export function hostConfigDir(dir, { data = genv("DATA", "/data"), hostData = genv("CLAUDE_HOST_DATA", "") } = {}) {
+  if (!dir || !hostData || !data) return null;
+  const rel = path.relative(path.resolve(data), path.resolve(dir));
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return path.join(hostData, rel);
+}
+
 // Which runs go to the host: config CLAUDE_HOST off | owner (their chats) | owner+jobs (and their jobs),
 // unless the chat itself says host or container (chats.runs_on, its menu). A chat of theirs in
 // bypass mode («no asking») always runs as their own user, like Claude Desktop, when this
@@ -36,14 +46,14 @@ export function runsOnHost({ claudeCode, ownerJob = false, mode = "off", chosen 
   return mode === "owner+jobs" || (mode === "owner" && !ownerJob);
 }
 
-export function hostSpawner({ target, key, port = "22", knownHosts = "" }, spawnImpl = spawn) {
+export function hostSpawner({ target, key, port = "22", knownHosts = "", configDir = "" }, spawnImpl = spawn) {
   return ({ args, cwd, env, signal }) => {
     const child = spawnImpl(
       "ssh",
       ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", ...(knownHosts ? ["-o", `UserKnownHostsFile=${knownHosts}`, "-o", "StrictHostKeyChecking=yes"] : []), "-i", key, "-p", String(port), target],
       { stdio: ["pipe", "pipe", "inherit"], signal },
     );
-    child.stdin.write(`${JSON.stringify({ cwd, args, env: forwardEnv(env) })}\n`);
+    child.stdin.write(`${JSON.stringify({ cwd, args, env: forwardEnv(env), ...(configDir ? { config_dir: configDir } : {}) })}\n`);
     return child;
   };
 }

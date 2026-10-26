@@ -10,11 +10,15 @@ import { textDir } from "./dir.js";
 import { num, t, isRtl, locale } from "./i18n.js";
 import { AgentsPage } from "./components/Agents.jsx";
 import { JobsPage } from "./components/Jobs.jsx";
+import { ModulePage, SectionOff } from "./components/ModulePage.jsx";
+import { pageOff, parseModuleRoute } from "./modules.js";
+import { useModuleList } from "./module-hooks.js";
 import { IncidentsPage } from "./components/Incidents.jsx";
 import { PeersPage } from "./components/Peers.jsx";
 import { InboxPeoplePage } from "./components/InboxPeople.jsx";
 import { peopleRoute } from "./inbox-people.js";
 import { GlobalPanel, MotherPanel, TelegramRedirect, WatchPill } from "./components/Telegram.jsx";
+import { TelegramChat } from "./components/TelegramChat.jsx";
 import { motherName } from "./telegram.js";
 import { SettingsPage } from "./components/Settings.jsx";
 import { WorkbenchPage } from "./components/Workbench.jsx";
@@ -41,9 +45,13 @@ import { useSuggestions } from "./components/ChatTools.jsx";
 import { quoteStore, withQuotes } from "./quotes.js";
 import { formatTokens } from "./tokens-format.js";
 import { useTouchPrimary } from "./touch.js";
+import { startClicks } from "./clicks.js";
+import { resumePhone } from "./phone.js";
 import { useInbox } from "./inbox.js";
 import { hasBoard } from "./board.js";
 import { NeedsYou, TaskLists } from "./components/Board.jsx";
+import { UpdateNotice } from "./components/UpdateNotice.jsx";
+import { NavRail, SectionsPalette } from "./components/SectionNav.jsx";
 
 // The thread's connection state in the header (timeline-memo.js connectionNotice). `wrap`: the
 // phone's own row, where the whole sentence shows.
@@ -70,9 +78,15 @@ function newChatContextNote(id, title = "") {
 export default function App() {
   const chatId = useRoute();
   const page = usePageRoute();
+  // The core sections are modules (modules/<id>): one switched off in this install shows a note, not its page.
+  const moduleList = useModuleList();
   const telegramPerson = useTelegramPerson();
-  const { chats, archived, groups, sideChat, privateShare, loading: chatsLoading, failed: chatsFailed, retry: retryChats } = useChats();
-  const { timeline, connection, reconnect } = useTimeline(chatId);
+  // «نقشهٔ کلیک‌ها» (clicks.js): what is clicked here, counted — never what is written.
+  // A phone this tab bridged before (Settings → «گوشی», phone.js) comes back by itself.
+  useEffect(() => { resumePhone().catch(() => {}); }, []);
+  useEffect(() => startClicks({ section: () => (window.location.hash === "#/settings" ? readSetting("griffin.settings.section", "") : "") }), []);
+  const { chats, archived, groups, looseAt, sideChat, privateShare, loading: chatsLoading, failed: chatsFailed, retry: retryChats } = useChats();
+  const { timeline, connection, reconnect, loadOlder } = useTimeline(chatId);
   const notice = connectionNotice(connection);
   const listed = useMemo(() => [...chats, ...archived].find((c) => c.id === chatId) || null, [chats, archived, chatId]);
   const [fetchedChat, setFetchedChat] = useState(null);
@@ -153,10 +167,13 @@ export default function App() {
   const openSuggestionCount = useSuggestions().open.length;
   // «کارهای دستیار»: what waits for the owner and what runs, on the home page (Board.jsx).
   const inbox = useInbox();
+  const onePlace = useFlag("onePlace");
+  const telegramView = useFlag("telegramChat"); // «تلگرام مثل خود تلگرام»: #/telegram/<person> is the conversation
   const menuBadge = openSuggestionCount + inbox.count;
   const board = useMemo(
-    () => (!chatId && hasBoard(inbox, chats, openSuggestionCount) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} />, count: inbox.count + openSuggestionCount } : null),
-    [chatId, inbox, chats, openSuggestionCount],
+    // «هر چیز فقط یک جا» (flag onePlace): only what waits for him makes a board; runs and suggestions stay in the sidebar.
+    () => (!chatId && (onePlace ? inbox.count > 0 : hasBoard(inbox, chats, openSuggestionCount)) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} />, count: inbox.count + (onePlace ? 0 : openSuggestionCount) } : null),
+    [chatId, inbox, chats, openSuggestionCount, onePlace],
   );
 
   // A sub-agent's chat is not in the sidebar (its parent shows it above the composer): the parent's
@@ -198,7 +215,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [theme, setTheme] = useState(() => readSetting(STORAGE.theme, "dark"));
   const [draft, setDraft] = useState(() => ({
-    mode: "agent", // plan is a choice for one chat, never the default: not kept between chats
+    mode: "auto", // «خودکار» by default; plan and «بدون پرسیدن» are a choice for one chat, not kept between chats
     model: readSetting(STORAGE.model, ""),
     effort: readSetting(STORAGE.effort, ""),
     agent: readSetting(STORAGE.agent, "griffin"),
@@ -281,7 +298,7 @@ export default function App() {
     navigate(null);
   }, []);
   useEffect(() => {
-    if (chatId || page) setDraft((d) => (d.groupId || d.mode !== "agent" ? { ...d, groupId: "", mode: "agent" } : d));
+    if (chatId || page) setDraft((d) => (d.groupId || d.mode !== "auto" ? { ...d, groupId: "", mode: "auto" } : d));
   }, [chatId, page]);
   const draftGroup = chat ? null : groups.find((g) => g.id === settings.groupId) || null;
 
@@ -328,12 +345,12 @@ export default function App() {
   };
 
   // Open chat: PATCH persona in place. Fresh composer: remember default for next chat.
+  // The sidebar's agent menu always opens a new chat with the agent picked, the one already shown
+  // too (a colleague 2026-10-24: picking it inside a chat changed that chat, or nothing, and left him there).
   const selectAgent = (agent) => {
-    if (chatId) updateSettings({ agent });
-    else {
-      setDraft((d) => ({ ...d, agent }));
-      writeSetting(STORAGE.agent, agent);
-    }
+    setDraft((d) => ({ ...d, agent, groupId: "" }));
+    writeSetting(STORAGE.agent, agent);
+    navigate(null);
   };
 
   const onError = useCallback((e) => setError(e), []);
@@ -435,7 +452,7 @@ export default function App() {
             <SidebarView
               chats={chats}
               archived={archived}
-              groups={groups} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
+              groups={groups} looseAt={looseAt} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
               filter={sidebarFilter}
               onFilter={setSidebarFilter}
               onNewChat={newChatIn}
@@ -445,7 +462,6 @@ export default function App() {
               page={page}
               agent={settings.agent}
               onAgentChange={selectAgent}
-              agentLocked={chat?.runStatus === "running"}
               onHide={page ? undefined : () => setSidebarHidden(true)}
             />
           </ResizableSidebar>
@@ -456,7 +472,7 @@ export default function App() {
                 <SidebarView
                   chats={chats}
                   archived={archived}
-                  groups={groups} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
+                  groups={groups} looseAt={looseAt} loading={chatsLoading} failed={chatsFailed} onRetry={retryChats}
                   filter={sidebarFilter}
                   onFilter={setSidebarFilter}
                   onNewChat={newChatIn}
@@ -466,7 +482,6 @@ export default function App() {
                   page={page}
                   agent={settings.agent}
                   onAgentChange={selectAgent}
-                  agentLocked={chat?.runStatus === "running"}
                   onClose={() => setDrawer(false)}
                 />
               </div>
@@ -474,7 +489,7 @@ export default function App() {
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
-            {page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "inbox" ? <InboxPeoplePage peerId={peopleRoute(window.location.hash)?.peerId || null} onBack={() => navigate(null)} /> : page === "telegram" ? <TelegramRedirect personId={telegramPerson} /> : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
+            {page === "m" && parseModuleRoute(window.location.hash) ? <div className="scrollbar-thin h-full overflow-y-auto"><ModulePage route={parseModuleRoute(window.location.hash)} onBack={() => navigate(null)} /></div> : pageOff(moduleList, page) ? <SectionOff onBack={() => navigate(null)} /> : page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "inbox" ? <InboxPeoplePage peerId={peopleRoute(window.location.hash)?.peerId || null} onBack={() => navigate(null)} /> : page === "telegram" ? (telegramView && telegramPerson ? <TelegramChat key={telegramPerson} personId={telegramPerson} onMenu={() => setDrawer(true)} /> : <TelegramRedirect personId={telegramPerson} />) : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
               <ChatChildrenContext.Provider value={chat?.children || []}>
               <ChatRecord.Provider value={chat}>
               <Thread
@@ -512,6 +527,11 @@ export default function App() {
                       </button>
                     ) : null}
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
+                    {chat?.mother && chat.personId && telegramView ? (
+                      <button type="button" onClick={() => { window.location.hash = `/telegram/${chat.personId}`; }} className="press shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
+                        گفتگوی تلگرام
+                      </button>
+                    ) : null}
                     {chat?.mother && chat.personId ? <WatchPill personId={chat.personId} /> : null}
                     {telegramChat ? (
                       <button type="button" onClick={() => setPanelSheet(true)} className="press shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted md:hidden">
@@ -547,6 +567,7 @@ export default function App() {
                     ) : null}
                     <ShareButton chatId={chatId} privateShare={privateShare} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
+                    <UpdateNotice place="top" />
                     </div>
                     {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="mt-2 flex w-fit sm:hidden" /> : null}
                     {headerCounts && chatId && notice?.action ? <ConnectionNotice notice={notice} onRetry={reconnect} className="mt-2 flex sm:hidden" wrap /> : null}
@@ -560,6 +581,9 @@ export default function App() {
                 agentLabel={agentMeta(settings.agent).label}
                 agent={settings.agent}
                 fresh={!chatId}
+                loading={Boolean(chatId) && connection === "loading"}
+                earlier={timeline.earlier || 0}
+                onLoadEarlier={loadOlder}
                 board={board}
                 recentTitles={recentTitles}
                 placeholder={
@@ -610,13 +634,17 @@ export default function App() {
               onSeedConsumed={clearSideSeed}
             />
           )}
+          {/* «جای بخش‌ها: نوار کناری» (SectionNav.jsx): the far edge of the screen; nothing otherwise. */}
+          <NavRail />
         </>
       )}
 
+      <SectionsPalette chats={chats} onNewChat={() => newChatIn(null)} />
       <Toaster position="top-center" theme={theme} dir="rtl" closeButton toastOptions={{ className: "font-sans" }} />
       <ServerDown />
       <FeedbackDialogs />
-      {chatId && !page ? <FeedbackButton /> : null}
+      {/* The sidebar foot has «ارسال بازخورد»; this corner one only while the list is hidden. */}
+      {chatId && !page && listHidden ? <FeedbackButton /> : null}
     </div>
   );
 }

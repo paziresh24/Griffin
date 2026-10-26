@@ -81,10 +81,10 @@ function routing(store) {
   };
 }
 
-test("PLAN_FALLBACK is a setting, ask by default", () => {
-  assert.equal(planFallbackMode(undefined), "ask");
-  assert.equal(planFallbackMode("auto"), "auto");
-  assert.equal(planFallbackMode("anything"), "ask");
+test("PLAN_FALLBACK is a setting, auto by default", () => {
+  assert.equal(planFallbackMode(undefined), "auto");
+  assert.equal(planFallbackMode("ask"), "ask");
+  assert.equal(planFallbackMode("anything"), "auto");
   assert.deepEqual(CONFIG_SCHEMA.find((c) => c.key === "PLAN_FALLBACK")?.options, ["ask", "auto"]);
 });
 

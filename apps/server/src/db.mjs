@@ -271,6 +271,26 @@ export function usageTokens(data) {
 export const OWNER_TEXT_SINCE = "owner-text-since";
 export const telegramOriginKey = (chatId) => `tg-origin:${chatId}`;
 
+/**
+ * True when (integration, external chat) is proven to be the owner's own messenger chat: his Saved
+ * Messages ("me" on the connected Telegram account), or a Telegram bot's private chat whose id is
+ * his own user id as that account reports it (settings.me.id). A Bale bot or a group cannot be
+ * proven. chat-origin.mjs isOwnerTelegramSource is this.
+ */
+export function ownMessengerChat(store, integrationId, externalChat) {
+  const integ = store.getIntegration?.(integrationId);
+  if (!integ) return false;
+  const ext = String(externalChat);
+  if (integ.kind === "telegram_account") return ext === "me";
+  if (integ.kind !== "telegram_bot") return false;
+  const account = (store.listIntegrations?.() || []).find((i) => i?.kind === "telegram_account" && i?.settings?.me?.id);
+  return Boolean(account) && ext === String(account.settings.me.id);
+}
+// The owner's proven private chat with a Telegram bot — the one link (db linkChat, foreignLinksForChat)
+// that does not make a chat a Telegram chat: what reaches it from others is marked per message
+// (manager.mjs receive). Saved Messages keeps the old rule (every chat it touched counts as linked).
+const ownBotLink = (store, integrationId, externalChat) => store.getIntegration?.(integrationId)?.kind === "telegram_bot" && ownMessengerChat(store, integrationId, externalChat);
+
 // The message search (events_fts) folds Arabic yeh and kaf into the Persian letters, in the index and
 // in the query, so «پيام» and «پیام» are one word.
 export const foldSearch = (text) => String(text ?? "").replace(/\u064A/g, "\u06CC").replace(/\u0643/g, "\u06A9");
@@ -503,6 +523,12 @@ export function openStore(file, { seedProvider } = {}) {
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "group_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN group_id TEXT");
   }
+  // The module a chat belongs to (modules/<id>): set when a module's page opens it; switching the
+  // module off moves these chats into a folder instead of leaving them orphaned (modules/host.mjs).
+  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "module")) {
+    db.exec("ALTER TABLE chats ADD COLUMN module TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS chats_module ON chats(module) WHERE module IS NOT NULL");
+  }
   // A person's Persian name (fa-names.mjs or the owner) wins over Telegram's own, which keeps
   // refreshing display_name underneath. Profile photos: one small JPEG per Telegram photo id.
   if (!db.prepare("PRAGMA table_info(persons)").all().some((c) => c.name === "fa_name")) db.exec("ALTER TABLE persons ADD COLUMN fa_name TEXT");
@@ -592,6 +618,14 @@ export function openStore(file, { seedProvider } = {}) {
         CASE
           WHEN c.job_id IS NOT NULL OR c.caller = 'scheduler' THEN 'job'
           WHEN c.caller = 'ops' THEN 'ops'
+          -- The owner's own conversation with his bot (or his Saved Messages) is an ordinary chat of
+          -- his: /new there starts one like «+» does, so it lists with them (owner 2026-10-25: «فرقی
+          -- نمی‌کنن»). Born there (receive() marks origin via the bot), or linked only to such a chat.
+          WHEN COALESCE(c.caller, 'owner') = 'owner' AND (
+              EXISTS (SELECT 1 FROM kv o WHERE o.key = 'origin:' || c.id AND json_extract(o.value, '$.via') IN ('telegram_bot', 'bale_bot', 'telegram_account'))
+              OR EXISTS (SELECT 1 FROM integration_links l JOIN integrations i ON i.id = l.integration_id WHERE l.chat_id = c.id AND (i.kind IN ('telegram_bot', 'bale_bot') OR l.external_chat = 'me')))
+            AND NOT EXISTS (SELECT 1 FROM integration_links l JOIN integrations i ON i.id = l.integration_id WHERE l.chat_id = c.id AND i.kind NOT IN ('telegram_bot', 'bale_bot') AND l.external_chat <> 'me')
+            AND NOT EXISTS (SELECT 1 FROM thread_links t WHERE t.chat_id = c.id) THEN 'manual'
           -- Born in Telegram wins over "peer": a colleague's agent writing in Telegram is a Telegram
           -- thread; only /mcp peers (no person, no link) belong to the peers tab.
           WHEN c.caller = 'team' OR c.person_id IS NOT NULL
@@ -741,6 +775,16 @@ export function openStore(file, { seedProvider } = {}) {
           WHERE c.archived = 0 AND c.pinned = 0 AND c.worktree_path IS NOT NULL AND c.parent_chat_id IS NULL AND c.side_of IS NULL
             AND c.job_id IS NULL AND c.sim = 0 AND COALESCE(c.caller, 'owner') = 'owner'`)
         .all()
+        .map((row) => ({ ...row }));
+    },
+
+    // Chats working in this chat's worktree directly: its side chats and its forks (app.mjs kv
+    // fork-of:), archived or not (tree-borrowers.mjs).
+    listTreeBorrowers(chatId) {
+      return db
+        .prepare(`SELECT id, archived FROM chats WHERE side_of = ?
+          OR id IN (SELECT substr(key, 9) FROM kv WHERE key LIKE 'fork-of:%' AND value = ?)`)
+        .all(String(chatId), JSON.stringify(String(chatId)))
         .map((row) => ({ ...row }));
     },
 
@@ -909,6 +953,11 @@ export function openStore(file, { seedProvider } = {}) {
       return q.childChatsWithStatus.all().map((row) => ({ ...row }));
     },
 
+    /** The chats a module owns (chats.module), archived ones too: id, title, group. */
+    listModuleChats(moduleId) {
+      return db.prepare("SELECT id, title, group_id, archived FROM chats WHERE module = ?").all(String(moduleId)).map((row) => ({ ...row }));
+    },
+
     listGroups() {
       return db.prepare("SELECT id, name, position FROM chat_groups ORDER BY position, created_at").all().map((row) => ({ ...row }));
     },
@@ -928,6 +977,32 @@ export function openStore(file, { seedProvider } = {}) {
       bus.emit("chats", { type: "groups" });
       return store.getGroup(id);
     },
+    // The owner's order by drag and drop: `order` is every group id once, plus "none" where the
+    // ungrouped chats («بدون گروه») sit. Returns false when the list is not exactly that.
+    orderGroups(order) {
+      const ids = store.listGroups().map((g) => g.id);
+      const list = Array.isArray(order) ? order.map(String) : [];
+      const named = list.filter((id) => id !== "none");
+      if (new Set(list).size !== list.length || named.length !== ids.length || !named.every((id) => ids.includes(id)) || list.length - named.length > 1) return false;
+      const set = db.prepare("UPDATE chat_groups SET position = ? WHERE id = ?");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        named.forEach((id, index) => set.run(index, id));
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      const loose = list.indexOf("none");
+      store.setKv("groups-loose-at", loose < 0 ? null : loose);
+      bus.emit("chats", { type: "groups" });
+      return true;
+    },
+    /** Where «بدون گروه» sits among the groups (0 = first); null = after them all. */
+    looseGroupAt() {
+      const at = store.getKv("groups-loose-at");
+      return Number.isInteger(at) && at >= 0 ? at : null;
+    },
     // Its chats stay where they are (archive included), only ungrouped.
     deleteGroup(id) {
       if (!store.getGroup(id)) return false;
@@ -940,7 +1015,7 @@ export function openStore(file, { seedProvider } = {}) {
     updateChat(id, patch) {
       const current = store.getChat(id);
       if (!current) return null;
-      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider", effort: "effort", runsOn: "runs_on", repo: "repo", worktreePath: "worktree_path", groupId: "group_id" };
+      const allowed = { title: "title", pinned: "pinned", archived: "archived", model: "model", mode: "mode", personId: "person_id", agent: "agent", provider: "provider", effort: "effort", runsOn: "runs_on", repo: "repo", worktreePath: "worktree_path", groupId: "group_id", module: "module" };
       const sets = [];
       const values = [];
       for (const [key, column] of Object.entries(allowed)) {
@@ -1136,6 +1211,10 @@ export function openStore(file, { seedProvider } = {}) {
       return db.prepare("SELECT * FROM peer_users ORDER BY created_at").all();
     },
 
+    setPeerUserLabel(id, label) {
+      db.prepare("UPDATE peer_users SET label = ? WHERE id = ?").run(label, id);
+    },
+
     setPeerUserEnabled(id, enabled) {
       db.prepare("UPDATE peer_users SET enabled = ? WHERE id = ?").run(enabled ? 1 : 0, id);
     },
@@ -1222,6 +1301,12 @@ export function openStore(file, { seedProvider } = {}) {
       return db
         .prepare("SELECT id FROM events WHERE chat_id = ? AND id > ? AND type = 'user' AND json_extract(data, '$.clientId') = ? LIMIT 1")
         .get(chatId, floor, clientId)?.id ?? null;
+    },
+
+    // The engine account the chat's last run was on (its run.started), or null (account-balance.mjs).
+    lastRunProvider(chatId) {
+      const row = db.prepare("SELECT json_extract(data, '$.provider') AS provider FROM events WHERE chat_id = ? AND type = 'run.started' ORDER BY id DESC LIMIT 1").get(chatId);
+      return row?.provider || null;
     },
 
     lastEventId(chatId) {
@@ -1405,6 +1490,11 @@ export function openStore(file, { seedProvider } = {}) {
         .prepare("SELECT n.*, c.title AS chat_title FROM notes n LEFT JOIN chats c ON c.id = n.chat_id WHERE n.id = ? AND n.status != 'deleted'")
         .get(String(id || ""));
       return row ? { ...row } : null;
+    },
+
+    /** When this chat's next timed note or reminder runs (the sidebar's clock), or null. */
+    nextNoteAt(chatId) {
+      return db.prepare("SELECT MIN(run_at) AS at FROM notes WHERE status = 'open' AND run_at IS NOT NULL AND chat_id = ?").get(chatId)?.at || null;
     },
 
     /** Open and failed notes: timed ones by run_at, then untimed ones newest first. */
@@ -1655,10 +1745,18 @@ export function openStore(file, { seedProvider } = {}) {
 
     linkChat(integrationId, externalChat, chatId) {
       // Remembered after the link is gone (owner-chat-tools.mjs): the chat holds that chat's words.
-      if (chatId) db.prepare("INSERT OR IGNORE INTO kv (key, value) VALUES (?, '1')").run(telegramOriginKey(chatId));
+      // Not for the owner's own bot chat (ownBotLink): only he writes there, and what he passes on
+      // from others is marked on its own message (manager.mjs receive), so /chats on his bot can move
+      // to one of his chats without making it a Telegram chat for good.
+      if (chatId && !ownBotLink(store, integrationId, externalChat)) db.prepare("INSERT OR IGNORE INTO kv (key, value) VALUES (?, '1')").run(telegramOriginKey(chatId));
       db.prepare(`INSERT INTO integration_links (integration_id, external_chat, chat_id, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(integration_id, external_chat) DO UPDATE SET chat_id = excluded.chat_id, updated_at = excluded.updated_at`)
         .run(integrationId, String(externalChat), chatId, now());
+    },
+
+    // The links to someone else's messenger chat: all but the owner's own bot chat (ownBotLink).
+    foreignLinksForChat(chatId) {
+      return store.linksForChat(chatId).filter((l) => !ownBotLink(store, l.integration_id, l.external_chat));
     },
 
     linksForChat(chatId) {

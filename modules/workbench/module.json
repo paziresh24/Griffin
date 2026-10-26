@@ -1,0 +1,10 @@
+{
+  "id": "workbench",
+  "version": "1.0.0",
+  "title": "میز کار",
+  "category": "tools",
+  "description": "ترمینال و فایل‌ها روی سندباکس",
+  "builtin": true,
+  "presets": ["griffin", "karsara"],
+  "pages": [{ "id": "main", "title": "میز کار", "icon": "terminal-square", "kind": "builtin", "route": "/workbench" }]
+}

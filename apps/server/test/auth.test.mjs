@@ -58,6 +58,36 @@ test("API requires a session; login sets a signed HttpOnly cookie", async () => 
   }
 });
 
+test("rotate-token: only the page's cookie resets it; the old token and other sessions die, this one stays", async () => {
+  const { app, token, dir, cleanup } = setup();
+  try {
+    const rotate = (headers) => app.request(`${origin}/api/auth/rotate-token`, { method: "POST", headers: { origin, ...headers } });
+    assert.equal((await rotate({})).status, 401);
+    assert.equal((await rotate({ authorization: `Bearer ${token}` })).status, 401, "a Bearer holder cannot reset it");
+
+    const here = (await login(app, token)).headers.get("set-cookie").split(";")[0];
+    const other = (await login(app, token)).headers.get("set-cookie").split(";")[0];
+    const res = await rotate({ cookie: here });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    const { token: fresh } = await res.json();
+    assert.ok(fresh && fresh !== token);
+    assert.equal(fs.readFileSync(path.join(dir, "owner.token"), "utf8").trim(), fresh);
+    assert.equal(fs.statSync(path.join(dir, "owner.token")).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")), []);
+
+    const renewed = res.headers.getSetCookie().find((c) => c.startsWith("griffin_session=")).split(";")[0];
+    assert.equal((await app.request(`${origin}/api/chats`, { headers: { cookie: renewed } })).status, 200, "this device stays in");
+    assert.equal((await app.request(`${origin}/api/chats`, { headers: { cookie: other } })).status, 401, "other devices are out");
+    assert.equal((await app.request(`${origin}/api/chats`, { headers: { authorization: `Bearer ${token}` } })).status, 401, "old token dead");
+    assert.equal((await login(app, token)).status, 401);
+    assert.equal((await app.request(`${origin}/api/chats`, { headers: { authorization: `Bearer ${fresh}` } })).status, 200);
+    assert.equal((await login(app, fresh)).status, 200);
+  } finally {
+    cleanup();
+  }
+});
+
 test("cross-origin writes are rejected and brute force is rate limited", async () => {
   const { app, token, cleanup } = setup();
   try {
@@ -127,6 +157,44 @@ test("an old public name redirects browser GETs permanently; POSTs are still ser
   assert.notEqual(post.status, 301);
   const lan = await app.request("http://192.0.2.46:3100/healthz", { headers: { host: "192.0.2.46:3100" } });
   assert.equal(lan.status, 200);
+});
+
+test("a signed-in page on an old public name carries its session to the new name once", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-carry-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  try {
+    const runner = createRunner({ store, sdk: {}, agentOptions: () => ({}), log: {} });
+    const app = createApp({ store, runner, auth: createAuth({ dataDir: dir, store }), movedHosts: ["karsara-x.example.org"], publicUrl: "https://griffin-x.example.org" });
+    const token = fs.readFileSync(path.join(dir, "owner.token"), "utf8").trim();
+    const cookie = (await login(app, token)).headers.get("set-cookie").split(";")[0];
+    const old = "http://karsara-x.example.org";
+    const host = { host: "karsara-x.example.org" };
+
+    // No cookie: the plain permanent redirect, as before.
+    assert.equal((await app.request(`${old}/?a=1`, { headers: host })).status, 301);
+
+    const hop = await app.request(`${old}/?a=1`, { headers: { ...host, cookie } });
+    assert.equal(hop.status, 302);
+    const to = new URL(hop.headers.get("location"));
+    assert.equal(to.origin + to.pathname, "https://griffin-x.example.org/api/auth/carry");
+    assert.equal(to.searchParams.get("to"), "/?a=1");
+
+    const carried = await app.request(`http://griffin-x.example.org${to.pathname}${to.search}`, { headers: { host: "griffin-x.example.org" } });
+    assert.equal(carried.status, 302);
+    assert.equal(carried.headers.get("location"), "/?a=1");
+    const fresh = carried.headers.get("set-cookie").split(";")[0];
+    assert.match(fresh, /^griffin_session=/);
+    assert.equal((await app.request(`${origin}/api/auth/me`, { headers: { cookie: fresh } }).then((r) => r.json())).authenticated, true);
+
+    // Single use, and never an off-site target.
+    const again = await app.request(`http://griffin-x.example.org${to.pathname}${to.search}`, { headers: { host: "griffin-x.example.org" } });
+    assert.equal(again.headers.get("set-cookie"), null);
+    const evil = await app.request(`http://griffin-x.example.org/api/auth/carry?c=x&to=${encodeURIComponent("//evil.example")}`);
+    assert.equal(evil.headers.get("location"), "/");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // A request as it reaches the server: the TCP peer plus whatever headers the client sent.

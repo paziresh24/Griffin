@@ -33,11 +33,12 @@ test("parseFiles takes PDFs and text files and refuses anything that is not what
   assert.equal(ok.files.length, 3);
   assert.equal(ok.files[2].name, "a b.csv", "a name is one clean line");
   assert.match(parseFiles([{ ...PDF, data: b64("not a pdf") }]).error, /واقعاً PDF نیست/);
-  assert.match(parseFiles([{ name: "x.exe", mimeType: "application/octet-stream", data: b64("MZ") }]).error, /فقط فایل PDF و فایل متنی/);
+  assert.match(parseFiles([{ name: "x.exe", mimeType: "application/octet-stream", data: b64("MZ") }], { strict: true }).error, /فقط فایل PDF و فایل متنی/);
+  assert.deepEqual(parseFiles([{ name: "x.exe", mimeType: "application/octet-stream", data: b64("MZ") }]).files[0].kept, true, "any other type is kept for the agent's file tools");
   assert.match(parseFiles([{ ...MD, data: "@@@" }]).error, /خراب رسیده/);
   assert.match(parseFiles([{ ...MD, data: "" }]).error, /خراب رسیده/);
   assert.match(parseFiles([MD, MD, MD, MD, MD]).error, /بیش از 4 فایل/);
-  assert.match(parseFiles([{ ...MD, data: "A".repeat(15_000_000) }]).error, /۱۰ مگابایت/);
+  assert.match(parseFiles([{ ...MD, data: "A".repeat(15_000_000) }], { strict: true }).error, /۱۰ مگابایت/);
   assert.match(parseFiles("x").error, /فهرست/);
 });
 
@@ -58,7 +59,8 @@ test("a PDF's pages are its distinct page objects; one whose pages cannot be rea
   // Object streams (no readable page objects): unknown, so at most 2 MB.
   const hidden = (pad) => ({ name: "s.pdf", mimeType: "application/pdf", data: Buffer.from(`%PDF-1.7\n5 0 obj << /Type /ObjStm /N 3 >> stream\n${"z".repeat(pad)}\nendstream endobj\n`, "latin1").toString("base64") });
   assert.equal(parseFiles([hidden(1000)]).files[0].pages, 0);
-  assert.match(parseFiles([hidden(2 * 1024 * 1024 + 1)]).error, /شمار صفحه‌هایش خوانده نمی‌شود/);
+  assert.match(parseFiles([hidden(2 * 1024 * 1024 + 1)], { strict: true }).error, /شمار صفحه‌هایش خوانده نمی‌شود/);
+  assert.equal(parseFiles([hidden(2 * 1024 * 1024 + 1)]).files[0].kept, true);
 });
 
 test("counting pages stays fast on hostile files (digit runs, obj without endobj)", () => {
@@ -71,26 +73,30 @@ test("counting pages stays fast on hostile files (digit runs, obj without endobj
   assert.equal(pdfPages(Buffer.from(`%PDF-1.4\n${unclosed}`, "latin1")), 1, "an object without endobj ends at the next one");
 });
 
-test("a PDF the API would refuse on every later turn is refused here: over 5 MB, over 100 pages, over 12 MB together", () => {
-  assert.match(parseFiles([pagesPdf(1, 5 * 1024 * 1024 + 1)]).error, /۵ مگابایت/);
-  assert.match(parseFiles([pagesPdf(101)]).error, /یک PDF بیش از ۱۰۰ صفحه/);
+test("a PDF the API would refuse on every later turn never goes inline: over 5 MB, over 100 pages, over 12 MB together", () => {
+  assert.match(parseFiles([pagesPdf(1, 5 * 1024 * 1024 + 1)], { strict: true }).error, /۵ مگابایت/);
+  assert.match(parseFiles([pagesPdf(101)], { strict: true }).error, /یک PDF بیش از ۱۰۰ صفحه/);
+  assert.equal(parseFiles([pagesPdf(1, 5 * 1024 * 1024 + 1)]).files[0].kept, true, "kept, not refused");
+  assert.equal(parseFiles([pagesPdf(101)]).files[0].kept, true);
   assert.equal(parseFiles([pagesPdf(100)]).files[0].pages, 100);
   const four = pagesPdf(1, 4 * 1024 * 1024);
   assert.equal(parseFiles([four, four]).files.length, 2);
-  assert.match(parseFiles([four, four, four, four]).error, /۱۲ مگابایت/);
+  assert.match(parseFiles([four, four, four, four], { strict: true }).error, /۱۲ مگابایت/);
+  assert.deepEqual(parseFiles([four, four, four, four]).files.map((file) => Boolean(file.kept)), [false, false, false, false].map((_, i) => i >= 2), "the PDFs past 12 MB are kept");
   // Unpadded base64 is re-encoded padded.
   assert.equal(parseFiles([{ ...PDF, data: PDF.data.replace(/=+$/, "") }]).files[0].data, Buffer.from(PDF.data, "base64").toString("base64"));
 });
 
 test("a UTF-16 text file becomes UTF-8; one that is not text is refused", () => {
-  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("نام,شهر\nعلی,یزد", "utf16le")]);
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("نام,شهر\nعلی,شمال", "utf16le")]);
   const parsed = parseFiles([{ name: "export.csv", mimeType: "text/csv", data: utf16.toString("base64") }]);
-  assert.equal(Buffer.from(parsed.files[0].data, "base64").toString("utf8"), "نام,شهر\nعلی,یزد");
+  assert.equal(Buffer.from(parsed.files[0].data, "base64").toString("utf8"), "نام,شهر\nعلی,شمال");
   const be = Buffer.from(utf16.subarray(2)).swap16();
   const parsedBe = parseFiles([{ name: "be.txt", mimeType: "text/plain", data: Buffer.concat([Buffer.from([0xfe, 0xff]), be]).toString("base64") }]);
-  assert.equal(Buffer.from(parsedBe.files[0].data, "base64").toString("utf8"), "نام,شهر\nعلی,یزد");
+  assert.equal(Buffer.from(parsedBe.files[0].data, "base64").toString("utf8"), "نام,شهر\nعلی,شمال");
   const binary = Buffer.alloc(400, 0);
-  assert.match(parseFiles([{ name: "x.txt", mimeType: "text/plain", data: binary.toString("base64") }]).error, /UTF-8 یا UTF-16/);
+  assert.match(parseFiles([{ name: "x.txt", mimeType: "text/plain", data: binary.toString("base64") }], { strict: true }).error, /UTF-8 یا UTF-16/);
+  assert.equal(parseFiles([{ name: "x.txt", mimeType: "text/plain", data: binary.toString("base64") }]).files[0].kept, true);
 });
 
 test("a line in a file that imitates the end marker does not end it", () => {
@@ -210,22 +216,24 @@ test("POST …/messages passes files on and refuses a bad one with 400", async (
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("one chat carries at most 15 MB or 100 pages of PDFs over all its messages (each is re-sent every turn)", async () => {
+test("one chat carries at most 15 MB or 100 pages of PDFs inline over all its messages; past it a PDF is kept", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-attach-budget-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  const runner = { isActive: () => false, activeCount: () => 0, send: async () => ({ delivered: "run" }) };
+  const got = [];
+  const runner = { isActive: () => false, activeCount: () => 0, send: async (chatId, input) => (got.push(input), { delivered: "run" }) };
   const app = createApp({ store, runner });
   const post = (chatId, files) => app.request(`/api/chats/${chatId}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "ببین", files }) });
   const chat = store.createChat({ title: "t" });
   const four = pagesPdf(1, 4 * 1024 * 1024);
   assert.equal((await post(chat.id, [four, four])).status, 202);
-  assert.equal((await post(chat.id, [four, four])).status, 400, "16 MB over two messages");
-  const refused = await post(chat.id, [four, four]);
-  assert.match((await refused.json()).error, /گفتگوی تازه/);
+  assert.equal((await post(chat.id, [four, four])).status, 202, "16 MB over two messages: accepted…");
+  assert.deepEqual(got.at(-1).files.map((file) => Boolean(file.kept)), [false, true], "…the one past 15 MB is kept, not inline");
+  assert.equal(store.getKv(`pdfs:${chat.id}`).bytes <= 15 * 1024 * 1024, true, "the budget counts only inline PDFs");
   assert.equal((await post(chat.id, [MD])).status, 202, "text files are not counted");
   const pages = store.createChat({ title: "p" });
   assert.equal((await post(pages.id, [pagesPdf(60)])).status, 202);
-  assert.equal((await post(pages.id, [pagesPdf(41)])).status, 400, "101 pages over two messages");
+  assert.equal((await post(pages.id, [pagesPdf(41)])).status, 202);
+  assert.equal(got.at(-1).files[0].kept, true, "101 pages over two messages: the second is kept");
   assert.equal((await post(store.createChat({ title: "n" }).id, [four, four])).status, 202, "a new chat starts empty");
   // A resend of a message already charged is a duplicate, not a budget refusal.
   const dup = store.createChat({ title: "d" });
@@ -259,15 +267,18 @@ test("an attached file's text and name reach the engine inert even inside the ow
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the PDF page cap is per message on every route: a new chat cannot carry 60 + 41 pages", async () => {
-  assert.match(parseFiles([pagesPdf(60), pagesPdf(41)]).error, /روی هم بیش از ۱۰۰ صفحه/);
+test("the PDF page cap is per message on every route: a new chat does not carry 60 + 41 pages inline", async () => {
+  assert.match(parseFiles([pagesPdf(60), pagesPdf(41)], { strict: true }).error, /روی هم بیش از ۱۰۰ صفحه/);
+  assert.deepEqual(parseFiles([pagesPdf(60), pagesPdf(41)]).files.map((file) => Boolean(file.kept)), [false, true]);
   assert.equal(parseFiles([pagesPdf(60), pagesPdf(40)]).files.length, 2);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-attach-pages-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  const runner = { isActive: () => false, activeCount: () => 0, send: async () => ({ delivered: "run" }) };
+  const got = [];
+  const runner = { isActive: () => false, activeCount: () => 0, send: async (chatId, input) => (got.push(input), { delivered: "run" }) };
   const app = createApp({ store, runner });
   const created = await app.request("/api/chats", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "ببین", files: [pagesPdf(60), pagesPdf(41)] }) });
-  assert.equal(created.status, 400);
+  assert.equal(created.status, 201);
+  assert.deepEqual(got[0].files.map((file) => Boolean(file.kept)), [false, true]);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -297,14 +308,16 @@ test("every refusal the owner sees about a file is in Persian", () => {
   const errors = [
     parseFiles("x").error,
     parseFiles([MD, MD, MD, MD, MD]).error,
-    parseFiles([{ name: "x.exe", mimeType: "application/octet-stream", data: b64("MZ") }]).error,
-    parseFiles([{ ...MD, data: "A".repeat(15_000_000) }]).error,
+    parseFiles([{ name: "x.exe", mimeType: "application/octet-stream", data: b64("MZ") }], { strict: true }).error,
+    parseFiles([{ ...MD, data: "A".repeat(15_000_000) }], { strict: true }).error,
     parseFiles([{ ...MD, data: "@@@" }]).error,
     parseFiles([{ ...PDF, data: b64("not a pdf") }]).error,
-    parseFiles([pagesPdf(1, 5 * 1024 * 1024 + 1)]).error,
-    parseFiles([four, four, four, four]).error,
-    parseFiles([pagesPdf(101)]).error,
-    parseFiles([{ name: "x.txt", mimeType: "text/plain", data: Buffer.from(Array.from({ length: 4000 }, (_, i) => i % 256)).toString("base64") }]).error,
+    parseFiles([pagesPdf(1, 5 * 1024 * 1024 + 1)], { strict: true }).error,
+    parseFiles([four, four, four, four], { strict: true }).error,
+    parseFiles([pagesPdf(101)], { strict: true }).error,
+    parseFiles([{ name: "x.txt", mimeType: "text/plain", data: Buffer.from(Array.from({ length: 4000 }, (_, i) => i % 256)).toString("base64") }], { strict: true }).error,
+    parseFiles([{ name: "big.zip", mimeType: "application/zip", data: "A".repeat(70_000_000) }]).error,
+    parseFiles([1, 2, 3].map(() => ({ name: "big.zip", mimeType: "application/zip", data: "A".repeat(40_000_000) }))).error,
     pdfBudgetProblem({ getKv: () => ({ bytes: 15 * 1024 * 1024, pages: 0 }) }, "c", [PDF]),
   ];
   for (const error of errors) {
@@ -356,6 +369,68 @@ test("SIDE_CHAT off: the chat list says so and POST …/side is refused", async 
   assert.equal((await side()).status, 404);
   on = true;
   assert.equal((await side()).status, 201);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Mr. Nouri, 2026-10-23: a 9 MB file was refused at 5 MB. Any type and size up to 50 MB now reaches
+// the agent — past the inline caps it is saved in the chat's folder and named by path, so it never
+// rides the session and cannot break a later turn.
+test("a file past the inline caps or of another type is saved for the agent and named by path, never sent inline", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-attach-kept-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const root = path.join(dir, "attachments");
+  const { sent, sdk } = fakeSdk("claude");
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), attachmentsRoot: root, log: { error() {}, info() {} } });
+  const chat = store.createChat({ title: "kept" });
+  const big = pagesPdf(3, 9 * 1024 * 1024);
+  const zip = { name: "../../etc/data.zip", mimeType: "application/zip", data: b64("PK\u0003\u0004 zipped") };
+  const parsed = parseFiles([big, zip, PDF]);
+  assert.deepEqual(parsed.files.map((file) => Boolean(file.kept)), [true, true, false]);
+  await runner.send(chat.id, { text: "ببین", images: [], files: parsed.files, ownerText: true });
+  await until(() => sent.length === 1 && !runner.isActive(chat.id));
+  const got = sent[0];
+  assert.deepEqual(got.files.map((file) => file.name), ["report.pdf"], "only the small PDF goes inline");
+  const saved = [...got.text.matchAll(/saved at (\S+) \(/g)].map((m) => m[1]);
+  assert.equal(saved.length, 2);
+  for (const file of saved) assert.ok(file.startsWith(path.join(root, chat.id) + path.sep), `inside the chat's folder: ${file}`);
+  assert.deepEqual(fs.readFileSync(saved[0]), Buffer.from(big.data, "base64"), "the bytes on disk are the file");
+  assert.equal(path.basename(saved[1]), "_.._etc_data.zip", "a name cannot leave the folder");
+  assert.match(got.text, /«p\.pdf» \(application\/pdf, 9\.0 MB\)/);
+  assert.match(got.text, /application\/zip/);
+  // The thread keeps the names (and that they were kept), never the bytes.
+  const user = store.eventsAfter(chat.id).find((event) => event.type === "user");
+  assert.deepEqual(user.data.files.map((file) => [file.name, Boolean(file.kept)]), [["p.pdf", true], ["../../etc/data.zip", true], ["report.pdf", false]]);
+  // The same name again is saved beside it, not over it.
+  await runner.send(chat.id, { text: "باز", images: [], files: parseFiles([big]).files, ownerText: true });
+  await until(() => sent.length === 2 && !runner.isActive(chat.id));
+  assert.equal(typeof sent[1], "string", "a turn with only a kept file is plain text: nothing for the API to refuse later");
+  assert.match(sent[1], /p-2\.pdf/);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a kept file that cannot be saved is still named, and the agent is told to say so", () => {
+  const message = toSdkMessage({ text: "ببین", files: [{ name: "a.zip", mimeType: "application/zip", data: b64("PK"), kept: true, path: null }] });
+  assert.equal(typeof message, "string");
+  assert.match(message, /«a\.zip» \(application\/zip, 1 KB\) — the owner attached it but it could not be saved for you/);
+});
+
+test("a picture Claude cannot take inline (over 5 MB, or HEIC) is kept as a file, not refused", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-attach-img-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const got = [];
+  const runner = { isActive: () => false, activeCount: () => 0, send: async (chatId, input) => (got.push(input), { delivered: "run" }) };
+  const app = createApp({ store, runner });
+  const chat = store.createChat({ title: "img" });
+  const post = (body) => app.request(`/api/chats/${chat.id}/messages`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "ببین", ...body }) });
+  const small = { mimeType: "image/png", data: b64("png") };
+  const large = { mimeType: "image/jpeg", data: Buffer.alloc(6 * 1024 * 1024, 1).toString("base64") };
+  const heic = { mimeType: "image/heic", data: b64("heic") };
+  assert.equal((await post({ images: [small, large, heic], files: [MD] })).status, 202);
+  assert.deepEqual(got[0].images.map((image) => image.mimeType), ["image/png"]);
+  assert.deepEqual(got[0].files.map((file) => [file.name, Boolean(file.kept)]), [["notes.md", false], ["image-1.jpeg", true], ["image-2.heic", true]]);
+  assert.equal((await post({ images: [{ mimeType: "text/plain", data: "x" }] })).status, 400, "not a picture is still refused");
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

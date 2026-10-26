@@ -36,6 +36,19 @@ const login = async (app, token) => (await loginRes(app, token)).headers.get("se
 const chats = (app, cookie) => app.request(`${origin}/api/chats`, { headers: { cookie } });
 const signed = async (store, name, value) => (await serializeSigned(name, value, store.getKv("session_secret"))).split(";")[0];
 
+test("a sign-in lasts 24 hours from when it was made", async () => {
+  const { app, token, store, cleanup } = setup();
+  try {
+    const res = await loginRes(app, token);
+    assert.match(res.headers.get("set-cookie"), /Max-Age=86400/);
+    const v = store.getKv("session_version") || 1;
+    assert.equal((await chats(app, await signed(store, "griffin_session", `${Date.now() - 23 * 3_600_000}.${v}.a`))).status, 200);
+    assert.equal((await chats(app, await signed(store, "griffin_session", `${Date.now() - 25 * 3_600_000}.${v}.b`))).status, 401);
+  } finally {
+    cleanup();
+  }
+});
+
 test("logout revokes the session id server-side; other sessions live on", async () => {
   const { app, token, store, cleanup } = setup();
   try {
@@ -83,9 +96,9 @@ test("a valid Karsara cookie is accepted and re-issued as Griffin's, keeping its
     await app.request(`${origin}/api/auth/logout`, { method: "POST", headers: { cookie: griffin, origin } });
     assert.equal((await chats(app, karsara)).status, 401);
 
-    // Karsara's own rules hold: no session id, older than 14 days, or another version → refused.
+    // No session id, older than a day, or another version → refused.
     assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v}`))).status, 401);
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now() - 15 * 86_400_000}.${v}.x`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now() - 25 * 3_600_000}.${v}.x`))).status, 401);
     assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v + 1}.x`))).status, 401);
     // Even when the first request a migrated device makes is a live stream.
     const stream = await app.request(`${origin}/api/stream`, { headers: { cookie: await signed(store, "karsara_session", `${Date.now()}.${v}.z`) } });

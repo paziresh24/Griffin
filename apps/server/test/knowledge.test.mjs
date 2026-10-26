@@ -144,3 +144,17 @@ test("review gate reads frontmatter only: a body line or a forged title never pa
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// 2026-10-21: a read-only side chat in the main chat's worktree rewrote the shared CLAUDE.md and the
+// main chat (full Claude Code loads project CLAUDE.md) answered «this chat is read-only».
+test("installRules writes no CLAUDE.md: removes the one Griffin wrote, keeps a repo's own", async () => {
+  const { installRules, buildRules } = await import("../src/prompt.mjs");
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-cm-"));
+  const md = path.join(ws, "CLAUDE.md");
+  fs.writeFileSync(md, buildRules({ agent: "griffin" }));
+  installRules(ws, { agent: "griffin" });
+  assert.equal(fs.existsSync(md), false);
+  fs.writeFileSync(md, "# repo notes\n");
+  installRules(ws, { agent: "griffin" });
+  assert.equal(fs.readFileSync(md, "utf8"), "# repo notes\n");
+});

@@ -1,7 +1,7 @@
 // Telegram send ledger (from Karsara, owner install). Every telegram_send from the owner's account
 // is written down with the chat that sent it, the peer and the Telegram message id; telegram_ledger
 // reads it back, so an answer that arrives later can be traced to the chat that asked instead of
-// guessed from its text. Per-install switch TELEGRAM_LEDGER (off by default, index.mjs): off, nothing
+// guessed from its text. Per-install switch TELEGRAM_LEDGER (on by default, index.mjs): off, nothing
 // is written and no chat has the tool, exactly as before.
 //
 // Who reads it: the owner's own chats only (owner-chat-tools.mjs isOwnerChat) — it names his chats

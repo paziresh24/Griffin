@@ -358,3 +358,63 @@ test("a live stream replays everything after the given id, however much that is"
     cleanup();
   }
 });
+
+// A long chat opens with its last messages only (?limit), the rest comes page by page.
+function manyTurns(store, turns) {
+  const chat = store.createChat({ title: "long", mode: "agent" });
+  for (let i = 0; i < turns; i += 1) {
+    store.appendEvent(chat.id, null, "user", { text: `پرسش ${i}` });
+    const runId = store.startRun(chat.id);
+    store.appendEvent(chat.id, runId, "run.started", { model: "m" });
+    store.appendEvent(chat.id, runId, "text", { text: `جواب ${i}` });
+    store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+  }
+  return chat;
+}
+
+test("/timeline?limit serves the last messages, /timeline/older the pages before them", async () => {
+  const { store, app, cleanup } = setup();
+  try {
+    const chat = manyTurns(store, 30); // 60 messages
+    const whole = await (await app.request(`/api/chats/${chat.id}/timeline`)).json();
+    assert.equal(whole.timeline.messages.length, 60);
+    assert.equal(whole.timeline.earlier, undefined, "no limit: the whole timeline, as before");
+
+    const tail = await (await app.request(`/api/chats/${chat.id}/timeline?limit=10`)).json();
+    assert.equal(tail.timeline.messages.length, 10);
+    assert.equal(tail.timeline.earlier, 50);
+    assert.equal(tail.timeline.lastEventId, whole.timeline.lastEventId);
+    assert.deepEqual(tail.timeline.messages, whole.timeline.messages.slice(50));
+
+    const page = await (await app.request(`/api/chats/${chat.id}/timeline/older?before=${encodeURIComponent(tail.timeline.messages[0].id)}&limit=25`)).json();
+    assert.deepEqual(page.messages, whole.timeline.messages.slice(25, 50));
+    assert.equal(page.earlier, 25);
+    const last = await (await app.request(`/api/chats/${chat.id}/timeline/older?before=${encodeURIComponent(page.messages[0].id)}&limit=25`)).json();
+    assert.equal(last.earlier, 0);
+    assert.equal(last.messages.length, 25);
+
+    const missing = await app.request(`/api/chats/${chat.id}/timeline/older?before=nope`);
+    assert.equal(missing.status, 404);
+
+    // short enough: nothing is cut
+    const small = await (await app.request(`/api/chats/${chat.id}/timeline?limit=200`)).json();
+    assert.deepEqual(small.timeline, whole.timeline);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a page never starts after a run that is still going", async () => {
+  const { store, app, cleanup } = setup();
+  try {
+    const chat = manyTurns(store, 5);
+    store.appendEvent(chat.id, null, "user", { text: "طولانی" });
+    const runId = store.startRun(chat.id);
+    store.appendEvent(chat.id, runId, "run.started", { model: "m" });
+    for (let i = 0; i < 4; i += 1) store.appendEvent(chat.id, null, "user", { text: `صف ${i}`, intent: "queue" });
+    const tail = await (await app.request(`/api/chats/${chat.id}/timeline?limit=3`)).json();
+    assert.ok(tail.timeline.messages.some((m) => m.runId === runId && m.status === "running"), "the open run is in the page");
+  } finally {
+    cleanup();
+  }
+});

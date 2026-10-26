@@ -1,0 +1,10 @@
+{
+  "id": "jobs",
+  "version": "1.0.0",
+  "title": "جاب",
+  "category": "ops",
+  "description": "کارهای زمان‌بندی‌شده و اجراهای آن‌ها",
+  "builtin": true,
+  "presets": ["griffin", "karsara"],
+  "pages": [{ "id": "main", "title": "جاب", "icon": "alarm-clock", "kind": "builtin", "route": "/jobs" }]
+}

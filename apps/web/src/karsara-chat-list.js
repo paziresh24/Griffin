@@ -1,6 +1,7 @@
 import { t } from "./i18n.js";
 // Karsara's sidebar list as pure functions, copied verbatim from Karsara (karsara-live apps/web/src/
 // chat-list.js): the Karsara skin draws its list with these, Griffin's skin keeps chat-list.js.
+import { orderSections } from "./drag.js";
 
 export const SORTS = [
   { id: "updated", label: t("آخرین به‌روزرسانی") },
@@ -165,7 +166,7 @@ export function groupChats(list, groupBy, { isUnread, now = new Date(), timeZone
  * its group — so pinning and the owner's groups never hide each other. Chats keep the order they
  * came in (already sorted).
  */
-export function layoutChats(list, groupBy, { isUnread, groups = [], agentLabel, now, timeZone } = {}) {
+export function layoutChats(list, groupBy, { isUnread, groups = [], agentLabel, now, timeZone, looseAt = null, sectionOrder = null } = {}) {
   const owned = groups || [];
   const known = new Set(owned.map((g) => g.id));
   const sections = [];
@@ -177,10 +178,13 @@ export function layoutChats(list, groupBy, { isUnread, groups = [], agentLabel, 
   const pinned = others.filter((c) => c.pinned);
   const unpinned = others.filter((c) => !c.pinned);
   const rest = unpinned.filter((c) => !known.has(c.groupId));
-  sections.push({ key: "pinned", title: t("سنجاق‌شده"), chats: pinned });
-  for (const g of owned) sections.push({ key: `group:${g.id}`, title: g.name, groupId: g.id, chats: unpinned.filter((c) => c.groupId === g.id) });
-  const grouped = groupBy && groupBy !== "none" ? groupChats(rest, groupBy, { isUnread, agentLabel, now, timeZone }) : null;
-  if (grouped) sections.push(...grouped);
-  else sections.push({ key: "recent", title: pinned.length || owned.length ? t("اخیر") : null, chats: rest });
+  sections.push({ key: "pinned", title: t("سنجاق‌شده"), chats: pinned, pinned: true });
+  const named = owned.map((g) => ({ key: `group:${g.id}`, title: g.name, groupId: g.id, chats: unpinned.filter((c) => c.groupId === g.id) }));
+  // The chats in no group («اخیر», or its groupings) are one block the owner drags among his groups (drag.js).
+  const groupedRaw = groupBy && groupBy !== "none" ? groupChats(rest, groupBy, { isUnread, agentLabel, now, timeZone }) : null;
+  const grouped = groupedRaw ? orderSections(groupedRaw, sectionOrder) : null;
+  const loose = (grouped || [{ key: "recent", title: pinned.length || owned.length ? t("اخیر") : null, chats: rest }]).map((s, i) => ({ ...s, loose: true, looseHead: i === 0 }));
+  const at = Number.isInteger(looseAt) && looseAt >= 0 ? Math.min(looseAt, named.length) : named.length;
+  sections.push(...named.slice(0, at), ...loose, ...named.slice(at));
   return sections;
 }

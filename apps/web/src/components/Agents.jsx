@@ -90,7 +90,13 @@ export function AgentsPage({ onBack, embedded = false }) {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [creating, setCreating] = useState(false);
+  // «افزودن ایجنت» in the sidebar's agent menu opens #/agents/new: the form is open from the start.
+  const [creating, setCreating] = useState(() => window.location.hash === "#/agents/new");
+  useEffect(() => {
+    const onHash = () => window.location.hash === "#/agents/new" && setCreating(true);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [accounts, setAccounts] = useState([]);
 
   const load = useCallback(() => {

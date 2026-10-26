@@ -64,15 +64,16 @@ test("rate limit per client", () => {
   assert.equal(last.status, 429);
 });
 
-test("new peer gets a narrow default quota; no secrets, shell or mutation", () => {
+test("a colleague gets the agent's own tools, minus the owner's Telegram and self-management", () => {
   const { auth, store } = setup();
   auth.createUser({ id: "ali-ahmadi" });
-  const platform = store.getAgentProfile("platform");
-  const catalog = ["kube_get", "kube_secret", "debug_exec", "pg_query", "s3_get", "kube_logs", "telegram_send", "gitlab_mr"];
-  const tools = resolveEnabledTools(platform, { caller: "peer:ali-ahmadi", catalogNames: catalog });
-  assert.deepEqual(tools.sort(), ["gitlab_mr", "kube_get"]);
-  // Unknown peer: fail closed.
-  assert.deepEqual(resolveEnabledTools(platform, { caller: "peer:someone-else", catalogNames: catalog }), []);
+  const catalog = ["kube_get", "kube_secret", "gitlab_search", "telegram_send", "telegram_read", "agent_tools_enable", "network_ask"];
+  store.updateAgentProfile("griffin", { tools: catalog });
+  const griffin = store.getAgentProfile("griffin");
+  const tools = resolveEnabledTools(griffin, { caller: "peer:ali-ahmadi", catalogNames: catalog });
+  assert.deepEqual(tools.filter((t) => catalog.includes(t)).sort(), ["gitlab_search", "kube_get", "kube_secret"]);
+  // No row needed: any colleague, on any agent.
+  assert.ok(resolveEnabledTools(griffin, { caller: "peer:someone-else", catalogNames: catalog }).includes("gitlab_search"));
 });
 
 test("irreversible calls are refused (not asked) on peer chains", async () => {
@@ -107,18 +108,17 @@ test("Bearer middleware answers 401 with WWW-Authenticate and passes identity", 
   assert.equal((await ok.json()).caller, "peer:ali-ahmadi");
 });
 
-test("quota API: replace, remove, and refuse self-management / wildcard", async () => {
+test("quota API sets only model/cap settings; tools are not granted per colleague", async () => {
   const { auth, store } = setup();
   auth.createUser({ id: "ali-ahmadi" });
   const app = new Hono();
-  auth.routes(app, { selfMgmtTools: ["agent_tools_enable"] });
+  auth.routes(app);
   const put = (body) => app.request("/api/peers/ali-ahmadi/quota", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  assert.equal((await put({ agent: "platform", tools: ["agent_tools_enable"] })).status, 400);
-  assert.equal((await put({ agent: "platform", tools: ["*"] })).status, 400);
-  const ok = await (await put({ agent: "platform", tools: ["kube_get", "kube_logs"] })).json();
-  assert.deepEqual(ok.quotas.find((q) => q.agent === "platform").tools, ["kube_get", "kube_logs"]);
-  await put({ agent: "platform", tools: [] });
-  assert.equal(store.getAgentProfile("platform").meta.callers["peer:ali-ahmadi"], undefined);
+  const ok = await (await put({ agent: "platform", tools: ["kube_get"], budget: { hourly: 1000 } })).json();
+  const row = ok.quotas.find((q) => q.agent === "platform");
+  assert.equal(row.budget.hourly, 1000);
+  assert.equal(row.tools, undefined);
+  assert.equal(store.getAgentProfile("platform").meta.callers["peer:ali-ahmadi"].tools, undefined);
   const listed = await (await app.request("/api/peers")).json();
   assert.equal(listed.users[0].caller, "peer:ali-ahmadi");
 });

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { forwardEnv, hostSpawner, runsOnHost } from "../src/providers/host-spawn.mjs";
+import { forwardEnv, hostConfigDir, hostSpawner, runsOnHost } from "../src/providers/host-spawn.mjs";
 
 test("host runs: only full Claude Code, by the owner's choice of sections", () => {
   assert.equal(runsOnHost({ claudeCode: false, mode: "owner+jobs" }), false, "no terminal, nothing to move");
@@ -47,4 +47,23 @@ test("«بدون پرسیدن» runs as the owner's own user, whatever the chat 
   assert.equal(runsOnHost({ claudeCode: true, mode: "off", chosen: "container", bypass: true }), true);
   assert.equal(runsOnHost({ claudeCode: true, ownerJob: true, mode: "owner", bypass: true }), false);
   assert.equal(runsOnHost({ claudeCode: false, bypass: true }), false);
+});
+
+test("a folder login's path is the same folder under the host's data path", () => {
+  const opts = { data: "/data", hostData: "/srv/griffin/data" };
+  assert.equal(hostConfigDir("/data/claude-accounts/claude-4", opts), "/srv/griffin/data/claude-accounts/claude-4");
+  assert.equal(hostConfigDir("/elsewhere/x", opts), null, "outside the data folder");
+  assert.equal(hostConfigDir("/data/../etc", opts), null);
+  assert.equal(hostConfigDir("/data/claude-accounts/claude-4", { data: "/data", hostData: "" }), null, "no host path known");
+});
+
+test("the request names the account folder only for a folder login", () => {
+  const sent = (host) => {
+    let out = "";
+    const fake = () => ({ stdin: { write: (text) => { out += text; } } });
+    hostSpawner(host, fake)({ args: [], cwd: "/w", env: {} });
+    return JSON.parse(out);
+  };
+  assert.equal("config_dir" in sent({ target: "t", key: "/k" }), false);
+  assert.equal(sent({ target: "t", key: "/k", configDir: "/h/claude-accounts/claude-4" }).config_dir, "/h/claude-accounts/claude-4");
 });

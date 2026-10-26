@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { createClaudeSignin, screen } from "../src/claude-signin.mjs";
+import { claudeSaid, createClaudeSignin, screen } from "../src/claude-signin.mjs";
 
 const code = "diagnostic-authorization-code#diagnostic-state";
 const token = "sk-ant-oat01-" + "synthetic-test-token-".repeat(4);
@@ -61,7 +61,7 @@ test("a rejected code returns an error instead of waiting for the HTTP timeout",
   const signin = createClaudeSignin({ env: { GRIFFIN_CLAUDE_BIN: "/diagnostic/claude" }, onToken: () => assert.fail("must not store a token") });
   t.after(() => signin.cancel());
   await signin.start("claude-self");
-  await assert.rejects(signin.submit("claude-self", code), /Claude rejected the code/);
+  await assert.rejects(signin.submit("claude-self", code), /Claude rejected the code: OAuth error: invalid code/);
   assert.equal(signin.pending("claude-self"), false);
 });
 
@@ -129,4 +129,10 @@ test("a token printed after exit and wrapped by the terminal is still stored", {
 test("screen keeps what cursor moves jump over", () => {
   assert.equal(screen("Paste\x1b[1Ccode\x1b[2G\r\nab\x1b[Kc\x1b[4G!"), "Paste code\nabc!");
   assert.equal(screen("old line\r\x1b[2Knew"), "new");
+});
+
+test("claudeSaid quotes Claude's own failure line", () => {
+  assert.equal(claudeSaid("code123\r\nOAuth error: Request failed with status code 400\r\nPress Enter to retry."), "OAuth error: Request failed with status code 400");
+  assert.equal(claudeSaid("\n Login failed: account has no Claude Code access \n"), "Login failed: account has no Claude Code access");
+  assert.equal(claudeSaid(""), "no reason given");
 });

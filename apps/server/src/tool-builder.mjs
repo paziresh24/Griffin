@@ -79,17 +79,42 @@ How to build it (this chat is yours to finish; the requesting chat gets your fin
 - Final answer: the MR link, what the tool does, the test result, and whether it was merged.`;
 }
 
-export function createToolBuilder({ store, runner, confirm, isYes, createBuildChat, log = console }) {
+// hasTool(name) -> true once that tool is in this install's catalog (a merge reaches it with the next
+// update): the chat that asked is woken again then, to finish the work it was waiting on.
+export function createToolBuilder({ store, runner, confirm, isYes, createBuildChat, hasTool = async () => false, log = console, livePollMs = 5 * 60_000 }) {
   const list = () => store.getKv(KV) || [];
   const save = (rows) => store.setKv(KV, rows.slice(-50));
   const update = (chatId, patch) => save(list().map((r) => (r.chat === chatId ? { ...r, ...patch } : r)));
   const isBuildChat = (chatId) => list().some((r) => r.chat === chatId);
+  const wake = (chatId, text) => runner.send(chatId, { text, images: [], intent: runner.isActive(chatId) ? "queue" : "send" });
+  // A subtask that asked (an arvan-ban thread of a colleague's chat) already reported to its parent:
+  // waking it would answer nobody. The root is told, and steers that thread.
+  function wakeAsker(fromId, text) {
+    const root = store.rootChatId?.(fromId) ?? fromId;
+    if (root === fromId || !store.getChat(root)) return wake(fromId, text);
+    const thread = store.getChat(fromId);
+    return wake(root, `${text}\n\nرشتهٔ «${thread?.title || fromId}» (id ${fromId}) این ابزار را خواسته بود: با subtasks steer همان را ادامه بده تا نتیجه به تو برگردد.`);
+  }
 
+  // Only a run that really ended reports: one cut by a restart continues by itself after the boot
+  // (2026-10-19: the build of arvan_load_balancer_get was cut, its «cancelled» half was reported,
+  // and the MR and merge that followed never reached the chain that asked — it told the colleague
+  // «the owner is on it» and stopped). An error is said once and the build is still watched.
   function watch(row) {
     const onEvent = (event) => {
       if (event.type !== "run.finished") return;
+      const status = event.data?.status || "error";
+      const cut = status === "cancelled" && /ری‌استارت/.test(String(event.data?.error || ""));
+      if (cut) return;
+      if (status !== "finished") {
+        const current = list().find((r) => r.chat === row.chat);
+        if (current?.errorSaid) return;
+        update(row.chat, { errorSaid: true });
+        if (store.getChat(row.from)) store.appendEvent(row.from, null, "note", { text: `🛠 ساخت ابزار «${row.title}» ${status === "cancelled" ? "متوقف شد" : "با خطا قطع شد"}؛ اگر دوباره راه بیفتد و تمام شود، گزارشش همین‌جا می‌آید.` });
+        return;
+      }
       store.bus.off(`chat:${row.chat}`, onEvent);
-      report(row, event.data?.status || "error").catch((error) => log.error?.(`[tool-builder] report ${row.chat}: ${error?.message || error}`));
+      report(row, status).catch((error) => log.error?.(`[tool-builder] report ${row.chat}: ${error?.message || error}`));
     };
     store.bus.on(`chat:${row.chat}`, onEvent);
   }
@@ -97,17 +122,39 @@ export function createToolBuilder({ store, runner, confirm, isYes, createBuildCh
   async function report(row, status) {
     const current = list().find((r) => r.chat === row.chat);
     if (!current || current.state !== "building") return;
-    update(row.chat, { state: "reported", status });
+    update(row.chat, { state: "reported", status, waitTool: true, reportedAt: new Date().toISOString() });
     if (!store.getChat(row.from)) return;
     const env = buildEnvelope(store, row.chat, { status });
     const text =
       `[گزارش خودکار ساخت ابزار «${row.title}» — این پیام را سیستم فرستاده، نه Owner]\n\n` +
       `${(env.summary || env.brief || "(بدون متن)").slice(-3_000)}\n\n` +
-      `گفتگوی ساخت: ${row.chat}. اگر ادغام شد، ابزار چند دقیقه بعد با آپدیت خودکار می‌رسد؛ کار اصلی را با آن ادامه بده. اگر ادغام نشد، همان را به درخواست‌کننده بگو.`;
-    await runner.send(row.from, { text, images: [], intent: runner.isActive(row.from) ? "queue" : "send" });
+      `گفتگوی ساخت: ${row.chat}. اگر ادغام شد، وقتی ابزار روی همین نصب فعال شد دوباره خودکار خبرت می‌کنم تا کار اصلی را با آن تمام کنی؛ تا آن موقع به درخواست‌کننده بگو منتظر چه هستی. اگر ادغام نشد، همان را به درخواست‌کننده بگو.`;
+    await wakeAsker(row.from, text);
+    checkLive().catch(() => {});
+  }
+
+  // A reported build whose tool is now in the catalog: the chat that asked carries on with it.
+  // Given up after three days (an MR nobody merged).
+  async function checkLive() {
+    for (const row of list().filter((r) => r.state === "reported" && r.waitTool)) {
+      if (Date.now() - Date.parse(row.reportedAt || row.at) > 3 * 24 * 3600_000) {
+        update(row.chat, { waitTool: false });
+        continue;
+      }
+      if (!(await hasTool(row.title).catch(() => false))) continue;
+      update(row.chat, { state: "live", waitTool: false });
+      if (!store.getChat(row.from)) continue;
+      await wakeAsker(
+        row.from,
+        `[ابزار «${row.title}» حالا روی همین نصب فعال است — این پیام را سیستم فرستاده، نه Owner]\n\nکاری که منتظر این ابزار بود را همین حالا با آن تمام کن و نتیجه را به درخواست‌کننده بده. اگر هنوز چیزی کم است، دقیق بگو چه.`,
+      ).catch((error) => log.error?.(`[tool-builder] wake ${row.from}: ${error?.message || error}`));
+    }
   }
 
   for (const row of list()) if (row.state === "building" && store.getChat(row.chat)) watch(row);
+  const livePoll = setInterval(() => checkLive().catch(() => {}), livePollMs);
+  livePoll.unref?.();
+  setTimeout(() => checkLive().catch(() => {}), 60_000).unref?.();
 
   function tool(chat, { requester }) {
     return {
@@ -146,7 +193,7 @@ export function createToolBuilder({ store, runner, confirm, isYes, createBuildCh
     };
   }
 
-  return { tool, isBuildChat, list };
+  return { tool, isBuildChat, list, checkLive, stop: () => clearInterval(livePoll) };
 }
 
 const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });

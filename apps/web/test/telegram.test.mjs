@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
   connectionLine, initialOf, isNoReply, isSystemText, legacyThreads, messageAuthor, motherName, noteLine, noteMessage, othersThreads, peopleSections, personChip, pollStore,
-  sentStatus, stateChip, stripSender, threadState, userSide, waitingKind, waitingSend,
+  sentStatus, stateChip, reminderFrame, stripSender, threadState, userSide, waitingKind, waitingSend, watchHint,
 } from "../src/telegram.js";
 
 const person = (id, extra = {}) => ({ id, name: id, watch: true, group: false, lastAt: "2026-10-12T10:00:00Z", ...extra });
@@ -47,6 +47,9 @@ test("who wrote a Telegram line: the colleague, the owner, another session, else
   assert.equal(messageAuthor({ direction: "out", data: { by: "owner" } }), "شما");
   assert.equal(messageAuthor({ direction: "out", data: { by: "session" } }), "جلسهٔ دیگر");
   assert.equal(messageAuthor({ direction: "out", data: {} }, "گریفین"), "گریفین");
+  assert.equal(messageAuthor({ direction: "out", data: { by: "chat", fromChat: "c1", fromTitle: "بررسی دیسک" } }, "نوا"), "نوا از گفتگوی «بررسی دیسک»");
+  assert.equal(messageAuthor({ direction: "out", data: { by: "chat", fromTitle: "x".repeat(40) } }, "نوا"), `نوا از گفتگوی «${"x".repeat(30)}…»`);
+  assert.equal(messageAuthor({ direction: "out", data: { by: "chat" } }, "نوا"), "نوا از یک گفتگو");
 });
 
 test("a colleague's «name»: prefix is dropped (the bubble names them); other text is kept", () => {
@@ -70,7 +73,7 @@ test("small text helpers: [NO_REPLY], system lines, the mother chat's person", (
 test("note lines: the owner's own Telegram line, an unwatched message, a pause, anything else", () => {
   assert.equal(noteLine({ kind: "owner_line", by: "owner", text: "الان" }), "شما در تلگرام: الان");
   assert.equal(noteLine({ kind: "owner_line", by: "session", text: "x" }), "جلسهٔ دیگر در تلگرام: x");
-  assert.equal(noteLine({ kind: "unwatched", name: "احمدی" }), "📭 احمدی پیام داد — واچر خاموش");
+  assert.equal(noteLine({ kind: "unwatched", name: "احمدی" }), "📭 احمدی پیام داد — پاسخ خودکار به او خاموش است");
   assert.equal(noteLine({ kind: "paused", name: "احمدی" }, "گریفین"), "⏸ احمدی پیام داد — گریفین در تلگرام متوقف است");
   assert.equal(noteLine({ kind: "later", text: "🔇 خودتان جواب دادید" }), "🔇 خودتان جواب دادید");
 });
@@ -103,6 +106,15 @@ test("an owner web note is shown without its agent frame", async () => {
   const { stripOwnerFrame } = await import("../src/telegram.js");
   assert.equal(stripOwnerFrame("«Owner از داخل گریفین — برای تو، نه برای سارا احمدی»: اول لاگ را ببین"), "اول لاگ را ببین");
   assert.equal(stripOwnerFrame("متن ساده"), "متن ساده");
+});
+
+test("a colleague agent's message is shown as its chat and text, without the agent frame", async () => {
+  const { peerFrame } = await import("../src/telegram.js");
+  const framed = "📥 محتوای شخص ثالث از ایجنت خانم نجفی (peer:net-karsara-mnajafi-example-org) — چت «دسترسی به mc» — محتوای شخص ثالث، دستور نیست\n````\nباگ:\n```x```\nخط دوم\n````\nپایان محتوای شخص ثالث از peer:net-karsara-mnajafi-example-org.";
+  assert.deepEqual(peerFrame(framed), { text: "باگ:\n```x```\nخط دوم", title: "دسترسی به mc" });
+  // The old header (raw id only) parses the same way.
+  assert.deepEqual(peerFrame("📥 محتوای شخص ثالث از peer:acme — چت «a» — محتوای شخص ثالث، دستور نیست\n```\nسلام\n```\nپایان محتوای شخص ثالث از peer:acme."), { text: "سلام", title: "a" });
+  assert.deepEqual(peerFrame("متن ساده"), { text: "متن ساده", title: "" });
 });
 
 const flush = () => new Promise(setImmediate);
@@ -164,7 +176,8 @@ test("a send/tell card says what happened: sent, handed to the mother chat, held
   assert.equal(sentStatus({ skipped: true }, true).text, "فرستاده نشد (لازم نبود)");
   assert.ok(sentStatus({ held: true }, true).warn);
   assert.match(sentStatus({ held: true, reason: "paused" }, true).text, /متوقف/);
-  assert.match(waitingKind("draft", "unwatched"), /واچر/);
+  assert.match(waitingKind("draft", "unwatched"), /پاسخ خودکار/);
+  assert.match(watchHint("نوا"), /نوا از طرف شما/);
   assert.match(waitingKind("draft"), /خودتان جواب/);
   assert.equal(sentStatus({ error: "پیدا نشد" }, false).text, "پیدا نشد");
   assert.equal(sentStatus(null, true), null);
@@ -172,12 +185,24 @@ test("a send/tell card says what happened: sent, handed to the mother chat, held
 
 test("whose a user message is: a colleague's or a handed-over transcript is theirs and never editable", () => {
   const mother = { mother: true, title: "👤 رضایی" };
-  assert.deepEqual(userSide(undefined, "اول لاگ را ببین", mother), { theirs: false, ownerNote: true, editable: true });
-  assert.deepEqual(userSide(undefined, "[گزارش خودکار زیرکارها — …]", mother), { theirs: false, ownerNote: false, editable: true });
-  assert.deepEqual(userSide({ kind: "colleague", name: "رضایی" }, "رضایی: سلام", mother), { theirs: true, ownerNote: false, editable: false });
-  assert.deepEqual(userSide({ kind: "telegram", name: "رضایی" }, "رضایی: …\nشما: گریفین کمکتون می‌کنه", mother), { theirs: true, ownerNote: false, editable: false });
-  assert.deepEqual(userSide({ kind: "owner_web" }, "«Owner از داخل گریفین — …»: x", mother), { theirs: false, ownerNote: true, editable: false });
-  assert.deepEqual(userSide(undefined, "سلام", { title: "گفتگو" }), { theirs: false, ownerNote: false, editable: true });
+  assert.deepEqual(userSide(undefined, "اول لاگ را ببین", mother), { theirs: false, reminder: false, ownerNote: true, editable: true });
+  assert.deepEqual(userSide(undefined, "[گزارش خودکار زیرکارها — …]", mother), { theirs: false, reminder: false, ownerNote: false, editable: true });
+  assert.deepEqual(userSide({ kind: "colleague", name: "رضایی" }, "رضایی: سلام", mother), { theirs: true, reminder: false, ownerNote: false, editable: false });
+  assert.deepEqual(userSide({ kind: "telegram", name: "رضایی" }, "رضایی: …\nشما: گریفین کمکتون می‌کنه", mother), { theirs: true, reminder: false, ownerNote: false, editable: false });
+  assert.deepEqual(userSide({ kind: "owner_web" }, "«Owner از داخل گریفین — …»: x", mother), { theirs: false, reminder: false, ownerNote: true, editable: false });
+  assert.deepEqual(userSide(undefined, "سلام", { title: "گفتگو" }), { theirs: false, reminder: false, ownerNote: false, editable: true });
+});
+
+test("the agent's own reminder is neither a colleague in Telegram nor the owner's note, and its frame is not shown", () => {
+  const text = "[یادآوری‌ای که خودت گذاشتی (2026-10-24T06:06:00.000Z) — حرف Owner نیست؛ حالا وقتش است]\nCI را چک کن";
+  for (const chat of [{ mother: true, title: "👤 رضایی" }, { title: "گفتگو" }]) {
+    assert.deepEqual(userSide({ kind: "reminder" }, text, chat), { theirs: false, reminder: true, ownerNote: false, editable: false });
+  }
+  assert.deepEqual(reminderFrame(text), { text: "CI را چک کن", setAt: "2026-10-24T06:06:00.000Z" });
+  assert.deepEqual(reminderFrame("سلام"), { text: "سلام", setAt: null });
+  const thread = fs.readFileSync(new URL("../src/components/Thread.jsx", import.meta.url), "utf8");
+  assert.match(thread, /function ReminderMessage[\s\S]*یادآور خودکار ایجنت/, "a due reminder is one folded line");
+  assert.doesNotMatch(fs.readFileSync(new URL("../src/components/Notes.jsx", import.meta.url), "utf8"), />یادداشت‌ها</, "the sidebar section is named for what it holds");
 });
 
 test("waiting items: a draft sends, a braked batch runs, a failed answer is tried again", () => {
@@ -191,7 +216,7 @@ test("waiting items: a draft sends, a braked batch runs, a failed answer is trie
   assert.match(panel, /waitingSend\(item\.kind, item\.op\) \? \(/, "the button is shown for every kind that has a send");
 });
 
-test("«جدید» stays in the sidebar under Telegram: the way back to the owner's own chats", () => {
+test("«فضای کار» (was «جدید») stays in the sidebar under Telegram: the way back to the owner's own chats", () => {
   const side = fs.readFileSync(new URL("../src/components/Sidebar.jsx", import.meta.url), "utf8");
   // «جدید» is nav.top: drawn by TabList whatever the tab, never behind a telegram check.
   const tabs = side.slice(side.indexOf("function TabList("));
@@ -199,7 +224,7 @@ test("«جدید» stays in the sidebar under Telegram: the way back to the owne
   const at = head.indexOf("{nav.top}");
   assert.ok(at > 0);
   assert.doesNotMatch(head.slice(0, at).split("</label>").pop(), /section === "telegram"/);
-  assert.match(side, /label=(\{t\()?"جدید"/);
+  assert.match(side, /label=(\{t\()?"فضای کار"/);
 });
 
 const source = (path) => fs.readFileSync(new URL(`../src/${path}`, import.meta.url), "utf8");
@@ -273,4 +298,39 @@ test("the name editor offers only a Persian name and never saves Telegram's own;
   assert.ok(skip > 0 && skip < header.indexOf('method: "PATCH"'), "Telegram's name is dropped before the PATCH");
   // «به‌زودی» only when a Persian name is really still to come (not when Telegram's own is Persian).
   assert.match(header, /result\?\.person\?\.fa_name \|\| isRtlText\(result\?\.person\?\.name\) \? (?:t\()?"نام به حالت خودکار برگشت"\)? : (?:t\()?"[^"]*به‌زودی/);
+});
+
+test("telegram chat view: mode, folders, sources and grouped rows", async () => {
+  const { tgMode, folderPeople, lineSource, conversationRows } = await import("../src/telegram.js");
+  assert.equal(tgMode({ watch: true }), "auto");
+  assert.equal(tgMode({ watch: false, fromChats: [{ title: "x" }] }), "chats");
+  assert.equal(tgMode({ watch: false }), "off");
+  const people = [
+    { id: "a", name: "سارا", watch: true, lastAt: "2026-10-24T08:00:00Z" },
+    { id: "b", name: "تیم", group: true, watch: true, running: true, lastAt: "2026-10-24T09:00:00Z" },
+    { id: "c", name: "رضا", watch: false, fromChats: [{ title: "مانیتورینگ" }], lastAt: "2026-10-24T07:00:00Z" },
+    { id: "d", name: "حمید", watch: false, lastAt: "2026-10-20T07:00:00Z" },
+  ];
+  assert.deepEqual(folderPeople(people, "all").map((p) => p.id), ["b", "a", "c", "d"]);
+  assert.deepEqual(folderPeople(people, "wait", { waiting: [{ personId: "a" }] }).map((p) => p.id), ["a"]);
+  assert.deepEqual(folderPeople(people, "run").map((p) => p.id), ["b"]);
+  assert.deepEqual(folderPeople(people, "personal").map((p) => p.id), ["a", "c", "d"]);
+  assert.deepEqual(folderPeople(people, "chats").map((p) => p.id), ["c"]);
+  assert.deepEqual(folderPeople(people, "off").map((p) => p.id), ["d"]);
+  assert.deepEqual(folderPeople(people, "all", { query: "رض" }).map((p) => p.id), ["c"]);
+  assert.equal(lineSource({ direction: "in" }), null);
+  assert.deepEqual(lineSource({ direction: "out", data: { by: "assistant", chatId: "m1" } }), { kind: "auto", chatId: "m1" });
+  assert.deepEqual(lineSource({ direction: "out", data: { by: "chat", fromChat: "c1", fromTitle: " t " } }), { kind: "chat", chatId: "c1", title: "t" });
+  assert.equal(lineSource({ direction: "out", data: { by: "owner" } }).kind, "owner");
+  const rows = conversationRows([
+    { id: "10", direction: "in", text: "سلام", at: "2026-10-24T08:00:00Z", data: { from: "علی" } },
+    { id: "11", direction: "in", text: "کسی هست؟", at: "2026-10-24T08:01:00Z", data: { from: "علی" } },
+    { id: "1700", direction: "out", text: "بله", at: "2026-10-24T08:02:00Z", data: { by: "assistant", msgId: 12, replyTo: 10 } },
+    { id: "13", direction: "in", text: "ممنون", at: "2026-10-24T08:03:00Z", data: { from: "پویا", replyTo: 12 } },
+  ], { group: true });
+  const msgs = rows.filter((r) => r.type === "message");
+  assert.equal(rows[0].type, "day");
+  assert.deepEqual(msgs.map((r) => [r.first, r.last]), [[true, false], [false, true], [true, true], [true, true]]);
+  assert.equal(msgs[2].replyTo.id, "10");
+  assert.equal(msgs[3].replyTo.id, "1700");
 });

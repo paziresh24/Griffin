@@ -1,5 +1,8 @@
 import { classify, controlPlaneWrite, gitWrite, routerReadOnly, confirmWithOwner, consentOf } from "./guard.mjs";
 import { redactArgs, maskText } from "./redact.mjs";
+import { OWNER } from "./persona.mjs";
+
+const OWNER_LABEL = `The owner (${OWNER.name})`;
 
 // Two-reviewer gate for risky changes. OPT-IN: off unless GRIFFIN_REVIEW=on (it costs two model
 // calls per gated change and needs two engines). Once one model decided alone to push a partial
@@ -81,7 +84,8 @@ export function changeOf(name, args = {}) {
 
 export const REVIEW_SYSTEM = `You are an independent change reviewer for an ops agent that acts on a company's production
 infrastructure (Kubernetes GitOps repo, GitLab, CDN, routers, databases). Another AI agent wants to run ONE change.
-Decide if it is safe to run right now. Approve only if ALL hold:
+Decide if it is safe to run right now. "***" in the call is a mask added for you; the real value is intact — never reject for it.
+Approve only if ALL hold:
 - it is needed for what the requester actually asked, and limited to that;
 - it does not push to main/master of a shared repo when a merge request would do, unless the request is an explicit owner order;
 - it does not use someone else's credentials or a root/admin token for a colleague's task;
@@ -112,6 +116,12 @@ tool: ${tool}
 args: ${args}`;
 }
 
+// The Claude account a reviewer may use: first one that is on, a plain Claude login (no vendor
+// endpoint), has a key, is not at a plan limit and not out of credit. null -> the GLM-flash fallback.
+export function healthyClaude(accounts, { isClaude, isEndpoint, isLimited, creditAt, hasKey }) {
+  return accounts.find((a) => a.enabled && isClaude(a.id) && !isEndpoint(a.id) && !isLimited(a.id) && !creditAt(a.id) && hasKey(a.id))?.id || null;
+}
+
 export function parseVerdict(text) {
   const raw = String(text || "");
   const json = raw.match(/\{[\s\S]*\}/)?.[0];
@@ -120,7 +130,8 @@ export function parseVerdict(text) {
     const verdict = String(v.verdict || "").toLowerCase() === "approve" ? "approve" : "reject";
     return { verdict, reason: String(v.reason || "").slice(0, 300) };
   } catch {
-    return { verdict: "none", reason: "جواب بازبین قابل خواندن نبود" };
+    const sample = maskText(raw.replace(/\s+/g, " ").trim()).slice(0, 80);
+    return { verdict: "none", reason: `جواب بازبین قابل خواندن نبود${sample ? `: ${sample}` : ""}` };
   }
 }
 
@@ -178,6 +189,12 @@ function chainContext(store, chatId) {
   const answers = [];
   for (const id of new Set([rootId, chatId])) {
     for (const e of store?.allEvents?.(id) || []) {
+      // What he typed himself in the chain counts too (2026-10-21: «دسترسی بهش بده» was judged
+      // «ادعای نقل‌شده» and the MR rejected twice).
+      if (e.type === "user" && e.data?.ownerText && id === rootId) {
+        answers.push(`- ${OWNER_LABEL} wrote himself in this chat: «${String(e.data.text || "").replace(/\s+/g, " ").slice(0, 300)}»`);
+        continue;
+      }
       if (e.type !== "tool.done" || e.data?.name !== "ask_owner" || !e.data?.result?.answered) continue;
       answers.push(`- Q: ${String(e.data.args?.question || "").replace(/\s+/g, " ").slice(0, 400)}\n  A: ${String(e.data.result.answer || "").slice(0, 200)}`);
     }
@@ -219,6 +236,10 @@ export function reviewChanges(tools, { chatId, store, asks = null, reviewers = [
         if (!change) return inner(rawArgs);
         if (!reviewWorthy(name, args)) return inner(rawArgs);
         const ctx = chainContext(store, chatId);
+        // In the owner's own chat a merge or a branch push is what he asked for: two reviewers blocked
+        // 33 of 88 of his changes in a week (2026-10-21, «نمیخواستم برا هرکاری از من دسترسی بخواد»).
+        // A raw `git push` from a shell (the 2026-10-11 wipe) and destructive filesystem ops keep the gate.
+        if (ctx.ownerRooted && !ctx.unattended && (GIT_TOOLS.has(name) || name === "gitlab_mr")) return inner(rawArgs);
         const shown = JSON.stringify(redactArgs(name, args)).slice(0, 4000);
         const key = `${ctx.rootId}\0${name}\0${shown}`;
         let result = decided.get(key);

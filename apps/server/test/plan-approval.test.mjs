@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
 import { createAsks, isPlanApprovalText } from "../src/asks.mjs";
-import { createClaudeProvider, PLAN_APPROVE, PLAN_KEEP, PLANS_DIR } from "../src/providers/claude.mjs";
+import { createClaudeProvider, PLAN_APPROVE, PLAN_KEEP, PLANS_DIR, REPLY_LANGUAGE } from "../src/providers/claude.mjs";
 import { createIntegrations } from "../src/integrations/manager.mjs";
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -68,7 +68,8 @@ test("without PLAN_APPROVAL the Claude session has no permission handler (as bef
   assert.equal(o.canUseTool, undefined);
   assert.equal(o.allowDangerouslySkipPermissions, undefined);
   assert.equal(o.tools.includes("ExitPlanMode"), false);
-  assert.equal(o.settings, undefined);
+  // Only the reply language (every chat answers in Persian), no plans folder.
+  assert.deepEqual(o.settings, { language: REPLY_LANGUAGE });
   assert.deepEqual(o.disallowedTools, ["Bash", "BashOutput", "KillShell", "NotebookEdit"]);
 });
 
@@ -92,6 +93,7 @@ test("with PLAN_APPROVAL the plan file goes to the owner's card; his approval mo
   assert.ok(o.disallowedTools.includes("AskUserQuestion"), "Claude Code's own question tool stays off");
   assert.ok(o.disallowedTools.includes("EnterPlanMode"), "the model cannot put itself into plan mode");
   assert.equal(o.settings.plansDirectory, PLANS_DIR);
+  assert.equal(o.settings.language, REPLY_LANGUAGE);
   assert.deepEqual(behaviors(fake.seen), [["ask_owner", "allow"], ["Write", "deny"], ["ExitPlanMode", "allow"]]);
   assert.deepEqual(fake.seen.decisions[2][1].updatedPermissions, [{ type: "setMode", mode: "bypassPermissions", destination: "session" }]);
   assert.equal(asked.length, 1);

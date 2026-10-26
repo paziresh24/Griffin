@@ -1,0 +1,15 @@
+{
+  "id": "telegram-inbox",
+  "version": "1.0.0",
+  "title": "تلگرام (صندوق، مثل کارسرا)",
+  "category": "team",
+  "settings": { "config": ["TELEGRAM_FILES", "TELEGRAM_INSTRUCTION_GUARD", "PRIVATE_SHARE"], "flags": ["inboxRow"] },
+  "choice": "پیام‌های خصوصی همکاران در تلگرام را چه کسی جواب بدهد؟",
+  "description": "هر پیام خصوصی همکار به یک صندوق می‌رود و جواب را شما می‌دهید؛ بدون شما چیزی برای همکار فرستاده نمی‌شود",
+  "builtin": true,
+  "presets": [],
+  "provides": ["telegram-dm"],
+  "sets": { "TELEGRAM_DM_MODE": "inbox" },
+  "switchNote": "پیام‌های خصوصی تلگرام از این به بعد به صندوق می‌روند و دستیار خودش جواب همکار را نمی‌دهد؛ دفتر ارسال هم روشن می‌شود. اتصال حساب تلگرام قطع نمی‌شود؛ چت‌های مادر قبلی می‌مانند ولی دیگر پیام تازه نمی‌گیرند.",
+  "pages": [{ "id": "main", "title": "صندوق تلگرام", "icon": "inbox", "kind": "builtin", "route": "/inbox" }]
+}

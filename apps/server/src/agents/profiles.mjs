@@ -1,3 +1,4 @@
+import { BROWSER_TOOL_NAMES } from "../browser-names.mjs";
 import { AGENTS, CALLER_LABELS, DEFAULT_AGENT, filterTools } from "./registry.mjs";
 
 export const SELF_MGMT_TOOLS = [
@@ -11,10 +12,23 @@ export const SELF_MGMT_TOOLS = [
   "agent_delete",
   "self_check",
   "self_fix",
-  // The agents' network (network.mjs): only the owner's own chats talk to colleagues' agents.
-  "network_agents",
-  "network_ask",
-  "network_reply",
+];
+
+// The agents' network (network.mjs): the owner's chats and the colleague mother chats (agent ↔ agent
+// goes there, not to Telegram). Not self-management, so a caller quota may list them; a peer's chain
+// still gets none (a quota row decides).
+export const NETWORK_TOOL_NAMES = ["network_agents", "network_ask", "network_reply", "network_connect"];
+
+// A colleague's request (peer:*) runs with the agent's whole tool set (owner 2026-10-24: «سهمیه دیگه
+// چیه اصن حذفش کن» — he approved the connection, he will not think about tools again); the approval
+// gate in guard.mjs is the control. Never: the owner's own Telegram account, peer admin, and the
+// agents' network (a colleague's chain does not fan out to other installs).
+export const PEER_NEVER_TOOLS = [
+  "telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_watch_list",
+  "peer_invite", "peer_connection",
+  ...NETWORK_TOOL_NAMES,
+  // The owner's incident sources and his workspace cards are his, not a colleague chain's.
+  "incident_source_set", "incident_assign", "incident_suggest",
 ];
 
 /** Tools the app itself provides (no broker, no credentials beyond what the owner connected). */
@@ -36,8 +50,12 @@ export const APP_TOOL_NAMES = [
   "preview_logs",
   "web_search",
   "web_fetch",
+  // A real browser in the sandbox (browser.mjs), every chat.
+  ...BROWSER_TOOL_NAMES,
   "knowledge_write",
   "knowledge_list",
+  "knowledge_edit",
+  "knowledge_delete",
   "jobs_list",
   "jobs_create",
   "jobs_update",
@@ -47,12 +65,19 @@ export const APP_TOOL_NAMES = [
   "telegram_read",
   "telegram_media",
   "telegram_send",
+  "telegram_edit",
+  "telegram_delete",
   "end_agent",
   "incidents_list",
   "incident_update",
   "incident_ack",
   "incident_history",
   "tell_owner",
+  // Incident data sources and workspace chats (incidents/tools.mjs).
+  "incident_sources",
+  "incident_source_set",
+  "incident_assign",
+  "incident_suggest",
   // A colleague's own conversation through its quota (related.mjs); the owner's own chats when the
   // install sets OWNER_CHAT_TOOLS=on (owner-chat-tools.mjs), with chat_read and notify_owner.
   "chat_list",
@@ -69,11 +94,12 @@ export const APP_TOOL_NAMES = [
   "chat_dismiss_suggestion",
   "chat_chapter",
   "consult",
+  ...NETWORK_TOOL_NAMES,
   ...SELF_MGMT_TOOLS,
 ];
 
 /** Built-in seed rows from the static registry (owner tools + self-mgmt). */
-export function seedProfilesFromRegistry({ provider = "cursor" } = {}) {
+export function seedProfilesFromRegistry({ provider = "claude" } = {}) {
   const rows = [];
   for (const [id, agent] of Object.entries(AGENTS)) {
     if (agent.custom) continue; // made at run time: its own row is the truth
@@ -90,7 +116,7 @@ export function seedProfilesFromRegistry({ provider = "cursor" } = {}) {
       instructions: "",
       provider,
       model: null,
-      tools: allTools ? [...SELF_MGMT_TOOLS] : unique([...(agent.tools || []), ...SELF_MGMT_TOOLS]),
+      tools: allTools ? [...SELF_MGMT_TOOLS, ...NETWORK_TOOL_NAMES] : unique([...(agent.tools || []), ...SELF_MGMT_TOOLS, ...NETWORK_TOOL_NAMES]),
       meta: { callers, ...(allTools ? { allTools: true } : {}) },
       builtIn: true,
     });
@@ -108,8 +134,8 @@ export function unique(list) {
 
 /**
  * Resolve which tool names this profile may use for a given caller.
- * owner → profile.tools (or every catalog tool when the profile says allTools).
- * scheduler / team → meta.callers quota when present.
+ * owner / colleagues (peer:*) → profile.tools (or every catalog tool when the profile says allTools).
+ * scheduler / team / ops → meta.callers quota when present.
  */
 export function resolveEnabledTools(profile, { caller = "owner", catalogNames = [] } = {}) {
   if (!profile) throw new Error("unknown agent profile");
@@ -118,16 +144,16 @@ export function resolveEnabledTools(profile, { caller = "owner", catalogNames = 
   const callers = meta.callers || {};
 
   // Only the owner, driving the agent directly, gets the profile's full enabled set (plus the
-  // self-management tools). Every other caller — a peer agent invoked through ask_agent, the
-  // scheduler, or a /agent coverage session — is bounded by that caller's quota. A missing quota
-  // row fails closed (no tools), so a peer can never reach beyond what it was explicitly granted,
-  // and the self-management tools (which mutate the profile) stay out of reach for non-owners.
+  // self-management tools). A colleague's request gets that set minus PEER_NEVER_TOOLS. The app's
+  // own callers (scheduler, ops, team, an agent asking another) are bounded by their quota row; a
+  // missing row fails closed. Self-management (mutates the profile) never reaches a non-owner.
   if (caller === "owner") return expandProfileTools(profile, catalog);
 
-  const quota = callers[caller];
-  if (!quota) return [];
   // Self-management edits quotas and profiles: never reachable by a non-owner, whatever a row says.
   const noSelf = (n) => !SELF_MGMT_TOOLS.includes(n);
+  if (String(caller).startsWith("peer:")) return expandProfileTools(profile, catalog).filter((n) => noSelf(n) && !PEER_NEVER_TOOLS.includes(n));
+  const quota = callers[caller];
+  if (!quota) return [];
   if (quota.tools === "*") return expandProfileTools(profile, catalog).filter(noSelf);
   return unique(Array.isArray(quota.tools) ? quota.tools : []).filter(
     (n) => noSelf(n) && (catalog.includes(n) || APP_TOOL_NAMES.includes(n)),
@@ -140,7 +166,7 @@ function expandProfileTools(profile, catalogNames) {
   // allTools: this agent gets whatever the install has, minus what the owner switched off.
   if (meta.allTools) {
     const base = catalogNames.filter((n) => !disabled.has(n));
-    return unique([...base, ...(profile.tools || []), ...SELF_MGMT_TOOLS]).filter((n) => !disabled.has(n));
+    return unique([...base, ...(profile.tools || []), ...SELF_MGMT_TOOLS, ...NETWORK_TOOL_NAMES]).filter((n) => !disabled.has(n));
   }
   const enabled = new Set(profile.tools || []);
   return catalogNames.filter((n) => enabled.has(n) && !disabled.has(n));

@@ -4,6 +4,7 @@
 
 @source "../../../node_modules/streamdown/dist/*.js";
 @source "../../../node_modules/@streamdown/code/dist/*.js";
+@source "../../../modules/*/web/*.jsx";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -150,23 +151,23 @@ body {
   unicode-bidi: isolate;
 }
 
-/* Markdown sheets: the sheet's dir comes from chatDir (any Persian → rtl), passed to Streamdown as
-   well — not Streamdown's dir="auto", which picks by majority and flips Persian paragraphs full of pod
-   names and English terms to LTR. Every block aligns to its dir; plain right/left (not `start`), so
-   Streamdown's `text-left` on table headers loses on specificity. Never unicode-bidi:plaintext: it
-   re-detects from the first strong char and flips English-leading Persian paragraphs back to LTR. */
+/* Markdown sheets: every block's dir comes from textDir (dir.js; DirBlock.jsx) — not Streamdown's
+   dir="auto", which picks by letter majority and flips Persian paragraphs full of pod names and English
+   terms to LTR. Every block aligns to its dir; plain right/left (not `start`), so Streamdown's
+   `text-left` on table headers loses on specificity. Never unicode-bidi:plaintext: it re-detects from
+   the first strong char and flips English-leading Persian paragraphs back to LTR. */
 .sd-block[dir="rtl"],
 .sd-block [dir="rtl"] {
   direction: rtl;
   text-align: right;
 }
 
-/* An all-English block keeps its own direction (punctuation and word order stay right) but sits
-   on the right like everything else (owner 2026-10-17: «همه متن‌ها فورس راست‌چین»). Code keeps left. */
+/* An English block sits on the left (owner 2026-10-25: «انگلیسی فورس چپ‌چین، فارسی فورس راست‌چین»;
+   it replaced 10-17's «همه متن‌ها فورس راست‌چین», which right-aligned English too). */
 .sd-block[dir="ltr"],
 .sd-block [dir="ltr"] {
   direction: ltr;
-  text-align: right;
+  text-align: left;
 }
 
 /* A table's fullscreen view is portalled to <body>, outside .sd-block, so it takes the page's
@@ -186,7 +187,7 @@ body {
 
 .chat-text[dir="ltr"] {
   direction: ltr;
-  text-align: right;
+  text-align: left;
   unicode-bidi: embed;
 }
 
@@ -223,14 +224,12 @@ body {
   vertical-align: middle;
 }
 
-.sd-block[dir="rtl"] :is(ul, ol) {
-  padding-right: 1.25rem;
+/* A list indents on its own start side: each block carries its own dir (DirBlock.jsx), so an English
+   list inside a Persian answer indents from the left. Physical zeros first, then the logical side. */
+.sd-block[dir] :is(ul, ol) {
   padding-left: 0;
-}
-
-.sd-block[dir="ltr"] :is(ul, ol) {
-  padding-left: 1.25rem;
   padding-right: 0;
+  padding-inline-start: 1.25rem;
 }
 
 .sd-block :is(pre, code) {
@@ -366,6 +365,13 @@ body {
   .overlay { animation: fade-in 200ms ease-out; }
   .overlay[data-state="closed"] { animation: fade-out 150ms ease-in forwards; }
   .msg-in { animation: msg-in 380ms cubic-bezier(0.16, 1, 0.3, 1); }
+  /* A chat comes in with a short fade and rise; the thread remounts per chat, so every switch plays it. */
+  .thread-in { animation: thread-in 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+  /* A list row or card that appears (an engine card moving between lists, a freshly loaded row). */
+  .row-in { animation: thread-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+}
+@keyframes thread-in {
+  from { opacity: 0; transform: translateY(6px); }
 }
 
 @keyframes pop-in {
@@ -401,6 +407,12 @@ body {
 .kc-usage-bar > span { height: 100%; background: var(--ok); transition: width 400ms cubic-bezier(0.2, 0, 0, 1); }
 .kc-usage-bar[data-level="warn"] > span { background: var(--warn); }
 .kc-usage-bar[data-level="danger"] > span { background: var(--bad); }
+.kc-usage-big { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.kc-usage-engine { display: flex; flex-direction: column; gap: 2px; padding-top: 4px; }
+.kc-usage-engine + .kc-usage-engine { margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
+/* A plan window past 60% shows beside the ring, before anyone opens it. */
+.kc-usage-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--warn); }
+.kc-usage-dot[data-level="danger"] { background: var(--bad); }
 /* Gauges are status colours (host-health.js), never the palette's --primary. */
 .kc-note { color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
 
@@ -487,7 +499,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .press, .pop, .pop[data-state="closed"], .overlay, .overlay[data-state="closed"], .msg-in { animation: none; transition: none; }
+  .press, .pop, .pop[data-state="closed"], .overlay, .overlay[data-state="closed"], .msg-in, .thread-in, .row-in { animation: none; transition: none; }
   .effort-thumb { transition: none; }
 }
 
@@ -1087,7 +1099,8 @@ html[dir="ltr"] .rtl-mirror { transform: scaleX(-1); }
 
 /* Griffin skin, reading like Claude (owner 2026-10-17, «چرا با محیط کلاد راحت‌ترم؟»): the answer at a
    bigger size in full-strength text, and the repo/branch chips above the box only while it is in use
-   (hover, typing, or one of their menus open) on an open chat. */
+   (hover, typing, or one of their menus open) on an open chat — unless the user's flag repoChipsAlways
+   keeps them shown (Thread.jsx drops the class). */
 html:not([data-look="karsara"]) .g-answer {
   font-size: 1.0625rem;
   color: var(--foreground);
@@ -1107,11 +1120,11 @@ html:not([data-look="karsara"]) .g-repo-top:has([data-state="open"]) {
   html:not([data-look="karsara"]) .g-repo-top { max-height: none; opacity: 1; }
 }
 
-/* Every text box whose direction follows its content (dir="auto": titles, names, notes) sits on the right,
-   English ones too; the text keeps its own direction (owner 2026-10-17: «همهٔ متن‌ها فورس راست‌چین»).
-   Unlayered, so it wins over a utility's text-start/text-left; code keeps its own alignment. */
+/* Every text box whose direction follows its content (dir="auto": titles, names, notes) aligns to its
+   own direction: Persian right, English left (owner 2026-10-25). Unlayered, so it wins over a
+   utility's text-left; code keeps its own alignment. */
 [dir="auto"]:not(pre, code, kbd) {
-  text-align: right;
+  text-align: start;
 }
 
 /* A file dragged over the chat: the whole chat shows where it will land (Thread.jsx, data-drop). */
@@ -1144,3 +1157,114 @@ html:not([data-look="karsara"]) .g-repo-top:has([data-state="open"]) {
 @media (prefers-reduced-motion: reduce) {
   .g-update-glow { animation: none; }
 }
+
+/* An «@» tag reads as a chip, the way Discord shows a mention (owner 2026-10-21): tinted with the
+   page's agent colour. No padding of its own (the box-shadow widens it), so behind the composer's
+   textarea (ComposerAssist MentionBackdrop) it sits exactly under the typed letters. */
+.g-mention {
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  box-shadow: 0 0 0 0.15em color-mix(in srgb, var(--primary) 18%, transparent);
+  color: color-mix(in srgb, var(--primary) 80%, var(--foreground));
+  font-weight: 500;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.g-mention-backdrop .g-mention {
+  color: transparent;
+  font-weight: inherit;
+}
+
+/* Drag and drop in the sidebar (components/SidebarDrag.jsx): a chat over a section tints it; a group
+   or a top section shows a line where it would land. */
+.g-drop { transition: background-color 0.12s ease; }
+.g-drop[data-drop="chat"] { background: color-mix(in oklab, var(--primary) 12%, transparent); outline: 1px dashed color-mix(in oklab, var(--primary) 60%, transparent); }
+.g-drop[data-drop="before"] { box-shadow: inset 0 2px 0 var(--primary); }
+.g-drop[data-drop="after"] { box-shadow: inset 0 -2px 0 var(--primary); }
+[dir="rtl"] .g-drop[data-drop-axis="x"][data-drop="before"] { box-shadow: inset -2px 0 0 var(--primary); }
+[dir="rtl"] .g-drop[data-drop-axis="x"][data-drop="after"] { box-shadow: inset 2px 0 0 var(--primary); }
+.g-drop[data-drop-axis="x"][data-drop="before"] { box-shadow: inset 2px 0 0 var(--primary); }
+.g-drop[data-drop-axis="x"][data-drop="after"] { box-shadow: inset -2px 0 0 var(--primary); }
+
+/* «جای بخش‌ها» (components/SectionNav.jsx), drawn as its prototype (prototypes/sidebar-nav, owner 2026-10-24:
+   «تو پروتوتایپت خوشکل‌تر و بهتر بودن… چرا همونا نیستن؟»). */
+.g-sn-tip { position: relative; }
+.g-sn-tip:hover::after {
+  content: attr(data-tip); position: absolute; z-index: 70; pointer-events: none; white-space: nowrap;
+  font-size: 12px; font-weight: 400; line-height: 1.4; padding: 4px 8px; border-radius: 6px;
+  background: var(--foreground); color: var(--background); animation: g-sn-tip 0.1s 0.25s both;
+}
+.g-sn-tip-below:hover::after { top: calc(100% + 6px); left: 50%; transform: translateX(-50%); }
+.g-sn-tip-side:hover::after { inset-inline-end: calc(100% + 10px); top: 50%; transform: translateY(-50%); }
+@keyframes g-sn-tip { from { opacity: 0; } to { opacity: 1; } }
+.g-sn-kbd {
+  font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; direction: ltr; padding: 1px 5px;
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; background: var(--card); color: var(--muted-foreground);
+}
+
+/* A: the launcher */
+.g-sn-launcher { width: 18.5rem; padding-bottom: 8px; }
+.g-sn-pop-title { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 4px; font-size: 13px; font-weight: 600; }
+.g-sn-pop-title .hint { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 400; color: var(--muted-foreground); }
+.g-sn-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 6px 8px 0; }
+.g-sn-tile { position: relative; }
+.g-sn-tile-main { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px; border-radius: 10px; text-align: center; }
+.g-sn-tile-main:hover { background: var(--muted); }
+.g-sn-tile[data-active] .g-sn-tile-main { background: color-mix(in oklab, var(--primary) 10%, transparent); }
+.g-sn-tile-ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--muted); color: var(--foreground); }
+.g-sn-tile[data-active] .g-sn-tile-ic { background: color-mix(in oklab, var(--primary) 18%, transparent); color: var(--primary); }
+.g-sn-tile-label { font-size: 12px; line-height: 1.35; min-height: 2.7em; display: flex; align-items: flex-start; justify-content: center; }
+.g-sn-tile-pin { position: absolute; top: 4px; inset-inline-start: 4px; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--muted-foreground); opacity: 0.35; }
+.g-sn-tile:hover .g-sn-tile-pin, .g-sn-tile-pin:focus-visible { opacity: 0.9; }
+.g-sn-tile-pin:hover { background: var(--card); opacity: 1; color: var(--foreground); box-shadow: 0 0 0 1px var(--border); }
+.g-sn-tile-pin[aria-pressed="true"] { opacity: 1; color: var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); }
+.g-sn-tile-pin[aria-pressed="true"] svg { fill: currentColor; }
+.g-sn-tile-store .g-sn-tile-ic { background: transparent; border: 1px dashed var(--border); color: var(--muted-foreground); }
+.g-sn-tile-store .g-sn-tile-label { color: var(--muted-foreground); }
+.g-sn-pop-foot { margin: 6px 12px 0; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted-foreground); }
+.g-sn-row-unpin { margin-inline-start: auto; opacity: 0; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--muted-foreground); }
+.g-sn-pinned:hover .g-sn-row-unpin, .g-sn-row-unpin:focus-visible { opacity: 1; }
+.g-sn-row-unpin:hover { background: var(--card); color: var(--foreground); }
+
+/* B: the rail on the far edge */
+.g-sn-rail { width: 48px; flex-shrink: 0; flex-direction: column; align-items: center; gap: 4px; padding: 12px 0 10px; background: var(--card); border-inline-start: 1px solid var(--border); z-index: 40; }
+.g-sn-rail[data-floating] { position: fixed; top: 0; bottom: 0; inset-inline-end: 0; box-shadow: 8px 0 28px -10px rgb(0 0 0 / 0.28); animation: g-sn-rail-in 0.14s ease-out; }
+[dir="rtl"] .g-sn-rail[data-floating] { animation-name: g-sn-rail-in-rtl; }
+@keyframes g-sn-rail-in { from { transform: translateX(100%); } }
+@keyframes g-sn-rail-in-rtl { from { transform: translateX(-100%); } }
+.g-sn-rail-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.g-sn-rail-foot { margin-top: auto; }
+.g-sn-rail-btn { position: relative; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: var(--muted-foreground); }
+.g-sn-rail-btn:hover { background: var(--muted); color: var(--foreground); }
+.g-sn-rail-btn[aria-current="page"] { background: color-mix(in oklab, var(--primary) 14%, transparent); color: var(--primary); }
+.g-sn-rail-btn[aria-current="page"]::before { content: ""; position: absolute; inset-inline-end: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--primary); }
+.g-sn-rail-btn[data-faint] { opacity: 0.6; }
+.g-sn-rail-btn[data-faint]:hover { opacity: 1; }
+.g-sn-rail-sep { width: 22px; height: 1px; background: var(--border); margin: 4px 0; }
+.g-sn-rail-handle {
+  position: fixed; inset-inline-end: 0; top: 50%; transform: translateY(-50%); z-index: 39; width: 14px; height: 64px;
+  place-items: center; border: 1px solid var(--border); border-inline-end: 0; border-start-start-radius: 10px; border-end-start-radius: 10px;
+  background: var(--card); color: var(--muted-foreground); box-shadow: 2px 0 8px -4px rgb(0 0 0 / 0.2); transition: width 0.1s;
+}
+.g-sn-rail-handle:hover { width: 18px; color: var(--foreground); }
+
+/* D: the user menu and Ctrl+K */
+.g-sn-menu-label { padding: 6px 10px 2px; font-size: 11px; font-weight: 500; color: var(--muted-foreground); }
+.g-sn-menu-row[aria-current="page"], .g-sn-menu-row[aria-current="page"] svg { color: var(--primary); }
+.g-sn-menu-foot { display: flex; align-items: center; gap: 6px; padding: 6px 10px 4px; font-size: 11px; color: var(--muted-foreground); }
+.g-sn-palette-input { display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.g-sn-palette-input input { flex: 1; border: 0; outline: 0; background: transparent; font-size: 15px; padding: 14px 0; }
+.g-sn-palette-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 8px; text-align: start; font-size: 14px; cursor: pointer; }
+.g-sn-palette-item svg { color: var(--muted-foreground); }
+.g-sn-palette-item[data-selected="true"] { background: var(--muted); }
+.g-sn-palette-item[data-selected="true"] svg { color: var(--foreground); }
+.g-sn-palette-item .kind { margin-inline-start: auto; font-size: 11px; color: var(--muted-foreground); }
+.g-sn-palette [cmdk-group-heading] { padding: 8px 10px 4px; font-size: 11px; font-weight: 500; color: var(--muted-foreground); }
+.g-sn-palette-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted-foreground); }
+.g-sn-palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Pointer drag and drop (components/SidebarDrag.jsx): the row follows the pointer, its place fades. */
+.g-drag-ghost { position: fixed; z-index: 9999; margin: 0; pointer-events: none; opacity: 0.92; border-radius: 8px; background: var(--card); box-shadow: 0 10px 28px -8px rgb(0 0 0 / 0.35), 0 0 0 1px var(--border); }
+[data-dragging] { opacity: 0.35; }
+.g-dragging, .g-dragging * { cursor: grabbing !important; user-select: none !important; }
+[data-drag-handle] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }

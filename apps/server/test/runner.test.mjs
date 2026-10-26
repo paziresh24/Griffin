@@ -470,6 +470,74 @@ test("a session lost at send time is retried once on a fresh one", async () => {
   }
 });
 
+// 2026-10-20: the engine answered "success" with no text, no tool and no output token. The runner
+// sends the same message once more on the SAME session; a second empty answer is kept as an error.
+test("an empty engine answer is retried once on the same session, then kept", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-empty-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let empties = 1;
+  const agent = {
+    agentId: "same",
+    async send() {
+      sends.push("same");
+      const empty = empties-- > 0;
+      return { id: "r", supports: () => true, async cancel() {}, wait: async () => (empty ? { status: "error", error: { message: "x", code: "no_answer" } } : { status: "finished" }) };
+    },
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {} });
+  try {
+    const chat = store.createChat({ title: "t" });
+    store.setAgentId(chat.id, "same");
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => sends.length === 2);
+    await until(() => !store.runningRuns().length);
+    assert.equal(store.getChat(chat.id).agent_id, "same");
+    assert.deepEqual(store.getKv(`kept:${chat.id}`) || [], []);
+    // Both attempts empty: nothing more is sent on its own and the message is kept.
+    empties = 2;
+    await runner.send(chat.id, { text: "دوباره", images: [] });
+    await until(() => sends.length === 4);
+    await until(() => !store.runningRuns().length);
+    assert.deepEqual((store.getKv(`kept:${chat.id}`) || []).map((k) => k.message), ["دوباره"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 2026-10-21: an account that answers nothing twice in a row rests 15 minutes and the turn moves on.
+test("empty twice: the account rests like a plan limit and the turn goes to another account", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-empty2-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let empties = 2;
+  const agent = {
+    agentId: "same",
+    async send() {
+      sends.push("s");
+      const empty = empties-- > 0;
+      return { id: "r", supports: () => true, async cancel() {}, wait: async () => (empty ? { status: "error", error: { message: "x", code: "no_answer" } } : { status: "finished" }) };
+    },
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const limits = [];
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {}, onPlanLimit: (chat, error) => (limits.push(error), true) });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => sends.length === 3);
+    await until(() => !store.runningRuns().length);
+    assert.equal(limits.length, 1);
+    assert.ok(limits[0].resetsAt > Date.now() + 10 * 60_000);
+    assert.deepEqual(store.getKv(`kept:${chat.id}`) || [], []);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // 2026-10-11: a colleague thread routed GLM → Claude kept its agent_id; the runner returned the cached
 // GLM agent and Z.ai answered "Unknown Model" for "opus". A cached agent belongs to one provider.
 test("a chat whose provider changed does not reuse the other provider's cached agent", async () => {
@@ -646,6 +714,40 @@ test("«فوری»: an engine that steers takes the message into the running tur
   assert.equal(sends.length, 1, "no second turn");
   assert.equal(store.eventsAfter(chat.id).filter((e) => e.type === "user").at(-1).data.intent, "steer");
 
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a chat moved to another repo gets a new agent (same session) instead of the one made for the old tree", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-repo-move-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const made = [];
+  const sdk = {
+    async create() {
+      made.push("create");
+      return makeAgent("agent-1", { sends });
+    },
+    async resume(id) {
+      made.push(`resume:${id}`);
+      return makeAgent(id, { sends });
+    },
+  };
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), log: { error() {} } });
+  const chat = store.createChat({ title: "t" });
+  store.updateChat(chat.id, { repo: "platform-gitops" });
+  const turn = async (text) => {
+    const { runId } = await runner.send(chat.id, { text });
+    await until(() => store.eventsAfter(chat.id).some((e) => e.type === "run.finished" && e.runId === runId));
+  };
+
+  await turn("یک");
+  await turn("دو");
+  assert.deepEqual(made, ["create"], "same repo: the cached agent is reused");
+  store.updateChat(chat.id, { repo: "griffin-private" });
+  await turn("سه");
+  assert.deepEqual(made, ["create", "resume:agent-1"], "new repo: the session resumes in a new agent");
+  assert.equal(sends.length, 3);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

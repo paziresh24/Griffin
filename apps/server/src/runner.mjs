@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { genv } from "./env.mjs";
 import { eventsFromUpdate } from "./updates.mjs";
+import { FOLLOW_THROUGH_NUDGE, leavesWorkOpen } from "./follow-through.mjs";
 import { inertText, maskText } from "./redact.mjs";
-import { fileMeta, forEngine, mergeMessages, toSdkMessage } from "./attachments.mjs";
+import { fileMeta, forEngine, isInline, keepOnDisk, mergeMessages, toSdkMessage } from "./attachments.mjs";
 import { ASK_TOOL } from "./asks.mjs";
+import { UPGRADE_TOOL, upgradeNote } from "./model-upgrade.mjs";
 import { accountMoveNote, doneTools, droppedNote, ENGINE_UNAVAILABLE, resetFromText, FALLBACK_KEY, FALLBACK_OFFERS_KEY, fallbackNote, fallbackQuestion, saidWait, saidYes, storableMessage, withLeadNote } from "./plan-fallback.mjs";
 
 // Kept messages: the owner's message whose run ended in an error before anything
@@ -29,6 +31,21 @@ const RESUME_KEY = "resume:pending";
 const resumesKey = (chatId) => `resumes:${chatId}`;
 // Config CLAUDE_BACKGROUND_TASKS: { chatId: [task] } of the background tasks running now.
 export const BG_TASKS_KEY = "background-tasks";
+// { chatId: { crons, at } } of the wake-ups (ScheduleWakeup, CronCreate, /loop) kept sessions hold:
+// a restart ends those processes and their wake-ups with them, so the boot says so and continues.
+export const WAKEUPS_KEY = "session-wakeups";
+const fa = (n) => Number(n || 0).toLocaleString("fa-IR");
+const WAKEUP_RESTORE_MS = Math.max(0, Number(process.env.GRIFFIN_WAKEUP_KEEP_HOURS ?? 24)) * 3_600_000;
+
+// The continue after a restart wiped a chat's wake-ups (Karsara's wording): re-arm or do them now.
+export function lostWakeupsPrompt(crons = []) {
+  const lines = (Array.isArray(crons) ? crons : []).slice(0, 12).map((cron) => `- ${cron.schedule ? `«${cron.schedule}» ` : ""}${cron.recurring ? "(تکرارشونده) " : ""}«${String(cron.prompt || "بی‌متن").slice(0, 400)}»`);
+  return (
+    "[ادامه پس از ری‌استارت سرور — این پیام را سیستم فرستاده، نه Owner]\n" +
+    `این بیدارباش‌های زمان‌بندی‌شدهٔ این گفتگو (ScheduleWakeup / CronCreate / /loop) با ری‌استارت پاک شدند و دیگر خودشان اجرا نمی‌شوند:\n${lines.join("\n")}\n` +
+    "هر کدام که هنوز لازم است را با همان ابزار و همان متن دوباره زمان‌بندی کن؛ اگر موعدش گذشته، همین حالا انجامش بده و نتیجه را بگو. اگر دیگر لازم نیست، یک خط بگو و رهایش کن."
+  );
+}
 // ponytail: continues per chat per hour, so a turn that kills the process cannot restart-loop it;
 // any new message to the chat resets the count.
 const MAX_RESUMES = 3;
@@ -107,6 +124,8 @@ export function createRunner({
   // runLabel(chat) -> { provider, model } actually used, for the run.started event.
   runLabel = (chat) => ({ provider: chat.provider || "cursor", model: chat.model || "auto" }),
   onCancel = () => {},
+  // Where a file past the inline caps is saved for the agent's file tools (attachments.mjs keepOnDisk).
+  attachmentsRoot = null,
   // Only for an explicit cancel (user / API), not for every run end.
   onUserCancel = () => {},
   onFinished = () => {},
@@ -139,6 +158,13 @@ export function createRunner({
   // notResumable(chat) -> true for a chat nobody waits on after a restart (a consult: the call
   // that waited for its answer is gone), so a cut or crashed run there is not continued.
   notResumable = () => false,
+  // model-upgrade.mjs createUpgrades(): a colleague's chat on the light model that asked for the
+  // stronger one goes on in the same run on it. null = never.
+  upgrades = null,
+  // followThrough(chat) -> true where a turn that ends on a promise nothing will wake is sent on
+  // once (follow-through.mjs); pendingWork(chatId) -> its delegated subtasks still owing a report.
+  followThrough = () => false,
+  pendingWork = () => 0,
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
@@ -164,6 +190,15 @@ export function createRunner({
     if (Object.keys(all).length) store.setKv?.(BG_TASKS_KEY, all);
     else store.deleteKv?.(BG_TASKS_KEY);
   };
+  const wakeSaved = () => store.getKv?.(WAKEUPS_KEY) || {};
+  const saveWake = (chatId, crons) => {
+    const all = wakeSaved();
+    if (crons.length) all[chatId] = { crons, at: Date.now() };
+    else delete all[chatId];
+    if (Object.keys(all).length) store.setKv?.(WAKEUPS_KEY, all);
+    else store.deleteKv?.(WAKEUPS_KEY);
+  };
+  const wakeAgents = new Map(); // chatId -> agent whose kept process holds wake-ups
   const BG_STATUS = { completed: "تمام شد", failed: "شکست خورد", stopped: "متوقف شد", killed: "متوقف شد" };
   const taskName = (task) => task.description || task.id;
   function wireBackground(chatId, agent) {
@@ -186,8 +221,109 @@ export function createRunner({
         store.appendEvent(chatId, null, "note", { text: `کار پس‌زمینه ${BG_STATUS[event.status] || event.status} (${taskName(event.task)})${summary}`, ...(event.outputFile ? { taskId: event.task.id } : {}) });
       } else if (event.type === "lost" && !stopping) {
         store.appendEvent(chatId, null, "note", { text: `این کارهای پس‌زمینه با بسته شدن Claude Code متوقف شدند: ${event.tasks.map(taskName).join("، ")}` });
+      } else if (event.type === "crons") {
+        if (event.crons.length) wakeAgents.set(chatId, agent);
+        else if (wakeAgents.get(chatId) === agent) wakeAgents.delete(chatId);
+        if (!stopping) saveWake(chatId, event.crons);
+        store.bus?.emit?.("chats", { type: "live", chatId });
+      } else if (event.type === "lost-crons" && !stopping) {
+        store.appendEvent(chatId, null, "note", { text: `این بیدارباش‌ها با بسته شدن Claude Code (بیش از ${fa(Math.round(WAKEUP_RESTORE_MS / 3_600_000))} ساعت بی‌استفاده) از بین رفتند: ${event.crons.map((cron) => String(cron.prompt || cron.schedule).slice(0, 120)).join("، ")}` });
+      } else if (event.type === "turn") {
+        return adoptTurn(chatId, event);
       }
+      return undefined;
     });
+  }
+
+  // A turn Claude Code starts by itself between the owner's turns (it answers a background task
+  // that ended — the watcher it left: «sleep 200» before checking CI) becomes a run of the chat:
+  // it shows, the chat reads «در حال کار» until it ends, and the owner's next message waits behind
+  // it. Before this (2026-10-20, chat «دیزاین ماژولار»): such turns started image builds and were
+  // refused a tool where nobody saw, and the chat read «تمام شد» — «نصب شد؟» each time.
+  // Null when a run of the chat already holds the process (that turn is its own) or none may start.
+  function adoptTurn(chatId, { cancel } = {}) {
+    if (stopping || active.has(chatId)) return null;
+    const chat = store.getChat(chatId);
+    if (!chat || chat.archived) return null;
+    const runId = store.startRun(chatId);
+    const entry = {
+      runId,
+      run: { id: null, supports: (cap) => cap === "cancel", cancel: async () => cancel?.() },
+      adopted: true,
+      cancelRequested: false,
+      cancelRequestedAt: null,
+      forcedDone: false,
+      queue: [],
+      lastEventAt: Date.now(),
+      keptId: null,
+      turn: { text: "ادامهٔ کاری که بعد از تمام شدن یک کار پس‌زمینه خودت شروع کرده بودی", ids: [] },
+      carried: [],
+      raw: null,
+    };
+    active.set(chatId, entry);
+    const emit = (type, data) => {
+      entry.lastEventAt = Date.now();
+      store.appendEvent(chatId, runId, type, data);
+    };
+    const label = runLabel(chat);
+    emit("run.started", { model: label.model, mode: chat.mode, provider: label.provider, ...(label.effort ? { effort: label.effort } : {}), wake: true });
+    return {
+      onDelta: ({ update }) => {
+        for (const event of eventsFromUpdate(update)) {
+          if (!QUIET_EVENTS.has(event.type)) entry.produced = true;
+          trackTail(entry, event);
+          emit(event.type, event.data);
+        }
+      },
+      finish: (result) => finishAdopted(chatId, entry, result, emit),
+    };
+  }
+
+  // The text after the turn's last tool call: what it closed on.
+  function trackTail(entry, event) {
+    if (event.type === "tool.started") entry.tail = "";
+    else if (event.type === "text") entry.tail = (entry.tail || "") + String(event.data?.text || "");
+  }
+  // A turn that closed on a promise with nothing left to wake it is sent on, once per message of
+  // the owner (nudged clears on the next send). The OpenAI-compatible engine does this in its loop.
+  const nudged = new Set();
+  function followUp(chatId, entry, status) {
+    if (status !== "finished" || entry.cancelRequested || nudged.has(chatId) || stopping) return false;
+    const chat = store.getChat(chatId);
+    if (!chat || chat.archived || sdkFor(chat)?.kind === "openai" || !followThrough(chat)) return false;
+    if (!leavesWorkOpen(entry.tail)) return false;
+    if (Number(pendingWork(chatId)) > 0 || api.backgroundTasks(chatId).length || api.wakeups(chatId).length || isBlocked(chatId)) return false;
+    nudged.add(chatId);
+    store.appendEvent(chatId, null, "note", { text: "ایجنت گفت ادامه می‌دهد ولی چیزی بیدارش نمی‌کرد؛ خودکار دوباره راهش انداختم تا کار را تمام کند." });
+    startRun(chatId, FOLLOW_THROUGH_NUDGE);
+    return true;
+  }
+
+  function finishAdopted(chatId, entry, result, emit) {
+    if (active.get(chatId) !== entry || entry.forcedDone) return;
+    const status = normalizeStatus(result?.status, entry.cancelRequested);
+    const error = status === "error" ? String(result?.error?.message || "run failed") : null;
+    onCancel(chatId);
+    // Cut by our own stop (a deploy): it continues after the boot, like any cut turn.
+    const cont = Boolean(entry.cut) && status === "cancelled";
+    runq.save(chatId, cont ? entry.turn : null, entry.queue);
+    emit("run.finished", { status, ...(error ? { error } : cont ? { error: "به‌خاطر ری‌استارت سرور قطع شد — بعد از بالا آمدن ادامه می‌دهد" } : {}) });
+    store.finishRun(chatId, entry.runId, status, error);
+    active.delete(chatId);
+    if (stopping) {
+      if (cont || entry.queue.length) pending.add(chatId, cont);
+      return;
+    }
+    if (status === "finished") Promise.resolve().then(() => onFinished(chatId)).catch(() => {});
+    if (!entry.queue.length && kept.next(chatId) < 0 && followUp(chatId, entry, status)) return;
+    const queued = entry.queue.splice(0);
+    runq.save(chatId, null, []);
+    if (kept.next(chatId) >= 0) {
+      if (queued.length) kept.push(chatId, mergeQueued(messagesOf(queued)), idsOf(queued));
+      if (queued.length && !entry.cancelRequested) startKept(chatId, kept.next(chatId));
+      return;
+    }
+    if (queued.length) startRun(chatId, mergeQueued(messagesOf(queued)), [], { ids: idsOf(queued) });
   }
   // Boot: what the last process stopped is said in its chat, once.
   for (const [chatId, tasks] of Object.entries(bgSaved())) {
@@ -527,7 +663,10 @@ export function createRunner({
   // A replaced agent's kept process (config CLAUDE_BACKGROUND_TASKS) ends with it, so it never holds
   // the session or tasks nobody can stop any more.
   const placedAs = new WeakMap(); // agent -> placement(chat) when it was made
-  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${(chat.mode || "agent") === "agent"}`;
+  // The repo too: a folder switch sets the old tree aside, and an agent made for it would start Claude
+  // Code in a folder that no longer exists (2026-10-20: the SDK read the spawn ENOENT as «binary does not
+  // match this system's libc»); a new one runs the setup that makes the new repo's tree first.
+  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}`;
   const liveAgent = (chatId) => {
     const chat = store.getChat(chatId);
     return bgAgents.get(chatId) || (chat?.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null) || null;
@@ -663,10 +802,14 @@ export function createRunner({
             if (before?.state !== update.state || before?.reason !== (update.reason || null)) live(chatId);
           }
           for (const event of eventsFromUpdate(update)) {
+            // Text the light model wrote after upgrade_model is not the answer (the boundary below).
+            if (event.type === "tool.done" && String(event.data?.name || "").endsWith(UPGRADE_TOOL)) entry.upgradeCalled = true;
+            else if (event.type === "text" && entry.upgradeCalled && String(event.data?.text || "").trim()) entry.textAfterUpgrade = true;
             if (!QUIET_EVENTS.has(event.type) && !entry.produced) {
               entry.produced = true;
               reached(chatId, entry);
             }
+            trackTail(entry, event);
             emit(event.type, event.data);
           }
         },
@@ -679,7 +822,37 @@ export function createRunner({
       // text — a long think kept them «در صف» above the box while the agent worked on them.
       reached(chatId, entry);
       if (entry.cancelRequested) await cancelSdkRun(run);
-      const result = await run.wait();
+      let result = await run.wait();
+      // The light model asked for the stronger one (model-upgrade.mjs): the same run goes on, in the
+      // same session, on that model — one answer for the colleague, one run.finished for its readers.
+      const up = normalizeStatus(result.status, entry.cancelRequested) === "finished" ? upgrades?.take(chatId) : null;
+      if (up) {
+        // The answer is the text after the last tool (timeline finalText): what the light model
+        // wrote after asking is cut off by a step of its own.
+        if (entry.textAfterUpgrade) {
+          const callId = `${UPGRADE_TOOL}-${runId}`;
+          emit("tool.started", { callId, name: UPGRADE_TOOL, args: { model: up.model } });
+          emit("tool.done", { callId, name: UPGRADE_TOOL, result: { content: [{ type: "text", text: JSON.stringify({ model: up.model }) }] } });
+        }
+        emit("note", { text: `ادامه با مدل قوی‌تر (${up.model})${up.reason ? ` — ${up.reason}` : ""}` });
+        emit("run.phase", { phase: "connecting" });
+        entry.tail = "";
+        const next = await startSdkRun(store.getChat(chatId) || chat, upgradeNote(up.reason), {
+          model: { id: up.model },
+          ...(up.effort ? { effort: up.effort } : {}),
+          mode: chat.mode || "agent",
+          ...(sdkFor(chat)?.kind === "claude" ? { ...ownerExtras(chat), userMessageId: randomUUID() } : {}),
+          onDelta: ({ update }) => {
+            for (const event of eventsFromUpdate(update)) {
+              trackTail(entry, event);
+              emit(event.type, event.data);
+            }
+          },
+        });
+        entry.run = next;
+        if (entry.cancelRequested) await cancelSdkRun(next);
+        result = await next.wait();
+      }
       status = normalizeStatus(result.status, entry.cancelRequested);
       if (status === "error") error = result.error?.message || "run failed";
       const limitCode = result.error?.code;
@@ -704,11 +877,33 @@ export function createRunner({
             entry.limitError = result.error;
             entry.offerFallback = { provider: entry.provider || runLabel(limitedChat).provider };
           }
-        } else if (moves && !entry.retried) entry.retryOnFallback = true;
+        } else if (moves && !entry.retried) {
+          entry.retryOnFallback = true;
+          // Auto mode too: another account of the same model goes on in the same session (it lost
+          // the whole context to a text-only reseed before — a colleague, 2026-10-21).
+          entry.hop = accountHop(limitedChat) || null;
+        }
         else entry.limitError = result.error;
       }
       // A session the provider only discovers is gone at send time: retry once on a fresh one.
       if (status === "error" && result.error?.code === "agent_not_found" && !entry.retried) entry.retryOnFallback = true;
+      // An empty result (success, no text, no tool, no output token) is a transient engine hiccup:
+      // send the same message once more on the same session before the owner sees an error.
+      if (status === "error" && result.error?.code === "no_answer" && !entry.retried && !entry.produced) {
+        entry.emptyRetry = true;
+        entry.retryOnFallback = true;
+      }
+      // Empty again on the retry: the account itself answers nothing (zero tokens in a few seconds —
+      // 15 on one install and 10 on another in two days, always on the same accounts). It rests
+      // 15 minutes like a plan limit and the turn goes to another account, the session kept when it
+      // is the same model.
+      if (status === "error" && result.error?.code === "no_answer" && entry.afterEmpty && !entry.produced) {
+        const chat = store.getChat(chatId);
+        if (onPlanLimit(chat, { message: result.error.message, resetsAt: Date.now() + 15 * 60_000 }, entry.provider)) {
+          entry.retryOnFallback = true;
+          entry.hop = accountHop(chat) || null;
+        }
+      }
     } catch (caught) {
       status = entry.cancelRequested ? "cancelled" : "error";
       error = status === "error" ? String(caught?.message || caught) : null;
@@ -716,6 +911,8 @@ export function createRunner({
     } finally {
       // sweepStale() may already have finalized this run locally (the SDK never confirmed the
       // cancel) — do not double-write run state if the stuck promise eventually settles anyway.
+      // The next message starts on the light model again.
+      upgrades?.end(chatId);
       if (!entry.forcedDone) {
         onCancel(chatId); // releases a question still waiting when the run ends for any reason
         // Nothing reached the owner: keep the message for «ارسال دوباره» (a fallback retry handles itself).
@@ -735,13 +932,21 @@ export function createRunner({
           kept.update(chatId, entry.keptId, (k) => [{ ...k, fails: k.fails + 1 }]);
           if (kept.list(chatId).find((k) => k.id === entry.keptId)?.fails === MAX_KEPT_RETRIES) {
             entry.keptGaveUp = true;
-            emit("note", { text: `این پیام ${MAX_KEPT_RETRIES} بار به ایجنت نرسید؛ دیگر خودکار فرستاده نمی‌شود و پیام‌های تازه‌تر منتظرش نمی‌مانند. «دوباره» یا «حل شد» (یا «بستن») را بزنید.` });
+            emit("note", { text: `این پیام ${MAX_KEPT_RETRIES} بار بی‌جواب ماند؛ دیگر خودکار فرستاده نمی‌شود و پیام‌های تازه‌تر منتظرش نمی‌مانند. «دوباره» یا «حل شد» (یا «بستن») را بزنید.` });
           }
         }
         // A retry that got an answer out: the kept message is delivered.
         if (entry.keptId && !keep) {
           kept.update(chatId, entry.keptId, () => []);
           entry.keptDelivered = true;
+        }
+        // The chat got through on a message of its own: one given up on (MAX_KEPT_RETRIES) is behind
+        // it now — the owner moved on — and leaves the board instead of waiting there for good.
+        if (status === "finished" && !entry.keptId) {
+          for (const item of kept.list(chatId).filter((k) => k.fails >= MAX_KEPT_RETRIES)) {
+            kept.update(chatId, item.id, () => []);
+            markQueued(chatId, item.ids, "dropped");
+          }
         }
         if (entry.limitError) planLimitResume(chatId, entry.limitError, emit);
         else if (!entry.retryOnFallback) limitTries.delete(chatId);
@@ -769,7 +974,7 @@ export function createRunner({
       // A same-model move between Claude accounts (ask mode) keeps the session: both accounts share
       // one Claude Code config folder, only the token differs. Without a session to keep, the
       // rerun is told what it does not see and what the stopped run already did.
-      const keepSession = Boolean(entry.hop && store.getChat(chatId)?.agent_id);
+      const keepSession = Boolean((entry.hop || entry.emptyRetry) && store.getChat(chatId)?.agent_id);
       if (entry.hop && !keepSession) {
         const raw = entry.raw ?? message;
         entry.rerunMessage = withLeadNote(raw, accountMoveNote(entry.hop, doneTools(store, runId)));
@@ -779,13 +984,17 @@ export function createRunner({
       // An automatic continue that moved engines is still that continue (its try count stays).
       const carry = limitTries.has(chatId);
       if (carry) autoSending.add(chatId);
-      const retryId = startRun(chatId, entry.rerunMessage ?? message, entry.queue.splice(0), { ids: entry.carried, turnText: entry.turn.text, fallback: true, limitMove: Boolean(entry.limitMove), ...(entry.hop ? { raw: entry.raw ?? message } : {}) });
+      const retryId = startRun(chatId, entry.rerunMessage ?? message, entry.queue.splice(0), { ids: entry.carried, turnText: entry.turn.text, fallback: !entry.emptyRetry, limitMove: Boolean(entry.limitMove), ...(entry.hop ? { raw: entry.raw ?? message } : {}) });
       if (carry) autoSending.delete(chatId);
       const next = active.get(chatId);
-      if (next?.runId === retryId) next.retried = true;
+      if (next?.runId === retryId) {
+        next.retried = true;
+        if (entry.emptyRetry) next.afterEmpty = true;
+      }
       return;
     }
     if (status === "finished") Promise.resolve().then(() => onFinished(chatId)).catch(() => {});
+    if (!entry.queue.length && kept.next(chatId) < 0 && followUp(chatId, entry, status)) return;
     // Everything that queued up during the run goes in as ONE turn: separate turns answered each
     // stale message on its own (a colleague got three replies in a minute, 2026-09-25).
     const queued = entry.queue.splice(0);
@@ -892,11 +1101,15 @@ export function createRunner({
     // inert (redact.mjs inertText): no live "@path" and no leading "/" command. The event keeps
     // the text as written.
     // files: PDFs and text files the owner attached (attachments.mjs); a text file goes inside the text.
-    async send(chatId, { text, images = [], files = [], intent = "send", clientId = null, from = null, ownerText = false }) {
+    // note: for the agent only (the agents tagged with «@»): it rides on the message, the thread shows the text.
+    async send(chatId, { text, images = [], files = [], intent = "send", clientId = null, from = null, ownerText = false, note = "" }) {
+      nudged.delete(chatId);
       const current = active.get(chatId);
       let effective = intent;
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
-      const message = toSdkMessage({ text: ownerText ? text : inertText(text), images, files });
+      // A kept file is saved before the engine hears of it: the message names it by path.
+      files = files.map((file) => (isInline(file) ? file : { ...file, bytes: Buffer.byteLength(String(file.data), "base64"), path: keepOnDisk(attachmentsRoot, chatId, file) }));
+      const message = toSdkMessage({ text: `${ownerText ? text : inertText(text)}${note ? `\n\n${note}` : ""}`, images, files });
       if (current && stopping) effective = "queue";
       // The pictures and files stay in the chat's media (the event holds only their ids), so the thread
       // can show them later — not just say that the message «has a picture».
@@ -1071,6 +1284,11 @@ export function createRunner({
     // Config CLAUDE_BACKGROUND_TASKS: the chat's live background tasks and a stop for each.
     backgroundTasks(chatId) {
       return bgAgents.get(chatId)?.backgroundTasks?.() || [];
+    },
+
+    // The wake-ups the chat's kept Claude Code process will fire later ({ id, schedule, recurring, prompt }).
+    wakeups(chatId) {
+      return wakeAgents.get(chatId)?.wakeups?.() || [];
     },
     async stopTask(chatId, taskId) {
       const agent = bgAgents.get(chatId);
@@ -1306,6 +1524,18 @@ export function createRunner({
     pending.remove(chatId);
   }
 
+  {
+    const lost = Object.entries(wakeSaved()).filter(([chatId, item]) => store.getChat(chatId) && !store.getChat(chatId).archived && Array.isArray(item?.crons) && item.crons.length && Date.now() - Number(item.at || 0) <= WAKEUP_RESTORE_MS);
+    store.deleteKv?.(WAKEUPS_KEY);
+    lost.forEach(([chatId, item], i) => {
+      const timer = setTimeout(() => {
+        if (stopping) return;
+        api.send(chatId, { text: lostWakeupsPrompt(item.crons), intent: active.has(chatId) ? "queue" : "send" }).catch((error) => log.error?.(`[runner] lost wake-ups ${chatId}: ${error?.message || error}`));
+      }, (pending.list().length + i) * resumeGapMs + 5_000);
+      timer.unref?.();
+    });
+  }
+
   if (pending.list().length) {
     Promise.resolve()
       .then(async () => {
@@ -1353,11 +1583,15 @@ function lastUserPrompt(store, chatId) {
 // A colleague's message (related.mjs chat_send) is not called the owner's request on a resume.
 export function resumePrompt(lastUser) {
   if (lastUser) {
-    const who = lastUser.startsWith("📥 ") ? "پیام قبلی (از شخص ثالث — نه درخواست Owner) این بود" : "درخواست قبلی Owner این بود";
+    const who = lastUser.startsWith("📥 ")
+      ? "پیام قبلی (از شخص ثالث — نه درخواست Owner) این بود"
+      : /^\[(گزارش خودکار|درخواست ایجنتِ همکار|درخواست از|ادامه|پیام «)/.test(lastUser)
+        ? "آخرین پیام این گفتگو (نه حرف Owner) این بود"
+        : "درخواست قبلی Owner این بود";
     return (
       `[ادامه پس از ری‌استارت سرور]\n` +
       `${who}:\n«${lastUser.slice(0, 4000)}»\n\n` +
-      `از جایی که قطع شدی ادامه بده. مراحل و ابزارهایی که قبلاً درست انجام شده را تکرار نکن؛ بقیه را تمام کن و نتیجه بده.`
+      `از جایی که قطع شدی ادامه بده. مراحل و ابزارهایی که قبلاً درست انجام شده را تکرار نکن؛ بقیه را تمام کن و نتیجه بده. سؤالی که با ری‌استارت بی‌جواب بسته شد «نه» نبود؛ اگر هنوز لازم است یک بار دیگر بپرس، نه بیشتر.`
     );
   }
   return (

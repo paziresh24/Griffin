@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filesLine, rewindChoices } from "../src/rewind.js";
+import { filesLine, rewindChoices, textBackToBox } from "../src/rewind.js";
 import { mcpSourceLine, mcpStatus } from "../src/mcp.js";
 
 test("rewind dialog: the choices the preview allows, and one plain line about files", () => {
@@ -23,4 +23,12 @@ test("an MCP sign-in card links only to a web page", async () => {
   assert.equal(askLink({ link: " https://example.com/login " }), "https://example.com/login");
   assert.equal(askLink({ link: "javascript:alert(1)" }), null);
   assert.equal(askLink({}), null);
+});
+
+test("rewind: the rewound message goes back to the composer, not after «فقط فایل‌ها» or an edit", () => {
+  assert.equal(textBackToBox({}, "سلام"), "سلام");
+  assert.equal(textBackToBox({ files: false }, "سلام"), "سلام");
+  assert.equal(textBackToBox({ conversation: false }, "سلام"), "");
+  assert.equal(textBackToBox({ text: "ویرایش" }, "سلام"), "");
+  assert.equal(textBackToBox({}, "  "), "");
 });

@@ -135,7 +135,7 @@ test("Board.jsx: who off the header row, suggestions without inbox items, stop o
   assert.doesNotMatch(header, /\bwho\b/, "who is on its own line, not in the header row");
   assert.match(card, /\{who \? <p /);
   const needs = between(board, "export function NeedsYou(", "function InboxCard(");
-  assert.match(needs, /if \(!inbox\.items\.length && !suggestions\) return null;/);
+  assert.match(needs, /if \(!inbox\.items\.length && \(!suggestions \|\| onePlace\)\) return null;/);
   assert.match(needs, /<SidebarSuggestions \/>/, "the sidebar's copy refreshes the store; no second fetch per chat-list change");
   const row = between(board, "function WorkingRow(", "\n}\n");
   assert.match(row, /\{row\.stoppable \? \(/);
@@ -157,4 +157,29 @@ test("new chat page: the box is docked at the bottom and the board fills the pag
   const at = slots.map((slot) => tree.indexOf(slot));
   assert.ok(at.every((i) => i > 0), "every slot is in the one tree");
   assert.deepEqual([...at].sort((a, b) => a - b), at, "tasks on top: «منتظر شما», then the task lists");
+});
+
+// 2026-10-20: a chat whose turn ended on a watcher (a background task it waits on) read «تمام شد»;
+// it wakes when the task ends, so it is still at work.
+test("a chat waiting on its own background task is at work, not done", () => {
+  const now = Date.parse("2026-10-20T05:00:00Z");
+  const chat = { id: "c1", title: "دیزاین", runStatus: "finished", backgroundTasks: 1, source: "manual", updatedAt: "2026-10-20T04:59:00Z" };
+  const [row] = workingTasks([chat]);
+  assert.equal(row.chat.id, "c1");
+  assert.equal(row.background, 1);
+  assert.match(stepLine(row), /کار پس‌زمینه/);
+  assert.deepEqual(recentDone([chat], { now }), []);
+  assert.deepEqual(recentDone([{ ...chat, backgroundTasks: 0 }], { now }).map((c) => c.id), ["c1"]);
+});
+
+test("«هر چیز فقط یک جا»: asks are a linked line, Telegram one line, no task lists or suggestions on the board", () => {
+  const board = src("components/Board.jsx");
+  const needs = between(board, "export function NeedsYou(", "function AskLine(");
+  assert.match(needs, /const onePlace = useFlag\("onePlace"\)/);
+  assert.match(needs, /item\.kind === "approval" \|\| item\.kind === "question" \? <AskLine/);
+  assert.match(needs, /href="#\/telegram"/);
+  const line = between(board, "function AskLine(", "function InboxCard(");
+  assert.doesNotMatch(line, /AskCard/, "the buttons live in the chat that asked");
+  assert.match(between(board, "export function TaskLists(", "function WorkingRow("), /if \(onePlace \|\| /);
+  assert.match(src("App.jsx"), /onePlace \? inbox\.count > 0 : hasBoard\(/);
 });

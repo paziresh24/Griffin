@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reviewChanges, forgetReviews, parseVerdict } from "../src/review.mjs";
+import { reviewChanges, forgetReviews, parseVerdict, healthyClaude } from "../src/review.mjs";
 
 function fakeStore(caller = "team") {
   const rows = [];
@@ -115,7 +115,25 @@ test("a routine change (cache purge) now skips the two-reviewer gate", async () 
   assert.equal(seen.length, 0); // reviewers never consulted for a non-catastrophic change
 });
 
+test("the reviewer's Claude is the first account neither limited nor out of credit", () => {
+  const accounts = ["claude", "claude-2", "claude-3", "claude-4", "openai"].map((id) => ({ id, enabled: true }));
+  const opts = { isClaude: (id) => id.startsWith("claude"), isEndpoint: () => false, isLimited: () => false, creditAt: (id) => (id === "claude" || id === "claude-2" ? 1 : 0), hasKey: () => true };
+  assert.equal(healthyClaude(accounts, opts), "claude-3");
+  assert.equal(healthyClaude(accounts, { ...opts, isLimited: (id) => id === "claude-3" }), "claude-4");
+  assert.equal(healthyClaude(accounts, { ...opts, hasKey: (id) => id === "claude-2" }), null);
+  assert.equal(healthyClaude(accounts.map((a) => ({ ...a, enabled: false })), opts), null);
+  assert.equal(healthyClaude(accounts, { ...opts, isEndpoint: (id) => id === "claude-3" }), "claude-4");
+});
+
+test("an unreadable verdict carries the start of the raw text", () => {
+  const v = parseVerdict("Credit balance is too low to access the Anthropic API");
+  assert.equal(v.verdict, "none");
+  assert.match(v.reason, /Credit balance is too low/);
+  assert.ok(v.reason.length < 130);
+});
+
 test("unparseable verdicts are no verdict, not a reject", () => {
   assert.equal(parseVerdict("sure, go ahead").verdict, "none");
+  assert.match(parseVerdict("Credit balance is too low").reason, /Credit balance is too low/);
   assert.equal(parseVerdict('```json\n{"verdict":"approve","reason":"ok"}\n```').verdict, "approve");
 });

@@ -28,5 +28,6 @@ test("one Sidebar: the one list is a flag inside it, not a second sidebar", () =
   const side = readFileSync(new URL("../src/components/Sidebar.jsx", import.meta.url), "utf8");
   assert.match(side, /\{oneList \? \(\s*<OneList /);
   const one = readFileSync(new URL("../src/components/SidebarOneList.jsx", import.meta.url), "utf8");
-  assert.match(one, /<SidebarNotes [^>]*\/>\s*<SidebarSuggestions [^>]*\/>/, "notes, then suggestions, under the peers' fold");
+  assert.match(one, /<PeerChats [^>]*\/>\s*<SidebarSuggestions [^>]*\/>/, "suggestions under the peers' fold");
+  assert.doesNotMatch(one + side, /SidebarNotes/, "«یادآورها» is on the home page, not in the sidebar");
 });

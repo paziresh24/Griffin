@@ -27,14 +27,28 @@ test("list prefs: one grouping per sidebar section, kept on the server; Karsara'
   const store = openStore(path.join(tmp(), "db.sqlite"));
   const app = new Hono();
   listPrefsRoutes(app, { store });
-  assert.deepEqual(await (await app.request("/api/list-prefs")).json(), { groupBy: null, sections: {} });
+  assert.deepEqual(await (await app.request("/api/list-prefs")).json(), { groupBy: null, sections: {}, sectionOrder: {} });
   assert.equal((await json(app, "/api/list-prefs", { groupBy: "date" }, "PUT")).status, 200);
   await json(app, "/api/list-prefs", { groupBy: "owner", section: "telegram" }, "PUT");
-  assert.deepEqual(await (await app.request("/api/list-prefs")).json(), { groupBy: "date", sections: { manual: "date", telegram: "owner" } });
+  assert.deepEqual(await (await app.request("/api/list-prefs")).json(), { groupBy: "date", sections: { manual: "date", telegram: "owner" }, sectionOrder: {} });
   assert.equal((await json(app, "/api/list-prefs", { groupBy: "nope" }, "PUT")).status, 400);
   assert.equal((await json(app, "/api/list-prefs", { groupBy: "date", section: "../x" }, "PUT")).status, 400);
   store.setKv("list-prefs", { groupBy: "repo" }); // a Karsara install's stored value
   assert.equal((await (await app.request("/api/list-prefs")).json()).groupBy, "repo");
+});
+
+test("list prefs: the sort, its direction and the filter are kept on the server too, apart from the grouping", async () => {
+  const store = openStore(path.join(tmp(), "db.sqlite"));
+  const app = new Hono();
+  listPrefsRoutes(app, { store });
+  assert.equal((await json(app, "/api/list-prefs", { groupBy: "origin" }, "PUT")).status, 200); // Karsara's own grouping
+  assert.equal((await json(app, "/api/list-prefs", { sort: "title", reverse: "yes", filter: "unread" }, "PUT")).status, 200);
+  assert.deepEqual(await (await app.request("/api/list-prefs")).json(), { groupBy: "origin", sections: { manual: "origin" }, sort: "title", reverse: "yes", filter: "unread", sectionOrder: {} });
+  assert.equal((await json(app, "/api/list-prefs", { filter: "all" }, "PUT")).status, 200); // one field leaves the rest alone
+  const now = await (await app.request("/api/list-prefs")).json();
+  assert.deepEqual([now.sort, now.reverse, now.filter, now.groupBy], ["title", "yes", "all", "origin"]);
+  assert.equal((await json(app, "/api/list-prefs", { sort: "nope" }, "PUT")).status, 400);
+  assert.equal((await json(app, "/api/list-prefs", {}, "PUT")).status, 400);
 });
 
 test("undelivered is Karsara's name for a kept message: owner only, a sane id, not while running", async () => {

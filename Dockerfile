@@ -21,6 +21,8 @@ RUN if [ -d npm-cache ]; then npm ci --offline --cache npm-cache --no-audit --no
 FROM deps AS web
 COPY packages packages
 COPY apps/web apps/web
+# A module's own screens (modules/<id>/web/) are part of the web bundle.
+COPY modules modules
 RUN npm run build --workspace apps/web
 
 # Packages are downloaded once (deps); production modules are pruned without a second download.
@@ -30,7 +32,10 @@ RUN npm prune --omit=dev --offline --no-audit --no-fund
 FROM ${NODE_SLIM} AS app
 # git: per-chat worktrees and the repo_* file/git tools (apps/server/src/worktrees.mjs, repo-tools.mjs).
 # openssh-client: config CLAUDE_HOST runs the owner's Claude Code on the host (providers/host-spawn.mjs).
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client && rm -rf /var/lib/apt/lists/*
+# python3: scripts and tools the chats run in Bash (the node user has no other interpreter).
+# ca-certificates: git/curl over HTTPS from the chats (--no-install-recommends drops it; without it "CAfile: none").
+# adb: the person's phone plugged into their browser (phone-bridge.mjs) is an `adb connect 127.0.0.1:15555` here.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client python3 adb && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules
@@ -44,6 +49,8 @@ COPY apps/server/src apps/server/src
 COPY apps/server/assets apps/server/assets
 # Scenario evals: docker exec griffin-app-1 node apps/server/scripts/eval.mjs
 COPY apps/server/scripts apps/server/scripts
+# Modules (modules/<id>/, docs/modules.md): loaded from /app/modules by the module host.
+COPY modules modules
 COPY --from=web /src/apps/web/dist apps/web/dist
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

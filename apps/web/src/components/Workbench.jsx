@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ChevronLeft, File, Folder, Globe, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
+import { ArrowRight, ChevronLeft, File, Folder, Loader2, RefreshCw, TerminalSquare } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { t } from "../i18n.js";
@@ -7,7 +7,6 @@ import { t } from "../i18n.js";
 const TABS = [
   { id: "terminal", label: t("ترمینال"), icon: TerminalSquare },
   { id: "files", label: t("فایل‌ها"), icon: Folder },
-  { id: "web", label: t("مرورگر وب"), icon: Globe },
 ];
 
 export function WorkbenchPage({ onBack }) {
@@ -44,7 +43,7 @@ export function WorkbenchPage({ onBack }) {
             <p>{t("میز کار روی میزبان sandbox کارگزار ابزارها اجرا می‌شود. کارگزار و سرویس sandbox را راه بینداز (راهنمای استقرار) و دوباره باز کن.")}</p>
             {probe.error ? <p className="ltr break-words font-mono text-xs" dir="ltr">{probe.error}</p> : null}
           </div>
-        ) : tab === "terminal" ? <Terminal /> : tab === "files" ? <Files /> : <WebBrowser />}
+        ) : tab === "terminal" ? <Terminal /> : <Files />}
       </div>
     </div>
   );
@@ -160,33 +159,6 @@ function Files() {
           </>
         ) : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">{t("یک فایل را انتخاب کن")}</div>}
       </div>
-    </div>
-  );
-}
-
-function WebBrowser() {
-  const [url, setUrl] = useState("https://");
-  const [page, setPage] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const go = async () => {
-    if (!/^https?:\/\//.test(url)) { toast.error(t("آدرس باید با http(s) شروع شود")); return; }
-    setLoading(true);
-    try { const d = await api("/api/sandbox/fetch", { method: "POST", body: { url } }); if (d.error) throw new Error(d.error); setPage(d); }
-    catch (e) { toast.error(e.message); } finally { setLoading(false); }
-  };
-  const isHtml = page && /html/i.test(page.contentType);
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} dir="ltr" className="min-w-0 flex-1 rounded-lg border bg-background px-3 py-1.5 font-mono text-sm" placeholder="https://example.com" />
-        <button type="button" onClick={go} disabled={loading} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-60">{loading ? <Loader2 className="size-4 animate-spin" /> : <Globe className="size-4" />} {t("برو")}</button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {!page ? <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("آدرسی را از طریق sandbox باز کن")}</div>
-          : isHtml ? <iframe title="web" sandbox="" srcDoc={page.body} className="h-full w-full bg-white" />
-          : <pre className="scrollbar-thin h-full overflow-auto p-3 font-mono text-[13px] leading-6" dir="ltr">{page.body}</pre>}
-      </div>
-      {page ? <div className="border-t px-3 py-1 text-xs text-muted-foreground" dir="ltr">{page.contentType || "?"}</div> : null}
     </div>
   );
 }

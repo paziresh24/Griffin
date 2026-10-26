@@ -9,6 +9,11 @@ export function waitText(seconds) {
 }
 
 export function loginError(status, body = {}) {
+  if (body.needCode) {
+    if (status === 429) return `چند بار کد اشتباه وارد شد؛ ورود تا ${waitText(body.retryAfter || 900)} دیگر بسته است.`;
+    if (body.remaining === 0) return `کد درست نیست. ورود از این دستگاه تا ${waitText(body.retryAfter || 900)} دیگر بسته است.`;
+    return t("کد درست نیست یا قبلاً استفاده شده؛ کد تازهٔ اپ را بزنید.");
+  }
   if (status === 429) return `چند بار پشت‌سرهم اشتباه وارد شد؛ ${waitText(body.retryAfter || 900)} دیگر دوباره امتحان کنید.`;
   if (status === 401) {
     if (body.remaining === 0) return `توکن درست نیست. ورود از این دستگاه تا ${waitText(body.retryAfter || 900)} دیگر بسته است.`;

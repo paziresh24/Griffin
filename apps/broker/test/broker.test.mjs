@@ -394,3 +394,14 @@ test("without OpenBao, tool credentials live in the broker's own box and only na
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// 2026-10-20: every shell step can carry its own title (the chat row), and it stays optional.
+test("shell tools offer an optional step title", () => {
+  const tools = createTools({ site: { ...TEST_SITE, tools: { ssh: true } }, kube: createKube({ vault, sshRun: async () => ({ stdout: "", stderr: "" }) }), vault, sshRun: async () => ({ stdout: "", stderr: "" }) });
+  for (const name of ["debug_exec", "ssh_exec", "kube_exec", "mikrotik_exec"]) {
+    const schema = tools[name]?.inputSchema;
+    assert.ok(schema, `${name} exists`);
+    assert.equal(schema.properties.description.type, "string", `${name} takes a description`);
+    assert.ok(!schema.required.includes("description"), `${name}: the title is optional`);
+  }
+});

@@ -12,7 +12,7 @@ import { createMcpHandler } from "../src/mcp.mjs";
 import { seedExampleAgents } from "./fixture-agents.mjs";
 
 // Fake runner: each send runs `script(chatId, emit)`; emit appends chat events like the real one.
-function setup(script) {
+function setup(script, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-tasks-"));
   const store = openStore(path.join(dir, "t.sqlite"));
   seedExampleAgents(store);
@@ -44,7 +44,7 @@ function setup(script) {
   auth.createUser({ id: "ali-ahmadi", label: "آقای احمدی" });
   auth.createUser({ id: "someone-else" });
   const peer = { userId: "ali-ahmadi", clientId: "c1", caller: "peer:ali-ahmadi", label: "آقای احمدی" };
-  const tasks = createPeerTasks({ store, runner, asks });
+  const tasks = createPeerTasks({ store, runner, asks, ...extra });
   return { store, tasks, peer, auth, runner, asks };
 }
 
@@ -147,11 +147,11 @@ test("messageId dedupes; other users cannot see the task; busy context is refuse
   assert.equal(tasks.list(peer).tasks.length, 2);
 });
 
-test("agent without a quota row for this peer is refused", async () => {
+test("an agent without a row for this peer still takes the request", async () => {
   const { tasks, store } = setup(async () => {});
   store.updateAgentProfile("griffin", { meta: { callers: {} } });
   const r = await tasks.send({ userId: "ali-ahmadi", caller: "peer:ali-ahmadi" }, { message: "hi" });
-  assert.match(r.error, /not available/);
+  assert.equal(r.error, undefined);
 });
 
 test("MCP over HTTP: initialize, tools/list, tools/call, auth required", async () => {
@@ -348,4 +348,82 @@ test("a new request carries the colleague's recent tasks so a repeat resumes ins
   assert.match(sent, /کارهای ۲۴ ساعت اخیرِ همین همکار/);
   assert.match(sent, /قفل ایمیج chat-ui/);
   assert.match(sent, /completed/);
+});
+
+// Dispatch (owner 2026-10-20): «اصلاحیه / تکمیل / لغو درخواست قبلی» without a contextId used to open
+// a chat of its own. A follow-up of a recent request now joins it.
+test("a follow-up of a finished request goes into the same chat; a new request opens its own", async () => {
+  const prompts = [];
+  let verdict = "1";
+  const { tasks, peer, store } = setup(async (_id, emit) => { emit("text", { text: "انجام شد" }); }, {
+    classify: async (prompt) => {
+      prompts.push(prompt);
+      return verdict;
+    },
+  });
+  const first = await tasks.send(peer, { message: "دیسک نود east3 را چک کن", waitSec: 2 });
+  assert.equal(first.state, "completed");
+  assert.equal(prompts.length, 0, "nothing to compare the first request with");
+  const follow = await tasks.send(peer, { message: "اصلاحیه: east2 هم ببین", waitSec: 2 });
+  assert.equal(follow.contextId, first.contextId);
+  assert.equal(follow.followUp, true);
+  assert.equal(follow.state, "completed");
+  assert.match(prompts[0], /دیسک نود east3/, "the classifier sees the earlier request");
+  assert.match(prompts[0], /اصلاحیه: east2/);
+  verdict = "0";
+  const other = await tasks.send(peer, { message: "یک سؤال جدا", waitSec: 2 });
+  assert.notEqual(other.contextId, first.contextId);
+  assert.equal(other.followUp, undefined);
+  const before = prompts.length;
+  verdict = "1";
+  const fresh = await tasks.send(peer, { message: "این هم جداست", fresh: true, waitSec: 2 });
+  assert.equal(prompts.length, before, "fresh skips the dispatcher");
+  assert.notEqual(fresh.contextId, first.contextId);
+  assert.equal(store.listChats({ archived: false }).filter((c) => c.caller === peer.caller).length, 3);
+});
+
+test("a follow-up of a request still running joins that run and answers on the same task", async () => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const { tasks, peer, runner } = setup(async (_id, emit) => {
+    emit("text", { text: "در حال بررسی" });
+    await gate;
+    emit("text", { text: " — تمام" });
+  }, { classify: async () => "1" });
+  const queued = [];
+  const send = runner.send.bind(runner);
+  runner.send = async (chatId, args) => {
+    if (args.intent === "queue" && runner.isActive(chatId)) {
+      queued.push({ chatId, ...args });
+      return { delivered: "queued" };
+    }
+    return send(chatId, args);
+  };
+  const first = await tasks.send(peer, { message: "لاگ سرویس tambo را ببین", waitSec: 0 });
+  assert.equal(first.state, "working");
+  const follow = await tasks.send(peer, { message: "لغو درخواست قبلی", waitSec: 0 });
+  assert.equal(follow.taskId, first.taskId);
+  assert.equal(follow.followUp, true);
+  assert.match(follow.note, new RegExp(first.taskId));
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].chatId, first.contextId);
+  assert.match(queued[0].text, /<peer_request>\nلغو درخواست قبلی\n<\/peer_request>/);
+  release();
+  await tick(30);
+});
+
+test("the dispatcher's silence or failure opens a new chat as before", async () => {
+  const { tasks, peer } = setup(async (_id, emit) => { emit("text", { text: "ok" }); }, { classify: async () => { throw new Error("down"); } });
+  const a = await tasks.send(peer, { message: "اول", waitSec: 2 });
+  const b = await tasks.send(peer, { message: "دوم", waitSec: 2 });
+  assert.notEqual(a.contextId, b.contextId);
+});
+
+test("a new colleague chat is titled by its request, not the agent's name", async () => {
+  const { tasks, peer, store } = setup(async (_id, emit) => { emit("text", { text: "ok" }); });
+  const r = await tasks.send(peer, { message: "سلام. لطفاً وضعیت دیپلوی سرویس tambo (owner: sara-jafari) را بررسی کن و بگو چرا بالا نیامده", waitSec: 2 });
+  const title = store.getChat(r.contextId).title;
+  assert.ok(!title.startsWith("آقای رضایی"), title);
+  assert.ok(title.startsWith("سلام. لطفاً وضعیت دیپلوی"));
+  assert.ok(title.endsWith("…") && title.length <= 61);
 });

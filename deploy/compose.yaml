@@ -101,6 +101,15 @@ services:
       GRIFFIN_TEAM_SUB_PROVIDER: ${TEAM_SUB_PROVIDER:-}
       GRIFFIN_TEAM_SUB_MODEL: ${TEAM_SUB_MODEL:-}
       GRIFFIN_TEAM_SUB_EFFORT: ${TEAM_SUB_EFFORT:-}
+      # Colleagues' agents on the network (peer:*): their opening model; empty = agent profile.
+      GRIFFIN_PEER_PROVIDER: ${PEER_PROVIDER:-}
+      GRIFFIN_PEER_MODEL: ${PEER_MODEL:-}
+      GRIFFIN_PEER_EFFORT: ${PEER_EFFORT:-}
+      # Those chats move one message to this model themselves when it is real work (upgrade_model); empty = off.
+      GRIFFIN_UPGRADE_MODEL: ${UPGRADE_MODEL:-}
+      GRIFFIN_UPGRADE_EFFORT: ${UPGRADE_EFFORT:-}
+      # on = Bash and the file tools cannot write the knowledge store or the data folder (Settings STATE_GUARD wins).
+      GRIFFIN_STATE_GUARD: ${STATE_GUARD:-}
       # New web chats start on this repo under <workspace>/repos; empty = no repo.
       GRIFFIN_DEFAULT_REPO: ${DEFAULT_REPO:-}
       GRIFFIN_PEER_SELF_SERVE: ${PEER_SELF_SERVE:-}

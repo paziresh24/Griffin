@@ -5,6 +5,7 @@ import { textDir } from "../dir.js";
 import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
 import { useFlag, useLook } from "../ui-prefs.js";
+import { MentionText } from "./Mention.jsx";
 
 // One waiting quote above the input. A click opens it in place: the quoted text and
 // the note are both editable, saved or cancelled before the message goes (Esc cancels; Enter in the
@@ -130,7 +131,7 @@ export function QuotedText({ parts }) {
             <span className="truncate">{part.title ? t("از گفتگوی «{title}»", { title: part.title }) : t("از گفتگوی دیگر")}</span>
           </a>
         ) : (
-          <div key={i} className="whitespace-pre-wrap" dir={textDir(part.text)}>{part.text}</div>
+          <div key={i} className="whitespace-pre-wrap" dir={textDir(part.text)}><MentionText text={part.text} /></div>
         ),
       )}
     </div>

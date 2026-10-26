@@ -77,6 +77,14 @@ const credentialsAt = (dir) => {
   }
 };
 
+// Claude's own words after the code went in («OAuth error: Request failed with status code 400», «Login
+// failed: …»), so the page says what really happened instead of guessing «expired».
+export function claudeSaid(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const hit = lines.findLast((l) => /Login failed|OAuth error/i.test(l)) || lines.at(-1) || "";
+  return hit.replace(/Press Enter to retry\.?/i, "").trim().slice(0, 240) || "no reason given";
+}
+
 export function createClaudeSignin({ onToken, onLogin = null, loginDir = null, env = process.env, timeoutMs = 30 * 60_000 } = {}) {
   let attempt = null;
 
@@ -132,7 +140,7 @@ export function createClaudeSignin({ onToken, onLogin = null, loginDir = null, e
           if (current.done && (current.full ? /Login failed|OAuth error/i : /OAuth error/i).test(plain.slice(current.submittedAt))) {
             const fail = current.done;
             current.done = null;
-            fail.reject(new Error("Claude rejected the code (it may have expired) — start the sign-in again"));
+            fail.reject(new Error(`Claude rejected the code: ${claudeSaid(plain.slice(current.submittedAt))}`));
             stop();
             return;
           }

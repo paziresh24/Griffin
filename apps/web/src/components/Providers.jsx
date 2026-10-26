@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Switch } from "radix-ui";
-import { Check, ChevronDown, KeyRound, Loader2, Plus, Settings2, Stethoscope, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { Check, ChevronDown, Copy, ExternalLink, KeyRound, Loader2, Pencil, Plus, Settings2, Stethoscope, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { Pill } from "./Health.jsx";
@@ -10,7 +11,9 @@ import { ProbeResult } from "./Setup.jsx";
 import { CustomEndpointCard, ZaiQuota } from "./PlanLimits.jsx";
 
 export const KIND_LABEL = { cursor: "Cursor", claude: "Claude", openai: "OpenAI-compatible" };
-export const accountLabel = (p) => p.label || (p.id === p.kind ? KIND_LABEL[p.kind] || p.id : `${KIND_LABEL[p.kind] || p.kind} · ${p.id.slice(p.kind.length + 1)}`);
+// The name a person sees: the one it was given, else the signed-in Claude email, else the kind and its
+// number — never the raw id («claude-2»).
+export const accountLabel = (p) => p.label || (p.kind === "claude" && p.signedInAs?.email ? `Claude · ${p.signedInAs.email}` : p.id === p.kind ? KIND_LABEL[p.kind] || p.id : `${KIND_LABEL[p.kind] || p.kind} · ${p.id.slice(p.kind.length + 1)}`);
 
 const KIND_BADGE = {
   claude: { letter: "C", tone: "bg-[#d97757]/15 text-[#c4623f]" },
@@ -47,6 +50,7 @@ export function ProvidersSection() {
   const [data, setData] = useState(null);
   const [showOff, setShowOff] = useState(false);
   const [failed, setFailed] = useState(null);
+  const [switching, setSwitching] = useState(() => new Set());
   const load = () => {
     setFailed(null);
     return api("/api/providers").then(setData).catch((e) => {
@@ -62,6 +66,32 @@ export function ProvidersSection() {
   const on = data.providers.filter((p) => p.enabled);
   const off = data.providers.filter((p) => !p.enabled);
 
+  // The switch answers at once (the card moves to its list with an animation) and the server is
+  // told after; a failure puts it back. A turned-off card leaves the visible list, so the toast says
+  // where it went and can bring it back.
+  const toggle = async (p, enabled) => {
+    const mark = (value) => setData((d) => ({ ...d, providers: d.providers.map((x) => (x.id === p.id ? { ...x, enabled: value } : x)) }));
+    setSwitching((s) => new Set(s).add(p.id));
+    mark(enabled);
+    try {
+      await api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled } });
+      if (!enabled) {
+        toast.success(`«${accountLabel(p)}» خاموش شد`, { description: t("زیر «خاموش‌ها» می‌ماند."), action: { label: t("برگردان"), onClick: () => toggle(p, true) } });
+      }
+      await load();
+    } catch (e) {
+      mark(!enabled);
+      toast.error(e.message);
+    } finally {
+      setSwitching((s) => {
+        const next = new Set(s);
+        next.delete(p.id);
+        return next;
+      });
+    }
+  };
+  const enter = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, scale: 0.96 }, transition: { duration: 0.22, ease: [0.16, 1, 0.3, 1] } };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
@@ -72,15 +102,29 @@ export function ProvidersSection() {
           <Plus className="size-4" /> {t("افزودن موتور")}
         </button>
       </div>
-      {on.length ? on.map((p) => <EngineCard key={p.id} p={p} presets={data.presets} reload={load} canDefault={on.length > 1} />) : (
-        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{t("هیچ موتور روشنی نیست؛ ایجنت‌ها نمی‌توانند جواب بدهند. «افزودن موتور» را بزن.")}</p>
-      )}
+      <div className="flex flex-col gap-4">
+        <AnimatePresence initial={false} mode="popLayout">
+          {on.length ? on.map((p) => (
+            <motion.div key={p.id} layout="position" {...enter}>
+              <EngineCard p={p} presets={data.presets} reload={load} canDefault={on.length > 1} onToggle={toggle} switching={switching.has(p.id)} />
+            </motion.div>
+          )) : (
+            <motion.p key="none" layout="position" {...enter} className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{t("هیچ موتور روشنی نیست؛ ایجنت‌ها نمی‌توانند جواب بدهند. «افزودن موتور» را بزن.")}</motion.p>
+          )}
+        </AnimatePresence>
+      </div>
       {off.length ? (
         <div>
           <button type="button" onClick={() => setShowOff(!showOff)} className="press inline-flex items-center gap-1 px-1 text-xs text-muted-foreground">
-            <ChevronDown className={`size-3.5 transition-transform ${showOff ? "" : "-rotate-90 rtl:rotate-90"}`} /> {t("خاموش‌ها ({n})", { n: num(off.length) })}
+            <ChevronDown className={`size-3.5 transition-transform duration-200 ${showOff ? "" : "-rotate-90 rtl:rotate-90"}`} /> {t("خاموش‌ها ({n})", { n: num(off.length) })}
           </button>
-          {showOff ? <div className="mt-2 space-y-3">{off.map((p) => <EngineCard key={p.id} p={p} presets={data.presets} reload={load} />)}</div> : null}
+          <AnimatePresence initial={false}>
+            {showOff ? (
+              <motion.div key="off" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22 }} className="overflow-hidden">
+                <div className="mt-2 space-y-3">{off.map((p) => <EngineCard key={p.id} p={p} presets={data.presets} reload={load} onToggle={toggle} switching={switching.has(p.id)} />)}</div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
         </div>
       ) : null}
       <CustomEndpointCard current={data.providers.find((p) => p.endpoint === "custom")} onSaved={load} />
@@ -102,7 +146,48 @@ async function makeDefault(id) {
 }
 export const DEFAULT_ENGINE_EVENT = "griffin:default-engine";
 
-function EngineCard({ p, presets, reload, canDefault = false }) {
+// The card's title with a pencil: a name changes right here, saved on its own with no connection test
+// (a name has nothing to test; owner 2026-10-19).
+function EngineTitle({ p, reload }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const start = () => {
+    setValue(p.label || "");
+    setEditing(true);
+  };
+  const save = async () => {
+    const label = value.trim();
+    if (label === (p.label || "")) return setEditing(false);
+    setSaving(true);
+    try {
+      await api(`/api/providers/${p.id}`, { method: "PATCH", body: { label } });
+      toast.success(label ? t("اسم موتور عوض شد") : t("اسم برگشت به حالت خودکار"));
+      setEditing(false);
+      reload();
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setSaving(false);
+  };
+  if (editing) {
+    return (
+      <form className="flex min-w-0 items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); save(); }}>
+        <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }} maxLength={40} placeholder={accountLabel({ ...p, label: "" })} aria-label={t("اسم موتور")} className="min-w-0 rounded-md border bg-background px-2 py-1 text-sm" />
+        <button type="submit" disabled={saving} className="press rounded-md p-1 text-ok hover:bg-muted disabled:opacity-60" aria-label={t("ذخیره اسم")}>{saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}</button>
+        <button type="button" onClick={() => setEditing(false)} className="press rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label={t("انصراف")}><X className="size-4" /></button>
+      </form>
+    );
+  }
+  return (
+    <>
+      <h3 className="truncate text-sm font-semibold" dir="auto">{accountLabel(p)}</h3>
+      <button type="button" onClick={start} className="press rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={t("تغییر اسم")} title={t("تغییر اسم")}><Pencil className="size-3.5" /></button>
+    </>
+  );
+}
+
+function EngineCard({ p, presets, reload, canDefault = false, onToggle = null, switching = false }) {
   const [open, setOpen] = useState(false);
   const [probe, setProbe] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -150,7 +235,7 @@ function EngineCard({ p, presets, reload, canDefault = false }) {
         <span className={`flex size-10 shrink-0 items-center justify-center rounded-xl text-sm font-bold ${badge.tone}`} aria-hidden>{badge.letter}</span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold" dir="auto">{accountLabel(p)}</h3>
+            <EngineTitle p={p} reload={reload} />
             <Pill state={s.tone} title={p.health?.ok ? `${t("سالم")}${p.health.ms ? ` · ${p.health.ms}ms` : ""}` : p.health?.error || ""}>{s.pill}</Pill>
             {p.isDefault ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">{t("پیش‌فرض همه")}</span> : null}
           </div>
@@ -169,8 +254,17 @@ function EngineCard({ p, presets, reload, canDefault = false }) {
             <span>{p.agents.length ? t("{n} ایجنت: {list}", { n: num(p.agents.length), list: p.agents.map((a) => t(a.label) + (a.model ? ` · ${a.model}` : "")).join(t("، ")) }) : t("هیچ ایجنتی رویش نیست")}</span>
           </p>
         </div>
-        <Switch.Root checked={p.enabled} onCheckedChange={(v) => act(() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled: v } }))()} className="relative mt-1 h-5 w-9 shrink-0 rounded-full bg-muted data-[state=checked]:bg-primary" aria-label={t("روشن/خاموش")}>
-          <Switch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white transition-transform data-[state=checked]:translate-x-[18px] rtl:data-[state=checked]:-translate-x-[18px]" />
+        <Switch.Root
+          checked={p.enabled}
+          disabled={switching}
+          onCheckedChange={(v) => (onToggle ? onToggle(p, v) : act(() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled: v } }))())}
+          className={`relative mt-1 h-5 w-9 shrink-0 rounded-full bg-muted transition-colors duration-200 data-[state=checked]:bg-primary ${switching ? "opacity-60" : ""}`}
+          aria-label={t("روشن/خاموش")}
+          aria-busy={switching}
+        >
+          <Switch.Thumb className="flex size-4 translate-x-0.5 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200 ease-out data-[state=checked]:translate-x-[18px] rtl:data-[state=checked]:-translate-x-[18px]">
+            {switching ? <Loader2 className="size-2.5 animate-spin text-muted-foreground" /> : null}
+          </Switch.Thumb>
         </Switch.Root>
       </div>
       {p.limitedUntil || p.state === "credit" ? (
@@ -206,18 +300,39 @@ function EditEngine({ provider, presets, onDone, onCancel }) {
   const [probe, setProbe] = useState(null);
   const isOpenai = provider.kind === "openai";
 
+  // Only what was changed is sent, and the connection is tested only when something that can break it
+  // changed (key, address, service, model). A new name or thinking level has nothing to test: it is
+  // saved and the panel closes (owner 2026-10-19: «تغییر اسم نیازی به تست مجدد نداره»).
+  const changes = () => {
+    const body = {};
+    if (label.trim() !== (provider.label || "")) body.label = label.trim();
+    if (model.trim() !== (provider.defaultModel || "")) body.model = model.trim();
+    if (isOpenai) {
+      if (preset) body.preset = preset;
+      else if (baseUrl.trim() !== (provider.baseUrl || "")) body.baseUrl = baseUrl.trim();
+      if (effort !== (provider.reasoningEffort || "")) body.reasoningEffort = effort;
+    }
+    if (apiKey.trim()) body.apiKey = apiKey.trim();
+    return body;
+  };
+  const pending = changes();
+  const needsTest = Boolean(pending.apiKey || pending.preset || pending.baseUrl !== undefined || pending.model !== undefined);
   const save = async () => {
+    const body = changes();
+    if (!Object.keys(body).length) {
+      toast.message(t("چیزی عوض نشده است"));
+      return;
+    }
     setSaving(true);
     setProbe(null);
     try {
-      const body = { model, label };
-      if (isOpenai) {
-        if (preset) body.preset = preset;
-        else body.baseUrl = baseUrl;
-        body.reasoningEffort = effort;
-      }
-      if (apiKey.trim()) body.apiKey = apiKey.trim();
       await api(`/api/providers/${provider.id}`, { method: "PATCH", body });
+      if (!needsTest) {
+        toast.success(t("ذخیره شد"));
+        setSaving(false);
+        onDone();
+        return;
+      }
       const r = await api(`/api/doctor/engine/${provider.id}`);
       setProbe(r);
       setSaving(false);
@@ -281,7 +396,7 @@ function EditEngine({ provider, presets, onDone, onCancel }) {
       {probe ? <ProbeResult result={probe} /> : null}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={save} disabled={saving} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
-          {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {t("ذخیره و تست")}
+          {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />} {needsTest ? t("ذخیره و تست") : t("ذخیره")}
         </button>
         <button type="button" onClick={onCancel} className="press rounded-lg border px-3 py-2 text-sm">{t("بستن")}</button>
       </div>
@@ -289,29 +404,49 @@ function EditEngine({ provider, presets, onDone, onCancel }) {
   );
 }
 
-// Sign in with a Claude subscription without leaving the page: Griffin runs Claude's own
-// `setup-token`, the owner opens the address, signs in and pastes the code shown there. `id` may be
-// a function that makes the account first (the engine wizard creates it only when sign-in starts).
+// Sign in with a Claude subscription without leaving the page: Griffin runs Claude's own sign-in, the
+// person opens the address, signs in and pastes the code shown at the end. Three numbered steps, because
+// the colleagues who tried it did not know what to do with a link and a «code#state» box (owner
+// 2026-10-19). `id` may be a function that makes the account first (the engine wizard creates it only
+// when sign-in starts).
+function SigninStep({ n, title, active = true, done = false, children = null }) {
+  return (
+    <li className={`flex gap-3 transition-opacity duration-200 ${active ? "" : "opacity-45"}`}>
+      <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-medium tabular-nums ${done ? "bg-ok/15 text-ok" : "bg-primary/10 text-primary"}`}>
+        {done ? <Check className="size-3.5" /> : n.toLocaleString("fa-IR")}
+      </span>
+      <div className="min-w-0 flex-1 space-y-2">
+        <p className="text-sm font-medium leading-7">{title}</p>
+        {children}
+      </div>
+    </li>
+  );
+}
+
 export function ClaudeSignin({ id, onDone }) {
   const [target, setTarget] = useState(null);
   const [url, setUrl] = useState(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
   const start = async () => {
     setBusy(true);
+    setProblem("");
     try {
       const account = typeof id === "function" ? await id() : id;
       const r = await api(`/api/providers/${account}/signin`, { method: "POST" });
       setTarget(account);
       setUrl(r.url);
-      window.open(r.url, "_blank", "noopener");
+      setCode("");
+      
     } catch (e) {
-      toast.error(e.message);
+      setProblem(e.message);
     }
     setBusy(false);
   };
   const submit = async () => {
     setBusy(true);
+    setProblem("");
     try {
       await api(`/api/providers/${target}/signin/code`, { method: "POST", body: { code: code.trim() } });
       toast.success(t("حساب Claude وصل شد"));
@@ -321,28 +456,47 @@ export function ClaudeSignin({ id, onDone }) {
         // The earlier sign-in had ended; the server started a new one, and the old code is useless for it.
         setUrl(e.body.url);
         setCode("");
-        window.open(e.body.url, "_blank", "noopener");
-        toast.message(t("ورود قبلی تمام شده بود؛ صفحهٔ ورود تازه باز شد. وارد شو و کد تازه را بگذار."));
-      } else toast.error(e.message);
-      setBusy(false);
+        
+        setProblem(t("ورود قبلی تمام شده بود؛ لینک تازه ساخته شد. «باز کردن لینک» یا «کپی لینک» را بزنید و کد تازه را بگذارید."));
+      } else {
+        setProblem(`کد پذیرفته نشد؛ «شروع دوباره» را بزنید و کد تازه بگیرید. پاسخ Claude: ${e.message}`);
+      }
     }
+    setBusy(false);
   };
+  const copyLink = () => navigator.clipboard?.writeText(url).then(() => toast.success(t("لینک کپی شد")), () => toast.error(t("کپی نشد؛ لینک را با دست انتخاب کنید")));
   const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm";
+  const small = "press inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted";
   return (
-    <div className="space-y-2 rounded-xl border border-dashed p-3">
-      {url ? (
-        <>
-          <p className="text-xs leading-6 text-muted-foreground">{t("صفحهٔ ورود Claude باز شد (اگر نشد {link}). وارد شو و کدی را که نشان می‌دهد این‌جا بگذار.").split("{link}").flatMap((part, i) => (i ? [<a key={i} href={url} target="_blank" rel="noreferrer" className="text-primary underline">{t("این‌جا")}</a>, part] : [part]))}</p>
+    <div className="space-y-3 rounded-xl border p-4">
+      <ol className="space-y-4">
+        <SigninStep n={1} title={t("صفحهٔ ورود Claude را باز کنید")} done={Boolean(url)}>
+          {url ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <a href={url} target="_blank" rel="noreferrer" className={small}><ExternalLink className="size-3.5" /> {t("باز کردن لینک")}</a>
+              <button type="button" onClick={copyLink} className={small}><Copy className="size-3.5" /> {t("کپی لینک")}</button>
+              <button type="button" onClick={() => { setUrl(null); setCode(""); setProblem(""); }} className={`${small} text-muted-foreground`}>{t("شروع دوباره")}</button>
+            </div>
+          ) : (
+            <button type="button" onClick={start} disabled={busy} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} ورود با اکانت Claude
+            </button>
+          )}
+        </SigninStep>
+        <SigninStep n={2} title={t("در آن صفحه وارد حساب Claude شوید و دکمهٔ تأیید (Authorize) را بزنید")} active={Boolean(url)}>
+          <p className="text-xs leading-6 text-muted-foreground">{t("در پایان صفحه یک کد بلند نشان می‌دهد. همهٔ آن را کپی کنید.")}</p>
+        </SigninStep>
+        <SigninStep n={3} title={t("کد را این‌جا بگذارید")} active={Boolean(url)}>
           <div className="flex gap-2">
-            <input className={field} dir="ltr" value={code} onChange={(e) => setCode(e.target.value)} placeholder="code#state" autoComplete="off" />
-            <button type="button" onClick={submit} disabled={busy || !code.trim()} className="press shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">{busy ? <Loader2 className="size-4 animate-spin" /> : t("وصل کن")}</button>
+            <input className={field} dir="ltr" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && code.trim() && !busy) submit(); }} disabled={!url} placeholder={t("کد را این‌جا بچسبانید")} autoComplete="off" aria-label={t("کد ورود")} />
+            <button type="button" onClick={submit} disabled={!url || busy || !code.trim()} className="press shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">{busy && url ? <Loader2 className="size-4 animate-spin" /> : t("وصل کن")}</button>
           </div>
-        </>
-      ) : (
-        <button type="button" onClick={start} disabled={busy} className="press inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm">
-          {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} {t("ورود با اکانت Claude (بدون کپی توکن)")}
-        </button>
-      )}
+        </SigninStep>
+      </ol>
+      {problem ? <p className="rounded-lg bg-bad/10 px-3 py-2 text-xs leading-6 text-bad" role="alert">{problem}</p> : null}
+      <p className="border-t pt-3 text-xs leading-6 text-muted-foreground">
+        اشتراک مال شخص دیگری است؟ «کپی لینک» را برای خودش بفرستید؛ او لینک را باز می‌کند، وارد می‌شود و کدِ آخر را برایتان می‌فرستد. این لینک و کد فقط چند دقیقه کار می‌کنند و فقط باید به صاحب اشتراک برسند.
+      </p>
     </div>
   );
 }

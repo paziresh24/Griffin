@@ -6,6 +6,7 @@ import path from "node:path";
 import { openStore } from "../src/db.mjs";
 import {
   APP_TOOL_NAMES,
+  NETWORK_TOOL_NAMES,
   SELF_MGMT_TOOLS,
   filterToolsByProfile,
   publicProfile,
@@ -32,7 +33,7 @@ test("a fresh install has exactly one agent; more are imported like any user wou
   const fresh = store.listAgentProfiles();
   assert.deepEqual(fresh.map((p) => p.id), ["griffin"], "no environment-specific agents ship");
   const griffin = fresh[0];
-  assert.equal(griffin.provider, "cursor");
+  assert.equal(griffin.provider, "claude"); // not Cursor: blocked from Iran (2026-10-21)
   assert.ok(!griffin.meta.allTools, "the default agent gets a named tool list, not everything");
   assert.ok(griffin.tools.includes("ask_agent"));
   for (const name of SELF_MGMT_TOOLS) assert.ok(griffin.tools.includes(name), name);
@@ -58,7 +59,7 @@ test("a fresh install has exactly one agent; more are imported like any user wou
 test("seedProfilesFromRegistry matches openStore seed shape", () => {
   const rows = seedProfilesFromRegistry();
   assert.equal(rows.length, 1);
-  assert.ok(rows.every((r) => r.builtIn && r.provider === "cursor"));
+  assert.ok(rows.every((r) => r.builtIn && r.provider === "claude"));
 });
 
 test("an agent can be created, edited and deleted at runtime", () => {
@@ -146,6 +147,25 @@ test("peer caller is bounded by its quota, never the full profile or self-mgmt",
   for (const name of SELF_MGMT_TOOLS) assert.ok(!asPeer.includes(name), name);
   // A caller with no quota row on this profile fails closed.
   assert.deepEqual(resolveEnabledTools(bounded, { caller: "no-such-agent", catalogNames: catalog }), []);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Owner 2026-10-20: a colleague's mother chat had no network tools, so it wrote to agents on Telegram.
+test("the agents' network is for the owner's chats and the colleagues' mother chats, not a peer's chain", () => {
+  const { store, dir } = tempStore();
+  const profile = store.getAgentProfile("griffin");
+  const catalog = [...NETWORK_TOOL_NAMES, "telegram_send", "ask_owner", ...SELF_MGMT_TOOLS];
+  for (const name of NETWORK_TOOL_NAMES) assert.ok(!SELF_MGMT_TOOLS.includes(name), `${name} is not self-management`);
+  const owner = resolveEnabledTools(profile, { caller: "owner", catalogNames: catalog });
+  const team = resolveEnabledTools(profile, { caller: "team", catalogNames: catalog });
+  for (const name of NETWORK_TOOL_NAMES) {
+    assert.ok(owner.includes(name), `owner has ${name}`);
+    assert.ok(team.includes(name), `the mother chat (team) has ${name}`);
+  }
+  const peer = resolveEnabledTools(profile, { caller: "peer:someone", catalogNames: catalog });
+  for (const name of [...NETWORK_TOOL_NAMES, "telegram_send", ...SELF_MGMT_TOOLS]) assert.ok(!peer.includes(name), `a peer's chain never gets ${name}`);
+  assert.ok(peer.includes("ask_owner"), "a peer's chain still has the agent's own tools");
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

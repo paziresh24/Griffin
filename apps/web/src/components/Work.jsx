@@ -11,7 +11,7 @@ import { groupLabel, groupNow, groupWork } from "../work-groups.js";
 // send_to_person: every message that reached a colleague keeps its «📤» card in sight; owner_task:
 // the chore the board links to (its run often ends with no answer, so it was all folded away);
 // consult: another model's answer, which the agent usually works on after (folded away otherwise).
-const RESULT_TOOLS = new Set(["show_media", "s3_get", "visualize", "preview_start", "ask_owner", "ask_agent", "consult", "send_to_person", "owner_task"]);
+const RESULT_TOOLS = new Set(["show_media", "browser_screenshot", "s3_get", "visualize", "preview_start", "ask_owner", "ask_requester", "ask_agent", "consult", "send_to_person", "owner_task"]);
 
 // Splits an assistant run into the work log (thinking, tool calls, narration between them) and the
 // answer (text after the last working tool, plus charts/files/questions wherever they appeared).
@@ -31,7 +31,7 @@ function askClosed(part) {
   return Boolean(isError && result && !result.cancelled);
 }
 const isResult = (part) =>
-  part.type === "tool" && RESULT_TOOLS.has(part.name) && !(part.name === "ask_owner" && askClosed(part));
+  part.type === "tool" && RESULT_TOOLS.has(part.name) && !((part.name === "ask_owner" || part.name === "ask_requester") && askClosed(part));
 
 // The built-in AskUserQuestion, when the host routed it through ask_owner, lands twice: as the native
 // call (raw JSON, no card) and as the ask_owner card, whose callId is `<native callId>:ask:<n>`

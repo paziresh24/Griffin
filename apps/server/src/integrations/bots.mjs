@@ -96,6 +96,24 @@ export function parseModelCallback(data) {
   return m ? { pickId: m[1].toLowerCase(), index: Number(m[2]) } : null;
 }
 
+/** callback_data for the /chats list: `c:<pick-id>:<i>` opens the i-th chat, `c:<pick-id>:n|p` turns the page. */
+export function parseChatCallback(data) {
+  const m = String(data || "").match(/^c:([a-f0-9]{6,16}):(\d+|n|p)$/i);
+  if (!m) return null;
+  const pickId = m[1].toLowerCase();
+  return /^\d+$/.test(m[2]) ? { pickId, index: Number(m[2]) } : { pickId, step: m[2].toLowerCase() === "n" ? 1 : -1 };
+}
+
+/** The /chats list as an inline keyboard: one chat per row, then the page buttons. */
+export function chatMenuKeyboard(menu) {
+  const rows = (menu.buttons || []).map((b) => [{ text: String(b.text).slice(0, 60), callback_data: `c:${menu.pickId}:${b.index}` }]);
+  const turn = [];
+  if (menu.back) turn.push({ text: "→ قبلی", callback_data: `c:${menu.pickId}:p` });
+  if (menu.more) turn.push({ text: "بعدی ←", callback_data: `c:${menu.pickId}:n` });
+  if (turn.length) rows.push(turn);
+  return { inline_keyboard: rows };
+}
+
 // One running bot: receives via webhook (preferred) or getUpdates long-poll; only talks to paired chats.
 export function createBotChannel({ integration, api, bridge, log = console, webhookUrl = null, webhookSecret = null }) {
   const { id } = integration;
@@ -278,6 +296,41 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
       // The model menu's own buttons (parseModelCallback), before the question buttons below, which
       // ack and drop every callback they do not parse (or model taps would do nothing). The owner picks a model for
       // THIS conversation; the run in flight keeps its model, the next turn runs on the new one.
+      const chatTap = update.callback_query ? parseChatCallback(update.callback_query.data) : null;
+      if (chatTap) {
+        const query = update.callback_query;
+        const from = String(query.message?.chat?.id ?? query.from?.id);
+        const ack = (text) => api.call("answerCallbackQuery", { callback_query_id: query.id, ...(text ? { text, show_alert: false } : {}) }).catch(() => {});
+        const messageId = query.message?.message_id;
+        if (!paired().has(from) || String(query.from?.id ?? "") !== from) {
+          await ack();
+          return;
+        }
+        if (chatTap.step) {
+          const menu = bridge.chatMenuPage?.(id, from, chatTap.pickId, chatTap.step);
+          if (!menu?.buttons) {
+            await ack("این فهرست دیگر باز نیست؛ /chats را دوباره بفرستید.");
+            return;
+          }
+          await ack();
+          await api.call("editMessageText", { chat_id: from, message_id: messageId, text: menu.text, reply_markup: chatMenuKeyboard(menu) }).catch(() => {});
+          return;
+        }
+        const picked = await bridge.pickChat?.(id, from, chatTap.pickId, chatTap.index);
+        if (!picked) {
+          await ack("این فهرست دیگر باز نیست؛ /chats را دوباره بفرستید.");
+          return;
+        }
+        await ack("✅ وصل شد");
+        if (messageId != null) {
+          await api.call("editMessageText", { chat_id: from, message_id: messageId, text: `✅ گفتگوی فعلی: ${picked.title}`, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+        }
+        const state = picked.waiting ? "❓ منتظر جواب شماست." : picked.running ? "⏳ الان در حال کار است؛ جوابش همین‌جا می‌آید." : "";
+        const tail = "از این به بعد هر چه بنویسید به همین گفتگو می‌رود. /chats برای عوض کردن، /new برای گفتگوی تازه.";
+        await sendText(from, [`💬 ${picked.title}`, picked.last ? `آخرین جواب:\n${picked.last}` : "هنوز جوابی در این گفتگو نیست.", state, tail].filter(Boolean).join("\n\n")).catch(() => {});
+        return;
+      }
+
       const modelTap = update.callback_query ? parseModelCallback(update.callback_query.data) : null;
       if (modelTap) {
         const query = update.callback_query;
@@ -367,7 +420,7 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
         const code = bridge.integration(id)?.settings.pairingCode;
         if (code && start[1] && start[1].toUpperCase() === code) {
           bridge.pair(id, from, message.chat);
-          await sendText(from, say(`✅ این گفتگو به ${PERSONA.name} وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /model انتخاب مدل · /stop توقف کار فعلی`, `✅ This chat is connected to ${PERSONA.latin}. Everything you write here reaches the agent.\n/new new chat · /model choose the model · /stop stop the current work`));
+          await sendText(from, say(`✅ این گفتگو به ${PERSONA.name} وصل شد. هر چه بنویسی به ایجنت می‌رسد.\n/new گفتگوی تازه · /chats گفتگوهای قبلی · /model انتخاب مدل · /stop توقف کار فعلی`, `✅ This chat is connected to ${PERSONA.latin}. Everything you write here reaches the agent.\n/new new chat · /model choose the model · /stop stop the current work`));
         } else if (!paired().has(from)) {
           await sendText(from, say("این ربات خصوصی است. کد اتصال را از تنظیمات بگیر و بفرست: /start CODE", "This bot is private. Get the pairing code from the settings and send: /start CODE"));
         }
@@ -428,6 +481,14 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
         }
         return;
       }
+      // /chats [متن]: his chats as buttons (manager.mjs chatMenu); a tap moves this conversation onto one.
+      const chats = text.match(/^\/chats(?:@\w+)?(?:\s+([\s\S]+))?$/);
+      if (chats) {
+        const menu = bridge.chatMenu?.(id, from, { query: chats[1] || "" });
+        if (!menu) return;
+        await sendText(from, menu.text, menu.buttons?.length ? { reply_markup: chatMenuKeyboard(menu) } : {});
+        return;
+      }
       if (/^\/new(?:@\w+)?$/.test(text)) {
         bridge.newChat(id, from);
         await sendText(from, say("🆕 گفتگوی تازه شروع شد. سؤالت را بفرست.", "🆕 New chat started. Send your question."));
@@ -472,6 +533,7 @@ export function createBotChannel({ integration, api, bridge, log = console, webh
           await api.call("setMyCommands", {
             commands: [
               { command: "new", description: "گفتگوی تازه" },
+              { command: "chats", description: "گفتگوهای من (رفتن به یکی و جواب دادن)" },
               { command: "model", description: "مدل این گفتگو (انتخاب با دکمه)" },
               { command: "models", description: "مدل‌های قابل انتخاب" },
               { command: "stop", description: "توقف کار فعلی" },

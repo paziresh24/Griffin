@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -21,7 +23,8 @@ import { Readable } from "node:stream";
 //     cannot touch the app's session or API. Pages with root-relative URLs do not work in this mode.
 //
 // The sandbox runs the processes (debug_exec on host "sandbox", through the broker); `exec` is
-// injected, so a test can stand in for it.
+// injected, so a test can stand in for it. A host install with no sandbox (the sandbox is optional
+// there) runs them on the machine itself, as the install's own user (`local`, see previewRunsLocal).
 
 const KV_KEY = "previews";
 const PORT_LOW = 41000;
@@ -33,8 +36,9 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
 const ROUTE_COOKIE = "gp_t";
 const PREVIEW_DIR = "/root/.previews";
 const DEFAULT_COMMAND = 'python3 -m http.server "$PORT" --bind 0.0.0.0';
-// A command may start in these places only: a chat's worktree, the sandbox's own home and /tmp.
-const DIR_ROOTS = ["/workspace/repos/_wt", "/root", "/tmp"];
+// A command may start in these places only: a chat's worktree, the sandbox's own home and /tmp. The
+// worktrees live under <REPOS_ROOT>/_wt, which a host install keeps outside /workspace (index.mjs passes it).
+export const DEFAULT_DIR_ROOTS = ["/workspace/repos/_wt", "/root", "/tmp"];
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"]);
 const NO_BODY = new Set([101, 204, 205, 304]);
 const SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock";
@@ -46,14 +50,39 @@ const b64 = (text) => Buffer.from(String(text), "utf8").toString("base64");
 const rid = () => crypto.randomBytes(4).toString("hex");
 const textOf = (value) => String(value ?? "");
 
-export function cleanDir(given, { base = null } = {}) {
+// Where previews run (PREVIEW_RUNNER: auto | sandbox | local). auto = the sandbox, unless this is a
+// host install that has none: not in a container, no GRIFFIN_SANDBOX_HOST and no sandbox client key.
+// That install's broker answers every debug_exec on "sandbox" with «ENOENT /sandbox-keys/client»
+// (2026-10-26, a colleague: every preview failed). Running there adds no reach: previews are owner-only,
+// and the owner's chat on that machine already has a shell as the same user.
+export function previewRunsLocal({ setting = "auto", env = process.env, exists = fs.existsSync } = {}) {
+  const value = textOf(setting).trim().toLowerCase();
+  if (value === "local") return true;
+  if (value === "sandbox") return false;
+  if (exists("/.dockerenv") || env.GRIFFIN_SANDBOX_HOST) return false;
+  return !exists(env.GRIFFIN_SANDBOX_KEY || "/sandbox-keys/client");
+}
+
+// The scripts below on this machine: `sh -c`, with a plain environment (never the app's own env).
+export function localExec(command, { timeoutMs = 125_000, env = process.env } = {}) {
+  const keep = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"];
+  const plain = Object.fromEntries(keep.filter((k) => env[k]).map((k) => [k, env[k]]));
+  return new Promise((resolve, reject) => {
+    execFile("sh", ["-c", command], { env: plain, timeout: timeoutMs, maxBuffer: 4 << 20 }, (error, stdout, stderr) => {
+      if (error && (error.killed || typeof error.code !== "number")) reject(error);
+      else resolve({ stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+export function cleanDir(given, { base = null, roots = DEFAULT_DIR_ROOTS } = {}) {
   const raw = textOf(given).trim();
-  if (!raw && !base) throw new Error("this chat has no repo worktree: give dir (a path under /workspace/repos/_wt, /root or /tmp)");
+  if (!raw && !base) throw new Error(`this chat has no repo worktree: give dir (a path under ${roots.join(", ")})`);
   const resolved = path.posix.resolve(base || "/", raw || ".");
   // A relative folder is the worktree's own: «..» does not reach another chat's tree.
   if (base && raw && !raw.startsWith("/") && resolved !== base && !resolved.startsWith(`${base}/`)) throw new Error("a relative dir must stay inside this chat's worktree");
-  if (!DIR_ROOTS.some((root) => resolved === root || resolved.startsWith(`${root}/`))) {
-    throw new Error(`dir must be under ${DIR_ROOTS.join(", ")}`);
+  if (!roots.some((root) => resolved === root || resolved.startsWith(`${root}/`))) {
+    throw new Error(`dir must be under ${roots.join(", ")}`);
   }
   return resolved;
 }
@@ -103,12 +132,31 @@ export function createPreviews({
   previewHost = () => "",
   publicUrl = () => "",
   sandboxAddr = () => process.env.GRIFFIN_SANDBOX_ADDR || "",
+  local = false,
+  previewDir = PREVIEW_DIR,
   worktreeOf = (chatId) => store.getChat?.(chatId)?.worktree_path || null,
+  dirRoots = DEFAULT_DIR_ROOTS,
   now = Date.now,
   idleMs = IDLE_MS,
   maxLive = MAX_LIVE,
   log = (...args) => console.log("[preview]", ...args),
 }) {
+  // A host install may run without the broker, so there is no sandbox to run in: say so, instead of a
+  // bare «connect ENOENT …/broker.sock».
+  const where = local ? "on this machine" : "in the sandbox";
+  const sandboxExec = exec;
+  exec = async (command) => {
+    try {
+      return await sandboxExec(command);
+    } catch (error) {
+      const what = `${error?.code || ""} ${error?.message || ""}`;
+      if (/ENOENT|ECONNREFUSED/.test(what) && /\.sock\b/.test(what)) {
+        throw new Error("previews run in the sandbox, and this install has no broker (its socket is missing): run the app on the machine yourself, or install the broker");
+      }
+      throw error;
+    }
+  };
+
   /** @type {Map<string, object>} */
   const records = new Map();
   for (const rec of Object.values(store.getKv(KV_KEY) || {})) if (rec?.id && rec?.token) records.set(rec.id, rec);
@@ -159,16 +207,17 @@ export function createPreviews({
 
   const startScript = ({ id, dir, port, command, waitSec }) => `
 ID=${id}; P=${port}
-mkdir -p ${PREVIEW_DIR}
+command -v nc >/dev/null 2>&1 || { echo NONC; exit 0; }
+mkdir -p ${previewDir}
 DIR=$(printf %s ${shq(b64(dir))} | base64 -d)
 CMD=$(printf %s ${shq(b64(command))} | base64 -d)
 if nc -z 127.0.0.1 $P 2>/dev/null; then echo BUSY; exit 0; fi
 cd "$DIR" 2>/dev/null || { echo NOCD; exit 0; }
-LOG=${PREVIEW_DIR}/$ID.log
+LOG=${previewDir}/$ID.log
 : > "$LOG"
-PATH="${PREVIEW_DIR}/bin:$PATH" PORT=$P HOST=0.0.0.0 BROWSER=none setsid nohup sh -c "$CMD" > "$LOG" 2>&1 < /dev/null &
+PATH="${previewDir}/bin:$PATH" PORT=$P HOST=0.0.0.0 BROWSER=none setsid nohup sh -c "$CMD" > "$LOG" 2>&1 < /dev/null &
 PID=$!
-echo $PID > ${PREVIEW_DIR}/$ID.pid
+echo $PID > ${previewDir}/$ID.pid
 echo "PID $PID"
 i=0; MAX=${Math.max(1, Math.round(waitSec * 2))}
 while [ $i -lt $MAX ]; do
@@ -193,6 +242,7 @@ exit 0
   // Runs rec's command and waits for its port. Updates rec in place; returns { outcome, logTail }.
   async function launch(rec, { waitSec }) {
     const out = textOf((await exec(startScript({ id: rec.id, dir: rec.dir, port: rec.port, command: rec.command, waitSec }))).stdout);
+    if (/^NONC$/m.test(out)) throw new Error(`nc (netcat) is not installed ${where}: previews need it to see the port open`);
     if (/^NOCD$/m.test(out)) return { outcome: "nocd", logTail: "" };
     if (/^BUSY$/m.test(out)) return { outcome: "busy", logTail: "" };
     const pid = Number(/^PID (\d+)$/m.exec(out)?.[1]);
@@ -223,7 +273,7 @@ exit 0
     if (live().length >= maxLive) {
       throw new Error(`${live().length} previews are running (the limit is ${maxLive}); stop one first: ${live().map((r) => `${r.id} «${r.title}»`).join(", ")}`);
     }
-    const cwd = cleanDir(dir, { base: worktreeOf(chatId) });
+    const cwd = cleanDir(dir, { base: worktreeOf(chatId), roots: dirRoots });
     const cmd = textOf(command).trim() || DEFAULT_COMMAND;
     if (cmd.length > 4000) throw new Error("command is longer than 4000 characters; put it in a script file");
     const wanted = port == null ? null : Number(port);
@@ -249,8 +299,8 @@ exit 0
       if (result.outcome !== "busy" || wanted) break;
       rec.port = pickPort();
     }
-    if (result.outcome === "nocd") throw new Error(`${cwd} does not exist in the sandbox`);
-    if (result.outcome === "busy") throw new Error(`port ${rec.port} is already in use in the sandbox`);
+    if (result.outcome === "nocd") throw new Error(`${cwd} does not exist ${where}`);
+    if (result.outcome === "busy") throw new Error(`port ${rec.port} is already in use ${where}`);
     records.set(rec.id, rec);
     save();
     log(`start ${rec.id} port ${rec.port} ${result.outcome} dir ${rec.dir}`);
@@ -294,7 +344,7 @@ exit 0
     const rec = records.get(id);
     if (!rec) throw new Error("no such preview");
     const n = Math.min(Math.max(Number(lines) || 80, 1), 400);
-    const { stdout } = await exec(`tail -n ${n} ${PREVIEW_DIR}/${rec.id}.log 2>/dev/null; exit 0`);
+    const { stdout } = await exec(`tail -n ${n} ${previewDir}/${rec.id}.log 2>/dev/null; exit 0`);
     return textOf(stdout);
   }
 
@@ -309,7 +359,7 @@ exit 0
         for (const rec of running) {
           if (alive.has(Number(rec.pid))) continue;
           rec.status = "stopped";
-          rec.reason = "the process is gone (the sandbox restarted, or the command exited)";
+          rec.reason = `the process is gone (${local ? "the machine restarted" : "the sandbox restarted"}, or the command exited)`;
           rec.stoppedAt = now();
         }
       }
@@ -318,7 +368,7 @@ exit 0
     for (const [id, rec] of records) {
       if ((rec.status === "stopped" || rec.status === "failed") && now() - (rec.stoppedAt || rec.createdAt) > KEEP_STOPPED_MS) {
         records.delete(id);
-        exec(`rm -f ${PREVIEW_DIR}/${id}.log ${PREVIEW_DIR}/${id}.pid; exit 0`).catch(() => {});
+        exec(`rm -f ${previewDir}/${id}.log ${previewDir}/${id}.pid; exit 0`).catch(() => {});
       }
     }
     save();
@@ -530,7 +580,7 @@ exit 0
     return {
       preview_start: {
         description:
-          "Run an app in the sandbox and show it to the owner as a live preview in the chat. `command` runs in `dir` (default: this chat's worktree) and must listen on 0.0.0.0:$PORT — $PORT is given to it (Vite: `npm run dev -- --host 0.0.0.0 --port $PORT`; Next: `npx next dev -H 0.0.0.0 -p $PORT`; Flask: `flask run --host 0.0.0.0 --port $PORT`). Without `command`, the folder is served as static files. Install dependencies first with debug_exec (host sandbox; node is there, npm may need `apk add npm`). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on `localUrl` from debug_exec. Root-relative URLs (/assets/x.js) only work when the install has a preview host; otherwise build with relative paths (Vite `--base ./`). A preview stops after 2 hours without a look. On failure you get the last log lines.",
+          `Run an app ${where} and show it to the owner as a live preview in the chat. \`command\` runs in \`dir\` (default: this chat's worktree) and must listen on 0.0.0.0:$PORT — $PORT is given to it (Vite: \`npm run dev -- --host 0.0.0.0 --port $PORT\`; Next: \`npx next dev -H 0.0.0.0 -p $PORT\`; Flask: \`flask run --host 0.0.0.0 --port $PORT\`). Without \`command\`, the folder is served as static files. ${local ? "Install dependencies first with your own shell (it runs on this same machine, as the same user). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from your shell." : "Install dependencies first with debug_exec (host sandbox; node is there, npm may need \`apk add npm\`). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from debug_exec."} Root-relative URLs (/assets/x.js) only work when the install has a preview host; otherwise build with relative paths (Vite \`--base ./\`). A preview stops after 2 hours without a look. On failure you get the last log lines.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -602,7 +652,7 @@ exit 0
   }
 
   return {
-    start, stop, restart, logs, tick, startReaper, tools, handle, handleUpgrade, route, urlOf, mode,
+    start, stop, restart, logs, tick, startReaper, tools, handle, handleUpgrade, route, urlOf, mode, address,
     get: (id) => records.get(id) || null,
     view,
     list: ({ chatId = null } = {}) => [...records.values()].filter((r) => !chatId || r.chatId === chatId).sort((a, b) => b.createdAt - a.createdAt),

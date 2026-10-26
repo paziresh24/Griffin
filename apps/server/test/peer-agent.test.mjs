@@ -60,7 +60,7 @@ test("derivePeerUserId is stable, charset-safe and prefers the username", () => 
   assert.equal(derivePeerUserId({}, null), null);
 });
 
-test("bindPeerAgentPerson registers the peer, grants the default quota and persists the binding", async () => {
+test("bindPeerAgentPerson registers the peer and persists the binding", async () => {
   const { createIntegrations } = await import("../src/integrations/manager.mjs");
   const { createPeerAuth } = await import("../src/peer-auth.mjs");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-bind-"));
@@ -73,8 +73,6 @@ test("bindPeerAgentPerson registers the peer, grants the default quota and persi
     assert.equal(first.user, "msadeghi");
     assert.equal(first.created, true);
     assert.ok(store.getPeerUser("msadeghi"), "peer user registered");
-    const callers = store.getAgentProfile("griffin").meta.callers;
-    assert.ok(callers["peer:msadeghi"], "default read-only quota granted");
     assert.equal(store.getPerson(person.id).access.peerAgent.user, "msadeghi", "binding persisted on the person");
     // Idempotent: second bind neither throws nor reports creation.
     const second = await integrations.bridge.bindPeerAgentPerson(store.getPerson(person.id), "10000004");

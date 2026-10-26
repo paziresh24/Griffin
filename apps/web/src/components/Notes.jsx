@@ -1,11 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Popover } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
 import { AlarmClock, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
-import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, toLocalInput, untilLabel } from "../notes.js";
+import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, sidebarNotes, toLocalInput, untilLabel } from "../notes.js";
 import { t } from "../i18n.js";
 
 // One store for the whole app: the card above the composer and the sidebar list stay in step.
@@ -121,21 +121,38 @@ export function ScheduledPeek({ chatId = null }) {
 }
 
 /**
- * The composer's «بعداً» under the Karsara skin (Karsara's alarm-clock button): keeps what is typed
- * as a note instead of sending it — into this chat, or (on the new-chat page) as the first message
- * of a new chat with the composer's settings.
+ * The composer's «بعداً»: keeps what is typed as a note instead of sending it — into this chat, or
+ * (on the new-chat page) as the first message of a new chat with the composer's settings. It is the
+ * send button's own menu: right-click it, or hold it on a phone (a colleague 2026-10-24: the clock
+ * button beside «ارسال» was one more thing to read in the box). The send button is the child.
  */
-export function LaterButton({ text, chatId = null, options = {}, disabled = false, disabledTitle = "", onSaved }) {
+const HOLD_MS = 500;
+export function SendLater({ text, chatId = null, options = {}, disabled = false, disabledTitle = "", onSaved, children }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const hold = useRef(null);
+  const held = useRef(false); // a hold opened the menu: the click that ends it does not send
   const empty = !String(text || "").trim();
+  const show = () => {
+    if (empty) return false;
+    if (disabled) {
+      toast(disabledTitle);
+      return true;
+    }
+    setOpen(true);
+    return true;
+  };
+  const stopHold = () => {
+    clearTimeout(hold.current);
+    hold.current = null;
+  };
   const save = async (atMs) => {
     setBusy(true);
     try {
       await notesStore.create(noteBody({ text, chatId, atMs, options }));
       setOpen(false);
       onSaved?.();
-      toast.success(atMs ? `یادداشت ذخیره شد؛ ${clockLabel(atMs)} اجرا می‌شود` : t("یادداشت ذخیره شد؛ در «یادداشت‌ها» منتظر می‌ماند"));
+      toast.success(atMs ? `یادداشت ذخیره شد؛ ${clockLabel(atMs)} اجرا می‌شود` : t("یادداشت ذخیره شد؛ در «یادآورها» منتظر می‌ماند"));
     } catch (error) {
       toast.error(noteError(error));
     } finally {
@@ -144,17 +161,33 @@ export function LaterButton({ text, chatId = null, options = {}, disabled = fals
   };
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
-          disabled={disabled || empty}
-          title={disabled ? disabledTitle : t("ارسال نکن؛ برای بعد نگه دار")}
-          aria-label={t("بعداً")}
+      <Popover.Anchor asChild>
+        <span
+          className="inline-flex shrink-0"
+          onContextMenu={(event) => {
+            if (show()) event.preventDefault();
+          }}
+          onPointerDown={(event) => {
+            held.current = false;
+            if (event.pointerType !== "touch") return;
+            stopHold();
+            hold.current = setTimeout(() => {
+              held.current = show();
+            }, HOLD_MS);
+          }}
+          onPointerUp={stopHold}
+          onPointerCancel={stopHold}
+          onPointerLeave={stopHold}
+          onClickCapture={(event) => {
+            if (!held.current) return;
+            held.current = false;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
-          <AlarmClock className="size-4" />
-        </button>
-      </Popover.Trigger>
+          {children}
+        </span>
+      </Popover.Anchor>
       <Popover.Portal>
         <Popover.Content align="end" side="top" sideOffset={8} collisionPadding={16} className={menu}>
           <WhenMenu busy={busy} onPick={(atMs) => save(atMs)} />
@@ -164,51 +197,36 @@ export function LaterButton({ text, chatId = null, options = {}, disabled = fals
   );
 }
 
-/** Sidebar: «یادداشت‌ها». Hidden while there is none. */
-export function SidebarNotes({ refreshKey, onNavigate, karsara = false }) {
-  const { items, busy } = useNotes();
-  const [expanded, setExpanded] = useState(true);
+const NOTES_HINT = t("پیام‌هایی که خودتان با «بعداً» برای بعد گذاشته‌اید؛ سر موعد اجرا می‌شوند");
+
+/**
+ * Home page, last and folded: «یادآورها» — what the person kept for later with «بعداً». Not in the
+ * sidebar (owner 10-24: «توی سایدبار چیزی نبینیم»), and never the agent's own `later` reminders:
+ * those stay in their chat (ScheduledPeek). Hidden while there is none.
+ */
+export function HomeNotes() {
+  const { items: all, busy } = useNotes();
+  const items = sidebarNotes(all);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     notesStore.refresh();
-  }, [refreshKey]);
-  // A timed note may run while nothing else changes: look again every minute.
-  useEffect(() => {
+    // A timed note may run while nothing else changes: look again every minute.
     const timer = setInterval(() => notesStore.refresh(), 60_000);
     return () => clearInterval(timer);
   }, []);
   const now = useNow();
   if (!items.length) return null;
-  if (karsara) {
-    // Karsara's own heading (Karsara Notes.jsx): the name, the count, the arrow at the far end.
-    return (
-      <section className="mt-2" aria-label={t("یادداشت‌ها")}>
-        <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="kc-list-row w-full text-xs !text-[var(--kc-muted)]">
-          <span>{t("یادداشت‌ها")}</span>
-          <span className="kc-tag">{items.length.toLocaleString("fa-IR")}</span>
-          <span className="flex-1" />
-          <ChevronDown className={`size-3.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
-        </button>
-        {expanded ? (
-          <ul className="flex flex-col gap-1">
-            {items.map((note) => (
-              <NoteItem key={note.id} note={note} now={now} working={Boolean(busy[note.id])} onNavigate={onNavigate} />
-            ))}
-          </ul>
-        ) : null}
-      </section>
-    );
-  }
   return (
-    <section className="mb-2" aria-label={t("یادداشت‌ها")}>
-      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground">
+    <section className="g-board w-full" aria-label={t("یادآورها")} title={NOTES_HINT}>
+      <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="g-list-row flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-xs font-medium text-muted-foreground hover:text-foreground">
         <ChevronDown className={`size-3 shrink-0 transition-transform ${expanded ? "" : "-rotate-90 rtl:rotate-90"}`} />
-        <span className="flex-1 text-start">{t("یادداشت‌ها")}</span>
+        <span className="flex-1 text-start">{t("یادآورها")}</span>
         <span className="g-tag tabular-nums">{num(items.length)}</span>
       </button>
       {expanded ? (
-        <ul className="flex flex-col gap-1 px-1">
+        <ul className="flex flex-col gap-1 pt-1">
           {items.map((note) => (
-            <NoteItem key={note.id} note={note} now={now} working={Boolean(busy[note.id])} onNavigate={onNavigate} />
+            <NoteItem key={note.id} note={note} now={now} working={Boolean(busy[note.id])} />
           ))}
         </ul>
       ) : null}
@@ -240,6 +258,7 @@ function NoteItem({ note, now, working, onNavigate }) {
   return (
     <li className={`g-note-item rounded-lg border px-2.5 py-1.5 ${open ? "bg-muted/50" : ""}`} data-open={open ? "true" : undefined}>
       <button type="button" className="block w-full min-w-0 text-start" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {note.reminder ? <p className="text-[11px] text-muted-foreground">{t("یادآور خودکار ایجنت")}</p> : null}
         <p className={`text-[13px] font-medium ${open ? "whitespace-pre-wrap" : "line-clamp-2"}`} dir={textDir(note.text)}>
           {open ? note.text : noteTitle(note)}
         </p>

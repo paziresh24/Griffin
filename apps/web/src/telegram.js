@@ -53,10 +53,15 @@ export function peopleSections(people, { query = "", waiting = [] } = {}) {
   };
 }
 
-// Who wrote a line of a person's Telegram conversation (GET /persons/:id/messages).
+// Who wrote a line of a person's Telegram conversation (GET /persons/:id/messages). "chat": one of
+// the owner's chats here sent it (telegram_send), named by its title.
 export function messageAuthor(message, assistant = BRAND.name) {
   if (message?.direction !== "out") return t("او");
   const by = message.data?.by;
+  if (by === "chat") {
+    const title = String(message.data?.fromTitle || "").trim();
+    return title ? `${assistant} از گفتگوی «${title.length > 30 ? `${title.slice(0, 30)}…` : title}»` : `${assistant} از یک گفتگو`;
+  }
   return by === "owner" ? t("شما") : by === "session" ? t("جلسهٔ دیگر") : assistant;
 }
 
@@ -68,10 +73,28 @@ export function stripSender(text, name) {
   return value.replace(new RegExp(`^\\s*«?${escaped}»?(?:\\s*\\(#\\d+\\))?\\s*:\\s*`), ""); // «name» (#id): the desk's line
 }
 
+// A colleague's agent's chat_send reaches the chat framed for the agent (server related.mjs: «📥 محتوای
+// شخص ثالث از … — چت «…» — …», a fence, the text, a fence, «پایان …»). The bubble's label already says
+// whose agent it is; it shows the colleague's chat and the text alone (owner 2026-10-25: «این پیاما
+// واضح نیست»). Anything else comes back as it is.
+export function peerFrame(text) {
+  const value = String(text ?? "");
+  const m = /^\s*📥 (?:[^\n]*?— چت «([^»\n]*)»)?[^\n]*\n(`{3,})\n([\s\S]*?)\n\2\n?(?:پایان [^\n]*)?\s*$/.exec(value);
+  return m ? { text: m[3], title: m[1] || "" } : { text: value, title: "" };
+}
+
 // The owner's web note reaches the agent framed («<owner> از داخل <platform> — …»: …); the bubble
 // already says it is his private note, so the frame is not shown.
 export function stripOwnerFrame(text) {
   return String(text ?? "").replace(/^\s*«[^»]*?از داخل [^»]*»\s*:\s*/, ""); // i18n-ignore: matches the server's frame
+}
+
+// The agent's own `later` reminder (server later.mjs reminderMessage): «[یادآوری‌ای که خودت گذاشتی (<setAt>) — …]\n<text>».
+// The frame is for the agent; the bubble says it in its own label, with the time it was set.
+export function reminderFrame(text) {
+  const value = String(text ?? "");
+  const m = /^\s*\[یادآوری‌ای که خودت گذاشتی \(([^)]*)\)[^\]]*\]\s*\n?/.exec(value);
+  return m ? { text: value.slice(m[0].length), setAt: m[1] } : { text: value, setAt: null };
 }
 
 export const isNoReply = (text) => String(text ?? "").trim() === "[NO_REPLY]";
@@ -88,13 +111,15 @@ export function noteLine(note, assistant = BRAND.name) {
     case "owner_line":
       return t("{who} در تلگرام: {text}", { who: note.by === "session" ? t("جلسهٔ دیگر") : t("شما"), text: note.text || "" });
     case "unwatched":
-      return t("📭 {name} پیام داد — واچر خاموش", { name: note.name || t("کسی") });
+      return t("📭 {name} پیام داد — پاسخ خودکار به او خاموش است", { name: note.name || t("کسی") });
     case "paused":
       return note.name
         ? t("⏸ {name} پیام داد — {assistant} در تلگرام متوقف است", { name: note.name, assistant })
         : t("⏸ {assistant} در تلگرام متوقف است", { assistant });
     case "watch":
       return `👁 ${note.text || ""}`;
+    case "proposal_done":
+      return `📥 پیام ${note.name || t("همکار")} به این گفتگو آورده شد`;
     default:
       return String(note?.text || "");
   }
@@ -140,8 +165,11 @@ export const threadState = (runStatus) =>
 // The letter in an avatar with no photo: the name's first letter («👤 Ali» → A), else a question mark.
 export const initialOf = (name) => String(name ?? "").match(/\p{L}/u)?.[0] || t("؟");
 
+// What «پاسخ خودکار» (the watcher) means, one line for anyone who has never heard the word «واچر».
+export const watchHint = (assistant = BRAND.name) => `روشن یعنی ${assistant} از طرف شما به پیام‌های این شخص جواب می‌دهد؛ خاموش یعنی فقط پیام‌ها ثبت می‌شوند.`;
+
 // Why a draft was held (desk.mjs holdReason), in words.
-const HELD = { owner_replied: t("خودتان جواب داده بودید"), paused: t("پاسخ خودکار متوقف بود"), unwatched: t("واچرش خاموش بود") };
+const HELD = { owner_replied: t("خودتان جواب داده بودید"), paused: t("پاسخ خودکار متوقف بود"), unwatched: t("پاسخ خودکار به او خاموش بود") };
 export const heldWhy = (reason) => HELD[reason] || HELD.owner_replied;
 
 // A waiting item's kind in words (op: a held edit / delete of one of the assistant's sent messages).
@@ -183,9 +211,11 @@ export function sentStatus(result, toPerson) {
 // Whose a user message is. Any `from` but the owner's own note relayed from the desk (owner_web) is
 // someone else's words — a colleague, or their Telegram transcript handed over: a muted named
 // bubble, never edited or rewound. In a mother chat the owner's own words are a private note.
+// The agent's own reminder (kind "reminder") is no one's words: its own label, never edited either.
 export function userSide(from, text, chat) {
-  const theirs = Boolean(from) && from.kind !== "owner_web";
-  return { theirs, ownerNote: Boolean(chat?.mother) && !theirs && !isSystemText(text), editable: !from };
+  const reminder = from?.kind === "reminder";
+  const theirs = Boolean(from) && from.kind !== "owner_web" && !reminder;
+  return { theirs, reminder, ownerNote: Boolean(chat?.mother) && !theirs && !reminder && !isSystemText(text), editable: !from };
 }
 
 // One poller per endpoint for the whole page: the sidebar (desktop and phone drawer), the header
@@ -244,3 +274,79 @@ export const PICKUPS = [
   { value: 120, label: t("هر ۲ ساعت") },
   { value: 240, label: t("هر ۴ ساعت") },
 ];
+
+// ---------- «گفتگوی تلگرام مثل خود تلگرام» (flag telegramChat, TelegramChat.jsx) ----------
+
+// How the assistant stands with a person: answers by itself, only follows what the owner's own chats
+// sent them (they show there, not as «off»), or leaves them alone.
+export function tgMode(person) {
+  if (person?.watch) return "auto";
+  return person?.fromChats?.length ? "chats" : "off";
+}
+
+// The sidebar's folders (icons in Telegram.jsx), each a test on a person; waiting = ids waiting for the owner.
+export const TG_FOLDERS = [
+  { id: "all", label: t("همه"), test: () => true },
+  { id: "wait", label: t("منتظر من"), test: (p, waiting) => waiting.has(p.id) },
+  { id: "run", label: t("در کار"), test: (p) => Boolean(p.running || p.openThreads) },
+  { id: "personal", label: t("شخصی"), test: (p) => !p.group },
+  { id: "groups", label: t("گروه‌ها"), test: (p) => Boolean(p.group) },
+  { id: "chats", label: t("از گفتگوهای من"), test: (p) => tgMode(p) === "chats" },
+  { id: "off", label: `بی ${BRAND.name}`, test: (p) => tgMode(p) === "off" },
+];
+
+// One folder's people, newest first, narrowed by the search like peopleSections.
+export function folderPeople(people, folder, { query = "", waiting = [] } = {}) {
+  const q = String(query).trim().toLowerCase();
+  const waits = new Set((waiting || []).map((w) => w.personId));
+  const test = (TG_FOLDERS.find((f) => f.id === folder) || TG_FOLDERS[0]).test;
+  return (people || [])
+    .filter((p) => !q || `${p.name || ""} ${p.tgName || ""} ${p.username || ""}`.toLowerCase().includes(q))
+    .filter((p) => test(p, waits))
+    .sort((a, b) => String(b.lastAt || "").localeCompare(String(a.lastAt || "")));
+}
+
+export const folderCount = (people, folder, waiting = []) => folderPeople(people, folder, { waiting }).length;
+
+// Who sent an outgoing line: the assistant by itself, one of the owner's chats here, or the owner.
+export function lineSource(message) {
+  const data = message?.data || {};
+  if (message?.direction !== "out") return null;
+  if (data.by === "assistant") return { kind: "auto", chatId: data.chatId || null };
+  if (data.by === "chat") return { kind: "chat", chatId: data.fromChat || null, title: String(data.fromTitle || "").trim() };
+  return { kind: "owner" };
+}
+
+const DAY = (at) => {
+  const t = new Date(at);
+  return Number.isNaN(t.getTime()) ? "" : t.toLocaleDateString("fa-IR", { weekday: "long", day: "numeric", month: "long" });
+};
+
+// A person's history as the page draws it: day separators, runs of one sender's lines grouped (first
+// shows the name, last gets the tail), and each reply resolved to the line it answers (by the Telegram
+// id: the account keeps it as `id`, the assistant's own lines as data.msgId).
+export function conversationRows(messages, { group = false } = {}) {
+  const list = (messages || []).filter((m) => m && (m.text || m.media));
+  const byTgId = new Map();
+  for (const m of list) {
+    byTgId.set(String(m.id), m);
+    if (m.data?.msgId != null) byTgId.set(String(m.data.msgId), m);
+  }
+  const who = (m) => `${m.direction}|${m.direction === "in" && group ? m.data?.from || "" : lineSource(m)?.kind || ""}`;
+  const rows = [];
+  let day = "";
+  list.forEach((m, i) => {
+    const d = DAY(m.at);
+    if (d && d !== day) {
+      rows.push({ type: "day", key: `day:${d}:${i}`, label: d });
+      day = d;
+    }
+    const prev = list[i - 1];
+    const next = list[i + 1];
+    const first = !prev || DAY(prev.at) !== d || who(prev) !== who(m);
+    const last = !next || DAY(next.at) !== d || who(next) !== who(m);
+    const replyTo = m.data?.replyTo != null ? byTgId.get(String(m.data.replyTo)) || null : null;
+    rows.push({ type: "message", key: `m:${m.id}:${i}`, message: m, first, last, replyTo });
+  });
+  return rows;
+}

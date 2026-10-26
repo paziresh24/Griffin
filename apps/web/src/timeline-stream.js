@@ -18,6 +18,10 @@ export function catchUpTimeline(chatId, { force = false } = {}) {
 // A direct fetch that hangs must not block every later one.
 const CATCH_UP_TIMEOUT_MS = 10_000;
 
+// A chat opens with its last PAGE messages; «earlier» pages of PAGE come on demand (a long chat
+// otherwise took longer to open the longer it grew).
+export const PAGE = 40;
+
 /**
  * remembered: { timeline, rev } from timeline-memo.js, or null.
  * onShow({ timeline, rev, connection }) after every change.
@@ -96,8 +100,8 @@ export function openTimeline({
   let loadSeq = 0; // only the newest history load counts
   const loadHistory = (attempt) => {
     const seq = (loadSeq += 1);
-    const have = remembered ? `?have=${current.lastEventId}&rev=${encodeURIComponent(rev)}` : "";
-    api(`/api/chats/${chatId}/timeline${have}`)
+    const have = remembered ? `&have=${current.lastEventId}&rev=${encodeURIComponent(rev)}` : "";
+    api(`/api/chats/${chatId}/timeline?limit=${PAGE}${have}`)
       .then((answer) => {
         if (!alive || historyIn || seq !== loadSeq) return;
         historyTimer = null;
@@ -121,6 +125,26 @@ export function openTimeline({
           loadHistory(attempt + 1);
         }, retryDelay(attempt));
       });
+  };
+  // The page of messages before the oldest one held. One at a time; a failure leaves the button
+  // to try again. Returns whether messages came.
+  let loadingOlder = false;
+  const loadOlder = async () => {
+    const before = current.messages[0]?.id;
+    if (!alive || loadingOlder || !before || !(current.earlier > 0)) return false;
+    loadingOlder = true;
+    try {
+      const page = await api(`/api/chats/${chatId}/timeline/older?before=${encodeURIComponent(before)}&limit=${PAGE}`);
+      // The chat moved on (a rewind, another history load) while this was on its way.
+      if (!alive || current.messages[0]?.id !== before || !Array.isArray(page?.messages)) return false;
+      current = { ...current, messages: [...page.messages, ...current.messages], earlier: page.earlier };
+      show();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      loadingOlder = false;
+    }
   };
   // The network back, the tab shown, or «تلاش دوباره» while the history waits: try it now.
   // Only while a retry is waiting: a load on its way is not doubled.
@@ -164,6 +188,7 @@ export function openTimeline({
 
   return {
     catchUp,
+    loadOlder,
     retryNow() {
       if (keeper) keeper.retryNow();
       else hurryHistory();

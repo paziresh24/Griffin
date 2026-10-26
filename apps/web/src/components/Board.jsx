@@ -34,15 +34,55 @@ const Heading = ({ count = 0, children }) => (
 
 // Open suggested chats wait for him too, with or without inbox items. The sidebar's copy keeps the
 // suggestion store fresh on every chat-list change; this one only reads it (one fetch when it mounts).
+// «هر چیز فقط یک جا» (flag onePlace; a colleague 2026-10-24: «وقتی از یه موضوع چند جا پیام میاد… حس
+// شلوغ‌پلوغی»): a question or an approval is answered in its own chat and is one linked line here, Telegram's
+// waiting messages are one line to Telegram, suggestions stay in the sidebar only.
 export function NeedsYou({ inbox }) {
+  const onePlace = useFlag("onePlace");
   const suggestions = useSuggestions().open.length;
-  if (!inbox.items.length && !suggestions) return null;
+  if (!inbox.items.length && (!suggestions || onePlace)) return null;
+  if (onePlace) {
+    const telegram = inbox.items.filter((item) => item.kind === "telegram");
+    const rest = inbox.items.filter((item) => item.kind !== "telegram");
+    return (
+      <section className="g-board w-full space-y-1" aria-label={t("منتظر شما")}>
+        <Heading count={inbox.count}>{t("منتظر شما")}</Heading>
+        <ul>
+          {rest.map((item) => (item.kind === "approval" || item.kind === "question" ? <AskLine key={item.id} item={item} /> : <li key={item.id}><InboxCard item={item} /></li>))}
+          {telegram.length ? (
+            <li>
+              <a href="#/telegram" className="g-list-row flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted pointer-coarse:min-h-11">
+                <span className={tag}>{TAGS.telegram}</span>
+                <span className="min-w-0 flex-1 truncate">{`${fa(telegram.length)} پیام منتظر شما در تلگرام`}</span>
+                <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+              </a>
+            </li>
+          ) : null}
+        </ul>
+      </section>
+    );
+  }
   return (
     <section className="g-board w-full space-y-2" aria-label={t("منتظر شما")}>
       <Heading count={inbox.count}>{t("منتظر شما")}</Heading>
       {inbox.items.map((item) => <InboxCard key={item.id} item={item} />)}
       <SidebarSuggestions />
     </section>
+  );
+}
+
+// A question or an approval as one line: the card with its buttons is in the chat that asked.
+function AskLine({ item }) {
+  const { title } = cardHead(item);
+  const open = item.sourceChatId || item.chatId;
+  return (
+    <li>
+      <a href={`#/c/${open}`} className="g-list-row flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted pointer-coarse:min-h-11">
+        <span className={tag}>{TAGS[item.kind]}</span>
+        <span className="min-w-0 flex-1 truncate" dir="auto">{title || item.question}</span>
+        <span className="shrink-0 text-xs text-muted-foreground" title={exactTime(item.at)}>{ago(item.at)}</span>
+      </a>
+    </li>
   );
 }
 
@@ -147,9 +187,10 @@ function InboxCard({ item }) {
 
 export function TaskLists({ chats, inbox }) {
   useSeenVersion(); // opening a chat elsewhere clears its unread dot here
+  const onePlace = useFlag("onePlace"); // the sidebar already shows what runs and what ended unread
   const working = workingTasks(chats, inbox.todos);
   const done = recentDone(chats, { isUnread: (c) => isUnreadChat(c, seenOf(c.id)) });
-  if (!working.length && !done.length) return null;
+  if (onePlace || (!working.length && !done.length)) return null;
   return (
     <div className="g-board w-full space-y-4">
       {working.length ? (

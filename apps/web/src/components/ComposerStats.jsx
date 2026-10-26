@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Popover } from "radix-ui";
 import { api } from "../api.js";
 import { loadLevel } from "../host-health.js";
@@ -112,11 +112,47 @@ function resetIn(at) {
 const windowPercent = (w) => (w.percentage != null ? Math.round(Number(w.percentage)) : w.limit ? Math.round((Number(w.used) / Number(w.limit)) * 100) : null);
 const tokens = (n) => (n >= 1e6 ? `${round1(n / 1e6)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n || 0));
 
-// The ring: how full this chat's context window is; the popover adds the plan's windows.
+// The plan windows (GET /api/usage), one copy for every ring on the page: read when a ring first
+// shows and again every two minutes while the tab is visible, so a tap opens on numbers already
+// there (a colleague 2026-10-24: it only started reading once opened, and showed nothing quickly).
+const PLAN_EVERY_MS = 2 * 60_000;
+const plan = { data: null, at: 0, loading: null, listeners: new Set(), timer: null };
+function loadPlan(force = false) {
+  if (plan.loading || (!force && plan.data && Date.now() - plan.at < 60_000)) return plan.loading;
+  plan.loading = api("/api/usage")
+    .then((data) => data, () => plan.data || { providers: [] })
+    .then((data) => {
+      plan.data = data;
+      plan.at = Date.now();
+      plan.loading = null;
+      for (const listener of plan.listeners) listener();
+    });
+  return plan.loading;
+}
+function subscribePlan(onChange) {
+  plan.listeners.add(onChange);
+  loadPlan();
+  plan.timer ??= setInterval(() => document.visibilityState !== "hidden" && loadPlan(true), PLAN_EVERY_MS);
+  return () => {
+    plan.listeners.delete(onChange);
+    if (!plan.listeners.size) {
+      clearInterval(plan.timer);
+      plan.timer = null;
+    }
+  };
+}
+const usePlan = () => useSyncExternalStore(subscribePlan, () => plan.data, () => null);
+
+const planWindows = (usage) => (usage?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, pct: windowPercent(w), provider: p.id, engine: p.label || p.id })));
+// The fullest plan window, for the ring's tooltip and its second colour.
+const worstWindow = (windows) => windows.reduce((worst, w) => (w.pct != null && (!worst || w.pct > worst.pct) ? w : worst), null);
+
+// The ring: how full this chat's context window is, with its number beside it; the popover adds the
+// plan's windows, by engine.
 export function UsageRing({ chatId, running }) {
   const [open, setOpen] = useState(false);
   const [context, setContext] = useState(null);
-  const [usage, setUsage] = useState(null);
+  const usage = usePlan();
   const sawRun = useRef(false);
   const loadContext = useCallback(() => {
     if (!chatId) return setContext(null);
@@ -126,53 +162,68 @@ export function UsageRing({ chatId, running }) {
     setContext(null);
     loadContext();
   }, [loadContext]);
-  // After each turn the window has grown: read it again.
+  // After each turn the window has grown and the plan has been used: read both again.
   useEffect(() => {
     if (running) sawRun.current = true;
     else if (sawRun.current) {
       sawRun.current = false;
       loadContext();
+      loadPlan(true);
     }
   }, [running, loadContext]);
   const onOpenChange = (next) => {
     setOpen(next);
     if (next) {
       loadContext();
-      api("/api/usage").then(setUsage, () => setUsage({ providers: [] }));
+      loadPlan(); // what is there shows at once; a stale copy is read again behind it
     }
   };
-  const percent = context?.available ? context.percent : 0;
+  const hasContext = Boolean(context?.available);
+  const percent = hasContext ? context.percent : 0;
   const circumference = 2 * Math.PI * 6;
-  const windows = (usage?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id })));
+  const windows = planWindows(usage);
+  const worst = worstWindow(windows);
+  const engines = [...new Set(windows.map((w) => w.engine))];
+  const title = [hasContext ? `پنجرهٔ زمینه ${fa(percent)}٪` : t("پنجرهٔ زمینه"), worst ? `${worst.label} ${fa(worst.pct)}٪` : null].filter(Boolean).join(" · ");
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
       <Popover.Trigger asChild>
-        <button type="button" className="kc-usage-trigger text-muted-foreground hover:text-foreground" aria-label={t("مصرف: {n}٪ از پنجرهٔ زمینه", { n: fa(percent) })} title={t("پنجرهٔ زمینه و سهمیهٔ پلن")}>
+        <button type="button" className="kc-usage-trigger gap-1 text-muted-foreground hover:text-foreground" aria-label={t("مصرف: {n}٪ از پنجرهٔ زمینه", { n: fa(percent) })} title={t({title})}>
           <svg viewBox="0 0 16 16" className="kc-usage-ring" data-level={level(percent)} aria-hidden>
             <circle cx="8" cy="8" r="6" />
             <circle cx="8" cy="8" r="6" data-fill="" strokeDasharray={`${(percent / 100) * circumference} ${circumference}`} />
           </svg>
+          {hasContext ? <span className="text-[11px] tabular-nums">{fa(percent)}٪</span> : null}
+          {worst && level(worst.pct) !== "ok" ? <span className="kc-usage-dot" data-level={level(worst.pct)} aria-hidden /> : null}
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" side="top" sideOffset={6} collisionPadding={16} className="g-menu pop kc-usage z-50 rounded-xl border bg-card shadow-xl" dir={isRtl ? "rtl" : "ltr"}>
+        <Popover.Content
+          align="end"
+          side="top"
+          sideOffset={6}
+          collisionPadding={16}
+          className="g-menu pop kc-usage scrollbar-thin z-50 overflow-y-auto overscroll-contain rounded-xl border bg-card shadow-xl"
+          style={{ maxHeight: "min(32rem, var(--radix-popover-content-available-height))" }}
+          dir={isRtl ? "rtl" : "ltr"}
+        >
           <section>
-            <div className="kc-usage-title">{t("پنجرهٔ زمینه")}</div>
+            <div className="kc-usage-head">
+              <span className="kc-usage-title">{t("پنجرهٔ زمینه")}</span>
+              {hasContext ? <span className="kc-usage-big ltr">{fa(context.percent)}٪</span> : null}
+            </div>
             {!chatId ? (
               <div className="kc-note">{t("پس از اولین پیام نمایش داده می‌شود")}</div>
             ) : !context ? (
               <div className="kc-note">{t("در حال خواندن…")}</div>
-            ) : !context.available ? (
+            ) : !hasContext ? (
               <div className="kc-note">{t("پس از پیامِ بعدی نمایش داده می‌شود")}</div>
             ) : (
               <>
-                <div className="kc-usage-head">
-                  <span className="kc-note">{t("استفاده‌شده")}</span>
-                  <span className="ltr kc-usage-num">
-                    {tokens(context.used)} / {tokens(context.window)} ({context.percent}%)
-                  </span>
-                </div>
                 <Bar percent={context.percent} />
+                <div className="kc-note ltr text-end">
+                  {tokens(context.used)} / {tokens(context.window)}
+                </div>
               </>
             )}
           </section>
@@ -182,21 +233,23 @@ export function UsageRing({ chatId, running }) {
             {!usage ? (
               <div className="kc-note">{t("در حال خواندن…")}</div>
             ) : windows.length ? (
-              windows.map((w, i) => {
-                const pct = windowPercent(w);
-                return (
-                  <div key={i} className="kc-usage-limit">
-                    <div className="kc-usage-head">
-                      <span>
-                        {w.label} <span className="ltr kc-note">({w.provider})</span>
-                      </span>
-                      <span className="ltr kc-usage-num">{pct == null ? "—" : `${pct}%`}</span>
-                    </div>
-                    <Bar percent={pct} />
-                    {resetIn(w.resetAt) ? <div className="kc-note">{t("ریست تا {time}", { time: resetIn(w.resetAt) })}</div> : null}
-                  </div>
-                );
-              })
+              engines.map((engine) => (
+                <div key={engine} className="kc-usage-engine">
+                  {engines.length > 1 ? <div className="kc-note font-medium" dir="auto">{engine}</div> : null}
+                  {windows
+                    .filter((w) => w.engine === engine)
+                    .map((w, i) => (
+                      <div key={i} className="kc-usage-limit">
+                        <div className="kc-usage-head">
+                          <span>{w.label}</span>
+                          <span className="ltr kc-usage-num">{w.pct == null ? "—" : `${fa(w.pct)}٪`}</span>
+                        </div>
+                        <Bar percent={w.pct} />
+                        {resetIn(w.resetAt) ? <div className="kc-note">{t("تازه می‌شود تا {time}", { time: resetIn(w.resetAt) })}</div> : null}
+                      </div>
+                    ))}
+                </div>
+              ))
             ) : (
               <div className="kc-note">{(usage.providers || []).find((p) => p.error)?.error || t("موتور فعلی سهمیهٔ پلن گزارش نمی‌دهد.")}</div>
             )}

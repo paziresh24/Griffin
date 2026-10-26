@@ -361,7 +361,7 @@ test("PATCH agent switches persona on an open chat and clears the SDK handle", a
     await until(() => !store.runningRuns().length);
     const chat = store.getChat(created.chat.id);
     assert.equal(chat.agent, "griffin");
-    assert.equal(chat.provider, "cursor");
+    assert.equal(chat.provider, "claude");
     assert.ok(chat.agent_id);
 
     const patched = await app.request(`/api/chats/${chat.id}`, {

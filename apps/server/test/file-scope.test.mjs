@@ -87,7 +87,7 @@ async function optionsOf(fileAccess, extra = {}) {
 test("a chain the owner did not start gets no built-in file or web tool; his own gets them, guarded", async () => {
   for (const missing of [null, undefined]) {
     const options = await optionsOf(missing);
-    assert.deepEqual(options.tools, [...NO_FILE_TOOLS], "no scope: no file or web tool (fail closed)");
+    assert.deepEqual(options.tools, [...NO_FILE_TOOLS, "ToolSearch"], "no scope: no file or web tool (fail closed); ToolSearch reaches the deferred tools");
     assert.ok(!options.allowedTools.some((t) => /^(Read|Write|Edit|Glob|Grep|WebFetch|WebSearch)$/.test(t)));
     assert.equal(options.hooks, undefined);
   }
@@ -108,7 +108,7 @@ test("the owner's full Claude Code (CLAUDE_CODE=on): every built-in, his setting
   assert.deepEqual(await m.hooks[0]({ tool_name: "Read", tool_input: { file_path: "/etc/hostname" } }), {});
   // Without a file scope (not the owner's chat) the switch changes nothing.
   const other = await optionsOf(null, { claudeCode: true });
-  assert.deepEqual(other.tools, [...NO_FILE_TOOLS]);
+  assert.deepEqual(other.tools, [...NO_FILE_TOOLS, "ToolSearch"]);
   assert.ok(other.disallowedTools.includes("Bash"));
   assert.equal(other.strictMcpConfig, true);
 });

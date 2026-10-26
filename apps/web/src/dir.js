@@ -1,11 +1,20 @@
-// Block direction: any Persian/Arabic (or Hebrew) script forces RTL, even if the line
-// opens with Latin (GitLab, paths, English words). Pure Latin stays LTR.
+// Block direction (owner 2026-10-25: «انگلیسی فورس چپ‌چین، فارسی فورس راست‌چین»): a Persian sentence
+// full of English names (GitLab, pod, namespace) stays RTL; an English sentence that only quotes a
+// Persian word («روایت», "سلام", `code`) is LTR. Quoted, code and URL spans don't vote; then a block
+// is RTL when at least one word in five is Persian. Nothing left to vote: any Persian → RTL.
 
 const RTL = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/;
 const LTR = /[A-Za-z]/;
+const RTL_WORD = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]+/g;
+const LTR_WORD = /[A-Za-z]+/g;
+const NOT_VOTING = /```[\s\S]*?(```|$)|`[^`\n]*`|«[^»\n]*»|"[^"\n]*"|“[^”\n]*”|\bhttps?:\/\/\S+|\]\([^)\s]*\)/g;
 
 export function textDir(value) {
   const text = String(value || "");
+  const voting = text.replace(NOT_VOTING, " ");
+  const rtl = (voting.match(RTL_WORD) || []).length;
+  const ltr = (voting.match(LTR_WORD) || []).length;
+  if (rtl || ltr) return rtl && rtl * 4 >= ltr ? "rtl" : "ltr";
   if (RTL.test(text)) return "rtl";
   if (LTR.test(text)) return "ltr";
   return "auto";

@@ -17,3 +17,10 @@ export function rewindChoices(preview) {
   const conversation = Boolean(preview?.conversation?.canRewind);
   return { both: files && conversation, conversation, files };
 }
+
+// The message rewound away comes back to the composer, as in Claude Code (owner 2026-10-22: its
+// text was lost). Not for «فقط فایل‌ها» (the message stays) nor for an edit (sent again at once).
+export function textBackToBox(body, text) {
+  if (!text?.trim() || body?.conversation === false || body?.text != null) return "";
+  return text;
+}

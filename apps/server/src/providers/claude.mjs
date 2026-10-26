@@ -10,9 +10,11 @@ import { ASK_TOOL, isPlanApprovalText } from "../asks.mjs";
 import { inertText, maskText } from "../redact.mjs";
 import { NO_FILE_TOOLS, fileGuard, fileGuardHooks } from "./file-scope.mjs";
 import { stateGuard, denyOutput, instructionGuardOptions } from "./state-guard.mjs";
-import { hostSpawner, hostTarget } from "./host-spawn.mjs";
-import { isLoginDirKey, loginDirOf } from "../claude-account-dir.mjs";
+import { planModeRefusal } from "./plan-mode-guard.mjs";
+import { hostConfigDir, hostSpawner, hostTarget } from "./host-spawn.mjs";
+import { isLoginDirKey, loginDirOf, loginDirToken, mainConfigDir, relativizeSharedLinks } from "../claude-account-dir.mjs";
 import { genv } from "../env.mjs";
+import { syncMcpServers } from "../mcp-servers.mjs";
 import { agentSlug } from "../persona.mjs";
 // The in-process MCP server carries the assistant's own name, so the model sees mcp__<name>__kube_get,
 // never mcp__griffin__… (each install's agent goes by its own name).
@@ -127,10 +129,24 @@ const FULL_NOTE = "This is the owner's own chat with his full Claude Code: besid
 // options.onHost (config CLAUDE_HOST): the same chat, but on the server as the owner's own Unix user.
 // Griffin's tools act as Griffin's own identity: their refusals (and their «do not hunt other
 // credentials» hints) are about that identity, not the owner's own access.
-const HOST_NOTE = "This is the owner's own chat with their full Claude Code, running on this server as their own Unix user, the way their own terminal does: their ssh keys and ~/.ssh/config hosts, kubectl through them, gh, git with their own forge token, their skills and memory. Besides the tools listed above you have every Claude Code built-in (Bash, Read, Write, Edit, …). Use Bash for what they would do from their own terminal. The app's own tools run as the app's own identity: their refusals and their hints not to look for other credentials are about that identity, not about the owner. When one refuses, try the owner's own access in Bash before you report a missing permission. Never print secret values; irreversible changes still need the owner's yes.";
+const HOST_NOTE = "This is the owner's own chat with their full Claude Code, running on this server as their own Unix user, the way their own terminal does: their ssh keys and ~/.ssh/config hosts, kubectl through them, gh, git with their own forge token, their skills and memory. Besides the tools listed above you have every Claude Code built-in (Bash, Read, Write, Edit, …). Use Bash for what they would do from their own terminal. The app's own tools run as the app's own identity: their refusals and their hints not to look for other credentials are about that identity, not about the owner. When one refuses, try the owner's own access in Bash before you report a missing permission. A «Permission denied» for one user or key on a machine is a wrong guess, not «no access»: find how that machine is actually reached (his ~/.ssh/config, his memory and instructions, the install list) before you say access is missing — never raise an access card for a machine we built. Never print secret values; irreversible changes still need the owner's yes. This server is the production install itself, shared by every chat: run heavy test suites one at a time (nice -n19, TMPDIR on disk) or leave them to CI, and never delete files or folders you did not create. When an irreversible request could mean two or more targets you can name, ask him one question with those as options before acting.";
+// options.onHost set, but this run fell back to the container (no host target, or a folder login whose token
+// is about to expire): Bash has no ssh keys here. Without this line a chat reported «no access» and raised an
+// access card for a capsule it reaches fine from the host (live 2026-10-21).
+const CONTAINER_FALLBACK_NOTE = "This turn could not run on the server as his user and runs inside the app container (user node): Bash here has none of his ssh keys or ~/.ssh hosts. If the work needs them, say plainly that this turn runs in the container and he should send it again in a minute — never report it as a missing access and never raise an access card for it.";
 // options.ownerJob (jobs/owner-jobs.mjs): the same full Claude Code, in the owner's scheduled job —
 // nobody is reading along, so the note must not tell the model this is his own chat.
 const OWNER_JOB_NOTE = "This is the owner's scheduled job, running unattended with his full Claude Code: nobody is reading along, and it is not his chat. Besides the tools listed above you also have every Claude Code built-in (Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, …), his skills and his own MCP servers. Bash is not approval-gated here: run only what the job's own instruction needs, and nothing irreversible that it does not plainly ask for. the app's own tools stay the way to reach clusters, vaults and people; their gated calls still wait for the owner's yes.";
+/** The note after the rules in full mode: a job, a run on the host, or a run in the container (with the
+ *  fallback line when the host was configured but this run could not go there). */
+export function fullModeNote({ ownerJob = false, host = false, onHost = false } = {}) {
+  if (ownerJob) return OWNER_JOB_NOTE;
+  if (host) return HOST_NOTE;
+  return onHost ? `${FULL_NOTE} ${CONTAINER_FALLBACK_NOTE}` : FULL_NOTE;
+}
+// Claude Code's own setting `language`: every send carries it, so every chat answers in Persian.
+export const REPLY_LANGUAGE = "Persian";
+
 const BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"];
 
 // One more PreToolUse entry, for every tool (no matcher): the state guard and the instruction-file
@@ -187,8 +203,49 @@ export function planWindows(windows) {
     .map(([key, w]) => ({ label: WINDOW_LABELS[key], percentage: Math.round(Number(w.utilization) * 100), resetAt: w.resetsAt ? w.resetsAt * 1000 : null }));
 }
 
+// Where a Claude session compacts (config CLAUDE_COMPACT_WINDOW, tokens; 0 = only at 80% of the
+// model's window). Every request re-reads the whole context, so its size is what a turn costs: with
+// nothing set, the 5-5 models' 1M window ran owner chats at a median 400k (p90 700k) and one
+// account's 5-hour plan window went in a morning (owner 2026-10-20, a colleague's account). A 200k cap
+// compacted too often; the owner keeps the 1M window and compacts at about 600k (2026-10-20).
+export const compactWindow = (env = process.env) => {
+  const n = Number(genv("CLAUDE_COMPACT_WINDOW", "600000", env));
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+};
+// With CLAUDE_CODE_AUTO_COMPACT_WINDOW set, Claude Code's getContextUsage answers that cap as the
+// window (maxTokens = rawMaxTokens = 600k, read from its binary 2026-10-21), so the gauge showed
+// 600k and the 80% rule fired at 480k. A reading at exactly the cap is the cap, not the model: put
+// the model's window (CLAUDE_MODEL_WINDOW, default 1M) back. A smaller model (200k) is left as is.
+export function withModelWindow(usage, env = process.env) {
+  const cap = compactWindow(env);
+  const raw = Number(usage?.rawMaxTokens || usage?.maxTokens);
+  if (!usage || !(cap > 0) || raw !== cap) return usage;
+  const model = Number(genv("CLAUDE_MODEL_WINDOW", "1000000", env));
+  return Number.isFinite(model) && model > cap ? { ...usage, rawMaxTokens: model, maxTokens: model } : usage;
+}
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW makes Claude Code compact inside a long turn too (it takes the
+// smaller of this and the model's window); one already set on the host wins.
+export function withCompactWindow(env, window = compactWindow()) {
+  return window && !env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ? { ...env, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) } : env;
+}
+
+// The folder a run reads its MCP servers from is its CLAUDE_CONFIG_DIR: copy the owner's list there first.
+function withMcpSync(env, on) {
+  if (on && env.CLAUDE_CONFIG_DIR) {
+    try {
+      syncMcpServers({ to: env.CLAUDE_CONFIG_DIR });
+    } catch (error) {
+      console.error(`[claude] MCP server list not synced: ${error.message}`);
+    }
+  }
+  return env;
+}
+
 // The env of a run: the account's Anthropic login, or (endpoint account) the vendor's endpoint and key.
-const runEnv = (apiKey, endpoint, modelId) => (endpoint ? endpointEnv(endpoint, apiKey, modelId) : claudeAuthEnv(apiKey));
+// GIT_AUTHOR_*/GIT_COMMITTER_* beat any user.name/email config, `git -c` included.
+export const gitAuthorEnv = (author) =>
+  author?.email ? { GIT_AUTHOR_NAME: author.name || author.email, GIT_AUTHOR_EMAIL: author.email, GIT_COMMITTER_NAME: author.name || author.email, GIT_COMMITTER_EMAIL: author.email } : {};
+const runEnv = (apiKey, endpoint, modelId) => (endpoint ? endpointEnv(endpoint, apiKey, modelId) : withCompactWindow(claudeAuthEnv(apiKey)));
 
 // What a failed result says to the runner: plan_limit / engine_unavailable (plan-fallback.mjs), else
 // a gone session. An endpoint account's spent plan (Z.ai 1308/1310) is a plan limit like Claude's,
@@ -202,7 +259,8 @@ function resultError(message, limit, endpoint) {
 // A login or key the endpoint refused, as Claude Code words it in a `result` (an
 // expired OAuth login can come back as subtype "success" + is_error true + zero tokens).
 const AUTH_RESULT = /failed to authenticate|oauth|\b401\b|invalid api key|not logged in/i;
-export const NO_ANSWER = "پاسخی دریافت نشد";
+export const NO_ANSWER = "موتور جواب خالی برگرداند";
+export const NO_ANSWER_CODE = "no_answer";
 
 // «Prompt is too long»: the session no longer fits the model's window. Claude Code compacts on its
 // own only between the turns it runs; a resumed session that already overflows is refused at its
@@ -210,10 +268,13 @@ export const NO_ANSWER = "پاسخی دریافت نشد";
 // hand-typed /compact recovered it). So the send itself compacts — before, when the last
 // reading (getContextUsage) is near the window, and after, when the engine refuses the turn.
 export const PROMPT_TOO_LONG = /prompt is too long/i;
-export function contextPressure(usage, ratio) {
+// `ratio` of the model's window or `window` (compactWindow) tokens, whichever comes first: a 1M
+// model compacts at 600k, a 200k one still at 160k.
+export function contextPressure(usage, ratio, window = 0) {
   const total = Number(usage?.totalTokens);
-  const max = Number(usage?.rawMaxTokens || usage?.maxTokens);
-  return ratio > 0 && total > 0 && max > 0 && total / max >= ratio;
+  const raw = Number(usage?.rawMaxTokens || usage?.maxTokens);
+  if (!(ratio > 0 && total > 0 && raw > 0)) return false;
+  return total / raw >= ratio || (window > 0 && total >= window);
 }
 // Updates that are bookkeeping, never something the turn showed the owner.
 const NOT_OUTPUT = new Set(["turn-ended", "request-usage", "checkpoint", "fast-mode", "api-retry", "rate-limit"]);
@@ -225,7 +286,7 @@ export const isOutput = (update) => !NOT_OUTPUT.has(update?.type);
 export function resultFailure(msg, { produced = false, limit = null, endpoint = null } = {}) {
   if (msg.subtype === "success" && !msg.is_error) {
     const silent = !produced && !msg.local_command && !String(msg.result || "").trim() && msg.usage != null && !(Number(msg.usage.output_tokens) > 0);
-    return silent ? { message: NO_ANSWER } : null;
+    return silent ? { message: NO_ANSWER, code: NO_ANSWER_CODE } : null;
   }
   const raw = msg.result || msg.errors?.join?.("; ") || msg.subtype || "claude run failed";
   const error = resultError(raw, limit, endpoint);
@@ -428,6 +489,8 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
       }
       return probeOutcome({ failure, closed, windows: lastLimits.windows });
     },
+    // The plan windows this account's last run reported, as they came (routing reads them: account-balance.mjs).
+    lastWindows: () => lastLimits.windows,
     // Pro plan windows. A setup-token has no profile scope, so /usage returns no rate_limits;
     // every run's rate_limit_event carries them instead (unifiedWindows, utilization 0-1).
     async usage() {
@@ -639,6 +702,33 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
   const CLI_TURN_QUIET_MS = options.cliTurnQuietMs ?? 15_000; // a turn of Claude's own that went silent
   const tellBackground = (event) => bestEffort(() => backgroundListener?.(event));
   const taskList = (p) => [...(p?.tasks.values() || [])].map((task) => ({ ...task }));
+  // Wake-ups the session holds (ScheduleWakeup, CronCreate, /loop), as its Stop hook said at the end
+  // of the last turn. They live in the Claude Code process: closing it as idle killed every one —
+  // 2026-10-19 a «check CI in 4 minutes» wake-up never fired and the owner had to ask. The process
+  // is kept for them, at most WAKEUP_KEEP_MS after the chat was last used (Karsara's rule).
+  let sessionCrons = [];
+  let lastUsedAt = Date.now();
+  const WAKEUP_KEEP_MS = options.wakeupKeepMs ?? Math.max(0, Number(process.env.GRIFFIN_WAKEUP_KEEP_HOURS ?? 24)) * 3_600_000;
+  const holdsWakeups = () => sessionCrons.length > 0 && Date.now() - lastUsedAt <= WAKEUP_KEEP_MS;
+  const cronList = () => sessionCrons.map((cron) => ({ ...cron }));
+  function noteCrons(list) {
+    const next = (Array.isArray(list) ? list : [])
+      .filter((cron) => cron && typeof cron === "object")
+      .slice(0, 20)
+      .map((cron) => ({ id: String(cron.id || ""), schedule: String(cron.schedule || ""), recurring: Boolean(cron.recurring), prompt: String(cron.prompt || "").slice(0, 1000) }));
+    if (JSON.stringify(next) === JSON.stringify(sessionCrons)) return;
+    sessionCrons = next;
+    tellBackground({ type: "crons", crons: cronList() });
+    if (proc && !proc.route) scheduleClose(proc);
+  }
+  async function stopHook(input) {
+    try {
+      if (Array.isArray(input?.session_crons)) noteCrons(input.session_crons);
+    } catch {
+      /* bookkeeping only */
+    }
+    return { continue: true };
+  }
   const tasksChanged = (p) => tellBackground({ type: "tasks", tasks: taskList(p) });
 
   function trackTask(p, msg) {
@@ -658,11 +748,69 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
     return { task, status: msg.status || msg.patch?.status || "completed", summary: String(msg.summary || "").slice(0, 2_000), outputFile: typeof msg.output_file === "string" && msg.output_file ? msg.output_file : null };
   }
 
+  // The runner's run for a turn Claude Code started by itself: a route like an owner's turn, with
+  // no message of its own (its result answers the task notification), stopped by interrupt().
+  function adoptTurn(p) {
+    if (typeof backgroundListener !== "function") return null;
+    let limit = null;
+    let settled = false;
+    const route = { uuid: null, adopted: true, steered: [], sendOptions: p.lastSendOptions || {}, bridge: createClaudeEventBridge(), cancelled: false, started: true, pushed: true, getLimit: () => limit, setLimit: (value) => (limit = value) };
+    let handlers = null;
+    route.finish = (result) => {
+      if (settled) return;
+      settled = true;
+      bestEffort(() => handlers?.finish?.(result));
+    };
+    const cancel = async () => {
+      route.cancelled = true;
+      if (p.route !== route) return route.finish({ status: "cancelled", error: null });
+      if (p.q && typeof p.q.interrupt === "function") {
+        try {
+          await Promise.race([p.q.interrupt(), new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5_000).unref?.())]);
+          hardStopIfStuck(p, route, () => settled);
+          return;
+        } catch {
+          /* fall through to the hard stop */
+        }
+      }
+      p.abort.abort();
+    };
+    try {
+      handlers = backgroundListener({ type: "turn", cancel });
+    } catch {
+      handlers = null;
+    }
+    if (typeof handlers?.onDelta !== "function") return null;
+    route.onDelta = handlers.onDelta;
+    p.route = route;
+    p.cliTurn = false;
+    clearTimeout(p.idleTimer);
+    return route;
+  }
+
+  // Stop asked the CLI to interrupt and it said yes, but the turn only ends when its result comes: a tool
+  // that never returns (a hung MCP call, a Bash with no timeout) keeps the chat on «در حال کار» for ever.
+  // If the turn is still open after the grace, the hard stop ends it (owner 2026-10-21, a colleague's install).
+  const STOP_GRACE_MS = options.stopGraceMs ?? 10_000;
+  function hardStopIfStuck(p, route, isDone) {
+    const timer = setTimeout(() => {
+      if (!isDone() && p.route === route && !p.me.done) p.abort.abort();
+    }, STOP_GRACE_MS);
+    timer.unref?.();
+  }
+
   function scheduleClose(p) {
     clearTimeout(p.idleTimer);
     if (p.closing || p.route || p.waiting.length || p.tasks.size) return;
+    if (holdsWakeups()) {
+      // Checked again when the keep window ends (or an hour from now, whichever is first).
+      const left = Math.max(1_000, Math.min(3_600_000, WAKEUP_KEEP_MS - (Date.now() - lastUsedAt)));
+      p.idleTimer = setTimeout(() => scheduleClose(p), left);
+      p.idleTimer.unref?.();
+      return;
+    }
     p.idleTimer = setTimeout(() => {
-      if (p.route || p.waiting.length || p.tasks.size) return;
+      if (p.route || p.waiting.length || p.tasks.size || holdsWakeups()) return;
       if (p.cliTurn && Date.now() - p.lastMessageAt < CLI_TURN_QUIET_MS) return scheduleClose(p);
       p.closing = true;
       p.input.close();
@@ -731,7 +879,10 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
         p.lastMessageAt = Date.now();
         if (msg?.session_id) currentSessionId = msg.session_id;
         const ended = trackTask(p, msg);
-        const route = p.route;
+        let route = p.route;
+        // A turn of Claude's own (it answers a background task that ended) becomes a run of the
+        // chat when the runner takes it (adoptTurn below); otherwise it stays unseen, as before.
+        if (!route && !p.closing && (msg?.type === "assistant" || msg?.type === "stream_event")) route = adoptTurn(p);
         if (msg?.type === "prompt_suggestion") {
           // Only for the owner's own last turn, never after a turn of Claude's own.
           if (p.lastResultOwn) bestEffort(() => p.lastSendOptions?.onSuggestion?.(String(msg.suggestion ?? "")));
@@ -755,7 +906,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
         // A result names the user message(s) it answers; one that does not name this route's is
         // Claude's own turn (it answers a task notification), not the owner's.
         const answers = msg?.type === "result" ? [msg.user_message_uuid, ...(Array.isArray(msg.user_message_uuids) ? msg.user_message_uuids : [])].filter(Boolean) : [];
-        const foreign = route && answers.length && !answers.some((id) => id === route.uuid || route.steered.includes(id));
+        const foreign = route && !route.adopted && answers.length && !answers.some((id) => id === route.uuid || route.steered.includes(id));
         if (!route || foreign) {
           // Between the owner's turns Claude may answer a finished task in a turn of its own: its
           // text stays in the session, so the owner's next turn sees it.
@@ -794,7 +945,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
           if (typeof p.q.getContextUsage === "function") {
             Promise.resolve()
               .then(() => p.q.getContextUsage({ detail: "summary" }))
-              .then((usage) => usage && (lastContext = usage))
+              .then((usage) => usage && (lastContext = withModelWindow(usage)))
               .catch(() => {});
           }
           const failure = resultFailure(msg, { produced: Boolean(route.produced), limit: route.getLimit(), endpoint });
@@ -804,7 +955,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
           });
           p.lastSendOptions = route.sendOptions;
           p.me.resultAt = Date.now();
-          p.lastResultOwn = true;
+          p.lastResultOwn = !route.adopted;
           p.route = null;
           startNext(p);
           scheduleClose(p);
@@ -825,6 +976,12 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
         tellBackground({ type: "lost", tasks: taskList(p) });
         p.tasks.clear();
         tasksChanged(p);
+      }
+      if (sessionCrons.length && proc === p) {
+        // Closed while wake-ups were still due (the keep window ran out, or a stop): they will not fire.
+        if (holdsWakeups()) tellBackground({ type: "lost-crons", crons: cronList() });
+        sessionCrons = [];
+        tellBackground({ type: "crons", crons: [] });
       }
       if (proc === p) proc = null;
       started = true;
@@ -874,6 +1031,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       if (p.q && typeof p.q.interrupt === "function") {
         try {
           await Promise.race([route.steered.length ? p.q.interrupt({ cancelQueued: true }) : p.q.interrupt(), new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5_000).unref?.())]);
+          hardStopIfStuck(p, route, isSettled);
           return;
         } catch {
           /* fall through to the hard stop */
@@ -946,6 +1104,10 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
     backgroundTasks() {
       return taskList(proc);
     },
+    // Wake-ups this session will fire later (a kept process only), as its last Stop hook said.
+    wakeups() {
+      return proc && !proc.closing && !proc.me.done ? cronList() : [];
+    },
     async stopTask(taskId, { timeoutMs = 10_000 } = {}) {
       const p = proc;
       if (!p?.q || typeof p.q.stopTask !== "function" || !p.tasks.has(String(taskId))) return false;
@@ -1000,8 +1162,10 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
         lastContext = null;
         return result?.status === "finished" && !result.error;
       };
-      if (contextPressure(lastContext, ratio)) {
-        const used = Math.round((Number(lastContext.totalTokens) / Number(lastContext.rawMaxTokens || lastContext.maxTokens)) * 100);
+      const window = endpoint ? 0 : compactWindow();
+      if (contextPressure(lastContext, ratio, window)) {
+        const raw = Number(lastContext.rawMaxTokens || lastContext.maxTokens);
+        const used = Math.round((Number(lastContext.totalTokens) / raw) * 100);
         await compact(`context at ${used}% of the window`);
       }
       const run = await agent.sendTurn(message, sendOptions);
@@ -1026,6 +1190,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       };
     },
     async sendTurn(message, sendOptions = {}) {
+      lastUsedAt = Date.now();
       // A fresh in-process MCP server per send: the runner caches this agent, and one server
       // instance holds a single transport — a send that started while the previous query was still
       // closing its transport came up with «MCP: failed».
@@ -1081,11 +1246,25 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       // knowledge store or the agent's state (scope.deny); Bash is his, like his own terminal — unguarded
       // only under STATE_GUARD=off (below; on by default).
       const full = Boolean(scope && options.claudeCode);
-      // A folder login lives in the app's data folder, which the host does not see: it runs here.
-      const host = full && options.onHost && !isLoginDirKey(apiKey) ? hostTarget() : null;
+      // A folder login lives in the app's data folder. With GRIFFIN_CLAUDE_HOST_LOGIN_DIRS=1 the host sees it at
+      // GRIFFIN_CLAUDE_HOST_DATA and the wrapper (griffin-claude-host, request field config_dir) uses it as the
+      // config dir, so Claude Code there refreshes its own login. Otherwise the host run gets the folder's live
+      // access token (loginDirToken); one about to expire runs here, which refreshes it.
+      let hostLogin = null;
+      let host = full && options.onHost ? hostTarget() : null;
+      if (host && isLoginDirKey(apiKey)) {
+        const configDir = genv("CLAUDE_HOST_LOGIN_DIRS", "") === "1" ? hostConfigDir(loginDirOf(apiKey)) : null;
+        if (configDir) {
+          relativizeSharedLinks({ dir: loginDirOf(apiKey), main: mainConfigDir() });
+          host = { ...host, configDir };
+        } else {
+          hostLogin = loginDirToken(loginDirOf(apiKey));
+          if (!hostLogin) host = null;
+        }
+      }
       if (full && options.onHost && !host) console.error("[claude] CLAUDE_HOST is set but GRIFFIN_CLAUDE_HOST_TARGET/_KEY are not: running in the container");
       const keep = full && Boolean(options.backgroundTasks);
-      const builtins = full ? null : scope ? BUILTIN_TOOLS : NO_FILE_TOOLS;
+      const builtins = full ? null : withToolSearch(scope ? BUILTIN_TOOLS : NO_FILE_TOOLS);
       // options.stateGuard (index.mjs, config STATE_GUARD, on by default): { protect, except } — with full Claude
       // Code, Bash and every other tool also may not write the knowledge store or the data folder
       // (state-guard.mjs). STATE_GUARD=off: as before.
@@ -1098,11 +1277,21 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       // literal paths into the data folder and the broker socket refused for reading as well (a speed
       // bump, not a boundary: a path built at run time passes).
       const protectReads = full && options.readGuard?.protect?.length ? stateGuard({ ...options.readGuard, cwd: options.cwd || process.cwd() }) : null;
-      const hooks = full
+      // «بدون پرسیدن» in the owner's own chat: no file or state hook at all (index.mjs ownerBypass).
+      const baseHooks = scope?.unrestricted
+        ? null
+        : full
         ? withStateGuard(fileGuardHooks(fileGuard({ cwd: options.cwd, read: ["/"], write: ["/"], deny: scope.deny || [] })), protectState, protectInstructions, protectReads)
         : scope
           ? fileGuardHooks(fileGuard({ cwd: options.cwd, ...scope }))
           : null;
+      // A kept process (config CLAUDE_BACKGROUND_TASKS): at the end of every turn Claude Code says
+      // which wake-ups it holds, so the process stays open for them to fire.
+      const kept = full && options.backgroundTasks ? { ...(baseHooks || {}), Stop: [...(baseHooks?.Stop || []), { hooks: [stopHook] }] } : baseHooks;
+      // Plan mode refuses changes in a hook, before the allow rules that skip canUseTool (plan-mode-guard.mjs).
+      const planHook = { hooks: [async (input) => (liveMode === "plan" ? ((why) => (why ? denyOutput(why) : {}))(planModeRefusal(input?.tool_name, input?.tool_input || {}, `mcp__${mcpName()}__`)) : {})] };
+      // Only where plan mode exists: the owner's own chats (fileAccess). A chain he did not start has no hooks at all.
+      const hooks = kept ? { ...kept, PreToolUse: [...(kept.PreToolUse || []), planHook] } : kept;
       const prev = last;
       let closeMe;
       const me = { closed: new Promise((resolve) => (closeMe = resolve)), done: false, abort, resultAt: 0 };
@@ -1131,7 +1320,10 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             // Claude Code's guess at the owner's next message, after the result (runner decides who gets one).
             ...(extras.onSuggestion ? { promptSuggestions: true } : {}),
             // Fast mode is an SDK opt-in: only a settings value turns it on (billed from extra usage, Opus only).
-            ...(extras.fast || planGate ? { settings: { ...(extras.fast ? { fastMode: true } : {}), ...(planGate ? { plansDirectory: PLANS_DIR } : {}) } } : {}),
+            // language: Claude Code's own «# Language — Always respond in …» note, kept inside the conversation;
+            // the Persian rule deep in the appended rules alone lost to the long English preset and tool
+            // output (2026-10-25: three owner chats opened in English until he typed «فارسی»).
+            settings: { language: REPLY_LANGUAGE, ...(extras.fast ? { fastMode: true } : {}), ...(planGate ? { plansDirectory: PLANS_DIR } : {}) },
             ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
             ...(checkpoint ? { enableFileCheckpointing: true } : {}),
             permissionMode: PERMISSION_MODES[mode],
@@ -1153,9 +1345,16 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             // Rules come with the run, not from the shared workspace CLAUDE.md: concurrent chats of
             // one agent rewrite that file, so a colleague thread could run on the owner's rules.
             ...(options.rules
-              ? { systemPrompt: { type: "preset", preset: "claude_code", append: full ? `${options.rules}\n\n${options.ownerJob ? OWNER_JOB_NOTE : host ? HOST_NOTE : FULL_NOTE}` : options.rules }, settingSources: full ? ["user", "project", "local"] : [] }
+              ? { systemPrompt: { type: "preset", preset: "claude_code", append: full ? `${options.rules}\n\n${fullModeNote({ ownerJob: options.ownerJob, host: Boolean(host), onHost: options.onHost })}` : options.rules }, settingSources: full ? ["user", "project", "local"] : [] }
               : { settingSources: full ? ["user", "project", "local"] : ["project"] }),
-            env: runEnv(apiKey, endpoint, modelId),
+            env: {
+              ...withMcpSync(runEnv(host && hostLogin ? hostLogin.token : apiKey, endpoint, modelId), full && !host),
+              ...gitAuthorEnv(options.gitAuthor),
+              // Claude Code stops suggesting by itself once the account is past its warning line
+              // (rate limit «allowed_warning», 72% of the week on 2026-10-22) or after 20 unused ones;
+              // the owner's switch (config PROMPT_SUGGESTIONS) decides, not that.
+              ...(extras.onSuggestion ? { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "true" } : {}),
+            },
             ...claudeExecutableOption(),
             // options.onHost (index.mjs, config CLAUDE_HOST): the process runs on the host as the owner.
             ...(host ? { spawnClaudeCodeProcess: hostSpawner(host) } : {}),
@@ -1166,7 +1365,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
 
       // Config CLAUDE_BACKGROUND_TASKS: the owner's full Claude Code keeps its process (and the
       // background shells and agents it started) after the turn, and the next send goes into it.
-      if (keep) return sendKept({ message, sendOptions, run, finish, abort, mcp, queryOptions, checkpoint, me, closeMe, prev, bridge, getLimit: () => limit, setLimit: (value) => (limit = value), isSettled: () => settled, settings: { modelId, mode, effort: extras.effort || null, fast: Boolean(extras.fast) } });
+      if (keep) return sendKept({ message, sendOptions, run, finish, abort, mcp, queryOptions, checkpoint, me, closeMe, prev, bridge, getLimit: () => limit, setLimit: (value) => (limit = value), isSettled: () => settled, settings: { modelId, mode, effort: extras.effort || null, fast: Boolean(extras.fast), ...(host && hostLogin ? { login: hostLogin.expiresAt } : {}) } });
 
       async function attempt(resume) {
         const q = queryImpl({
@@ -1228,7 +1427,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             if (typeof q.getContextUsage === "function") {
               Promise.resolve()
                 .then(() => q.getContextUsage({ detail: "summary" }))
-                .then((usage) => usage && (lastContext = usage))
+                .then((usage) => usage && (lastContext = withModelWindow(usage)))
                 .catch(() => {});
             }
             // is_error wins over subtype: an expired login can arrive as "success" + is_error (seen in the wild).
@@ -1293,7 +1492,38 @@ function sessionGone(message) {
   return /no conversation found with session id|failed to resume session/i.test(message) ? { message, code: "agent_not_found" } : { message };
 }
 
-function buildMcpServer(customTools) {
+// The tools whose definition goes into every request (config CLAUDE_ALWAYS_LOAD: a comma list, «*» =
+// every tool, as before). The rest wait behind Claude Code's ToolSearch and load on first use: every
+// tool always loaded put ~170 definitions (~40k tokens) into each request of an owner chat, more than
+// its rules and memory together (owner 2026-10-20). These are the ones nearly every chain reaches for.
+export const ALWAYS_LOAD = [
+  "ask_owner",
+  "ask_requester",
+  "ask_agent",
+  "delegate",
+  "subtasks",
+  "list_agents",
+  "owner_task",
+  "knowledge_list",
+  "knowledge_write",
+  "telegram_send",
+  "telegram_read",
+  "chat_send",
+  "updateTodos",
+  // Only a colleague's chat on its light model has it (model-upgrade.mjs); deferred, the light model
+  // never found it and handed real work to delegate instead (2026-10-25 test on .46).
+  "upgrade_model",
+];
+export function alwaysLoaded(env = process.env) {
+  const set = String(genv("CLAUDE_ALWAYS_LOAD", "", env)).trim();
+  if (set === "*") return () => true;
+  const names = new Set(set ? set.split(",").map((name) => name.trim()).filter(Boolean) : ALWAYS_LOAD);
+  return (name) => names.has(name);
+}
+// ToolSearch reaches the deferred tools: a chain whose built-ins are restricted must still have it.
+export const withToolSearch = (builtins) => (builtins.includes("ToolSearch") ? builtins : [...builtins, "ToolSearch"]);
+
+export function buildMcpServer(customTools, isAlwaysLoaded = alwaysLoaded()) {
   const names = Object.keys(customTools || {});
   if (!names.length) return null;
   const tools = names.map((name) => {
@@ -1306,14 +1536,14 @@ function buildMcpServer(customTools) {
         const result = await def.execute(args || {});
         return toCallToolResult(result);
       },
-      { alwaysLoad: true },
+      { alwaysLoad: isAlwaysLoaded(name) },
     );
   });
+  // No server-wide alwaysLoad: the SDK ORs it with each tool's and would load all of them again.
   return createSdkMcpServer({
     name: mcpName(),
     version: "1.0.0",
     tools,
-    alwaysLoad: true,
   });
 }
 
@@ -1386,7 +1616,12 @@ function userMessageOf(message, sessionId, uuid) {
 // A chat's permission mode (as in Claude Desktop's mode menu): «agent» is the old
 // default, no prompts. In «auto», «ask» and «edits» Claude Code asks before a step it needs a permission
 // for (canUseTool), and that becomes a yes/no card for the owner; no way to ask = denied.
-export const PERMISSION_MODES = { agent: "bypassPermissions", plan: "plan", auto: "auto", ask: "default", edits: "acceptEdits" };
+// «خودکار» runs exactly as «بدون پرسیدن» used to (owner 2026-10-21: «خودکار باید مثل حالت فعلی باشه،
+// به مشکل نخورن یهو بچه ها»): Claude Code asks nothing, and the app's guards and reviewers still apply.
+// «بدون پرسیدن» is the same plus no guards at all in the owner's own chats (index.mjs ownerBypass).
+export const PERMISSION_MODES = { agent: "bypassPermissions", plan: "plan", auto: "bypassPermissions", ask: "default", edits: "acceptEdits" };
+// Modes that run like the old default: on the host with his own user, no Claude Code permission card.
+export const runsFree = (mode) => ["agent", "auto"].includes(mode || "agent");
 
 export function permissionQuestion(name, input = {}) {
   const what = typeof input.description === "string" && input.description.trim() ? input.description.trim() : null;
@@ -1457,8 +1692,11 @@ export function askOwnerTool(approve, { askTool = null, emit = async () => {} } 
     if (name === "ExitPlanMode") return { behavior: "deny", message: "Stay in plan mode: give the plan as your answer and stop." };
     if (name === "AskUserQuestion" && typeof askTool?.execute === "function") return canUseAskUserQuestion(input, askTool, { emit, toolUseID: ctx.toolUseID || null });
     if (typeof approve !== "function") return { behavior: "deny", message: "No one is here to approve this step." };
-    const yes = await approve(permissionQuestion(name, input)).catch(() => false);
-    return yes ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "The owner did not allow this step. Do not retry it; say what you would need." };
+    const yes = await approve(permissionQuestion(name, input)).catch(() => "unanswered");
+    // A card cut by a restart or a cancel is not a «no» (2026-10-21: «آخرین ابزارم را رد کردید» after
+    // an install restarted the server under an open card).
+    if (yes === "unanswered") return { behavior: "deny", message: "The owner's approval card closed without an answer (restart or cancel); he did NOT refuse. Ask again if the step is still needed, and never tell him he rejected it." };
+    return yes === true ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "The owner did not allow this step. Do not retry it; say what you would need." };
   };
 }
 

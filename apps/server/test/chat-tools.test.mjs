@@ -190,3 +190,14 @@ test("GET /api/chats/:id/context: the last run's prompt tokens over the window",
   const got = await (await app.request(`/api/chats/${chat.id}/context`)).json();
   assert.deepEqual(got, { available: true, used: 50_000, window: 200_000, percent: 25, model: "sonnet" });
 });
+
+test("GET /api/chats/:id/context: a 1M model's gauge is over its own 1M window", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-chattools-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const runner = { isActive: () => false, activeCount: () => 0, contextUsage: () => ({ totalTokens: 150_000, rawMaxTokens: 1_000_000, model: "claude-sonnet-5-5" }) };
+  const app = createApp({ store, runner, isValidRepo: () => true });
+  const chat = store.createChat({ title: "a" });
+  const got = await (await app.request(`/api/chats/${chat.id}/context`)).json();
+  assert.equal(got.window, 1_000_000);
+  assert.equal(got.percent, 15);
+});

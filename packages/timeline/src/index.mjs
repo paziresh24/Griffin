@@ -40,7 +40,8 @@ export function foldEvents(events, timeline = emptyTimeline()) {
 export function applyEvent(timeline, event) {
   if (event.id && event.id <= timeline.lastEventId) return timeline;
   const messages = reduceMessages(timeline.messages, event);
-  return { messages, lastEventId: event.id || timeline.lastEventId };
+  // `earlier` (messages not loaded yet, a page opened with ?limit) rides along.
+  return { ...timeline, messages, lastEventId: event.id || timeline.lastEventId };
 }
 
 function reduceMessages(messages, event) {
@@ -430,3 +431,5 @@ export function finalText(message) {
     .map((part) => part.text)
     .join("");
 }
+
+export * from "./mentions.mjs";

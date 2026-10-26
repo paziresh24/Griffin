@@ -219,3 +219,33 @@ test("a direct fetch that hangs gives way after 10s, and the next one runs", asy
   assert.equal(server.calls.length, before + 1);
   t.handle.stop();
 });
+
+test("loadOlder fetches the page before the oldest message held and prepends it", async () => {
+  const messages = (from, to) => Array.from({ length: to - from }, (_, i) => ({ id: `u${from + i}`, role: "user", text: `m${from + i}` }));
+  const calls = [];
+  const server = fakeServer();
+  const base = server.api;
+  server.api = async (path, opts) => {
+    if (path.startsWith(`/api/chats/${CHAT}/timeline/older`)) {
+      calls.push(path);
+      const before = new URL(path, "http://x").searchParams.get("before");
+      assert.equal(before, "u50");
+      return { messages: messages(10, 50), earlier: 10 };
+    }
+    if (path.startsWith(`/api/chats/${CHAT}/timeline`)) {
+      calls.push(path);
+      return { timeline: { messages: messages(50, 60), lastEventId: 40, earlier: 50 }, rev: "r1" };
+    }
+    return base(path, opts);
+  };
+  const { shown, handle } = open(server);
+  await flushPromises();
+  assert.match(calls[0], /timeline\?limit=40/);
+  assert.equal(shown.at(-1).timeline.earlier, 50);
+  assert.equal(await handle.loadOlder(), true);
+  const { timeline } = shown.at(-1);
+  assert.equal(timeline.messages.length, 50);
+  assert.equal(timeline.messages[0].id, "u10");
+  assert.equal(timeline.earlier, 10);
+  handle.stop();
+});

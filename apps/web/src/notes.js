@@ -66,6 +66,9 @@ export function noteTarget(note) {
   return t("در چت «{title}»", { title: note.chatTitle || t("حذف‌شده") });
 }
 
+/** The sidebar's list: the person's own notes; an agent's reminder shows only in its own chat. */
+export const sidebarNotes = (items) => (items || []).filter((note) => !note.reminder);
+
 /** A first line for the card: the note's opening words. */
 export function noteTitle(note, max = 80) {
   const line = String(note?.text || "").trim().split("\n")[0];

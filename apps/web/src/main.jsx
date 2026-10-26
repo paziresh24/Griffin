@@ -12,6 +12,9 @@ import { applyDocumentLang } from "./i18n.js";
 import { BRAND, loadBrand } from "./brand.js";
 import { startVersionWatch } from "./new-version.js";
 import { watchErrors } from "./feedback.js";
+import { watchStaleChunks } from "./stale-chunks.js";
+
+watchStaleChunks();
 
 applyDocumentLang();
 

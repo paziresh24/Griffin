@@ -1,0 +1,11 @@
+{
+  "id": "peers",
+  "version": "1.0.0",
+  "title": "ایجنت‌های همکاران",
+  "category": "team",
+  "settings": { "config": ["NETWORK", "PEER_SELF_SERVE"] },
+  "description": "همتاها، کارهای ایجنت‌های همکاران و شبکهٔ ایجنت‌ها",
+  "builtin": true,
+  "presets": ["griffin", "karsara"],
+  "pages": [{ "id": "main", "title": "ایجنت‌های همکاران", "icon": "users", "kind": "builtin", "route": "/peers" }]
+}

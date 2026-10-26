@@ -221,7 +221,7 @@ test("arvan_page_rule_create: copies a sibling's settings, pages through rules, 
   });
   const listed = await tools.arvan_page_rules.execute({ domain: "example.com", search: "orders" });
   assert.equal(listed.total, 2);
-  assert.equal(listed.rules[0].load_balancer, "orders-lb");
+  assert.deepEqual(listed.rules[0].load_balancer, { id: "orders-lb", name: null });
 
   const out = await tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://api.example.com/orders/v1/factors/search*", copy_from: sibling.id });
   const body = JSON.parse(calls.find((c) => c.method === "POST").body);
@@ -238,4 +238,270 @@ test("arvan_page_rule_create: copies a sibling's settings, pages through rules, 
   await assert.rejects(tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://evil.example.org/x*", copy_from: sibling.id }), /must be on example.com/);
   await assert.rejects(tools.arvan_page_rule_create.execute({ domain: "example.com", url: "https://api.example.com/y*", copy_from: "22222222-2222-2222-2222-222222222222" }), /no page rule/);
   assert.equal(calls.filter((c) => c.method === "POST").length, 1, "no write on refusal");
+});
+
+// 2026-10-22: «which rule and which LB does apigw-x…/orders/v1/* hit?» needed host/path matching,
+// the full body of one rule, and host_header / cache_ignore_cc in the list.
+test("arvan_page_rules: matches host+path, resolves LB names, reads one rule in full, GET only", async () => {
+  const rules = [
+    { id: "a", seq: 5, url: "https://api.example.com/*", url_type: "wildcard", load_balancer: "lb-gw", cache_level: "off", status: true },
+    { id: "b", seq: 2, url: "https://api.example.com/orders/v1/*", url_type: "regex", load_balancer: { id: "lb-k", name: "orders-platform" }, host_header: "orders.internal", cache_ignore_cc: false, cache_level: "query_string", status: true, updated_at: "2026-10-01" },
+    { id: "c", seq: 1, url: "https://www.example.com/*", load_balancer: "lb-www" },
+    { id: "d", seq: 3, url: "https://api.example.com/orders/v2/*", load_balancer: "lb-k" },
+  ];
+  const { tools, calls } = setup({
+    responses: {
+      "/cdn/4.0/domains/example.com/page-rules": () => Response.json({ data: rules, meta: { last_page: 1 } }),
+      "/cdn/4.0/domains/example.com/load-balancers": () => Response.json({ data: [{ id: "lb-gw", name: "apisix-gw" }, { id: "lb-k", name: "orders-platform" }] }),
+      "/cdn/4.0/domains/example.com/page-rules/b": () => Response.json({ data: { ...rules[1], api_token: "s3cret", acceleration: { status: "inherit" } } }),
+    },
+  });
+  const hit = await tools.arvan_page_rules.execute({ domain: "example.com", host: "api.example.com", path: "/orders/v1/factors/search" });
+  assert.deepEqual(hit.rules.map((r) => r.id), ["b", "a"], "covering rules only, by seq");
+  assert.deepEqual(hit.rules[0].load_balancer, { id: "lb-k", name: "orders-platform" });
+  assert.equal(hit.rules[0].host_header, "orders.internal");
+  assert.equal(hit.rules[0].cache_ignore_cc, false);
+  assert.deepEqual(hit.rules[1].load_balancer, { id: "lb-gw", name: "apisix-gw" });
+
+  const one = await tools.arvan_page_rules.execute({ domain: "example.com", id: "b" });
+  assert.equal(one.rule.full.api_token, "***");
+  assert.equal(one.rule.full.acceleration.status, "inherit");
+  assert.equal(one.rule.updated_at, "2026-10-01");
+
+  const searched = await tools.arvan_page_rules.execute({ domain: "example.com", search: "orders-platform" });
+  assert.deepEqual(searched.rules.map((r) => r.id), ["b"]);
+  await assert.rejects(tools.arvan_page_rules.execute({ domain: "example.com", host: "evil.example.net" }), /must be on/);
+  assert.ok(calls.every((c) => c.method === "GET"));
+});
+
+test("arvan_load_balancer_get finds a balancer by name and masks secrets", async () => {
+  const lb = { id: "lb1", name: "hamravesh-doctors", origins: [{ ip: "1.2.3.4", port: 443, weight: 1, token: "abc" }] };
+  const { tools, calls } = setup({
+    responses: {
+      "/cdn/4.0/domains/example.com/load-balancers": () => Response.json({ data: [lb, { id: "lb2", name: "other" }] }),
+      "/cdn/4.0/domains/example.com/load-balancers/lb1": () => Response.json({ data: { ...lb, health_check: { path: "/health", timeout: 3 } } }),
+    },
+  });
+  const result = await tools.arvan_load_balancer_get.execute({ domain: "example.com", name: "Hamravesh-Doctors" });
+  assert.equal(result.loadBalancer.health_check.path, "/health");
+  assert.equal(result.loadBalancer.origins[0].token, "***");
+  assert.equal(result.loadBalancer.origins[0].ip, "1.2.3.4");
+  assert.ok(calls.every((c) => c.method === "GET"));
+  await assert.rejects(tools.arvan_load_balancer_get.execute({ domain: "example.com", name: "nope" }), ToolInputError);
+  const all = await tools.arvan_load_balancer_get.execute({ domain: "example.com" });
+  assert.equal(all.total, 2);
+});
+
+function reportResponses(seen) {
+  const record = (u) => seen.push(u.pathname.replace("/cdn/4.0/domains/example.com/reports", "") + "?" + u.searchParams.toString());
+  const hours = ["2026-10-21T16:00:00Z", "2026-10-21T17:00:00Z", "2026-10-21T18:00:00Z"];
+  return {
+    "/cdn/4.0/domains/example.com/reports/status": (u) => (record(u), Response.json({
+      data: {
+        statistics: { status_codes: { "2xx_sum": 300, "3xx_sum": 30, "4xx_sum": 3, "5xx_sum": 9 } },
+        charts: { status_code: { name: "status_code", categories: hours, series: [
+          { name: "report.status_code.2xx", data: [100, 100, 100] },
+          { name: "report.status_code.5xx", data: [1, 6, 2] },
+        ] } },
+      },
+    })),
+    "/cdn/4.0/domains/example.com/reports/status/summary": (u) => (record(u), Response.json({
+      data: { statistics: [], charts: { status_code: [{ name: "200", y: 300 }, { name: "502", y: 2 }, { name: "503", y: 7 }, { name: "404", y: 3 }] } },
+    })),
+    "/cdn/4.0/domains/example.com/reports/error-logs/chart": (u) => (record(u), Response.json({
+      data: { charts: { status_code: {
+        categories: ["2026-10-21T15:00:00Z", "2026-10-21T16:00:00Z", "2026-10-21T17:00:00Z", "2026-10-21T18:00:00Z", "2026-10-21T22:00:00Z"],
+        series: [
+          { name: "upstream timed out (110: Connection timed out) while connecting to upstream", data: [50, 4, 5, 0, 70] },
+          { name: "connect() failed (111: Connection refused)", data: [9, 0, 0, 0, 9] },
+        ],
+      } } },
+    })),
+    "/cdn/4.0/domains/example.com/reports/error-logs": (u) => (record(u), Response.json({
+      data: [
+        { name: "upstream timed out", count: 129, upstreams: [
+          { address: "https://198.51.100.23/webhook/abc?token=s3cr3t", count: 9 },
+          { address: "https://198.51.100.23/api/x", count: 120 },
+        ] },
+        { name: "connect() failed", count: 18, upstreams: [{ address: "https://198.51.100.53/other", count: 18 }] },
+      ],
+    })),
+  };
+}
+
+test("arvan_reports: status series by class, exact codes, clipped origin errors", async () => {
+  const seen = [];
+  const { tools } = setup({ responses: reportResponses(seen) });
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-10-22T09:50:00Z");
+  try {
+    const out = await tools.arvan_reports.execute({
+      domain: "example.com", from: "2026-10-21T16:30:00Z", to: "2026-10-21T21:30:00Z", status: "503", host: "users.example.com", path: "/webhook",
+    });
+    assert.ok(seen.includes("/status?since=2026-10-21T16%3A30%3A00Z&until=2026-10-21T21%3A30%3A00Z"));
+    // 17h20m before now → smallest covering period is 24h; error logs ignore since/until.
+    assert.ok(seen.includes("/error-logs?period=24h"));
+    assert.equal(out.bucketSeconds, 3600);
+    assert.deepEqual(out.series[1], { t: "2026-10-21T17:00:00Z", "5xx": 6 });
+    assert.deepEqual(out.totals, { "5xx": 9 });
+    assert.deepEqual(out.codes, { 503: 7 });
+    assert.equal(out.originErrors.period, "24h");
+    assert.equal(out.originErrors.bucketSeconds, 3600);
+    // 15:00 is before the window; 22:00 is after it.
+    assert.deepEqual(out.originErrors.categories, ["2026-10-21T16:00:00Z", "2026-10-21T17:00:00Z", "2026-10-21T18:00:00Z"]);
+    assert.deepEqual(out.originErrors.chart, [{ error: "upstream timed out (110: Connection timed out) while connecting to upstream", total: 9, data: [4, 5, 0] }]);
+    assert.equal(out.originErrors.list.length, 1);
+    assert.deepEqual(out.originErrors.list[0].upstreams, [{ address: "https://198.51.100.23/webhook/abc", count: 9 }]);
+    assert.ok(!JSON.stringify(out).includes("s3cr3t"));
+    assert.ok(out.notes.some((n) => /per domain/.test(n)));
+    assert.ok(out.notes.some((n) => /5xx class/.test(n)));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("arvan_reports: class filter keeps the class; GET only", async () => {
+  const seen = [];
+  const { tools, calls } = setup({ responses: reportResponses(seen) });
+  const out = await tools.arvan_reports.execute({ domain: "example.com", from: new Date(Date.now() - 2 * 3_600_000).toISOString(), status: "5xx" });
+  assert.deepEqual(out.codes, { 503: 7, 502: 2 });
+  assert.deepEqual(Object.keys(out.series[0]), ["t", "5xx"]);
+  assert.equal(out.originErrors.period, "3h");
+  assert.ok(calls.every((c) => c.method === "GET"));
+});
+
+test("arvan_reports: bad windows are ToolInputError", async () => {
+  const { tools } = setup();
+  for (const args of [
+    { domain: "example.com", from: "yesterday" },
+    { domain: "example.com", from: "2026-10-01T00:00:00Z", to: "2026-10-09T00:00:00Z" },
+    { domain: "example.com", from: "2026-10-02T00:00:00Z", to: "2026-10-01T00:00:00Z" },
+    { domain: "example.com", from: "2026-10-01T00:00:00Z", status: "abc" },
+  ]) {
+    await assert.rejects(tools.arvan_reports.execute(args), ToolInputError);
+  }
+});
+
+test("arvan_load_balancer_get reads every page of the list", async () => {
+  const all = Array.from({ length: 120 }, (_, i) => ({ id: `d${String(i).padStart(3, "0")}`, name: i === 117 ? "Orders-LoadBalancer-Api" : `lb-${i}` }));
+  const pageOf = (u) => {
+    const page = Number(u.searchParams.get("page") || 1);
+    return { page, data: all.slice((page - 1) * 50, page * 50) };
+  };
+  for (const shape of ["meta", "links", "bare"]) {
+    const { tools, calls } = setup({
+      responses: {
+        "/cdn/4.0/domains/example.com/load-balancers": (u) => {
+          const { page, data } = pageOf(u);
+          if (shape === "meta") return Response.json({ data, meta: { current_page: page, last_page: 3, per_page: 50, total: 120 } });
+          if (shape === "links") return Response.json({ data, links: { next: page < 3 ? `https://x/?page=${page + 1}` : null } });
+          return Response.json({ data });
+        },
+      },
+    });
+    const listed = await tools.arvan_load_balancer_get.execute({ domain: "example.com" });
+    assert.equal(listed.loadBalancers.length, 120, shape);
+    assert.equal(listed.total, 120, shape);
+    assert.equal(listed.pages, 3, shape);
+    const one = await tools.arvan_load_balancer_get.execute({ domain: "example.com", name: "orders-loadbalancer-api" });
+    assert.equal(one.loadBalancer.id, "d117", shape);
+    await assert.rejects(tools.arvan_load_balancer_get.execute({ domain: "example.com", name: "orders" }), /similar: Orders-LoadBalancer-Api/);
+    assert.ok(calls.every((c) => c.method === "GET"), shape);
+  }
+});
+
+test("arvan_dns_records pages through the whole zone, reports API total, summary and offset/limit", async () => {
+  const make = (i) => ({ id: String(i), type: i % 10 === 0 ? "TXT" : i % 7 === 0 ? "MX" : "A", name: i === 345 ? "jahannama" : `h${i}`, value: { ip: "1.1.1.1" } });
+  const pages = [Array.from({ length: 300 }, (_, i) => make(i + 1)), Array.from({ length: 220 }, (_, i) => make(i + 301))];
+  const { tools, calls } = setup({
+    responses: {
+      "/cdn/4.0/domains/example.com/dns-records": (u) => {
+        const page = Number(u.searchParams.get("page") || 1);
+        return Response.json({ data: pages[page - 1] || [], meta: { total: 520, last_page: 2, current_page: page } });
+      },
+    },
+  });
+  const one = await tools.arvan_dns_records.execute({ domain: "example.com", name: "jahannama" });
+  assert.equal(one.total, 520);
+  assert.equal(one.records.length, 1);
+  assert.equal(one.records[0].name, "jahannama");
+  assert.equal(calls.length, 2);
+  const sum = await tools.arvan_dns_records.execute({ domain: "example.com", summary: true });
+  assert.equal(sum.fetched, 520);
+  assert.equal(sum.byType.TXT, 52);
+  assert.ok(sum.byType.MX > 0);
+  assert.equal(sum.records, undefined);
+  const page = await tools.arvan_dns_records.execute({ domain: "example.com", offset: 500, limit: 50 });
+  assert.equal(page.records.length, 20);
+  assert.equal(page.nextOffset, null);
+  const first = await tools.arvan_dns_records.execute({ domain: "example.com" });
+  assert.equal(first.records.length, 300);
+  assert.equal(first.nextOffset, 300);
+});
+
+test("arvan_dns_records stops when a page repeats (API ignores page param)", async () => {
+  const { tools, calls } = setup({
+    responses: { "/cdn/4.0/domains/example.com/dns-records": () => Response.json({ data: [{ id: "1", type: "A", name: "www", value: { ip: "1.2.3.4" } }] }) },
+  });
+  const out = await tools.arvan_dns_records.execute({ domain: "example.com" });
+  assert.equal(out.total, 1);
+  assert.ok(calls.length <= 2);
+});
+
+test("arvan_dns_delete finds a record on a later page", async () => {
+  const pages = [[{ id: "1", type: "A", name: "www", value: { ip: "1.2.3.4" } }], [{ id: "2", type: "A", name: "late", value: { ip: "5.6.7.8" } }]];
+  const { tools, calls } = setup({
+    responses: {
+      "GET /cdn/4.0/domains/example.com/dns-records": (u) => {
+        const page = Number(u.searchParams.get("page") || 1);
+        return Response.json({ data: pages[page - 1] || [], meta: { total: 2, last_page: 2 } });
+      },
+      "DELETE /cdn/4.0/domains/example.com/dns-records/2": () => new Response(null, { status: 204 }),
+    },
+  });
+  const out = await tools.arvan_dns_delete.execute({ domain: "example.com", name: "late" });
+  assert.equal(out.deleted.id, "2");
+  assert.ok(calls.some((c) => c.method === "DELETE"));
+});
+
+test("arvan_dns_export grep and line paging", async () => {
+  const bind = ["$ORIGIN example.com.", "www 120 IN A 1.2.3.4", "@ 300 IN MX 10 mail.example.com.", "jahannama 120 IN CNAME x.example.com.", "@ 300 IN TXT \"v=spf1\""].join("\n") + "\n";
+  const { tools } = setup({
+    responses: { "/cdn/4.0/domains/example.com/dns-records/export": () => new Response(bind, { status: 200 }) },
+  });
+  const g = await tools.arvan_dns_export.execute({ domain: "example.com", grep: "JAHANNAMA" });
+  assert.equal(g.matchedLines, 1);
+  assert.match(g.bind, /jahannama/);
+  assert.equal(g.totalLines, 5);
+  const p = await tools.arvan_dns_export.execute({ domain: "example.com", offset: 1, limit: 2 });
+  assert.equal(p.bind.split("\n").length, 2);
+  assert.equal(p.nextOffset, 3);
+});
+
+// 2026-10-24: a 23-record cleanup asked the owner once per record. One call takes the whole list.
+test("arvan_dns_delete records: one call for many, resolves all before deleting, reports already-gone", async () => {
+  const records = [
+    { id: "a1", type: "cname", name: "old1", value: { host: "c14.hamravesh.example" } },
+    { id: "a2", type: "cname", name: "old2", value: { host: "to.liara.zone" } },
+    { id: "d1", type: "a", name: "dual", value: [{ ip: "1.1.1.1" }] },
+    { id: "d2", type: "cname", name: "dual", value: { host: "x.example.com" } },
+    { id: "n1", type: "NS", name: "sub", value: { host: "ns1.example.com" } },
+  ];
+  const { tools, calls } = setup({
+    responses: {
+      "GET /cdn/4.0/domains/example.com/dns-records": () => Response.json({ data: records }),
+      "DELETE /cdn/4.0/domains/example.com/dns-records/a1": () => new Response(null, { status: 204 }),
+      "DELETE /cdn/4.0/domains/example.com/dns-records/a2": () => new Response(null, { status: 204 }),
+    },
+  });
+  const deletes = () => calls.filter((c) => c.method === "DELETE").length;
+  const out = await tools.arvan_dns_delete.execute({ domain: "example.com", records: [{ name: "old1" }, { name: "old2", type: "CNAME" }, { name: "gone" }] });
+  assert.deepEqual(out.deleted.map((r) => r.id), ["a1", "a2"]);
+  assert.deepEqual(out.notFound, [{ name: "gone" }]);
+  assert.equal(deletes(), 2);
+  // one bad entry refuses the whole list before any delete
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", records: [{ name: "old1" }, { name: "dual" }] }), /nothing deleted/);
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", records: [{ name: "old1" }, { name: "sub" }] }), /NS/);
+  await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "old1", records: [{ name: "old2" }] }), /not both/);
+  assert.equal(deletes(), 2, "refusals deleted nothing");
 });

@@ -356,10 +356,10 @@ test("Griffin: STATE_GUARD=off, and outside full Claude Code nothing changes", a
   // STATE_GUARD=off: index.mjs passes no stateGuard, and Bash is unguarded as before.
   const off = await hookOptions(env, { stateGuard: undefined });
   assert.equal((await decide(off, "Bash", { command: `echo x > ${note}` }, env.worktree)).decision, "allow");
-  assert.equal(off.hooks.PreToolUse.length, 1, "only the file guard");
+  assert.equal(off.hooks.PreToolUse.length, 2, "only the file guard and the plan-mode guard");
   // Without full Claude Code there is no Bash; the file guard alone runs.
   const scoped = await hookOptions(env, { claudeCode: false });
-  assert.equal(scoped.hooks.PreToolUse.length, 1);
+  assert.equal(scoped.hooks.PreToolUse.length, 2);
 });
 
 test("index.mjs protects the knowledge store and the whole data folder, except a home inside it", () => {

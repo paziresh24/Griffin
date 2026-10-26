@@ -2,15 +2,6 @@ import { t } from "./i18n.js";
 // The update offer at the bottom of the sidebar (UpdateNotice.jsx): the host publishes the newest
 // release with what it changes and fetches it right away; the owner reads the Persian lines and
 // presses «ری‌استارت و اعمال», which only switches to what is already downloaded.
-const PERSIAN = /[؀-ۿ]/;
-
-/** Lines written for users (a commit's Persian «Changelog:» trailer) and the technical ones. */
-export function readableChanges(changes) {
-  const list = Array.isArray(changes) ? changes : [];
-  const user = list.filter((c) => PERSIAN.test(String(c.text || "")));
-  return { user, technical: list.length - user.length, technicalLines: list.filter((c) => !PERSIAN.test(String(c.text || ""))) };
-}
-
 /**
  * The bar's state from /api/update: null (nothing to offer), offered (the host has not started on
  * it), downloading, download-failed, ready, waiting (pressed; switches once downloaded and no chat
@@ -86,6 +77,18 @@ export function formatSize(bytes) {
 }
 
 /** A date in the owner's calendar, e.g. «۲۶ مهر، ۱۴:۰۵»; empty when unknown. */
+/** The changes grouped by the day they were made (newest first, as given): [{ day, items }]. */
+export function byDay(changes) {
+  const out = [];
+  for (const c of changes || []) {
+    const d = c.at ? new Date(c.at) : null;
+    const day = d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("fa-IR", { weekday: "long", day: "numeric", month: "long" }) : t("بدون تاریخ");
+    if (out.at(-1)?.day === day) out.at(-1).items.push(c);
+    else out.push({ day, items: [c] });
+  }
+  return out;
+}
+
 export function formatWhen(iso) {
   const d = iso ? new Date(iso) : null;
   if (!d || Number.isNaN(d.getTime())) return "";

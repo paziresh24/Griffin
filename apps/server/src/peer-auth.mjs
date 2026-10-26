@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { PEER_CHAT_TOOLS } from "./related.mjs";
 import { DEFAULT_PEER_MESSAGES, WINDOWS, cloneDefaults, mergeLimits, peerSettings } from "./peer-limits.mjs";
 
 // Identity for external agents (MCP now, A2A later). A peer user is a person (one id per human);
@@ -19,29 +18,6 @@ export const peerCaller = (userId) => `peer:${userId}`;
 export const isPeerCaller = (caller) => typeof caller === "string" && caller.startsWith("peer:");
 
 export const hashToken = (token) => crypto.createHash("sha256").update(String(token)).digest("hex");
-
-// Conservative default: diagnostics without secrets, raw logs, databases, object storage or any
-// mutation. Irreversible tools are refused for peer chains anyway (guard.mjs). The owner widens
-// a quota per agent with PATCH /api/agents/:id.
-export const PEER_DEFAULT_QUOTA = {
-  griffin: ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "knowledge_list", ...PEER_CHAT_TOOLS],
-  "platform": [
-    "kube_status", "kube_get", "kube_df", "metrics_query", "alerts_active",
-    "gitlab_version", "gitlab_projects", "gitlab_search", "gitlab_file", "gitlab_mr", "gitlab_mr_changes", "gitlab_commits", "gitlab_pipeline",
-    "grafana_search", "grafana_dashboard", "grafana_panel_query", "grafana_query",
-    "dns_lookup", "http_check", "tls_check", "nsin_edge_ranges",
-  ],
-  "arvan-ban": [
-    "arvan_domains", "arvan_dns_records", "arvan_dns_export", "arvan_dnssec", "arvan_cache_settings", "arvan_purge_tags",
-    "arvan_cache_purge", "dns_lookup", "http_check", "tls_check",
-  ],
-  "nsin-ban": [
-    "nsin_domains", "nsin_domain", "nsin_dns_records", "nsin_ssl_status", "nsin_cache_stats", "nsin_cache_keys",
-    "nsin_rules", "nsin_analytics_summary", "nsin_analytics_query", "nsin_top_uris", "nsin_request_logs", "nsin_waf_logs",
-    "nsin_uptime_live", "nsin_uptime_incidents", "nsin_recommendations", "nsin_check_nameservers", "nsin_edge_ranges",
-    "nsin_cache_purge", "nsin_cache_purge_path", "dns_lookup", "http_check", "tls_check",
-  ],
-};
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
 
@@ -64,11 +40,7 @@ button{font:inherit;background:#e8702a;color:#fff;border:0;border-radius:999px;p
 <body><h1>اتصال ایجنت</h1>${body}</body></html>`;
 }
 
-// On an install with a business docs repo (GRIFFIN_BUSINESS_DOCS_REPO), a new colleague can read it
-// too: every agent should be able to get the business information easily.
-export const PEER_BUSINESS_DOCS_TOOLS = ["business_docs_search", "business_docs_read"];
-
-export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", businessDocs = false }) {
+export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "" }) {
   const hits = new Map(); // clientId -> timestamps
 
   function rateLimited(clientId) {
@@ -79,26 +51,12 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", 
     return recent.length > RATE_MAX;
   }
 
-  function grantDefaultQuota(userId) {
-    const caller = peerCaller(userId);
-    for (const profile of store.listAgentProfiles()) {
-      const base = PEER_DEFAULT_QUOTA[profile.id];
-      if (!base) continue;
-      const tools = businessDocs && profile.id === "griffin" ? [...base, ...PEER_BUSINESS_DOCS_TOOLS] : base;
-      const callers = { ...(profile.meta?.callers || {}) };
-      if (callers[caller]) continue;
-      callers[caller] = { tools, ...cloneDefaults() };
-      store.updateAgentProfile(profile.id, { meta: { callers } });
-    }
-  }
-
   const api = {
     createUser({ id, label }) {
       const userId = String(id || "").trim().toLowerCase();
       if (!USER_ID.test(userId)) throw new Error("invalid user id (a-z, 0-9, -)");
       if (store.getPeerUser(userId)) throw new Error("user exists");
       const user = store.createPeerUser({ id: userId, label: String(label || userId).slice(0, 80) });
-      grantDefaultQuota(userId);
       return user;
     },
 
@@ -239,17 +197,15 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", 
         const since = (ms) => new Date(Date.now() - ms).toISOString();
         return store.listAgentProfiles().map((p) => {
           const entry = p.meta?.callers?.[caller] || null;
-          // Effective values: an older tools-only grant shows the defaults it actually runs with.
-          const effective = entry ? peerSettings(p, caller) : null;
+          const effective = peerSettings(p, caller);
           return {
             agent: p.id,
             label: p.label,
-            tools: entry?.tools || null,
             model: effective?.model ?? null,
             models: effective?.models || [],
             budget: effective?.budget || { hourly: null, daily: null },
             messages: { overBudget: entry?.messages?.overBudget || "", unavailable: entry?.messages?.unavailable || "" },
-            usage: entry ? Object.fromEntries(Object.entries(WINDOWS).map(([w, ms]) => [w, store.peerUsageSince(caller, p.id, since(ms)).tokens])) : null,
+            usage: Object.fromEntries(Object.entries(WINDOWS).map(([w, ms]) => [w, store.peerUsageSince(caller, p.id, since(ms)).tokens])),
           };
         });
       };
@@ -287,8 +243,8 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", 
         }));
         return c.json({ tasks });
       });
-      // One agent's quota and limits for this peer: tools, default/allowed models, token caps, texts.
-      // Only the fields sent change; tools null/[] removes the agent for this peer (fail closed).
+      // One agent's limits for this peer: default/allowed models, token caps, texts. Only the
+      // fields sent change.
       app.put("/api/peers/:id/quota", async (c) => {
         const userId = c.req.param("id");
         if (!store.getPeerUser(userId)) return c.json({ error: "not found" }, 404);
@@ -297,21 +253,10 @@ export function createPeerAuth({ store, now = () => Date.now(), publicUrl = "", 
         if (!profile) return c.json({ error: "unknown agent" }, 400);
         const caller = peerCaller(userId);
         const callers = { ...(profile.meta?.callers || {}) };
-        let entry = { ...(callers[caller] || {}) };
-        if ("tools" in body) {
-          const tools = Array.isArray(body.tools) ? [...new Set(body.tools.map(String))] : [];
-          const forbidden = tools.filter((t) => selfMgmtTools.includes(t) || t === "*");
-          if (forbidden.length) return c.json({ error: `not grantable to a peer: ${forbidden.join(", ")}` }, 400);
-          if (!tools.length) {
-            delete callers[caller];
-            store.updateAgentProfile(profile.id, { meta: { callers } });
-            return c.json({ quotas: quotasOf(userId) });
-          }
-          // A first grant comes with the default limits, like a new peer's.
-          entry = callers[caller] ? { ...entry, tools } : { ...cloneDefaults(), tools };
-        } else if (!callers[caller]) {
-          return c.json({ error: "grant at least one tool before setting limits" }, 400);
-        }
+        // Tools are no longer granted per colleague (profiles.mjs PEER_NEVER_TOOLS); a row only
+        // carries the optional model/cap settings.
+        const entry = { ...cloneDefaults(), ...(callers[caller] || {}) };
+        delete entry.tools;
         const merged = mergeLimits(entry, body);
         if (merged.error) return c.json({ error: merged.error }, 400);
         callers[caller] = merged.entry;

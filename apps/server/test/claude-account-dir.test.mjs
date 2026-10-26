@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { accountLoginDir, hasLogin, isLoginDirKey, linkSharedEntries, loginDirKey, loginDirOf, removeLoginDir } from "../src/claude-account-dir.mjs";
+import { accountLoginDir, hasLogin, isLoginDirKey, linkSharedEntries, loginDirKey, loginDirOf, relativizeSharedLinks, removeLoginDir } from "../src/claude-account-dir.mjs";
 import { claudeAuthEnv, createClaudeProvider } from "../src/providers/claude.mjs";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "claude-acct-"));
@@ -79,4 +79,39 @@ test("health of a folder login asks `claude auth status`: logged in = ok, otherw
   assert.equal(g.status, 401);
   const none = createClaudeProvider({ apiKey: key, statusImpl: async () => null });
   assert.equal((await none.health()).status, 401);
+});
+
+test("a host run gets the folder login's live access token, never one about to expire", async () => {
+  const { loginDirToken } = await import("../src/claude-account-dir.mjs");
+  const dir = tmp();
+  const now = 1_000_000_000_000;
+  const write = (expiresAt) => fs.writeFileSync(path.join(dir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-live", refreshToken: "sk-ant-ort01-keep", expiresAt } }));
+  write(now + 5 * 3600_000);
+  assert.deepEqual(loginDirToken(dir, { now }), { token: "sk-ant-oat01-live", expiresAt: now + 5 * 3600_000 });
+  write(now + 10 * 60_000);
+  assert.equal(loginDirToken(dir, { now }), null);
+  assert.equal(loginDirToken(tmp(), { now }), null);
+  assert.equal(loginDirToken(null), null);
+  fs.writeFileSync(path.join(dir, ".credentials.json"), "{broken");
+  assert.equal(loginDirToken(dir, { now }), null);
+});
+
+test("links resolve from another mount of the same data folder, and old absolute ones are rewritten", () => {
+  const root = tmp();
+  const main = path.join(root, "home", ".claude");
+  const dir = path.join(root, "claude-accounts", "claude-4");
+  fs.mkdirSync(path.join(main, "skills"), { recursive: true });
+  fs.writeFileSync(path.join(main, "CLAUDE.md"), "rules");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.symlinkSync(path.join(main, "CLAUDE.md"), path.join(dir, "CLAUDE.md")); // an older login: absolute
+  linkSharedEntries({ dir, main });
+  assert.equal(fs.readlinkSync(path.join(dir, "skills")), path.join("..", "..", "home", ".claude", "skills"));
+  assert.deepEqual(relativizeSharedLinks({ dir, main }), ["CLAUDE.md"]);
+  assert.equal(fs.readlinkSync(path.join(dir, "CLAUDE.md")), path.join("..", "..", "home", ".claude", "CLAUDE.md"));
+  assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), "rules");
+  // the data folder seen at another path: the same links still land
+  const moved = `${root}-moved`;
+  fs.renameSync(root, moved);
+  assert.equal(fs.readFileSync(path.join(moved, "claude-accounts", "claude-4", "CLAUDE.md"), "utf8"), "rules");
+  assert.deepEqual(relativizeSharedLinks({ dir: path.join(moved, "claude-accounts", "claude-4"), main: path.join(moved, "home", ".claude") }), []);
 });

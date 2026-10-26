@@ -150,27 +150,6 @@ test("the prompt names the tools only on an install that has them", async () => 
   assert.match(buildRules({ agent: "griffin", businessDocsLabel: "مستندات نمونه" }), /business_docs_search \/ business_docs_read read مستندات نمونه/);
 });
 
-test("a new colleague's default quota reads the business docs only on an install that has them", async () => {
-  const { createPeerAuth } = await import("../src/peer-auth.mjs");
-  const { openStore } = await import("../src/db.mjs");
-  for (const businessDocs of [false, true]) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bdocs-peer-"));
-    const store = openStore(path.join(dir, "db.sqlite"));
-    try {
-      const auth = createPeerAuth({ store, businessDocs });
-      auth.createUser({ id: "colleague", label: "Colleague" });
-      const tools = store.getAgentProfile("griffin").meta.callers["peer:colleague"].tools;
-      assert.equal(tools.includes("business_docs_search") && tools.includes("business_docs_read"), businessDocs, String(businessDocs));
-      assert.ok(tools.includes("knowledge_list"), "the usual quota stays");
-      const other = store.getAgentProfile("platform")?.meta?.callers?.["peer:colleague"]?.tools || [];
-      assert.ok(!other.includes("business_docs_read"), "only the main assistant");
-    } finally {
-      store.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
-});
-
 test("GET /api/chats carries NEXT_STEP_RETURNS for the composer: off by default", async () => {
   const { createApp } = await import("../src/app.mjs");
   const { openStore } = await import("../src/db.mjs");

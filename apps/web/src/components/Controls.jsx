@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { Popover } from "radix-ui";
 import { Command } from "cmdk";
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion } from "motion/react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleHelp, FilePen, Hand, Infinity as InfinityIcon, ListTree, Moon, Sparkles, Sun, Bot } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleHelp, FilePen, Hand, Infinity as InfinityIcon, ListTree, Moon, Plus, Sparkles, Sun, Bot } from "lucide-react";
 import { api, usePolling } from "../api.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
@@ -13,11 +13,11 @@ import { isRtl, num, t } from "../i18n.js";
 // The chat's mode, as Claude Desktop's mode menu. The three asking modes apply to Claude with full
 // Claude Code in the owner's chats; elsewhere they run like «بدون پرسیدن» (no asking).
 export const MODES = [
-  { value: "auto", label: t("خودکار"), icon: Sparkles, hint: t("Claude خودش دربارهٔ اجازه‌ها تصمیم می‌گیرد؛ هر جا مطمئن نبود از شما می‌پرسد") },
+  { value: "auto", label: t("خودکار"), icon: Sparkles, hint: t("مثل قبل: همه‌چیز را انجام می‌دهد؛ فقط کارهای حساس (گارد و بازبین) از شما پرسیده می‌شود (پیش‌فرض)") },
   { value: "ask", label: t("دستی"), icon: Hand, hint: t("قبل از هر تغییری از شما اجازه می‌گیرد") },
   { value: "edits", label: t("پذیرش ویرایش‌ها"), icon: FilePen, hint: t("ویرایش فایل‌ها بدون پرسیدن؛ بقیهٔ تغییرها با اجازهٔ شما") },
   { value: "plan", label: t("برنامه‌ریزی"), icon: ListTree, hint: t("اول نقشهٔ کار را می‌نویسد و بدون اجرای تغییر منتظر تأیید می‌ماند") },
-  { value: "agent", label: t("بدون پرسیدن"), icon: InfinityIcon, hint: t("همه‌چیز را بدون گرفتن اجازه انجام می‌دهد (پیش‌فرض)") },
+  { value: "agent", label: t("بدون پرسیدن"), icon: InfinityIcon, hint: t("هیچ محدودیتی ندارد: بدون بازبین، بدون کارت تأیید، بدون گارد؛ فقط وقتی منظورتان روشن نیست می‌پرسد") },
 ];
 
 const PROVIDERS = [
@@ -73,7 +73,7 @@ export function ModeToggle({ mode, onChange, named = false }) {
   // «حالت اجرا: فقط Bypass و Plan» (ui-prefs.js): Karsara's two modes, in its words.
   const simple = useFlag("modeSimple");
   if (simple) return <ModeMenu mode={mode} onChange={onChange} />;
-  const current = MODES.find((m) => m.value === mode) || MODES.find((m) => m.value === "agent");
+  const current = MODES.find((m) => m.value === mode) || MODES.find((m) => m.value === "auto");
   const tone = (value) => (value === "plan" ? "text-amber-600 dark:text-amber-400" : "text-primary");
   const Icon = current.icon;
   return (
@@ -159,7 +159,8 @@ function ModeMenu({ mode, onChange }) {
 }
 
 /** Wide rectangular agent switcher — shell chrome, not a tiny chat-header pill. */
-export function AgentPicker({ agent, onChange, locked = false, className = "" }) {
+// onAdd: a last row «افزودن ایجنت» (the sidebar's picker; a colleague 2026-10-24: the menu had no way to add one).
+export function AgentPicker({ agent, onChange, onAdd = null, locked = false, className = "" }) {
   const karsara = useLook() === "karsara";
   const data = usePolling("/api/agents", 5 * 60_000);
   const agents = data?.agents || [];
@@ -238,6 +239,19 @@ export function AgentPicker({ agent, onChange, locked = false, className = "" })
                 </>
               ) : null}
             </Command.List>
+            {onAdd ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onAdd();
+                }}
+                className="press flex items-center gap-2.5 border-t px-3 py-2.5 text-start text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-dashed"><Plus className="size-4" /></span>
+                افزودن ایجنت
+              </button>
+            ) : null}
           </Command>
         </Popover.Content>
       </Popover.Portal>
@@ -626,7 +640,7 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
   const applied = levels.includes(profile?.effort) ? profile.effort : recommended; // what runs with no choice here
   const current = levels.includes(effort) ? effort : applied;
   // Karsara offers effort only on its plain Claude login; a Claude-compatible endpoint (Z.ai, custom) has none.
-  if (simple) return account === "claude" ? <KarsaraEffort levels={levels} effort={levels.includes(effort) ? effort : ""} onChange={onChange} /> : null;
+  if (simple) return kind === "claude" ? <KarsaraEffort levels={levels} effort={levels.includes(effort) ? effort : ""} onChange={onChange} /> : null;
   return (
     <Popover.Root>
       <Popover.Trigger asChild>

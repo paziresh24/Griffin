@@ -3,8 +3,8 @@
 // Same code as the page's «افزودن» button (createMcpServers.save); nothing else in ~/.claude.json
 // is reachable. No secret passes through here: env is not accepted, a header whose name or value
 // looks like a credential is refused (a server that needs one is signed in through Claude Code's
-// own OAuth, or the owner types the value on the page). The new server is loaded by Claude Code
-// from the NEXT chat on.
+// own OAuth, or the owner types the value on the page). Claude Code reads the list from the session's
+// own config folder; claude.mjs copies it there before each run (syncMcpServers).
 import { createMcpServers, MCP_NAME } from "./mcp-servers.mjs";
 import { isOwnerChat } from "./owner-chat-tools.mjs";
 
@@ -32,7 +32,7 @@ export function createMcpServerTools({ store, chatId, mcp = createMcpServers(), 
     },
     mcp_server_add: {
       description:
-        "Add (or update, same name) one MCP server in the owner's list — what Settings → MCP servers → «افزودن» does. type http|sse needs `url`; stdio needs `command` (+ `args`). Never pass a password or token: headers named like a credential are refused (a server that signs in with OAuth is authorised afterwards from Claude Code's /mcp). Takes effect from the next chat, not this one.",
+        "Add (or update, same name) one MCP server in the owner's list — what Settings → MCP servers → «افزودن» does. type http|sse needs `url`; stdio needs `command` (+ `args`). Never pass a password or token: headers named like a credential are refused (a server that signs in with OAuth is authorised afterwards from Claude Code's /mcp).",
       inputSchema: {
         type: "object",
         properties: {
@@ -56,7 +56,7 @@ export function createMcpServerTools({ store, chatId, mcp = createMcpServers(), 
             if (SECRET_HEADER.test(k) || SECRET_VALUE.test(String(v))) throw new Error(`header «${k}» looks like a credential; this tool takes no secrets — the owner enters it on the MCP page`);
           }
           const server = type === "stdio" ? { type, command: args?.command, args: args?.args } : { type, url: args?.url, headers: args?.headers };
-          return ok({ server: mcp.save({ name, server }), note: "saved; Claude Code loads it from the next chat" });
+          return ok({ server: mcp.save({ name, server }), note: "saved to the owner's MCP list" });
         } catch (error) {
           return fail(error);
         }
@@ -64,7 +64,7 @@ export function createMcpServerTools({ store, chatId, mcp = createMcpServers(), 
     },
     mcp_server_login: {
       description:
-        "Start the OAuth sign-in of one http/sse MCP server of the owner (what the «ورود» button on Settings → MCP servers does). Returns a `url` the owner opens in a browser and signs in with his own account; Griffin keeps the token (no value is returned here) and the server works from the next chat. Needs the server to publish OAuth metadata with dynamic client registration.",
+        "Start the OAuth sign-in of one http/sse MCP server of the owner (what the «ورود» button on Settings → MCP servers does). Returns a `url` the owner opens in a browser and signs in with his own account; Griffin keeps the token (no value is returned here) and the server works once signed in. Needs the server to publish OAuth metadata with dynamic client registration.",
       inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false },
       async execute(args) {
         try {
@@ -72,7 +72,7 @@ export function createMcpServerTools({ store, chatId, mcp = createMcpServers(), 
           const base = String(publicUrl || "").trim().replace(/\/+$/, "");
           if (!/^https?:\/\/[^\s/]+$/.test(base)) throw new Error("GRIFFIN_PUBLIC_URL is not set; use the «ورود» button on the MCP page");
           const { url } = await oauth.start({ name: String(args?.name || "").trim(), redirectUri: `${base}/api/mcp-oauth/callback` });
-          return ok({ url, note: "the owner opens this link and signs in; then the server works from the next chat" });
+          return ok({ url, note: "the owner opens this link and signs in; then the server works" });
         } catch (error) {
           return fail(error);
         }

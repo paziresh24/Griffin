@@ -60,9 +60,12 @@ export const CONSULT_WITHHELD = [
   // Nor anything that outlives the call or changes the owner's setup: jobs, the shared agent
   // profile, a suggestion card in front of the owner, a knowledge note, a colleague invite, incidents.
   ...["jobs_create", "jobs_update", "jobs_run", "jobs_delete", "agent_tools_enable", "agent_tools_disable", "agent_settings_set"],
-  ...["chat_suggest", "chat_dismiss_suggestion", "knowledge_write", "peer_invite", "incident_ack", "incident_update"],
+  ...["chat_suggest", "chat_dismiss_suggestion", "knowledge_write", "peer_invite", "incident_ack", "incident_update", "incident_source_set", "incident_assign", "incident_suggest"],
+  ...["knowledge_edit", "knowledge_delete"],
   // Nor ring the owner's phone: the asking chat decides what he must know.
   "notify_owner",
+  // Nor talk to a colleague's agent (it would wake this chat later, like a delegated task).
+  "network_ask", "network_reply", "network_connect",
 ];
 /** The consult row of a chat (null for any other chat). */
 export const consultOf = (store, chatId) => (chatId ? store.getKv(`${CONSULT_KV}${chatId}`) : null);
@@ -292,7 +295,7 @@ export function createPeers({
       const label = CALLER_LABELS[d.agent] || d.agent;
       return (
         `### ${label} — ${env.status} (subtask ${d.childId})\n` +
-        `${(env.summary || env.brief || "(بدون متن)").slice(-3_000)}\n` +
+        `${env.summary || env.brief || "(بدون متن)"}\n` +
         (env.unknowns.length ? `نامعلوم/خطا: ${env.unknowns.join(" · ").slice(0, 500)}\n` : "") +
         (env.facts.length ? `ابزارهای اجراشده: ${[...new Set(env.facts.map((f) => f.tool))].join(", ")}\n` : "")
       );
@@ -513,7 +516,11 @@ export function createPeers({
         error: outcome.error,
         at: now().toISOString(),
       });
-      return { content: [{ type: "text", text: JSON.stringify(envelope) }] };
+      // Raw tool results made the answer too big for Claude Code to read inline: it spilled to a file
+      // the chain cannot open and the parent asked the same thing again (2026-10-21, ops room 01:13).
+      // The parent needs the answer and what was run, not every tool's output.
+      const { facts = [], ...slim } = envelope;
+      return { content: [{ type: "text", text: JSON.stringify({ ...slim, toolsRun: [...new Set(facts.map((f) => f.tool))] }) }] };
     } catch (error) {
       return {
         isError: true,
@@ -736,8 +743,15 @@ export function peerMessage(callerAgent, request, { continued = false } = {}) {
 // between tools is not the answer), redacted, its end kept when over the cap.
 export function consultAnswer(store, chatId) {
   const events = [...store.allEvents(chatId)];
+  // The latest FINISHED run: a steer queued right at the end starts a new, empty run a few ms later,
+  // and reading that one sent «(بدون متن)» and the work was delegated again (2026-10-21, 11f41845).
   let start = 0;
-  events.forEach((event, i) => { if (event.type === "run.started") start = i; });
+  let lastStart = -1;
+  events.forEach((event, i) => {
+    if (event.type === "run.started") lastStart = i;
+    if (event.type === "run.finished" && lastStart >= 0) start = lastStart;
+  });
+  if (lastStart > start && !events.slice(start).some((e) => e.type === "run.finished")) start = lastStart; // nothing finished yet
   let all = "";
   let final = "";
   for (const event of events.slice(start)) {
@@ -781,7 +795,8 @@ export function buildEnvelope(store, chatId, { status, error = null, at = null }
   // mid-sentence). Report the final answer; fall back to the tail of everything said.
   const all = texts.join("").trim();
   const answer = finalText.trim();
-  const summary = (answer.length >= 40 ? answer.slice(0, 4000) : all.length > 4000 ? `…${all.slice(-4000)}` : all) || null;
+  // 12k, not 4k: a long report lost its first and last items and the parent asked again (2026-10-21, 319c583f).
+  const summary = (answer.length >= 40 ? answer.slice(0, 12_000) : all.length > 12_000 ? `…${all.slice(-12_000)}` : all) || null;
   const brief = briefFromFacts(facts) || (summary ? summary.split(/\n+/).map((l) => l.trim()).filter(Boolean).slice(0, 3).join("\n").slice(0, 500) : null);
   // Which model answered, and whether the run moved there after a plan limit (a delegated
   // subtask keeps the auto-fallback): the owner sees it in the result his chat gets back.

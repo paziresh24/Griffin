@@ -42,14 +42,14 @@ const cap = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : null);
 
 // The effective settings of a caller entry, or null when the agent is not granted to it.
 export function peerSettings(profile, caller) {
-  const entry = profile?.meta?.callers?.[caller];
-  if (!entry) return null;
+  if (!profile) return null;
+  // Every agent is open to every colleague; a row only carries optional model/cap settings.
+  const entry = profile.meta?.callers?.[caller] || {};
   const model = typeof entry.model === "string" && entry.model ? entry.model : null;
   const listed = Array.isArray(entry.models) ? entry.models.filter((m) => typeof m === "string" && m) : [];
   const budget = "budget" in entry ? entry.budget || {} : PEER_DEFAULT_LIMITS.budget;
   const messages = entry.messages || {};
   return {
-    tools: Array.isArray(entry.tools) ? entry.tools : [],
     model,
     models: listed.length ? listed : model ? [model] : [],
     budget: { hourly: cap(budget.hourly), daily: cap(budget.daily) },

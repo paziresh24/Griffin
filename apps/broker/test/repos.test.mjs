@@ -63,3 +63,25 @@ test("git_push with mrTitle opens one Draft MR per branch", async () => {
   assert.equal(again.mergeRequest.existing, true);
   assert.equal(seen.filter((s) => s.startsWith("POST")).length, 1);
 });
+
+// 2026-10-21: a clone an agent left on its own branch logged a refresh error every 10 minutes.
+test("git_fetch update leaves a checkout on its own branch alone, ff's a tracking one", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-ff-"));
+  const sh = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  sh(root, "init", "-q", "--bare", "-b", "main", "origin.git");
+  sh(root, "clone", "-q", "origin.git", "seed");
+  sh(path.join(root, "seed"), "commit", "-q", "--allow-empty", "-m", "a");
+  sh(path.join(root, "seed"), "push", "-q", "origin", "HEAD:main");
+  sh(root, "clone", "-q", "origin.git", "app");
+  sh(path.join(root, "seed"), "commit", "-q", "--allow-empty", "-m", "b");
+  sh(path.join(root, "seed"), "push", "-q", "origin", "HEAD:main");
+  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root });
+  const ff = await tools.git_fetch.execute({ repo: "app", update: true });
+  assert.equal(ff.updated, true);
+  sh(path.join(root, "app"), "checkout", "-q", "-b", "sanij/a24c0de2");
+  const own = await tools.git_fetch.execute({ repo: "app", update: true });
+  assert.deepEqual([own.fetched, own.updated], [true, false]);
+  assert.match(own.reason, /not on a branch/);
+  fs.rmSync(root, { recursive: true, force: true });
+});

@@ -10,6 +10,8 @@ const time = (stamp) => {
   return Number.isFinite(ms) ? ms : 0;
 };
 const runningChildren = (chat) => (chat?.children || []).filter((k) => k.runStatus === "running").length;
+// Background tasks it left running (a watcher it waits on): it wakes when they end, so it is still at work.
+const background = (chat) => Number(chat?.backgroundTasks) || 0;
 
 /**
  * The inbox as a tiny external store (for useSyncExternalStore). Refreshes coalesce: a refresh asked
@@ -57,11 +59,12 @@ export const sourceTag = (chat) => (chat?.global || chat?.mother ? SOURCE_TAGS.t
 // reset (it goes on by itself). Newest start first.
 export function workingTasks(chats, todos = {}, { limit = 12 } = {}) {
   return (chats || [])
-    .filter((c) => c.runStatus === "running" || runningChildren(c) > 0 || c.limitResumeAt)
+    .filter((c) => c.runStatus === "running" || runningChildren(c) > 0 || c.limitResumeAt || background(c) > 0)
     .map((c) => ({
       chat: c,
       todo: todos?.[c.id] || null,
       runningChildren: runningChildren(c),
+      background: c.runStatus === "running" ? 0 : background(c),
       waiting: Boolean(c.waitingForOwner),
       // Stop also when only its subtasks run: cancelling the root cancels its delegates.
       stoppable: c.runStatus === "running" || runningChildren(c) > 0,
@@ -82,7 +85,7 @@ export function recentDone(chats, { isUnread = () => false, now = Date.now(), li
   return (chats || [])
     .filter((c) => ["manual", "peer"].includes(c.source || "manual") && !c.mother && !c.global)
     // Waiting for the plan limit is still work (it is listed under «در حال کار»).
-    .filter((c) => DONE.has(c.runStatus) && !runningChildren(c) && !c.limitResumeAt && now - Date.parse(c.updatedAt) <= DAY)
+    .filter((c) => DONE.has(c.runStatus) && !runningChildren(c) && !c.limitResumeAt && !background(c) && now - Date.parse(c.updatedAt) <= DAY)
     .sort((a, b) => Number(Boolean(isUnread(b))) - Number(Boolean(isUnread(a))) || time(b.updatedAt) - time(a.updatedAt))
     .slice(0, limit);
 }
@@ -91,6 +94,7 @@ export function recentDone(chats, { isUnread = () => false, now = Date.now(), li
 export function stepLine(row) {
   const todo = row?.todo;
   if (todo?.total) return todo.current ? `${fa(todo.done)}/${fa(todo.total)} — ${todo.current}` : `${fa(todo.done)}/${fa(todo.total)}`;
+  if (row?.background) return `منتظر ${fa(row.background)} کار پس‌زمینه؛ با تمام شدنش خودش ادامه می‌دهد`;
   if (row?.resumeAt) {
     const clock = new Date(row.resumeAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
     return t("ساعت {time} خودش ادامه می‌دهد", { time: clock });

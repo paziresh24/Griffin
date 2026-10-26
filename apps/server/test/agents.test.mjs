@@ -69,7 +69,7 @@ test("rules are the shared core plus this agent's own instructions", () => {
   assert.ok(text.includes(TASK_RULE), "every agent works in the task shape");
   assert.match(text, /never claim to be/, "the voice section fixes the identity");
   assert.ok(text.includes(OWNER_CHAT_STYLE), "the owner's own chat gets the chat style");
-  assert.equal(fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8"), text);
+  assert.equal(fs.existsSync(path.join(dir, "CLAUDE.md")), false); // rules go per run, never a shared file
 
   const own = rulesFor({
     agent: "scribe",

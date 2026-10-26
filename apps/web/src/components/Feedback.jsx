@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { Info, LifeBuoy, Loader2, MessageSquareHeart, Send, UserRound, X } from "lucide-react";
+import { Bug, Info, LifeBuoy, Loader2, LogOut, MessageSquareHeart, Send, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { BRAND } from "../brand.js";
@@ -161,17 +161,30 @@ function AboutDialog({ open, onOpenChange }) {
 }
 
 /** The profile menu's rows (UserBar, UserMenu): its own place, not Settings. */
+// «خروج» is the menu's last row (a colleague 2026-10-24: nobody had used the logout button at the foot
+// of the list; its place went to «ارسال بازخورد», FeedbackBarButton).
 export const PROFILE_ITEMS = [
   { id: "profile", icon: UserRound, label: t("ویرایش پروفایل") },
   { id: "about", icon: Info, label: t("درباره") },
   { id: "support", icon: LifeBuoy, label: t("پشتیبانی") },
-  { id: "feedback", icon: MessageSquareHeart, label: t("ارسال بازخورد") },
+  { id: "logout", icon: LogOut, label: t("خروج"), rule: true },
 ];
+const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
 /** What a profile row does; editProfile opens Settings → Account. */
 export function profileAction(id, { editProfile }) {
   if (id === "profile") return editProfile();
   if (id === "about") return openAbout();
+  if (id === "logout") return logout();
   return openFeedback(id);
+}
+
+/** The foot of the sidebar, where «خروج» was: feedback or a bug report, one tap away. */
+export function FeedbackBarButton({ className }) {
+  return (
+    <button type="button" onClick={() => openFeedback("feedback")} className={className} title={t("ارسال بازخورد یا گزارش مشکل")} aria-label={t("ارسال بازخورد یا گزارش مشکل")}>
+      <Bug className="size-4" />
+    </button>
+  );
 }
 
 /** The page's bottom-left corner, small and out of the way, still plainly «feedback». */

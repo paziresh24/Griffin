@@ -126,7 +126,8 @@ test("ask_agent creates child with peer quota caller and returns server envelope
   assert.equal(envelope.status, "finished");
   assert.equal(envelope.chatRef, childId);
   assert.match(envelope.summary, /۷ دامنه/);
-  assert.equal(envelope.facts[0].tool, "arvan_domains");
+  assert.deepEqual(envelope.toolsRun, ["arvan_domains"]);
+  assert.equal(envelope.facts, undefined);
   const child = store.getChat(childId);
   assert.equal(child.agent, "arvan-ban");
   assert.equal(child.caller, "platform");

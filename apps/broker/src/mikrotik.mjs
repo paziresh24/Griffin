@@ -2,6 +2,7 @@ import { genv } from "./env.mjs";
 import { ToolInputError } from "./kube.mjs";
 import { connectRouterOs, RouterOsError } from "./routeros.mjs";
 import { winboxExec } from "./winbox.mjs";
+import { STEP_TITLE } from "./step-title.mjs";
 
 // MikroTik tools for the routers this deployment sits behind. Credentials come from the vault
 // ({host, port, user, password}); the router user's group decides what is possible at all.
@@ -229,7 +230,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
         properties: {
           router: router(routers),
           path: { type: "string", enum: READ_PATHS },
-          where: { type: "object", additionalProperties: { type: "string" }, description: "equality filters, e.g. {\"chain\":\"dstnat\"}" },
+          where: { type: ["object", "string"], additionalProperties: { type: "string" }, description: "equality filters, e.g. {\"chain\":\"dstnat\"} (\"chain=dstnat dst-port=8460\" works too)" },
           properties: { type: "array", items: { type: "string" }, maxItems: 20, description: "only these fields (proplist)" },
           limit: { type: "integer", minimum: 1, maximum: 500, description: "max items (default 100)" },
         },
@@ -237,6 +238,9 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
         additionalProperties: false,
       },
       async execute(args) {
+        // A RouterOS-style "k=v k2=v2" string is the same filter (2026-10-21: the model sent one and
+        // got a schema error back).
+        if (typeof args.where === "string") args = { ...args, where: Object.fromEntries([...args.where.matchAll(/([\w.-]+)=("[^"]*"|\S+)/g)].map(([, k, v]) => [k, v.replace(/^"|"$/g, "")])) };
         const path = String(args.path || "");
         if (!READ_PATHS.includes(path)) throw new ToolInputError(`path must be one of ${READ_PATHS.join(", ")}`);
         // Winbox routers have no API to query: read the same menu from the console instead.
@@ -273,6 +277,7 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
         properties: {
           router: router(routers),
           command: { type: "string", description: 'one console line, e.g. "/ppp/secret/print detail without-paging"' },
+          description: STEP_TITLE,
           timeoutMs: { type: "integer", minimum: 5000, maximum: 120000 },
         },
         required: ["router", "command"],

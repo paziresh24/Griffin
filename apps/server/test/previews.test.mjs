@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
-import { cleanDir, createPreviews, rewriteLocation } from "../src/previews.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { cleanDir, createPreviews, localExec, previewRunsLocal, rewriteLocation } from "../src/previews.mjs";
 
 // A kv-only store and an exec that plays the sandbox's shell: it answers the start script the way the
 // real one does (PID, READY, the log), the probe of live pids, and `hostname -i`.
@@ -50,6 +53,32 @@ test("dirs: relative to the worktree, absolute only under the allowed roots", ()
   assert.throws(() => cleanDir("/etc", { base }), /must be under/);
   assert.throws(() => cleanDir("/workspace/repos/platform-gitops", { base }), /must be under/, "the read-only clones are not a place to run things");
   assert.throws(() => cleanDir("", {}), /no repo worktree/);
+});
+
+test("a host install: worktrees outside /workspace are allowed when index passes their root", async () => {
+  const roots = ["/home/ubuntu/git-repos-griffin/_wt", "/root", "/tmp"];
+  const base = "/home/ubuntu/git-repos-griffin/_wt/demo-1234";
+  assert.equal(cleanDir("", { base, roots }), base);
+  assert.equal(cleanDir("web", { base, roots }), `${base}/web`);
+  assert.throws(() => cleanDir("", { base }), /must be under/, "the default roots alone refuse a host worktree");
+  assert.throws(() => cleanDir("/home/ubuntu/git-repos-griffin/griffin", { base, roots }), /must be under/, "the clones beside _wt stay out");
+  const s = setup({ dirRoots: roots, worktreeOf: () => base });
+  const out = await s.previews.tools("c1").preview_start.execute({ title: "host" });
+  assert.equal(out.isError, undefined);
+  assert.equal(JSON.parse(out.content[0].text).dir, base);
+});
+
+test("no broker on this install: preview_start says so instead of ENOENT", async () => {
+  const s = setup({
+    script: () => {
+      const error = new Error("connect ENOENT /run/griffin/broker.sock");
+      error.code = "ENOENT";
+      throw error;
+    },
+  });
+  const out = await s.previews.tools("c1").preview_start.execute({ title: "x" });
+  assert.equal(out.isError, true);
+  assert.match(out.content[0].text, /no broker/);
 });
 
 test("Location from a dev server moves under the preview prefix", () => {
@@ -336,4 +365,45 @@ test("a host per preview: the token is the first label, nothing to route", async
   } finally {
     up.server.close();
   }
+});
+
+test("runner: a host install with no sandbox runs previews on the machine itself", () => {
+  const none = () => false;
+  assert.equal(previewRunsLocal({ env: {}, exists: none }), true, "no container, no sandbox key: local");
+  assert.equal(previewRunsLocal({ env: {}, exists: (f) => f === "/.dockerenv" }), false, "in a container: the sandbox");
+  assert.equal(previewRunsLocal({ env: {}, exists: (f) => f === "/sandbox-keys/client" }), false, "the sandbox key is there");
+  assert.equal(previewRunsLocal({ env: { GRIFFIN_SANDBOX_KEY: "/k" }, exists: (f) => f === "/k" }), false, "its own key path");
+  assert.equal(previewRunsLocal({ env: { GRIFFIN_SANDBOX_HOST: "10.0.0.5" }, exists: none }), false, "a remote sandbox");
+  assert.equal(previewRunsLocal({ setting: "sandbox", env: {}, exists: none }), false);
+  assert.equal(previewRunsLocal({ setting: "local", env: {}, exists: () => true }), true);
+});
+
+const hasTools = ["nc", "python3"].every((bin) => (process.env.PATH || "").split(":").some((dir) => dir && fs.existsSync(path.join(dir, bin))));
+test("runner: local start, look and stop of a real static server", { skip: !hasTools && "needs nc and python3" }, async (t) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pv-local-"));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(tmp, "index.html"), "<h1>hi</h1>");
+  const kv = new Map();
+  const store = { getKv: (k) => (kv.has(k) ? JSON.parse(kv.get(k)) : null), setKv: (k, v) => kv.set(k, JSON.stringify(v)), getChat: () => null };
+  const previews = createPreviews({
+    store,
+    exec: (command) => localExec(command, { env: { ...process.env, SECRET_TOKEN: "x" } }),
+    local: true,
+    sandboxAddr: () => "127.0.0.1",
+    previewDir: path.join(tmp, ".previews"),
+    dirRoots: [tmp],
+    log: () => {},
+  });
+  const { rec, outcome } = await previews.start({ chatId: "c1", dir: tmp, command: 'env > env.txt; exec python3 -m http.server "$PORT" --bind 127.0.0.1', waitSec: 15 });
+  try {
+    assert.equal(outcome, "ready");
+    const res = await previews.handle(new Request(`https://nova.example.com/p/${rec.token}/`));
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /<h1>hi<\/h1>/);
+    assert.doesNotMatch(fs.readFileSync(path.join(tmp, "env.txt"), "utf8"), /SECRET_TOKEN/, "the app's env does not reach the preview");
+    await assert.rejects(previews.start({ chatId: "c1", dir: path.join(tmp, "nope") }), /does not exist on this machine/);
+  } finally {
+    await previews.stop(rec.id);
+  }
+  assert.equal(previews.get(rec.id).status, "stopped");
 });

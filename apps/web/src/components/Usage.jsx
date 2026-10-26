@@ -40,7 +40,7 @@ export function UsageBadge({ open: startOpen = false } = {}) {
   const data = usePolling("/api/usage", 60_000);
   // The Karsara look warns from 75%, the default look from 70%; both turn red at 90%.
   const warnAt = useLook() === "karsara" ? 75 : 70;
-  const windows = (data?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id })));
+  const windows = (data?.providers || []).flatMap((p) => (p.windows || []).map((w) => ({ ...w, provider: p.id, engine: p.label || p.id })));
   const worst = windows.reduce((max, w) => Math.max(max, percentOf(w) ?? 0), 0);
   const tone = worst >= 90 ? "text-bad" : worst >= warnAt ? "text-warn" : "text-muted-foreground";
   const summary = windows.length ? windows.map((w) => `${t(w.label)} ${pct(percentOf(w) ?? 0)}`).join(" · ") : data ? tokens(data.local?.last5h?.input + data.local?.last5h?.output) + " tok/5h" : "…";
@@ -61,7 +61,7 @@ export function UsageBadge({ open: startOpen = false } = {}) {
               return (
                 <div key={i} className="mb-2">
                   <div className="flex justify-between">
-                    <span>{t(w.label)} <span className="text-muted-foreground" dir="ltr">({w.provider})</span></span>
+                    <span>{t(w.label)} <bdi className="text-muted-foreground" dir="auto">({w.engine})</bdi></span>
                     <span>{p == null ? "—" : pct(p)}</span>
                   </div>
                   <div className="g-usage-bar mt-1 h-1.5 overflow-hidden rounded-full bg-muted">

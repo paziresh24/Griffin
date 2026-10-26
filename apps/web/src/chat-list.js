@@ -5,6 +5,7 @@
 import { clockLabel } from "./elapsed.js";
 import { groupSections } from "./chat-groups.js";
 import { locale, num, t } from "./i18n.js";
+import { orderSections } from "./drag.js";
 
 export const SORTS = [
   { id: "updated", label: t("جدیدترین") },
@@ -53,7 +54,8 @@ export function chatState(chat, isUnread) {
   const unread = Boolean(isUnread(chat));
   let id = "read";
   if (chat?.waitingForOwner) id = "ask";
-  else if (chat?.runStatus === "running" || chat?.children?.some((k) => k.runStatus === "running") || chat?.limitResumeAt) id = "running";
+  // A background task it left running (a watcher: «sleep» before checking CI) wakes it again.
+  else if (chat?.runStatus === "running" || chat?.children?.some((k) => k.runStatus === "running") || chat?.limitResumeAt || Number(chat?.backgroundTasks) > 0) id = "running";
   else if (failed(chat)) id = "error";
   else if (unread) id = "unread";
   return { id, label: STATES[id], unread, failed: failed(chat) };
@@ -126,22 +128,37 @@ function bucket(list, keyOf, order = null) {
  * impossible to miss; failures sit at the end of pinned and of the rest.
  */
 export function groupChats(list, groupBy, options = {}) {
-  // By date, agent, repo or model (like Claude Desktop's folders), pinned chats stay on top.
-  if (["date", "agent", "repo", "model"].includes(groupBy) && list.some((c) => c.pinned)) {
-    const pinned = { key: "pinned", title: t("سنجاق‌شده"), chats: list.filter((c) => c.pinned) };
-    return [pinned, ...attributeGroups(list.filter((c) => !c.pinned), groupBy, options)];
+  // By date, agent, repo or model (like Claude Desktop's folders), pinned chats stay on top. The owner's
+  // own groups (the main list only) sit beside those sections, where he dragged them (drag.js), so a chat
+  // can be dragged into one whatever the grouping (owner 2026-10-24); the sections themselves take the
+  // order he dragged them into (`sectionOrder`).
+  if (["date", "agent", "repo", "model"].includes(groupBy)) {
+    const { groups = [], scope = "", narrowed = false, looseAt = null, sectionOrder = null } = options;
+    const owned = scope === "manual" ? groups : [];
+    const known = new Set(owned.map((g) => g.id));
+    const pinned = list.filter((c) => c.pinned);
+    const named = owned
+      .map((g) => ({ key: `group:${g.id}`, title: g.name, groupId: g.id, chats: list.filter((c) => !c.pinned && c.groupId === g.id), collapsible: true }))
+      .filter((s) => s.chats.length || !narrowed);
+    const rest = list.filter((c) => !c.pinned && !known.has(c.groupId));
+    const loose = orderSections(attributeGroups(rest, groupBy, options), sectionOrder).map((s, i) => ({ ...s, loose: true, looseHead: i === 0 }));
+    const at = Number.isInteger(looseAt) && looseAt >= 0 ? named.filter((s) => owned.findIndex((g) => g.id === s.groupId) < looseAt).length : named.length;
+    return [...(pinned.length ? [{ key: "pinned", title: t("سنجاق‌شده"), chats: pinned }] : []), ...named.slice(0, at), ...loose, ...named.slice(at)];
   }
   return attributeGroups(list, groupBy, options);
 }
 
-function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date(), timeZone, agentLabel = (id) => id, groups = [], narrowed = false, scope = "" } = {}) {
-  if (groupBy === "custom") return groupSections(list, groups, { narrowed });
+function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date(), timeZone, agentLabel = (id) => id, groups = [], narrowed = false, scope = "", looseAt = null } = {}) {
+  if (groupBy === "custom") return groupSections(list, groups, { narrowed, looseAt });
   if (groupBy === "owner") {
     // Whose threads (Telegram, peers): each person's can be folded away.
     const map = new Map();
+    // A colleague's agent's chats have no owner key: they are that colleague's (caller «peer:<id>»,
+    // label from the server) — before, all of them sat in one «بدون صاحب» heap (owner 2026-10-20).
     for (const chat of list) {
-      const key = chat.ownerKey || "none";
-      if (!map.has(key)) map.set(key, { key: `${scope}:${key}`, title: chat.ownerLabel || t("بدون صاحب"), chats: [], collapsible: true });
+      const peer = !chat.ownerKey && String(chat.caller || "").startsWith("peer:");
+      const key = chat.ownerKey || (peer ? chat.caller : "none");
+      if (!map.has(key)) map.set(key, { key: `${scope}:${key}`, title: chat.ownerLabel || (peer ? chat.peerLabel || chat.caller.slice(5) : "") || t("بدون صاحب"), chats: [], collapsible: true });
       map.get(key).chats.push(chat);
     }
     return [...map.values()];
@@ -184,3 +201,9 @@ function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date
 export function ago(stamp, now = Date.now()) {
   return clockLabel(stamp, new Date(now));
 }
+
+// The sidebar's clock beside a chat with a reminder still to run (owner 10-24: «مثل علامت سوال»).
+export const reminderLabel = (at) => {
+  const when = clockLabel(at);
+  return when ? `یادآور فعال · ${when}` : t("یادآور فعال");
+};

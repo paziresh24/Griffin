@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalS
 import {
   AssistantRuntimeProvider,
   CompositeAttachmentAdapter,
-  SimpleImageAttachmentAdapter,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
 import { api, catchUpTimeline, navigate } from "./api.js";
@@ -16,12 +15,12 @@ import { retryableRunId } from "./side.js";
 import { collectChapters } from "./chat-tools.js";
 import { noteMessage } from "./telegram.js";
 import { guestMessage } from "./guest.js";
-import { FileAttachmentAdapter, attachmentPayload, countProblem, filesShown } from "./attachments.js";
+import { FileAttachmentAdapter, ImageAttachmentAdapter, attachmentPayload, countProblem, filesShown } from "./attachments.js";
 
 export { unwrapResult };
 
-// Pictures go as images; PDFs and text files as files (attachments.js, from Karsara).
-const attachmentAdapter = new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new FileAttachmentAdapter()]);
+// Pictures go as images (a big one shrunk, or sent as a file); any other file as a file (attachments.js).
+const attachmentAdapter = new CompositeAttachmentAdapter([new ImageAttachmentAdapter(), new FileAttachmentAdapter()]);
 
 // The chat this runtime sends to (the composer keys its draft and quotes by it), a send of the
 // waiting quotes alone (an empty box cannot be submitted through the composer itself), and the
@@ -54,7 +53,7 @@ function tabStorage() {
   }
 }
 
-function returnToBox(chatId, text) {
+export function returnToBox(chatId, text) {
   if (!text) return;
   const detail = { chatId, text, handled: false };
   window.dispatchEvent(new CustomEvent(RESTORE_EVENT, { detail }));

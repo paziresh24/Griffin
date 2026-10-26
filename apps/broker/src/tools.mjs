@@ -14,6 +14,7 @@ import { createNsinTools } from "./nsin.mjs";
 import { createAlertTools } from "./alerts.mjs";
 import { EMPTY_SITE } from "./site.mjs";
 import { genv } from "./env.mjs";
+import { STEP_TITLE } from "./step-title.mjs";
 
 // Read-only kinds the agent may list. No secrets, no configmaps.
 const KINDS = {
@@ -29,6 +30,14 @@ const KINDS = {
   jobs: { group: "apis/batch/v1", namespaced: true },
   cronjobs: { group: "apis/batch/v1", namespaced: true },
   ingresses: { group: "apis/networking.k8s.io/v1", namespaced: true },
+  // Kinds the agents kept reaching for and got a schema error instead (2026-10-21: endpoints ×3).
+  endpoints: { group: "api/v1", namespaced: true },
+  configmaps: { group: "api/v1", namespaced: true },
+  namespaces: { group: "api/v1", namespaced: false },
+  replicasets: { group: "apis/apps/v1", namespaced: true },
+  networkpolicies: { group: "apis/networking.k8s.io/v1", namespaced: true },
+  horizontalpodautoscalers: { group: "apis/autoscaling/v2", namespaced: true },
+  httproutes: { group: "apis/gateway.networking.k8s.io/v1", namespaced: true },
   "clusters.postgresql.cnpg.io": { group: "apis/postgresql.cnpg.io/v1", plural: "clusters", namespaced: true },
 };
 
@@ -129,7 +138,18 @@ export function createTools({
         });
         if (!response.ok) throw new Error(`GitLab http_${response.status}`);
         const body = await response.json();
-        return { version: String(body.version || ""), revision: String(body.revision || ""), source: `${host} api/v4/version` };
+        // Whose token this is: the app gives the owner's own Claude Code processes this git author.
+        let user = null;
+        try {
+          const me = await fetchImpl(`${host}/api/v4/user`, { headers: { "PRIVATE-TOKEN": await vault.item("gitlab__token"), Accept: "application/json" }, signal: AbortSignal.timeout(20_000) });
+          if (me.ok) {
+            const u = await me.json();
+            user = { username: String(u.username || ""), name: String(u.name || ""), email: String(u.email || u.public_email || "") };
+          }
+        } catch {
+          /* version alone */
+        }
+        return { version: String(body.version || ""), revision: String(body.revision || ""), user, source: `${host} api/v4/version` };
       },
     },
 
@@ -138,7 +158,7 @@ export function createTools({
         "Pod counts by phase/namespace for a cluster; with namespace (and optional name prefix) also per-pod details and CNPG clusters. Falls back to the emergency SSH path when the public API is down.",
       inputSchema: {
         type: "object",
-        properties: { cluster, namespace: k8sName("namespace (omit for cluster-wide)"), prefix: k8sName("pod name prefix") },
+        properties: { cluster, namespace: k8sName("namespace (omit for cluster-wide)"), prefix: { type: "string", pattern: "^[a-z0-9][-a-z0-9.]{0,252}$", description: "pod name prefix (a trailing - is fine)" } },
         required: ["cluster"],
         additionalProperties: false,
       },
@@ -300,6 +320,7 @@ export function createTools({
           pod: k8sName("pod"),
           container: k8sName("container"),
           command: { type: "string", minLength: 1, maxLength: 2000, description: "shell command run with sh -c inside the container" },
+          description: STEP_TITLE,
         },
         required: ["cluster", "namespace", "pod", "command"],
         additionalProperties: false,
@@ -349,6 +370,33 @@ export function createTools({
       },
     },
 
+    kube_create: {
+      description:
+        "Create ONE namespaced Kubernetes object from a manifest (JSON object): a Job, a Pod for a one-off test, a CNPG Backup, a ConfigMap, a Service… Create only: never updates, patches or deletes an existing object (an existing name is an error). Not for RBAC (Role/RoleBinding/ServiceAccount) or cluster-scoped kinds. Prefer GitOps (an MR) for anything that should stay; this is for one-off operational objects. Asks the owner unless it is the requester's own namespace.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          cluster,
+          namespace: k8sName("namespace to create it in"),
+          manifest: { type: "object", description: "the object as JSON: apiVersion, kind, metadata.name, spec…" },
+        },
+        required: ["cluster", "namespace", "manifest"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const name = requireCluster(args);
+        const namespace = requiredName(args.namespace, "namespace");
+        const m = args.manifest && typeof args.manifest === "object" ? { ...args.manifest } : null;
+        if (!m?.apiVersion || !m?.kind || !m?.metadata) throw new ToolInputError("manifest needs apiVersion, kind and metadata");
+        const kind = String(m.kind);
+        if (KUBE_CREATE_DENY.test(kind)) throw new ToolInputError(`${kind} is not created from here (RBAC or cluster-scoped) — use an MR`);
+        if (m.metadata.namespace && m.metadata.namespace !== namespace) throw new ToolInputError(`manifest namespace ${m.metadata.namespace} differs from ${namespace}`);
+        m.metadata = { ...m.metadata, namespace, labels: { ...(m.metadata.labels || {}), "app.kubernetes.io/created-by": "griffin" } };
+        const base = String(m.apiVersion).includes("/") ? `/apis/${m.apiVersion}` : `/api/${m.apiVersion}`;
+        const out = await kube.publicWrite(name, `${base}/namespaces/${namespace}/${kindPlural(kind)}`, { method: "POST", body: m });
+        return { cluster: name, namespace, kind, name: out?.metadata?.name || m.metadata.name || m.metadata.generateName, uid: out?.metadata?.uid || null, created: true };
+      },
+    },
     kube_copy_secret: {
       description:
         "Copy a Secret between clusters/namespaces/names without exposing its values — e.g. a DR replica that needs the primary cluster's <db>-ca, or a shared gateway wildcard-tls → an owner namespace. Default target namespace is the source's; set toNamespace to copy across namespaces. Refuses to overwrite an existing target unless replace=true (replace deletes and recreates, so a different Secret type is fine). Returns only key names.",
@@ -465,6 +513,7 @@ export function createTools({
         properties: {
           host: { type: "string", enum: Object.keys(debugHosts) },
           command: { type: "string", minLength: 1, maxLength: 16000 },
+          description: STEP_TITLE,
         },
         required: ["command"],
         additionalProperties: false,
@@ -491,6 +540,7 @@ export function createTools({
         properties: {
           host: { type: "string", pattern: "^[A-Za-z0-9._-]{1,253}$", description: "hostname or IP, e.g. 203.0.113.57 or app.example.com" },
           command: { type: "string", minLength: 1, maxLength: 16000 },
+          description: STEP_TITLE,
           port: { type: "integer", minimum: 1, maximum: 65535, description: "SSH port (default 22)" },
           user: { type: "string", pattern: "^[A-Za-z0-9._-]{1,32}$", description: `login user (default ${sshUser})` },
         },
@@ -616,6 +666,18 @@ async function inHomeIfForbidden(kube, cluster, namespace, run) {
     const result = await run(error.homeNamespace);
     return { ...result, note: `cluster-wide reads are forbidden for this credential; showing its namespace "${error.homeNamespace}"` };
   }
+}
+
+const KUBE_CREATE_DENY = /^(Namespace|Node|PersistentVolume|ClusterRole|ClusterRoleBinding|Role|RoleBinding|ServiceAccount|CustomResourceDefinition|MutatingWebhookConfiguration|ValidatingWebhookConfiguration|ValidatingAdmissionPolicy|ValidatingAdmissionPolicyBinding|StorageClass|PriorityClass|APIService|CertificateSigningRequest)$/;
+
+// Kind → its REST plural (lowercase; -y → -ies, -s → -es); the irregular ones listed.
+export function kindPlural(kind) {
+  const k = String(kind).toLowerCase();
+  const irregular = { endpoints: "endpoints", ingress: "ingresses", networkpolicy: "networkpolicies" };
+  if (irregular[k]) return irregular[k];
+  if (/[^aeiou]y$/.test(k)) return `${k.slice(0, -1)}ies`;
+  if (/(s|x|ch|sh)$/.test(k)) return `${k}es`;
+  return `${k}s`;
 }
 
 function optionalName(value, label) {

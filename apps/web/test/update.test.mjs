@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatSize, offerState, readableChanges } from "../src/update.js";
+import { byDay, formatSize, offerState } from "../src/update.js";
 
-test("only Persian lines are shown; the rest are counted", () => {
-  const r = readableChanges([{ commit: "a", text: "ایجنت‌ها ابزار می‌سازند" }, { commit: "b", text: "fix(autoupdate): lock" }, { commit: "c", text: "feat: x" }]);
-  assert.deepEqual(r.user.map((c) => c.commit), ["a"]);
-  assert.equal(r.technical, 2);
+test("every change is listed, grouped by its day, in the order given", () => {
+  const days = byDay([
+    { commit: "a", at: "2026-10-24T10:00:00Z", text: "یک" },
+    { commit: "b", at: "2026-10-24T08:00:00Z", text: "fix: two" },
+    { commit: "c", at: "2026-10-23T08:00:00Z", text: "سه" },
+  ]);
+  assert.deepEqual(days.map((d) => d.items.map((c) => c.commit)), [["a", "b"], ["c"]]);
 });
 
 test("offer state follows the host", () => {

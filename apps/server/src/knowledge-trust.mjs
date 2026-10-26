@@ -30,7 +30,7 @@ export const SAFE_TOOLS = Object.freeze([
   // and jobs_update (prompts and run summaries), repo_list / repo_read / repo_search (a repo's
   // file names and files hold anyone's words: others' commits, vendored text), repo_git / repo_push (others' commits, remote answers),
   // related_chat_send, ask_agent, delegate, subtasks, feed_read, team_threads, incidents_*.
-  "knowledge_write", "knowledge_list", "ask_owner", "visualize", "show_media", "chat_suggest",
+  "knowledge_write", "knowledge_list", "knowledge_edit", "knowledge_delete", "ask_owner", "visualize", "show_media", "chat_suggest",
   "chat_dismiss_suggestion", "chat_chapter", "todo_write", "owner_task", "jobs_create",
   "jobs_delete", "jobs_run", "agent_tools_list", "agent_tools_enable",
   "agent_tools_disable", "agent_settings_get", "agent_settings_set", "list_agents",
@@ -86,7 +86,7 @@ export function createChatTrust({ store } = {}) {
     if (chat.job_id || chat.person_id || chat.sim) return false;
     if (isGlobalChat(store, chat.id) || motherInfo(store, chat.id)) return false;
     if (store.getKv?.(thirdPartyKey(chat.id))) return false;
-    if (store.linksForChat?.(chat.id)?.length || store.getKv?.(telegramOriginKey(chat.id))) return false;
+    if ((store.foreignLinksForChat || store.linksForChat)?.(chat.id)?.length || store.getKv?.(telegramOriginKey(chat.id))) return false;
     return true;
   }
 
@@ -121,7 +121,7 @@ export function createChatTrust({ store } = {}) {
     if (!chatId || depth > 10) return false;
     const chat = store.getChat(String(chatId));
     if (!chat || (chat.caller || "owner") !== "owner" || chat.job_id || chat.person_id || chat.sim) return false;
-    if (isGlobalChat(store, chat.id) || motherInfo(store, chat.id) || store.linksForChat?.(chat.id)?.length || store.getKv?.(telegramOriginKey(chat.id))) return false;
+    if (isGlobalChat(store, chat.id) || motherInfo(store, chat.id) || (store.foreignLinksForChat || store.linksForChat)?.(chat.id)?.length || store.getKv?.(telegramOriginKey(chat.id))) return false;
     for (const up of [chat.parent_chat_id, chat.side_of, store.getKv?.(`fork-of:${chat.id}`)]) {
       if (up && !ownerRooted(up, depth + 1)) return false;
     }
@@ -134,6 +134,10 @@ export function createChatTrust({ store } = {}) {
     // Called by knowledge_write right after it saved `text` as <agent>/<file> in chat `chatId`.
     recordNote(agentId, file, chatId, text) {
       store.setKv(noteKey(agentId, file), { chat: String(chatId), event: store.lastEventId(chatId), sha: sha256(text) });
+    },
+    // The note was deleted (knowledge_delete / Settings): drop its record so a restored copy waits for review.
+    forgetNote(agentId, file) {
+      store.deleteKv?.(noteKey(agentId, file));
     },
     // Auto-trusted: the file is exactly what knowledge_write saved, and its chat was clean up to then.
     isTrustedNote(agentId, file, text) {

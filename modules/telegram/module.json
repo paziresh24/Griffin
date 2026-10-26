@@ -1,0 +1,15 @@
+{
+  "id": "telegram",
+  "version": "1.1.0",
+  "title": "تلگرام (دستیار به جای شما)",
+  "category": "team",
+  "settings": { "config": ["TELEGRAM_FILES", "TELEGRAM_LEDGER", "TELEGRAM_INSTRUCTION_GUARD", "PRIVATE_SHARE", "TEAM_PROVIDER", "TEAM_MODEL", "TEAM_EFFORT", "TEAM_SUB_PROVIDER", "TEAM_SUB_MODEL"] },
+  "choice": "پیام‌های خصوصی همکاران در تلگرام را چه کسی جواب بدهد؟",
+  "description": "پیام همکاران در تلگرام را دستیار شما جواب می‌دهد: چت مادر هر نفر، واچر، رشته‌ها",
+  "builtin": true,
+  "presets": ["griffin", "karsara"],
+  "provides": ["telegram-dm"],
+  "sets": { "TELEGRAM_DM_MODE": "assistant" },
+  "switchNote": "پیام‌های خصوصی تلگرام از این به بعد با روش «چت مادر» جواب داده می‌شوند. اتصال حساب تلگرام قطع نمی‌شود؛ گفتگوهای قبلی جایی نمی‌روند.",
+  "pages": [{ "id": "main", "title": "تلگرام", "icon": "message-circle", "kind": "builtin", "route": "/telegram" }]
+}

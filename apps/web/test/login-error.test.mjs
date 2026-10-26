@@ -13,3 +13,9 @@ test("login errors say exactly how long to wait or how many tries are left", () 
   assert.match(loginError(0), /سرور در دسترس نیست/);
   assert.match(loginError(500), /۵۰۰/);
 });
+
+test("with two-step sign-in a wrong code says so, not «توکن درست نیست»", () => {
+  assert.match(loginError(401, { needCode: true, remaining: 3 }), /کد درست نیست/);
+  assert.match(loginError(401, { needCode: true, remaining: 0, retryAfter: 900 }), /۱۵ دقیقه/);
+  assert.match(loginError(429, { needCode: true, retryAfter: 300 }), /کد اشتباه.*۵ دقیقه/);
+});

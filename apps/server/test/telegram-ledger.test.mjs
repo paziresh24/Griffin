@@ -59,9 +59,9 @@ test("ledger off (the default): nothing is written and no chat has the tool", as
     await tools.telegram_send.execute({ chat: "777", text: "hi" });
     assert.deepEqual(store.listTelegramSends({ peerId: "777" }), []);
     assert.deepEqual(ledgerTools({ store, chat, enabled: false }), {});
-    // The switch is a Settings entry, off unless set.
+    // The switch is a Settings entry, on unless set (owner 2026-10-20: Karsara's defaults).
     const entry = CONFIG_SCHEMA.find((c) => c.key === TELEGRAM_LEDGER_CONFIG);
-    assert.deepEqual(entry?.options, ["off", "on"]);
+    assert.deepEqual(entry?.options, ["on", "off"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

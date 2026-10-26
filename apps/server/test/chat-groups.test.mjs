@@ -106,3 +106,28 @@ test("group changes and moves tell open pages to refresh the list", async () => 
   }
   assert.ok(events.length > seen);
 });
+
+test("drag and drop order: groups and «بدون گروه» take the order given; a wrong list changes nothing", async () => {
+  const { app, events } = setup();
+  const a = await newGroup(app, "الف");
+  const b = await newGroup(app, "ب");
+  assert.equal((await (await app.request("/api/groups")).json()).looseAt, null);
+  const res = await send(app, "/api/groups/order", { order: ["none", b.id, a.id] }, "PUT");
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.groups.map((g) => g.id), [b.id, a.id]);
+  assert.equal(body.looseAt, 0);
+  assert.ok(events.some((e) => e.type === "groups"));
+  for (const order of [[a.id], [a.id, a.id, b.id], [a.id, b.id, "x"], [a.id, b.id, "none", "none"], "nope"]) {
+    assert.equal((await send(app, "/api/groups/order", { order }, "PUT")).status, 400);
+  }
+  const now = await (await app.request("/api/groups")).json();
+  assert.deepEqual(now.groups.map((g) => g.id), [b.id, a.id]);
+  assert.equal(now.looseAt, 0);
+  // Without "none" the ungrouped chats go back to the end; a new group lands last.
+  await send(app, "/api/groups/order", { order: [a.id, b.id] }, "PUT");
+  const c = await newGroup(app, "پ");
+  const last = await (await app.request("/api/groups")).json();
+  assert.deepEqual(last.groups.map((g) => g.id), [a.id, b.id, c.id]);
+  assert.equal(last.looseAt, null);
+});

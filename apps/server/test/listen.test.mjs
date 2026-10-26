@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import https from "node:https";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { getRequestListener } from "@hono/node-server";
@@ -70,4 +71,20 @@ test("trusted proxies take addresses and ranges; a bad entry is refused", () => 
   assert.equal(loopback.check("::1", "ipv6"), true);
   assert.equal(loopback.check("10.0.0.1", "ipv4"), false);
   assert.throws(() => parseTrustedProxies("edge.example.com"), /not an address or range/);
+});
+
+// A socket that never sends a byte and a WebSocket handed to onUpgrade both sit outside the inner
+// http servers; close() once waited on such a socket for 23 minutes with the port closed (2026-10-24).
+test("close() does not wait on idle raw sockets or upgraded WebSockets", async () => {
+  const server = createDualServer(getRequestListener(new Hono().fetch), { onUpgrade: (req, socket) => (socket.write("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: upgrade\r\n\r\n"), true) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const idle = net.connect(port, "127.0.0.1");
+  const ws = net.connect(port, "127.0.0.1", () => ws.write("GET / HTTP/1.1\r\nhost: x\r\nupgrade: websocket\r\nconnection: upgrade\r\n\r\n"));
+  for (const s of [idle, ws]) s.on("error", () => {});
+  await new Promise((resolve) => ws.once("data", resolve));
+  const closed = await Promise.race([new Promise((resolve) => server.close(() => resolve(true))), new Promise((resolve) => setTimeout(() => resolve(false), 2_000))]);
+  idle.destroy();
+  ws.destroy();
+  assert.equal(closed, true);
 });

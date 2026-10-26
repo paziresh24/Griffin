@@ -74,7 +74,9 @@ test("owner_task: an access request on the owner's board, linked to the root cha
   const root = store.createChat({ title: "سرچ" });
   const tool = ownerTaskTool({ store, chatId: root.id, agent: "griffin" });
   assert.equal((await tool.execute({ access: "  " })).isError, true);
-  assert.deepEqual(tool.inputSchema.required, ["access"], "not a chore: the access it needs");
+  // Not a chore: the access it needs — or `done`, the id of a card of this chat whose access arrived.
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ["access", "done", "why"]);
+  assert.equal((await tool.execute({ why: "بدون دسترسی" })).isError, true);
   const done = await tool.execute({ access: "Maintainer برای griffin روی alice/search-service", why: "اصلاح‌های MR 45" });
   assert.equal(done.isError, undefined);
   const [chore] = listOwnerTasks(store);
@@ -111,7 +113,7 @@ test("watchTodos: a task whose turn ended after delegating keeps its steps until
 
 test("owner_task: only in chains the owner reads — his own and colleagues' Telegram ones", () => {
   assert.equal(offersOwnerTask({ rootCaller: "owner", unattended: false }), true);
-  assert.equal(offersOwnerTask({ rootCaller: "team", unattended: false }), true);
+  assert.equal(offersOwnerTask({ rootCaller: "team", unattended: false }), false, "a colleague's Telegram chain hands work over instead (handoff_to_owner)");
   assert.equal(offersOwnerTask({ rootCaller: "peer:alice", unattended: false }), false, "a colleague's agent over /mcp");
   assert.equal(offersOwnerTask({ rootCaller: "ops", unattended: true }), false);
   assert.equal(offersOwnerTask({ rootCaller: "owner", unattended: true }), false, "a job");

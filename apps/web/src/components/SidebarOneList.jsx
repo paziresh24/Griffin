@@ -1,25 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import {
-  AlarmClock, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
+  AlarmClock, Archive, BellRing, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
   ChevronRight, ExternalLink, Filter, FolderInput, FolderPlus, FolderTree, Inbox, LogOut, Mail, MailOpen, MoreHorizontal, Pencil, Pin, PinOff, Search,
   CircleHelp, Hourglass, PanelRightClose, Plus, Settings2, Trash2, Users, X, Zap,
 } from "lucide-react";
 import { api, navigate, usePolling } from "../api.js";
-import { PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
+import { FeedbackBarButton, PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
 import { peoplePath } from "../inbox-people.js";
 import { isUnreadChat, markSeen, markUnread, seenOf, useSeenVersion } from "../seen.js";
 import { agentMeta, readSetting, writeSetting } from "../brand.js";
 import { textDir } from "../dir.js";
 import { SidebarSuggestions } from "./ChatTools.jsx";
-import { SidebarNotes } from "./Notes.jsx";
 import { ListStatus } from "./ListStatus.jsx";
 import { isPlainClick } from "../sidebar-width.js";
 import { FILTERS, GROUPS, SORTS, chatState, filterChats, isPeerChat, layoutChats, sortChats, splitPeerChats } from "../karsara-chat-list.js";
 import { PROFILE_EVENT, ownerView } from "../profile.js";
 import { clockLabel } from "../elapsed.js";
+import { reminderLabel } from "../chat-list.js";
 import { useFlag } from "../ui-prefs.js";
 import { t } from "../i18n.js";
+import { useListChoice, useSectionOrder } from "../list-prefs.js";
+import { useUpdateDot } from "./UpdateNotice.jsx";
+import { PaletteKey, SectionMenuFoot, SectionMenuItems } from "./SectionNav.jsx";
+import { groupOrder, sectionDrag } from "../drag.js";
+import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 
 // The sidebar's one list (flag «یک فهرست برای همه», ui-prefs.js): Karsara's own list (karsara-live
 // Sidebar.jsx, release a9c3e3ee51bc), kept as close to it as Griffin's data allows, drawn inside the one
@@ -80,27 +85,6 @@ const isUnread = (chat) => {
 
 const REVERSES = [{ id: "no" }, { id: "yes" }];
 
-// The owner's list settings stick across reloads.
-function useStored(key, initial, allowed) {
-  const [value, setValue] = useState(() => {
-    try {
-      const saved = localStorage.getItem(key);
-      return allowed.some((item) => item.id === saved) ? saved : initial;
-    } catch {
-      return initial;
-    }
-  });
-  const set = (next) => {
-    setValue(next);
-    try {
-      localStorage.setItem(key, next);
-    } catch {
-      /* storage blocked: the choice lasts for this page only */
-    }
-  };
-  return [value, set];
-}
-
 // The grouping lives on the server (GET/PUT /api/list-prefs) so every device shows the same list.
 // The last known value is kept for the page, so a sidebar that remounts (the phone drawer) does not flash.
 let groupByCache = null;
@@ -128,14 +112,15 @@ function useServerGroupBy(initial) {
   return [value, set];
 }
 
-export function OneList({ chats, archived, groups = [], loading = false, failed = false, onRetry = null, onNewChat = null, activeId, onClose, nav = null, karsara = true }) {
+export function OneList({ chats, archived, groups = [], looseAt = null, loading = false, failed = false, onRetry = null, onNewChat = null, activeId, onClose, nav = null, karsara = true }) {
   const inboxOn = useFlag("inboxRow");
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(true);
-  const [sort, setSort] = useStored("kc-list-sort", "updated", SORTS);
+  const [sort, setSort] = useListChoice("sort", "kc-list-sort", "updated", SORTS);
   const [groupBy, setGroupBy] = useServerGroupBy("custom");
-  const [reverse, setReverse] = useStored("kc-list-reverse", "no", REVERSES);
-  const [filter, setFilter] = useStored("kc-list-filter", "all", FILTERS);
+  const [sectionOrders, setSectionOrder] = useSectionOrder(); // sections dragged into the owner's order (drag.js)
+  const [reverse, setReverse] = useListChoice("reverse", "kc-list-reverse", "no", REVERSES);
+  const [filter, setFilter] = useListChoice("filter", "kc-list-filter", "all", FILTERS);
   const seenVersion = useSeenVersion(); // read state changes re-shape the list (unread filter, groups)
   const [showArchived, setShowArchived] = useState(false);
   const searchRef = useRef(null);
@@ -190,11 +175,15 @@ export function OneList({ chats, archived, groups = [], loading = false, failed 
     // the archive has no groups. An empty group stays visible (a new one must show up to be used),
     // but not while a search or a filter narrows the list.
     const narrowed = Boolean(query.trim()) || filter !== "all" || showArchived;
-    const all = layoutChats(prepared.own, groupBy, { isUnread, agentLabel: (id) => agentMeta(id).label, groups: showArchived ? [] : groups });
+    const all = layoutChats(prepared.own, groupBy, { isUnread, agentLabel: (id) => agentMeta(id).label, groups: showArchived ? [] : groups, looseAt, sectionOrder: sectionOrders[groupBy] });
     return all
       .filter((s) => s.chats.length || (s.groupId && !narrowed))
       .map((s) => (s.title && !s.counted ? { ...s, title: `${s.title} (${s.chats.length.toLocaleString("fa-IR")})` } : s));
-  }, [prepared, groupBy, groups, query, filter, showArchived, seenVersion]);
+  }, [prepared, groupBy, groups, looseAt, sectionOrders, query, filter, showArchived, seenVersion]);
+  const order = useMemo(() => groupOrder(groups, looseAt), [groups, looseAt]); // drag and drop (drag.js)
+  const sectionKeys = sections.filter((s) => s.loose).map((s) => s.key);
+  const dragOf = (section) =>
+    showArchived ? { handle: null, slots: [] } : sectionDrag(section, { groupBy, groupsOrder: order, hasGroups: groups.length > 0, sectionKeys, onOrder: (keys) => setSectionOrder(groupBy, keys) });
 
 
   const open = (id) => {
@@ -229,6 +218,7 @@ export function OneList({ chats, archived, groups = [], loading = false, failed 
               <X className="!size-3.5" />
             </button>
           ) : null}
+          <PaletteKey />
           <SortMenu sort={sort} groupBy={groupBy} reverse={reverse === "yes"} onSort={setSort} onGroupBy={setGroupBy} onReverse={(on) => setReverse(on ? "yes" : "no")} />
           <FilterMenu filter={filter} onFilter={setFilter} />
         </label>
@@ -240,7 +230,6 @@ export function OneList({ chats, archived, groups = [], loading = false, failed 
       <nav className="scrollbar-thin mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {nav?.sections}
         <PeerChats chats={prepared.peers} activeId={activeId} onOpen={open} filtered={filter !== "all"} />
-        <SidebarNotes refreshKey={chats} onNavigate={onClose} karsara={karsara} />
         <SidebarSuggestions refreshKey={chats} onNavigate={onClose} karsara={karsara} />
         {showArchived ? <p className="mt-3 px-2 text-xs text-muted-foreground">{t("بایگانی")}</p> : null}
         <div className="mt-2" />
@@ -255,6 +244,8 @@ export function OneList({ chats, archived, groups = [], loading = false, failed 
             groups={groups}
             activeId={activeId}
             onOpen={open}
+            dropTarget={showArchived ? null : section.pinned ? { kind: "pinned" } : section.groupId ? { kind: "group", id: section.groupId } : section.loose ? { kind: "loose" } : null}
+            drag={dragOf(section)}
             onNewChat={showArchived ? null : startChat}
           />
         ))}
@@ -267,6 +258,12 @@ export function OneList({ chats, archived, groups = [], loading = false, failed 
         <ListStatus loading={loading && !chats.length} failed={failed} onRetry={onRetry} empty={!prepared.own.length} k>
           <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t("گفتگویی نیست.")}</p>
         </ListStatus>
+        {showArchived && list.length > 0 ? (
+          <button type="button" onClick={() => deleteAllArchived(list.map((c) => c.id))} className="kc-list-row mt-2 w-full text-xs !text-[var(--kc-muted)]">
+            <Trash2 className="size-3.5" />
+            {`حذف دائم همه بایگانی (${list.length})`}
+          </button>
+        ) : null}
         {archived.length > 0 || showArchived ? (
           <button
             type="button"
@@ -359,6 +356,7 @@ export function UserMenu({ onNavigate }) {
   // Something to connect (Claude signed out, Telegram not connected): marked here, so it is seen
   // without opening Settings.
   const setupMissing = useSetupMissing();
+  const updateDot = useUpdateDot(); // «آپدیت فقط در تنظیمات»: a new release waits there
   // The owner's name and photo, replaced at once when Settings saves a typed name.
   const [profile, setProfile] = useState(null);
   const [photoFailed, setPhotoFailed] = useState(false);
@@ -407,8 +405,6 @@ export function UserMenu({ onNavigate }) {
     window.location.hash = hash;
     onNavigate?.();
   };
-  const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
-
   return (
     <div className="flex items-center gap-2 border-t px-2 py-2 pb-[max(env(safe-area-inset-bottom),0.5rem)]">
       <Popover.Root open={open} onOpenChange={setOpen}>
@@ -425,7 +421,7 @@ export function UserMenu({ onNavigate }) {
               onError={owner.isPhoto ? onPhotoError : undefined}
             />
             <span className="min-w-0 flex-1 truncate text-sm" dir="auto">{owner.name}</span>
-            {setupMissing ? <span className="size-2 shrink-0 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : null}
+            {setupMissing ? <span className="size-2 shrink-0 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : updateDot ? <span className="size-2 shrink-0 rounded-full bg-primary" role="img" aria-label={t("نسخهٔ تازه آماده است")} title={t("نسخهٔ تازه آماده است")} /> : null}
             <ChevronUp className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "opacity-70"}`} />
           </button>
         </Popover.Trigger>
@@ -437,26 +433,23 @@ export function UserMenu({ onNavigate }) {
             avoidCollisions={false}
             className="kc-menu pop z-50 w-[var(--radix-popover-trigger-width)] shadow-lg"
           >
-            {PROFILE_ITEMS.map(({ id, icon, label }) => (
+            {/* «جای بخش‌ها: منوی کاربر»: the sections first (SectionNav.jsx); nothing otherwise. */}
+            <SectionMenuItems onPick={() => { setOpen(false); onNavigate?.(); }} rowClass="kc-row" iconClass="size-4 kc-muted" />
+            {PROFILE_ITEMS.filter((item) => item.id !== "logout").map(({ id, icon, label }) => (
               <MenuRow key={id} icon={icon} label={label} onClick={() => { setOpen(false); profileAction(id, { editProfile: () => go("/settings", "account") }); }} />
             ))}
             <div className="my-1 border-t" />
             <MenuRow icon={Bot} label={t("ایجنت‌ها")} onClick={() => go("/agents")} />
             {/* Griffin keeps token usage in Settings: «مصرف توکن» opens that section. */}
             <MenuRow icon={Zap} label={t("مصرف توکن")} onClick={() => go("/settings", "tokens")} />
-            <MenuRow icon={Settings2} label={t("تنظیمات")} onClick={() => go("/settings")} warn={setupMissing} />
+            <MenuRow icon={Settings2} label={updateDot ? t("تنظیمات · نسخهٔ تازه") : t("تنظیمات")} onClick={() => go("/settings", updateDot ? "status" : null)} warn={setupMissing || updateDot} />
+            <SectionMenuFoot />
+            <div className="my-1 border-t" />
+            <MenuRow icon={LogOut} label={t("خروج")} onClick={() => { setOpen(false); profileAction("logout", {}); }} />
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      <button
-        type="button"
-        onClick={logout}
-        className="kc-icon-btn !size-11"
-        title={t("خروج")}
-        aria-label={t("خروج")}
-      >
-        <LogOut className="size-4 -scale-x-100" />
-      </button>
+      <FeedbackBarButton className="kc-icon-btn !size-11" />
     </div>
   );
 }
@@ -475,6 +468,17 @@ function MenuRow({ icon: Icon, label, onClick, warn = false }) {
 // crowd the list; the closed row still shows how many there are and whether one needs a look.
 // It opens by itself while one of them is the chat on screen, and while a filter is on (a filter
 // is a deliberate look, and its matches must not hide behind a closed row).
+const PER_COLLEAGUE = 5;
+// The colleagues' chats by whose agent opened them, newest colleague first (the list comes sorted).
+function byColleague(chats) {
+  const map = new Map();
+  for (const chat of chats) {
+    if (!map.has(chat.caller)) map.set(chat.caller, { caller: chat.caller, label: chat.peerLabel || chat.caller.slice("peer:".length), chats: [] });
+    map.get(chat.caller).chats.push(chat);
+  }
+  return [...map.values()];
+}
+
 function PeerChats({ chats, activeId, onOpen, filtered = false }) {
   const holdsActive = chats.some((c) => c.id === activeId);
   // What the owner chose is kept across reloads and pages; opening because the chat on screen is in
@@ -502,13 +506,28 @@ function PeerChats({ chats, activeId, onOpen, filtered = false }) {
         <span>{`گفتگوهای ایجنت‌های همکاران (${chats.length.toLocaleString("fa-IR")})`}</span>
         {pending && !open ? <span className="kc-unread" title={t("گفتگویی منتظر دیدن است")} /> : null}
       </button>
-      {/* A filter forces the group open, so only then it keeps its own short scroll: own chats stay in reach. */}
+      {/* A filter forces the group open, so only then it keeps its own short scroll: own chats stay in reach.
+          One heading per colleague (the agent's name lives there, not in every title); its newest few
+          chats under it, the rest on that colleague's page. */}
       {open ? (
-        <ul className={`mb-1 ms-6 border-s ps-2 ${filtered ? "scrollbar-thin max-h-64 overflow-y-auto" : ""}`}>
-          {chats.map((chat) => (
-            <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeId} onOpen={onOpen} />
-          ))}
-        </ul>
+        <div className={`mb-1 ms-6 border-s ps-2 ${filtered ? "scrollbar-thin max-h-64 overflow-y-auto" : ""}`}>
+          {byColleague(chats).map((g) => {
+            const shown = g.chats.some((c) => c.id === activeId) || filtered ? g.chats : g.chats.slice(0, PER_COLLEAGUE);
+            return (
+              <div key={g.caller}>
+                <a href={`#/peers/${encodeURIComponent(g.caller.slice("peer:".length))}`} className="kc-list-row w-full justify-start text-xs !text-[var(--kc-muted)]" title={t("همهٔ کارهای این همکار")}>
+                  <span className="min-w-0 truncate" dir="auto">{g.label}</span>
+                  <span className="shrink-0">{`(${g.chats.length.toLocaleString("fa-IR")})`}</span>
+                </a>
+                <ul>
+                  {shown.map((chat) => (
+                    <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeId} onOpen={onOpen} />
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
       ) : null}
     </div>
   );
@@ -542,6 +561,18 @@ async function newGroup() {
   const { group } = await api("/api/groups", { method: "POST", body: { name } }).catch(groupFailed);
   return group || null;
 }
+// Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
+const deleteFailed = (error) => window.alert(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("حذف انجام نشد"));
+function deleteForGood(chat) {
+  if (!window.confirm(`گفتگوی «${chat.title}» برای همیشه حذف شود؟ برگشتی ندارد.`)) return;
+  api(`/api/chats/${chat.id}`, { method: "DELETE" }).catch(deleteFailed);
+}
+function deleteAllArchived(ids) {
+  if (!window.confirm(`همه ${ids.length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.`)) return;
+  api("/api/chats/delete-archived", { method: "POST", body: { ids } })
+    .then((r) => { if (r.skipped?.length) window.alert(`${r.skipped.length} گفتگو در حال کار بود و حذف نشد.`); })
+    .catch(deleteFailed);
+}
 const groupFailed = () => {
   window.alert("کار روی گروه انجام نشد؛ دوباره امتحان کنید.");
   return {};
@@ -573,9 +604,11 @@ function useFolded(id) {
   return [folded, toggle];
 }
 
-function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, onNewChat }) {
+function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, onNewChat, dropTarget = null, drag = null }) {
   const [folded, toggleFolded] = useFolded(group?.id);
   const [menu, setMenu] = useState(false);
+  const drop = useSectionDrop({ target: dropTarget, slots: drag?.slots || [] });
+  const handle = drag?.handle ? groupDragProps(drag.handle.id, drag.handle.scope) : {};
   if (!chats.length && !group) return null;
   // The chat on screen stays in sight even inside a folded group.
   const shown = folded ? chats.filter((c) => c.id === activeId) : chats;
@@ -591,9 +624,9 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
     }
   };
   return (
-    <div className="mb-2">
+    <div className="g-drop mb-2 rounded-lg" {...drop}>
       {group ? (
-        <div className="group relative flex items-center">
+        <div className="group relative flex items-center" {...handle} title={t("برای جابه‌جایی بکشید")}>
           <button
             type="button"
             onClick={toggleFolded}
@@ -607,6 +640,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             <button
               type="button"
               onClick={() => onNewChat(group.id)}
+              data-no-drag=""
               className="kc-icon-btn !h-7 !w-7 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
               title={`گفتگوی جدید در «${group.name}»`}
               aria-label={`گفتگوی جدید در گروه ${group.name}`}
@@ -617,6 +651,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
           <button
             type="button"
             onClick={() => setMenu(!menu)}
+          data-no-drag=""
             className="kc-icon-btn !h-7 !w-7 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
             aria-label={`گزینه‌های گروه ${group.name}`}
           >
@@ -633,12 +668,12 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
           ) : null}
         </div>
       ) : title && repo && onNewChat ? (
-        <div className="group flex items-center">
+        <div className="group flex items-center" {...handle}>
           <p className="min-w-0 flex-1 truncate px-2.5 pb-1 pt-2 text-xs text-muted-foreground" dir="auto">{title}</p>
           <RepoNewChat repo={repo} onNewChat={onNewChat} className="kc-icon-btn !h-7 !w-7" />
         </div>
       ) : title ? (
-        <p className="px-2.5 pb-1 pt-2 text-xs text-muted-foreground">{title}</p>
+        <p className="px-2.5 pb-1 pt-2 text-xs text-muted-foreground" {...handle}>{title}</p>
       ) : (
         <div className="pt-1" />
       )}
@@ -655,7 +690,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
 // (owner 2026-10-18). Always visible, small: a hover-only button is lost on a phone.
 export function RepoNewChat({ repo, onNewChat, className }) {
   return (
-    <button type="button" onClick={() => onNewChat(null, { repo })} className={className} title={`گفتگوی جدید در مخزن ${repo}`} aria-label={`گفتگوی جدید در مخزن ${repo}`}>
+    <button type="button" onClick={() => onNewChat(null, { repo })} data-no-drag="" className={className} title={`گفتگوی جدید در مخزن ${repo}`} aria-label={`گفتگوی جدید در مخزن ${repo}`}>
       <Plus className="!size-3.5" />
     </button>
   );
@@ -695,6 +730,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
       <div
         className="kc-list-row group !p-0"
         data-active={active ? "true" : undefined}
+        {...(isPeerChat(chat) ? {} : chatDragProps(chat))}
         onContextMenu={(event) => {
           // Right click = the «گزینه‌ها» menu. Shift+right click keeps the browser's own menu.
           if (event.shiftKey) return;
@@ -720,6 +756,9 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
           ) : state.id === "error" ? (
             <span className="kc-dot kc-dot-bad" title={state.label} />
           ) : null}
+          {chat.reminderAt ? (
+            <span className="kc-state-wrap" title={reminderLabel(chat.reminderAt)}><BellRing className="kc-state" aria-label={reminderLabel(chat.reminderAt)} /></span>
+          ) : null}
           {chat.jobId ? (
             <span className="kc-state-wrap kc-origin" title={`از جاب: ${chat.jobName || t("بی‌نام")}`}>
               <AlarmClock className="kc-state" aria-label={`از جاب ${chat.jobName || ""}`} />
@@ -739,6 +778,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
         <button
           type="button"
           onClick={() => setMenu(!menu)}
+          data-no-drag=""
           className="kc-icon-btn !h-8 !w-8 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           aria-label={t("گزینه‌ها")}
         >
@@ -820,6 +860,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
             <ChatMenuItem icon={chat.archived ? ArchiveRestore : Archive} onClick={() => { setMenu(false); patch({ archived: !chat.archived }); }}>
               {chat.archived ? t("خروج از بایگانی") : t("بایگانی")}
             </ChatMenuItem>
+            {chat.archived ? <ChatMenuItem icon={Trash2} onClick={() => { setMenu(false); deleteForGood(chat); }}>{t("حذف دائم")}</ChatMenuItem> : null}
             <ChatMenuItem
               icon={ExternalLink}
               onClick={() => {

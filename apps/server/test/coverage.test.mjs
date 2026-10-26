@@ -74,7 +74,7 @@ test("guardTeamTools blocks destructive SQL without asking", async () => {
   assert.match(result.content[0].text, /مخرب/);
 });
 
-test("guardTeamTools requires owner yes for write SQL", async () => {
+test("guardTeamTools refuses write SQL without asking and points at the handoff", async () => {
   const asks = createAsks();
   let ran = false;
   const tools = {
@@ -86,13 +86,33 @@ test("guardTeamTools requires owner yes for write SQL", async () => {
     },
   };
   const guarded = guardTeamTools(tools, { chatId: "c2", asks });
-  const pending = guarded.pg_query.execute({ sql: "UPDATE x SET a=1", write: true });
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(asks.isWaiting("c2"), true);
-  asks.answer("c2", { answer: "بله", selected: ["بله"] });
-  const result = await pending;
-  assert.equal(ran, true);
-  assert.equal(result.content[0].text, "ok");
+  const result = await guarded.pg_query.execute({ sql: "UPDATE x SET a=1", write: true });
+  assert.equal(asks.isWaiting("c2"), false, "nobody is asked per call");
+  assert.equal(ran, false);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /handoff_to_owner/);
+});
+
+test("guardTeamTools refuses team-only writes (MR, purge, kubectl apply) the owner's chats run freely", async () => {
+  const asks = createAsks();
+  const ran = [];
+  const tool = (name) => ({ async execute(args) { ran.push([name, args]); return { content: [{ type: "text", text: "ok" }] }; } });
+  const guarded = guardTeamTools({ gitlab_propose: tool("gitlab_propose"), arvan_cache_purge: tool("arvan_cache_purge"), debug_exec: tool("debug_exec"), gitlab_mr: tool("gitlab_mr") }, { chatId: "c6", asks });
+  for (const [name, args] of [
+    ["gitlab_propose", { project: "x", action: "edit" }],
+    ["arvan_cache_purge", { domain: "example.com", urls: ["https://x"] }],
+    ["debug_exec", { command: "kubectl -n hojat-khajavi apply -f backup.yaml" }],
+    ["gitlab_mr", { action: "merge", iid: 1 }],
+  ]) {
+    const out = await guarded[name].execute(args);
+    assert.equal(out.isError, true, name);
+    assert.match(out.content[0].text, /handoff_to_owner/, name);
+  }
+  assert.deepEqual(ran, []);
+  await guarded.debug_exec.execute({ command: "kubectl -n hojat-khajavi get backups.postgresql.cnpg.io" });
+  await guarded.gitlab_mr.execute({ action: "view", iid: 1 });
+  assert.deepEqual(ran.map(([name]) => name), ["debug_exec", "gitlab_mr"]);
+  assert.equal(asks.isWaiting("c6"), false);
 });
 
 test("guardTeamTools lets read-only pg_query through", async () => {

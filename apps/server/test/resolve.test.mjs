@@ -146,7 +146,7 @@ test("a kept message given up on names the buttons the owner has: «دوباره
     runner.retry(chat.id);
     await settle(n);
   }
-  const note = store.eventsAfter(chat.id).find((e) => e.type === "note" && /نرسید/.test(e.data.text));
+  const note = store.eventsAfter(chat.id).find((e) => e.type === "note" && /بی‌جواب/.test(e.data.text));
   assert.ok(note, "given up after three retries");
   assert.match(note.data.text, /«دوباره»/);
   assert.match(note.data.text, /«حل شد»/);

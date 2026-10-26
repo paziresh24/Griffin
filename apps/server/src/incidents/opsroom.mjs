@@ -1,4 +1,5 @@
 import { OWNER_NAME } from "../owner.mjs";
+import { OWNER } from "../persona.mjs";
 import { incidentView } from "./index.mjs";
 import { DEFAULT_TZ } from "../jobs/cron.mjs";
 
@@ -27,6 +28,7 @@ export const OPS_CHARTER = `[اتاق عملیات — حالت سایه]
 1. اگر از خود اطلاعات حادثه (نام آلارم، کلاستر، scope، اعضا، summary) و دانش knowledge معلوم است، مستقیم نتیجه بگیر.
 2. وگرنه با ask_agent به platform یک درخواست **خواندنی و مشخص** بده (مثلاً «پادهای ns X در کلاستر Y چرا NotReady اند؟ events و لاگ آخر»). حادثه‌های هم‌ریشه را با هم بپرس، نه یکی‌یکی.
 3. نتیجه را با incident_update ثبت کن: cause (علت محتمل)، impact (چه سرویس/کاربری آسیب می‌بیند)، owner (مالک اپ از label یا knowledge)، whoWouldAsk (چه کسی احتمالاً به ${OWNER_NAME} پیام می‌دهد)، action (اقدام پیشنهادی)، reversible (true/false)، confidence (low/medium/high)، noise (true اگر آلارم نویز/بی‌اقدام است و باید rule اصلاح شود).
+4. اگر حادثه واقعی است و کاری روی آن لازم است (نه فقط ثبت) و هنوز چتی رویش نیست: incident_suggest با tldr فارسی ساده تا کارتش روی فضای کار ${OWNER.nameFa} بیاید (روزی حداکثر ۶؛ نه برای نویز، عمدی یا چیزی که خودش رفع می‌شود).
 
 برای حادثه‌های TeamReport (یک همکار برای کمک به ${OWNER_NAME} پیام داده؛ متن خلاصه در summary/اعضا):
 - اگر درخواست فنی/عملیاتی نیست (احوال‌پرسی، شخصی، تشکر) فقط noise=true ثبت کن.

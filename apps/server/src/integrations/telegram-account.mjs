@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { markdownToPlain, signedByAgent, signedParts, splitMarkdown, withAgentFooter } from "./format.mjs";
 import { coverageCommand } from "./coverage.mjs";
 import { isAgentSigned, looksAssistantSigned, peerAgentConfig } from "./peer-agent.mjs";
@@ -107,7 +109,7 @@ export async function mediaFiles(client, message) {
     const name = doc.attributes?.find((attribute) => attribute?.fileName)?.fileName || "file";
     const buf = await client.downloadMedia(message, {});
     if (!buf?.length) return [];
-    return parseFiles([{ name, mimeType: doc.mimeType, data: Buffer.from(buf).toString("base64") }]).files || [];
+    return parseFiles([{ name, mimeType: doc.mimeType, data: Buffer.from(buf).toString("base64") }], { strict: true }).files || [];
   } catch {
     return [];
   }
@@ -626,7 +628,10 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
               data: { platform: "telegram", source: "account", chatType: message.isGroup ? "group" : message.isChannel ? "channel" : "user" },
             });
             // An outgoing message that reaches here was typed by the owner himself (ours are in sentByUs).
-            if (person) bridge.addPersonMessage?.(person.id, { externalMessageId: message.id, direction: message.out ? "out" : "in", text, data: { chatId: key, ...(message.out ? { by: "owner" } : {}) } });
+            // In a group, who wrote it; and the message it answers (the Telegram page quotes it).
+            const sender = message.isGroup && !message.out ? await message.getSender?.().catch(() => null) : null;
+            const replyTo = Number(message.replyTo?.replyToMsgId) || null;
+            if (person) bridge.addPersonMessage?.(person.id, { externalMessageId: message.id, direction: message.out ? "out" : "in", text, data: { chatId: key, ...(message.out ? { by: "owner" } : {}), ...(sender ? { from: entityName(sender, "") } : {}), ...(replyTo ? { replyTo } : {}) } });
             if (person && entity) wantPhoto(person.id, entity);
           }
           // ——— Saved Messages: call word + answers to Owner asks from coverage ———
@@ -927,7 +932,40 @@ export async function accountHistory(client, peerId, limit = 50) {
   return messages.map((m) => ({ id: m.id, ts: Number(m.date), out: Boolean(m.out), text: m.message || "", replyTo: m.replyTo?.replyToMsgId ?? null, media: mediaKind(m) }));
 }
 
-export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null }) {
+// A file telegram_send may attach: at most this big (like show_media), and only from the chat's own
+// workspace roots, checked after symlinks are resolved.
+export const SEND_FILE_MAX_BYTES = 50 * 1024 * 1024;
+// One Telegram caption holds 1024 characters; a longer text goes first as its own message.
+const CAPTION_MAX = 1024;
+
+/** The real path of `given` if it is a regular file inside one of `roots` (symlinks resolved), else an Error. */
+export async function workspaceFile(roots, given) {
+  const value = String(given || "").trim();
+  if (!value) throw new Error("file is empty");
+  for (const root of roots) {
+    let realRoot;
+    try {
+      realRoot = await fs.realpath(path.resolve(root));
+    } catch {
+      continue;
+    }
+    let real;
+    try {
+      real = await fs.realpath(path.resolve(root, value));
+    } catch {
+      continue;
+    }
+    if (real !== realRoot && !real.startsWith(`${realRoot}${path.sep}`)) continue;
+    const stat = await fs.stat(real);
+    if (!stat.isFile()) throw new Error(`file is not a regular file: ${value}`);
+    if (stat.size > SEND_FILE_MAX_BYTES) throw new Error(`file is ${stat.size} bytes; the limit is ${SEND_FILE_MAX_BYTES} (50MB)`);
+    return { real, size: stat.size };
+  }
+  throw new Error(`file must be an existing file inside this chat's workspace: ${value}`);
+}
+
+// fileRoots(): the chat's workspace roots a `file` may come from; without it telegram_send sends text only.
+export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null, networkFirst = null, fileRoots = null, loadCustomFile = async () => (await import("telegram/client/uploads.js")).CustomFile }) {
   const need = () => {
     const client = getClient();
     if (!client) throw new Error("no Telegram account is connected (Settings → اتصال‌ها)");
@@ -1038,20 +1076,34 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
     },
 
     telegram_send: {
-      description: "Send a message from the owner's own Telegram account to a chat (id, @username or title). Sends immediately. Only send to who the owner named.",
+      description:
+        "Send a message from the owner's own Telegram account to a chat (id, @username or title). Sends immediately. Only send to who the owner named. " +
+        "For people, groups and channels. A colleague's AGENT (an assistant or bot that signs its messages) is reached on the agents' network (network_agents / network_ask), and a send to one " +
+        "is carried there by itself; only when the network has no path at all, set telegram_because to one line on what you tried. " +
+        "file = a path in this chat's workspace (max 50MB) to send as a document; text is then its caption.",
       inputSchema: {
         type: "object",
-        properties: { chat: { type: "string" }, text: { type: "string", minLength: 1, maxLength: 4000 }, replyTo: { type: "integer" } },
+        properties: {
+          chat: { type: "string" },
+          text: { type: "string", minLength: 1, maxLength: 4000 },
+          replyTo: { type: "integer" },
+          telegram_because: { type: "string" },
+          file: { type: "string", description: "optional: path of a file in this chat's workspace (absolute or relative), sent with text as caption" },
+        },
         required: ["chat", "text"],
         additionalProperties: false,
       },
       async execute(args) {
         try {
           const client = need();
+          // The file is checked before anything goes out, so a bad path sends nothing.
+          let file = null;
+          if (args.file) {
+            if (!fileRoots) throw new Error("sending a file is not available on this path; send text only");
+            file = await workspaceFile(fileRoots(), withoutInertMarks(args.file));
+          }
           const { entity, title } = await resolveChat(client, args.chat);
           const message = withoutInertMarks(args.text);
-          const sent = await client.sendMessage(entity, { message, ...(args.replyTo ? { replyTo: Number(args.replyTo) } : {}) });
-          markSent(sent.id);
           // The chat's Telegram id as the account keys people (a marked peer id), so a send from
           // another session counts as the owner being in that conversation (desk.mjs R2).
           let peer = entity?.id != null ? String(entity.id) : null;
@@ -1060,6 +1112,24 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           } catch {
             /* the plain id */
           }
+          // The agents' network carries text only: networkFirst refuses a file bound for a colleague's
+          // agent (throws, before anything is sent) rather than slip it to the agent's bot over Telegram.
+          if (networkFirst && peer) {
+            const routed = await networkFirst({ peer, title, text: message, because: args.telegram_because || "", ...(file ? { file: path.basename(file.real) } : {}) });
+            if (routed) return text(routed);
+          }
+          const reply = args.replyTo ? { replyTo: Number(args.replyTo) } : {};
+          let sent;
+          if (file) {
+            const CustomFile = await loadCustomFile();
+            const name = path.basename(file.real);
+            const long = message.length > CAPTION_MAX;
+            if (long) await client.sendMessage(entity, { message, ...reply }).then((m) => markSent(m.id));
+            sent = await client.sendFile(entity, { file: new CustomFile(name, file.size, file.real), caption: long ? "" : message, forceDocument: true, ...(long ? {} : reply) });
+          } else {
+            sent = await client.sendMessage(entity, { message, ...reply });
+          }
+          markSent(sent.id);
           try {
             if (peer) onSent(peer, message);
           } catch {
@@ -1070,7 +1140,50 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           } catch {
             /* it went out; the ledger row is best effort */
           }
-          return text({ sent: true, chat: title, messageId: sent.id, peer, source: "telegram account" });
+          return text({ sent: true, chat: title, messageId: sent.id, peer, ...(file ? { file: path.basename(file.real) } : {}), source: "telegram account" });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    },
+
+    telegram_edit: {
+      description:
+        "Edit a message the owner's account already sent (chat + messageId from telegram_send's result or telegram_read). Use it to correct a message instead of sending a second one.",
+      inputSchema: {
+        type: "object",
+        properties: { chat: { type: "string" }, messageId: { type: "integer" }, text: { type: "string", minLength: 1, maxLength: 4000 } },
+        required: ["chat", "messageId", "text"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        try {
+          const client = need();
+          const { entity, title } = await resolveChat(client, args.chat);
+          await client.editMessage(entity, { message: Number(args.messageId), text: withoutInertMarks(args.text), linkPreview: false });
+          return text({ edited: true, chat: title, messageId: Number(args.messageId), source: "telegram account" });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    },
+
+    telegram_delete: {
+      description:
+        "Delete messages the owner's account sent (chat + messageIds), for everyone in the chat. Use it to remove a wrong or superseded message; prefer telegram_edit when the message can simply be corrected.",
+      inputSchema: {
+        type: "object",
+        properties: { chat: { type: "string" }, messageIds: { type: "array", items: { type: "integer" }, minItems: 1, maxItems: 20 } },
+        required: ["chat", "messageIds"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        try {
+          const client = need();
+          const { entity, title } = await resolveChat(client, args.chat);
+          const ids = args.messageIds.map(Number);
+          await client.deleteMessages(entity, ids, { revoke: true });
+          return text({ deleted: true, chat: title, messageIds: ids, source: "telegram account" });
         } catch (error) {
           return fail(error);
         }

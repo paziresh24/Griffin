@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { agentNameError } from "../identity.mjs";
 import { agentIdError } from "./registry.mjs";
 import { SELF_MGMT_TOOLS, unique } from "./profiles.mjs";
+import { BROWSER_TOOL_NAMES } from "../browser-names.mjs";
 
 // Making an agent at run time (the agents page, POST /api/agents, and the agent_create tool of the
 // mother agent). An agent is a row: name, line of work, instructions, engine/model, tools. It is
@@ -9,7 +10,7 @@ import { SELF_MGMT_TOOLS, unique } from "./profiles.mjs";
 
 export const MAX_INSTRUCTIONS = 6000;
 // What a new agent can do when nothing else is asked: think with the owner, look things up, report.
-const BASE_TOOLS = ["ask_owner", "ask_agent", "knowledge_list", "visualize", "show_media", "web_search", "web_fetch", "dns_lookup", "http_check"];
+const BASE_TOOLS = ["ask_owner", "ask_agent", "knowledge_list", "visualize", "show_media", "web_search", "web_fetch", "dns_lookup", "http_check", ...BROWSER_TOOL_NAMES];
 
 const fail = (message) => Object.assign(new Error(message), { code: "invalid" });
 

@@ -1,0 +1,195 @@
+{
+  "id": "mr-explainer",
+  "version": "0.3.0",
+  "presets": [],
+  "title": "مرج ریکوئست‌ها",
+  "category": "dev",
+  "description": "فهرست MRهای باز و توضیح ساده برای هر کدام: چه چیزی عوض می‌شود، هر بخش چه می‌کند، ریسک و آمادگی برای مرج.",
+  "requires": {
+    "tools": [
+      "gitlab_mrs",
+      "gitlab_mr",
+      "gitlab_mr_changes",
+      "gitlab_file"
+    ]
+  },
+  "config": [
+    {
+      "key": "DEFAULT_PROJECT",
+      "description": "پروژه‌ای که فهرست با آن باز می‌شود (group/name)",
+      "default": ""
+    }
+  ],
+  "agents": [
+    {
+      "id": "mr-explainer",
+      "label": "توضیح‌دهندهٔ MR",
+      "domain": "MRهای GitLab را برای آدم‌های غیرمسئول همان کد ساده توضیح می‌دهد",
+      "blurb": "خواندن MR و توضیح بخش‌به‌بخش",
+      "instructions": "تو MRهای GitLab را برای کسی توضیح می‌دهی که کد این پروژه را نمی‌نویسد. اول mr_explainer_overview را برای نمای کلی بزن، بعد فقط فایل‌های مهم را با gitlab_mr_changes {path} یا gitlab_file بخوان؛ کل دیف را یک‌جا نخوان. جواب: ۱) هدف MR در یک جمله ۲) هر بخش تغییر چه می‌کند، به ترتیب اهمیت، با زبان ساده و نام فایل ۳) چه چیزی برای کاربر یا سیستم عوض می‌شود ۴) ریسک‌ها و چیزهایی که باید قبل از مرج چک شود ۵) آماده مرج است یا نه، با دلیل. چیزی را حدس نزن: اگر ندیدی بگو ندیدی. مرج نکن و چیزی تغییر نده.",
+      "tools": [
+        "mr_explainer_overview",
+        "gitlab_mrs",
+        "gitlab_mr",
+        "gitlab_mr_changes",
+        "gitlab_file",
+        "ask_owner",
+        "show_media",
+        "web_fetch"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "overview",
+      "risk": "read",
+      "description": "نمای کلی یک MR: فایل‌های تغییرکرده گروه‌بندی‌شده بر اساس پوشه، با تعداد خط اضافه و کم (بدون دیف)"
+    }
+  ],
+  "pages": [
+    {
+      "id": "mrs",
+      "title": "مرج ریکوئست‌ها",
+      "icon": "git-merge",
+      "kind": "list",
+      "view": "board",
+      "source": "mrs",
+      "fields": [
+        {
+          "key": "title",
+          "label": "عنوان",
+          "primary": true
+        },
+        {
+          "key": "reason",
+          "label": "وضعیت",
+          "type": "text"
+        },
+        {
+          "key": "author",
+          "label": "نویسنده"
+        },
+        {
+          "key": "project",
+          "label": "پروژه"
+        },
+        {
+          "key": "branches",
+          "label": "شاخه"
+        },
+        {
+          "key": "changes",
+          "label": "تغییر"
+        },
+        {
+          "key": "comments",
+          "label": "نظر"
+        },
+        {
+          "key": "labels",
+          "label": "برچسب"
+        },
+        {
+          "key": "pipeline",
+          "label": "پایپ‌لاین",
+          "type": "badge"
+        },
+        {
+          "key": "updatedAt",
+          "label": "آخرین تغییر",
+          "type": "time"
+        },
+        {
+          "key": "webUrl",
+          "label": "GitLab",
+          "type": "link"
+        }
+      ],
+      "filters": [
+        {
+          "key": "project",
+          "label": "پروژه (group/name یا * برای همه)",
+          "type": "text",
+          "default": ""
+        },
+        {
+          "key": "author",
+          "label": "نویسنده (نام کاربری)",
+          "type": "text"
+        },
+        {
+          "key": "state",
+          "label": "وضعیت",
+          "type": "select",
+          "options": [
+            {
+              "value": "opened",
+              "label": "باز"
+            },
+            {
+              "value": "merged",
+              "label": "مرج‌شده"
+            },
+            {
+              "value": "closed",
+              "label": "بسته‌شده"
+            }
+          ],
+          "default": "opened"
+        }
+      ],
+      "actions": [
+        {
+          "id": "explain",
+          "label": "توضیح بده"
+        }
+      ],
+      "search": true,
+      "groupBy": {
+        "field": "category",
+        "groups": [
+          {
+            "key": "attention",
+            "label": "نیاز به رسیدگی",
+            "tone": "bad",
+            "hint": "پایپ‌لاین قرمز، تداخل یا عقب‌ماندن از مقصد"
+          },
+          {
+            "key": "ready",
+            "label": "آمادهٔ مرج",
+            "tone": "ok",
+            "hint": "بدون مانع؛ فقط تصمیم مرج مانده"
+          },
+          {
+            "key": "running",
+            "label": "در حال بررسی",
+            "tone": "info",
+            "hint": "پایپ‌لاین هنوز تمام نشده"
+          },
+          {
+            "key": "waiting",
+            "label": "منتظر بازبینی",
+            "tone": "warn",
+            "hint": "تأیید یا بحث حل‌نشده"
+          },
+          {
+            "key": "draft",
+            "label": "پیش‌نویس",
+            "tone": "muted",
+            "hint": "هنوز آمادهٔ بازبینی نیست"
+          },
+          {
+            "key": "merged",
+            "label": "مرج‌شده",
+            "tone": "muted"
+          },
+          {
+            "key": "closed",
+            "label": "بسته‌شده",
+            "tone": "muted"
+          }
+        ]
+      }
+    }
+  ]
+}

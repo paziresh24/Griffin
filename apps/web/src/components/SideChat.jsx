@@ -91,12 +91,12 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
 
 // The same thread as the main chat, bound to the side chat: it streams, steers and queues alike.
 function SideThread({ chat, chatId, settings, agentLabel, onError }) {
-  const { timeline } = useTimeline(chatId);
+  const { timeline, loadOlder } = useTimeline(chatId);
   const karsara = useFlag("sideChatSimple"); // the simple side chat
   return (
     <div className="min-h-0 flex-1">
       <GriffinRuntime chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
-        <Thread chatId={chatId} agentLabel={agentLabel} agent={settings.agent} mode={settings.mode} model={settings.model} compact={karsara} />
+        <Thread chatId={chatId} agentLabel={agentLabel} agent={settings.agent} mode={settings.mode} model={settings.model} compact={karsara} earlier={timeline.earlier || 0} onLoadEarlier={loadOlder} />
       </GriffinRuntime>
     </div>
   );

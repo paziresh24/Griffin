@@ -48,6 +48,7 @@ test("a rejection carried by extra usage is not a closed limit", () => {
 
 test("a success with nothing in it is an error, never a silent finished run", () => {
   assert.equal(resultFailure({ subtype: "success", result: "", usage: { output_tokens: 0 } }).message, NO_ANSWER);
+  assert.equal(resultFailure({ subtype: "success", result: "", usage: { output_tokens: 0 } }).code, "no_answer");
   assert.equal(resultFailure({ subtype: "success", result: "", usage: { output_tokens: 0 } }, { produced: true }), null);
   assert.equal(resultFailure({ subtype: "success", result: "hi", usage: { output_tokens: 3 } }), null);
   assert.equal(resultFailure({ subtype: "success", result: "" }), null); // no usage: not judged

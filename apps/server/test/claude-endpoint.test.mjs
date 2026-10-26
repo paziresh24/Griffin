@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createClaudeProvider } from "../src/providers/claude.mjs";
+import { createClaudeProvider, REPLY_LANGUAGE } from "../src/providers/claude.mjs";
 import { createProviders, setAccounts } from "../src/providers/index.mjs";
 import { CLAUDE_ENDPOINTS, endpointOf, endpointModel, endpointSettings } from "../src/providers/claude-endpoint.mjs";
 import { splitModel, kindOf } from "../src/providers/ids.mjs";
@@ -52,7 +52,9 @@ test("an endpoint account runs Claude Code on Z.ai: base URL, its key, every mod
     // Claude-only extras stay off; the full harness stays on (Bash not taken away).
     assert.equal(o.effort, undefined);
     assert.equal(o.promptSuggestions, undefined);
-    assert.equal(o.settings, undefined);
+    assert.equal(o.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, undefined);
+    // Only the reply language: an endpoint model answers in Persian too.
+    assert.deepEqual(o.settings, { language: REPLY_LANGUAGE });
     assert.equal(o.disallowedTools, undefined);
     assert.deepEqual(o.settingSources, ["user", "project", "local"]);
   } finally {
@@ -85,6 +87,17 @@ test("a plain Claude account is unchanged: its own login, no endpoint, Claude id
   assert.equal(o.env.ANTHROPIC_MODEL, process.env.ANTHROPIC_MODEL);
   assert.deepEqual((await provider.listModels()).map((m) => m.id), ["opus", "sonnet", "haiku"]);
   assert.ok(!provider.endpoint);
+  // No suggestion asked: Claude Code's own default stands.
+  assert.equal(o.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, undefined);
+});
+
+// Past the account's warning line Claude Code stopped suggesting by itself (2026-10-22): asked, it is forced on.
+test("a Claude chat that wants a suggestion forces Claude Code's own switch on", async () => {
+  const fake = fakeClaude();
+  const provider = createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl: fake.queryImpl });
+  await runOnce(provider, { model: { id: "opus" }, onSuggestion: () => {} });
+  assert.equal(fake.calls[0].promptSuggestions, true);
+  assert.equal(fake.calls[0].env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, "true");
 });
 
 test("Z.ai's spent plan (1308, 1310) is a plan limit with its reset time, so ask mode asks; a plain rate limit is not", async () => {

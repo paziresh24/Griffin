@@ -4,8 +4,7 @@
 // watchTodos; the OpenAI-compatible engine has none, so it gets todo_write.
 
 import { maskText } from "./redact.mjs";
-import { addOwnerTask } from "./inbox.mjs";
-import { COVERAGE_CALLER } from "./integrations/coverage.mjs";
+import { addOwnerTask, listOwnerTasks, removeOwnerTask } from "./inbox.mjs";
 
 export const TODO_TOOL = "todo_write";
 export const OWNER_TASK_TOOL = "owner_task";
@@ -77,10 +76,10 @@ export function todoWriteTool({ store, chatId }) {
   };
 }
 
-// A chore shows on the owner's board as the assistant's own, with no «از گفتگو با …»: offered only in his own
-// chains and his colleagues' Telegram ones, both read by him — never a peer:* (/mcp) agent's, a job
-// or the ops room (nobody reads the board there).
-export const offersOwnerTask = ({ rootCaller, unattended }) => !unattended && (rootCaller === "owner" || rootCaller === COVERAGE_CALLER);
+// A chore shows on the owner's board as the assistant's own: offered only in his own attended chains — never
+// a peer:* (/mcp) agent's, a job or the ops room (nobody reads the board there). A colleague's
+// Telegram chain hands work to his chats instead (handoff_to_owner, handoff.mjs; owner 2026-10-21).
+export const offersOwnerTask = ({ rootCaller, unattended }) => !unattended && rootCaller === "owner";
 
 // The owner gives access; the agents do the work (owner 2026-10-13: «چرا انقدر کار به دوش منه؟ من
 // قرار بود فقط دسترسی‌دهنده باشم» — three «کار شما» cards were review fixes and a workflow edit).
@@ -88,24 +87,41 @@ export const offersOwnerTask = ({ rootCaller, unattended }) => !unattended && (r
 export function ownerTaskTool({ store, chatId, askedIn = null, agent }) {
   return {
     description:
-      "Ask the owner for ACCESS you lack — besides a decision (ask_owner), the only thing that is his. Never work: a code change, the fixes a review asked for, editing a workflow, telling someone, running a fix — those are yours (do them or delegate them). Name the exact access: which permission or credential, on which system, and where it should land (e.g. «Maintainer برای کاربر griffin روی alice/search-service», «API key پنل n8n سرچ در Infisical پروژهٔ alice»). It lands on his main page; when he grants it the main conversation is told which thread asked, and the work goes on there. Do what you can meanwhile.",
+      "Ask the owner for ACCESS you lack — besides a decision (ask_owner), the only thing that is his. Never work: a code change, the fixes a review asked for, editing a workflow, telling someone, running a fix — those are yours (do them or delegate them). Name the exact access: which permission or credential, on which system, and where it should land (e.g. «Maintainer برای کاربر griffin روی alice/search-service», «API key پنل n8n سرچ در Infisical پروژهٔ alice»). It lands on his main page; when he grants it the main conversation is told which thread asked, and the work goes on there. Do what you can meanwhile. " +
+      "The card stays on his page until it is closed: once the access is there (he said so in this chat, or you saw it work) and you have tested it, close it with {done: <its id>} — never leave a granted access waiting on him.",
     inputSchema: {
       type: "object",
       properties: {
         access: { type: "string", maxLength: 110, description: "The access, in one short Persian line: what, on which system." },
         why: { type: "string", maxLength: 600, description: "The work it unblocks, one or two lines." },
+        done: { type: "string", maxLength: 20, description: "Instead of asking: the id of this conversation's card whose access has arrived and works — it leaves his page." },
       },
-      required: ["access"],
       additionalProperties: false,
     },
     async execute(args) {
+      const done = String(args?.done || "").trim().replace(/^#/, "");
+      if (done) {
+        const task = listOwnerTasks(store).find((t) => t.id === done);
+        if (!task || task.chatId !== chatId) return reply(`no open card ${done} of this conversation`, true);
+        removeOwnerTask(store, done);
+        return reply(JSON.stringify({ closed: done, note: "از صفحهٔ اصلی Owner برداشته شد" }));
+      }
       const access = String(args?.access || "").trim();
       const task = access ? addOwnerTask(store, { title: `دسترسی: ${access}`, detail: args?.why, chatId, askedIn, agent, access }) : null;
-      if (!task) return reply("access is required: which permission or credential, on which system", true);
+      if (!task) return reply("access is required: which permission or credential, on which system (or done: a card id)", true);
       // The id lets the board's «باز کردن» find this call's card in the chat (web focus.js).
       return reply(JSON.stringify({ placed: "روی صفحهٔ اصلی Owner گذاشته شد", id: task.id }));
     },
   };
+}
+
+/** The line a turn of this conversation reads while access cards it left on the owner's page are open. */
+export function openChoresLine(store, chatId) {
+  const root = store.rootChatId?.(chatId) ?? chatId;
+  const open = listOwnerTasks(store).filter((t) => t.chatId === root && t.access);
+  if (!open.length) return null;
+  const lines = open.map((t) => `#${t.id} «${t.access}»`).join("\n");
+  return `[کارت‌های دسترسی این گفتگو که هنوز روی صفحهٔ اصلی Owner منتظرند:\n${lines}\nاگر دسترسی رسیده (Owner در همین گفتگو گفته یا دیده‌ای کار می‌کند)، اول خودت تستش کن و بعد با owner_task {done: "<id>"} ببندش.]`;
 }
 
 // Copies the native engines' lists, and clears a chat's row when its run ends — unless it still

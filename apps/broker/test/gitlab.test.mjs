@@ -255,3 +255,40 @@ test("gitlab_propose update refuses a whole-file rewrite that brings in *** the 
   const ok = proposeSetup({ "v.yaml": "token: ***\n" });
   await ok.tools.gitlab_propose.execute({ project: "g/r", branch: "rewrite-y", title: "rewrite ok", actions: [{ action: "update", path: "v.yaml", content: "token: ***\nmore: 1\n" }] });
 });
+
+test("gitlab_mrs lists merge requests, newest first, for one project or the whole instance", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    calls.push(u.pathname + u.search);
+    return Response.json([{ iid: 7, title: "feat: x", author: { username: "rezaei" }, state: "opened", draft: true, source_branch: "s", target_branch: "main", head_pipeline: { status: "success" }, updated_at: "2026-10-19T10:00:00Z", web_url: "https://gl/g/p/-/merge_requests/7", references: { full: "g/p!7" } }]);
+  };
+  const tools = createGitlabTools({ vault: { item: async () => "tok" }, fetchImpl, host: "https://gitlab.example.com" });
+  const one = await tools.gitlab_mrs.execute({ project: "g/p", author: "rezaei" });
+  assert.match(calls[0], /^\/api\/v4\/projects\/g%2Fp\/merge_requests\?/);
+  assert.match(calls[0], /state=opened/);
+  assert.match(calls[0], /author_username=rezaei/);
+  assert.match(calls[0], /order_by=updated_at/);
+  assert.deepEqual(one.mergeRequests[0], { iid: 7, project: "g/p", title: "feat: x", author: "rezaei", state: "opened", draft: true, sourceBranch: "s", targetBranch: "main", pipeline: "success", detailedMergeStatus: null, hasConflicts: false, labels: [], reviewers: [], changesCount: null, comments: 0, createdAt: null, updatedAt: "2026-10-19T10:00:00Z", webUrl: "https://gl/g/p/-/merge_requests/7" });
+  await tools.gitlab_mrs.execute({ state: "all" });
+  assert.match(calls[1], /^\/api\/v4\/merge_requests\?/);
+  assert.match(calls[1], /scope=all/);
+  await assert.rejects(() => tools.gitlab_mrs.execute({ state: "weird" }), /invalid state/);
+});
+
+// 2026-10-21: Moradi's agent could not close two superseded MRs and asked him to do it by hand.
+test("gitlab_mr close/reopen sends state_event and keeps the branch", async () => {
+  const sent = [];
+  const fetchImpl = async (url, init = {}) => {
+    sent.push({ path: new URL(url).pathname, method: init.method || "GET", body: init.body ? JSON.parse(init.body) : null });
+    const ev = sent.at(-1).body?.state_event;
+    return Response.json({ state: ev === "close" ? "closed" : "opened", web_url: "https://x/mr/190" });
+  };
+  const tools = createGitlabTools({ vault: { item: async () => "tok" }, fetchImpl, host: "https://gitlab.example.com" });
+  const closed = await tools.gitlab_mr.execute({ project: "shop/shop-front", iid: 190, action: "close" });
+  assert.equal(closed.state, "closed");
+  assert.deepEqual(sent.at(-1), { path: "/api/v4/projects/shop%2Fshop-front/merge_requests/190", method: "PUT", body: { state_event: "close" } });
+  assert.equal((await tools.gitlab_mr.execute({ project: "shop/shop-front", iid: 190, action: "reopen" })).state, "opened");
+  const blocked = createGitlabTools({ vault: { item: async () => "tok" }, fetchImpl, host: "https://gitlab.example.com", canMutate: () => false });
+  await assert.rejects(() => blocked.gitlab_mr.execute({ project: "shop/shop-front", iid: 190, action: "close" }), /not enabled/);
+});

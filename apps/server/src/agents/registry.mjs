@@ -25,6 +25,8 @@ export const CORE_TOOLS = [
   "web_fetch",
   "knowledge_write",
   "knowledge_list",
+  "knowledge_edit",
+  "knowledge_delete",
   "jobs_list",
   "jobs_create",
   "jobs_update",
@@ -34,6 +36,8 @@ export const CORE_TOOLS = [
   "telegram_read",
   "telegram_media",
   "telegram_send",
+  "telegram_edit",
+  "telegram_delete",
   "end_agent",
   "chat_suggest",
   "chat_dismiss_suggestion",
@@ -45,7 +49,7 @@ export const CORE_TOOLS = [
 const SCHEDULER_TOOLS = ["ask_agent", "delegate", "subtasks", "visualize", "show_media", "knowledge_list", "knowledge_write"];
 
 /** What a person talking through a messenger bridge may use. */
-const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "web_search", "web_fetch", "knowledge_list", "end_agent", "peer_connection"];
+const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "web_search", "web_fetch", "knowledge_list", "end_agent", "peer_connection", "network_agents", "network_ask", "network_reply", "network_connect"];
 
 export const AGENTS = {
   griffin: {
@@ -57,7 +61,7 @@ export const AGENTS = {
       scheduler: { tools: SCHEDULER_TOOLS },
       // Unattended triage; its own ask_owner reaches the owner with a timeout (asks.mjs), approvals
       // for irreversible calls stay refused there.
-      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write", "incidents_list", "incident_update", "incident_history", "ask_owner", "tell_owner"] },
+      ops: { tools: ["ask_agent", "knowledge_list", "knowledge_write", "incidents_list", "incident_update", "incident_history", "ask_owner", "tell_owner", "incident_sources", "incident_suggest"] },
       team: { tools: TEAM_TOOLS },
     },
   },

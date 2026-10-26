@@ -166,3 +166,19 @@ test("a name Iran's filter answers is not mistaken for a private address; IPv4 i
     s.cleanup();
   }
 });
+
+test("show_media reads a file in the chat's own worktree outside the workspace, nothing beside it", async () => {
+  const s = setup();
+  try {
+    const tree = path.join(s.dir, "repos", "_wt", "chat1");
+    fs.mkdirSync(tree, { recursive: true });
+    fs.writeFileSync(path.join(tree, "out.json"), '{"a":1}');
+    fs.writeFileSync(path.join(s.dir, "repos", "other.json"), "{}");
+    const tool = createShowMedia({ store: s.store, workspace: s.workspace, resolveRoots: () => [s.workspace, tree] }).tool(s.chat.id);
+    const ok = await tool.execute({ path: path.join(tree, "out.json") });
+    assert.notEqual(ok.isError, true);
+    assert.equal((await tool.execute({ path: "out.json" })).isError, undefined, "a relative path resolves inside the worktree");
+    const beside = await tool.execute({ path: path.join(s.dir, "repos", "other.json") });
+    assert.equal(beside.isError, true);
+  } finally { s.cleanup(); }
+});

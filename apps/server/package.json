@@ -16,8 +16,10 @@
     "@hono/node-server": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@resvg/resvg-js": "^2.6.2",
+    "@simplewebauthn/server": "^14.0.3",
     "hono": "^4.13.7",
     "telegram": "^2.26.22",
+    "uqr": "^0.1.3",
     "vega": "^6.4.0",
     "vega-lite": "^6.4.3",
     "zod": "^4.6.5"

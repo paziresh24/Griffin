@@ -1,6 +1,7 @@
 import { ASK_TOOL } from "./asks.mjs";
 import { maskText, redactArgs } from "./redact.mjs";
 import { OWNER, PERSONA } from "./persona.mjs";
+import { escalateReason } from "./handoff.mjs";
 
 // Code-level gate for irreversible tool calls. Applies to every run whose chain is not rooted
 // in the owner (teammate coverage, scheduler, ops room, and — later — external peers): the
@@ -136,6 +137,7 @@ const NEEDS_APPROVAL = new Map([
   ["infisical_create_project", "ساخت پروژهٔ Infisical"],
   ["gitlab_project_member", "دادن نقش (Reporter/Developer) به یک کاربر روی پروژهٔ گیت‌لب"],
   ["kube_copy_secret", "کپی secret بین کلاسترها"],
+  ["kube_create", "ساختن یک آبجکت در کلاستر"],
   ["kube_exec", "اجرای دستور داخل پاد"],
   ["cnpg_retry_bootstrap", "حذف Jobهای bootstrap دیتابیس"],
   ["arvan_dns_create", "ساخت رکورد DNS آروان"],
@@ -184,9 +186,12 @@ export function classify(name, args = {}) {
     if (isDestructiveShell(command)) return { block: "دستور مخرب (rm ریشه، mkfs، reboot …) اجازه ندارد" };
     if (isCredentialHunt(command)) return { block: "اسکن شبکه / امتحان کلید SSH / گشتن دنبال کریدنشیال اجازه ندارد" };
     if (OWNER_ROOT_TOKEN.test(command)) return { block: ROOT_TOKEN_REASON };
-    return { approve: `اجرای دستور با SSH روی ${args?.user ? args.user + "@" : ""}${args?.host || "?"}` };
+    // The user griffin is read-only by construction (no sudo but docker ps/logs, no write to anyone's
+    // files), so asking added nothing. Another user asks.
+    if (!args?.user || args.user === "griffin") return null;
+    return { approve: `اجرای دستور با SSH روی ${args.user}@${args?.host || "?"}` };
   }
-  if (name === "gitlab_mr") return args?.action === "merge" ? { approve: "merge کردن MR" } : null;
+  if (name === "gitlab_mr") return args?.action === "merge" ? { approve: "merge کردن MR" } : args?.action === "close" ? { approve: "بستن MR" } : null;
   if (name === "gitlab_pipeline") return args?.playJob || args?.retryFailed ? { approve: "اجرای job پایپ‌لاین" } : null;
   if (name === "infisical_machine_identity") {
     return { approve: args?.membershipOnly ? "عضو کردن machine identity موجود در یک پروژهٔ دیگر Infisical (بدون ساخت secret)" : "ساخت machine identity و client secret در Infisical و ذخیره‌اش در پروژه" };
@@ -265,12 +270,19 @@ export function isYes(answer) {
   return YES_RE.test(s);
 }
 
+// Questions the guard itself sends. A yes to one of them is the decision for THAT scope only; it
+// must not also become a «blessing» for the chain's next gated call, which a parallel call of
+// another scope then spent (2026-10-21: a yes for one cluster's gitlab-runner ran another cluster's monitoring,
+// and that cluster's question was asked twice).
+const guardAsked = new Map(); // masked question -> askedAt
+
 export async function confirmWithOwner(store, asks, chatId, question) {
   const args = { question, options: [{ label: "بله" }, { label: "نه" }] };
   const callId = `guard-${Date.now()}`;
   // The question embeds a detail of the gated call — pg_query write SQL and
   // infisical_upsert values carry credentials, so the mirrored events get the same masking.
   const safeQuestion = maskText(question);
+  guardAsked.set(safeQuestion, Date.now());
   store?.appendEvent?.(chatId, null, "tool.started", { callId, name: ASK_TOOL, args: { ...args, question: safeQuestion } });
   const conf = await asks.confirm(chatId, { question: safeQuestion });
   store?.appendEvent?.(chatId, null, "tool.done", { callId, name: ASK_TOOL, args: { ...args, question: safeQuestion }, result: conf });
@@ -343,9 +355,33 @@ function approvalShaped(options) {
   return labels.some((label) => NO_RE.test(label));
 }
 
+// The owner typing an order in a chain he did not start (a colleague's or a peer's chat) is his yes:
+// «دسترسی بهش بده» and «میشه دسترسی بدی بهشون؟» were followed by approval cards and the reviewers
+// called it «ادعای نقل‌شده» (2026-10-21, 8e1ce443). For 30 minutes the chain's gated calls run, each
+// recorded as owner-ordered and learned like a yes. A question about the work («چرا…؟») is not an order.
+const ORDER_MS = 30 * 60 * 1000;
+const orders = new Map(); // rootChatId -> { until, text }
+const ORDER_RE = /(?<![\p{L}])(بده|بدی|بدید|بکن|بکنی|بکنید|بزن|بزنی|بزنید|بساز|بسازی|بسازید|انجام|اعمال|مرج|مرجش|مرج کن|ادامه بده|حلش کن|درستش کن|ببرش|برو جلو|اوکیه|موافقم|بله|آره)(?![\p{L}])/u;
+export function noteOwnerOrder(store, chatId, text) {
+  const s = String(text || "").trim();
+  if (!s || NO_RE.test(s) || NEG_ANYWHERE.test(s) || !ORDER_RE.test(s)) return false;
+  if (/^(چرا|چی|کجا|کی|آیا)\b/.test(s)) return false;
+  const root = store?.rootChatId?.(chatId) || chatId;
+  orders.set(root, { until: Date.now() + ORDER_MS, text: s.slice(0, 300) });
+  vetoes.delete(root);
+  return true;
+}
+export function ownerOrder(store, chatId) {
+  const root = store?.rootChatId?.(chatId) || chatId;
+  const o = orders.get(root);
+  return o && Date.now() < o.until ? o : null;
+}
+
 /** Call when the owner settles an ask in a chat (wired from asks.onSettled). */
 export function noteOwnerAnswer(store, chatId, { question = "", answer = "", selected = [], options = null } = {}) {
   if (!BLESSING_MS) return;
+  for (const [q, at] of guardAsked) if (Date.now() - at > 24 * 3600_000) guardAsked.delete(q);
+  if (guardAsked.has(maskText(String(question || "")))) return;
   const root = store?.rootChatId?.(chatId) || chatId;
   const text = String(question || "");
   const opts = options === null ? [{ label: "بله" }, { label: "نه" }] : options;
@@ -385,7 +421,7 @@ function canonicalArgs(name, args) {
 // under one path asked three times — the owner stopped reading and pressed «بله» on all of them.
 function scopeOf(name, args) {
   const a = args || {};
-  if (name === "kube_exec") return { cluster: a.cluster, namespace: a.namespace };
+  if (name === "kube_exec" || name === "kube_create") return { cluster: a.cluster, namespace: a.namespace };
   if (name === "infisical_upsert") return { projectId: a.projectId, environment: a.environment, path: a.path };
   if (name === "infisical_get") return { projectId: a.projectId };
   if (name === "pg_query" && a.write) return { cluster: a.cluster, namespace: a.namespace, name: a.name, database: a.database };
@@ -393,8 +429,18 @@ function scopeOf(name, args) {
   // several source rules to copy from and each one used to be a new question.
   // ponytail: the source rule is not part of the scope; key on its load_balancer if a path ever mixes origins.
   if (name === "arvan_page_rule_create") return { domain: a.domain, prefix: pageRulePrefix(a.url) };
+  // Read-only shell steps on one host: one yes for the host (2026-10-21, 76d2e08a: uptime, docker logs,
+  // list-timers and ps on host griffin were four questions). A command that may change something
+  // keeps its own question.
+  if (name === "debug_exec" || name === "ssh_exec") {
+    const cmd = String(a.command || a.cmd || "");
+    if (!cmd || gitWrite(cmd) || controlPlaneWrite(cmd) || SHELL_CHANGE.test(cmd)) return null;
+    return { host: a.host || "sandbox" };
+  }
   return null;
 }
+
+const SHELL_CHANGE = /\b(rm|mv|cp|dd|tee|chmod|chown|kill|pkill|reboot|shutdown|sed\s+-i|kubectl\b[^\n]*\b(apply|delete|patch|edit|scale|replace|create|annotate|label|drain|cordon|rollout)|helm\s+(install|upgrade|uninstall|rollback)|systemctl\s+(restart|stop|start|disable|enable|reload|kill|mask)|docker\s+(compose\s+\S*\s*)?(rm|stop|restart|kill|up|down|push|rmi|prune|update|exec)|psql|mysql|curl\b[^\n]*-(X|d)\b)|>/i;
 
 function pageRulePrefix(url) {
   const m = /^https?:\/\/([^/]+)\/([^/*?]*)/i.exec(String(url || ""));
@@ -404,9 +450,11 @@ function pageRulePrefix(url) {
 function scopeLabel(name, args) {
   const a = args || {};
   if (name === "kube_exec") return `هر دستوری داخل پادهای namespace «${a.namespace}» (کلاستر ${a.cluster})`;
+  if (name === "kube_create") return `ساختن آبجکت‌های یک‌باره (Job، Pod تست، Backup…) در namespace «${a.namespace}» (کلاستر ${a.cluster})`;
   if (name === "infisical_upsert") return `نوشتن secret در Infisical پروژهٔ «${a.projectId}»، ${a.environment || "prod"}، مسیر ${a.path || "/"}`;
   if (name === "infisical_get") return `خواندن سکرت‌های Infisical پروژهٔ «${a.projectId}»`;
   if (name === "pg_query") return `SQL نوشتنی روی دیتابیس ${a.database || "postgres"} در ${a.name} (namespace «${a.namespace}»، ${a.cluster})`;
+  if (name === "debug_exec" || name === "ssh_exec") return `دستورهای فقط‌خواندنی روی سرور «${a.host || "sandbox"}»`;
   if (name === "arvan_page_rule_create") return `ساخت page rule آروان زیر ${pageRulePrefix(a.url)}… با کپی تنظیمات ruleهای موجود همین مسیر`;
   return "";
 }
@@ -422,8 +470,46 @@ function decisionKey(store, chatId, name, args) {
   return `${root}\u0000${name}\u0000${raw}`;
 }
 
+// A yes is learned, not spent (owner 2026-10-21: «نمیخواستم برا هرکاری از من دسترسی بخواد. فقط
+// میخواستم بفهمه باید چیکار کنه و هی رشد کنه» — ~140 approvals in a week, 90% «بله», mostly the same
+// namespace/project for the same person). A yes on a scoped call (scopeOf) is kept in kv `grants`
+// for that requester and that scope, for good: the next chain of the same person doing the same kind
+// of thing there runs without asking. A «نه» is not learned (the 6h decision cache still holds it).
+// ponytail: grants never expire and have no UI; delete kv `grants` (or a key in it) to revoke.
+function requesterOf(store, chatId) {
+  try {
+    const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
+    const caller = String(root?.caller || "");
+    if (!caller) return "";
+    return caller === "team" ? (root?.person_id ? `person:${root.person_id}` : "") : caller;
+  } catch {
+    return "";
+  }
+}
+
+function grantKey(store, chatId, name, args) {
+  const scope = scopeOf(name, args);
+  const who = requesterOf(store, chatId);
+  if (!scope || !who) return "";
+  return `${who}\u0000${name}\u0000${JSON.stringify(scope)}`;
+}
+
+export function learnedGrant(store, chatId, name, args) {
+  const key = grantKey(store, chatId, name, args);
+  return key ? store?.getKv?.("grants")?.[key] || null : null;
+}
+
+function learnGrant(store, chatId, name, args, question) {
+  const key = grantKey(store, chatId, name, args);
+  if (!key || !store?.setKv) return;
+  const all = store.getKv?.("grants") || {};
+  all[key] = { at: new Date().toISOString(), question: maskText(String(question || "")).slice(0, 300) };
+  store.setKv("grants", all);
+}
+
 export function forgetDecisions() {
   decisions.clear();
+  orders.clear();
   inflight.clear();
   unanswered.clear();
   blessings.clear();
@@ -434,6 +520,8 @@ export function forgetDecisions() {
 
 const WHY = "why"; // older prompts still send it; stripped, never shown
 const INTENT = "intent";
+// Tools whose `description` is the step's name in the chat (apps/broker/src/step-title.mjs).
+const STEP_TITLED = new Set(["debug_exec", "ssh_exec", "kube_exec", "mikrotik_exec"]);
 
 // A code-built question names the tool and its args, which tells the owner nothing about whether
 // the path is right. Only the agent knows what the requester wants, so gated tools take one plain
@@ -464,7 +552,7 @@ export function plainIntent(text) {
 
 // Plain labels for tools gated only on some paths (teammate coverage) — «صدا زدن «telegram_send»»
 // meant nothing to the owner.
-const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: `نوشتن یادداشت در دانش ${PERSONA.name}`, arvan_cache_purge: "پاک کردن کش آروان" };
+const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: `نوشتن یادداشت در دانش ${PERSONA.name}`, arvan_cache_purge: "پاک کردن کش آروان", knowledge_edit: `ویرایش یادداشت در دانش ${PERSONA.name}`, knowledge_delete: `حذف یادداشت از دانش ${PERSONA.name}` };
 
 // What the action touches, in a few readable words — never a credential.
 function actionDetail(name, args) {
@@ -472,8 +560,17 @@ function actionDetail(name, args) {
   if (name === "pg_query") return String(args?.sql || "").replace(/\s+/g, " ").slice(0, 120);
   if (name === "kube_exec") return args?.pod ? `پاد ${args.pod}` : ""; // a shell one-liner means nothing to the owner
   if (name === "infisical_upsert") return String(args?.name || "");
+  // A DNS cleanup is one call for the whole list: the owner sees every record he is saying yes to.
+  if (name === "arvan_dns_delete") {
+    const recs = Array.isArray(args?.records) ? args.records : [args || {}];
+    const names = recs.map((r) => `${r?.name || "?"}${r?.type ? ` (${r.type})` : ""}`);
+    return `${recs.length} رکورد در ${args?.domain || "?"}: ${names.join("، ").slice(0, 900)}`;
+  }
   if (name === "gitlab_mr") return [args?.project, args?.iid && `!${args.iid}`].filter(Boolean).join(" ");
-  if (name === "telegram_send") return `در «${args?.chat || "?"}»: «${String(args?.text || "").replace(/\s+/g, " ").slice(0, 200)}»`;
+  if (name === "telegram_send") {
+    const file = args?.file ? ` فایل «${String(args.file).split("/").pop()}» با` : "";
+    return `در «${args?.chat || "?"}»:${file} «${String(args?.text || "").replace(/\s+/g, " ").slice(0, 200)}»`;
+  }
   return Object.entries(args || {})
     .filter(([key, value]) => ["string", "number", "boolean"].includes(typeof value) && !/value|secret|pass|token|key$/i.test(key))
     .map(([key, value]) => `${key}: ${String(value).slice(0, 60)}`)
@@ -492,15 +589,29 @@ export function ownerLabel(store, id) {
   }
 }
 
+// Who a peer caller is in namespaces and Infisical projects. A network peer's id is its install
+// (net-karsara-sara-example-org), not the person (sara-sharifi), so her own namespace looked
+// like someone else's: every exec in her own pods and every read of her own secrets asked the owner,
+// with a warning that it belonged to someone else (2026-10-21). kv `peer-owner` maps a peer id
+// to that person's slug(s): {"net-karsara-sara-example-org": ["sara-sharifi"]}.
+export function selfIds(store, caller) {
+  const peer = String(caller || "").replace(/^peer:/, "");
+  let mapped = [];
+  try {
+    const m = store?.getKv?.("peer-owner")?.[peer];
+    mapped = Array.isArray(m) ? m : m ? [m] : [];
+  } catch {}
+  return [peer, ...mapped].map((x) => String(x).toLowerCase());
+}
+
 // The namespace/project this call writes into, when it is not the requesting colleague's own
 // (owner names = namespaces = Infisical projects). That is the line the owner must not miss.
 function foreignTarget(store, chatId, args) {
   const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
   const caller = String(root?.caller || "");
   if (!caller.startsWith("peer:")) return "";
-  const self = caller.slice("peer:".length);
-  const target = args?.namespace || args?.projectId || "";
-  return target && target !== self ? String(target) : "";
+  const target = String(args?.namespace || args?.projectId || "");
+  return target && !selfIds(store, caller).includes(target.toLowerCase()) ? target : "";
 }
 
 // «X می‌خواد …؛ برای این کار باید …. اوکیه؟» — the agent's sentence when it gave a usable one,
@@ -517,7 +628,7 @@ export function approvalQuestion(store, chatId, name, args, action, intent = "",
   if (plain) {
     lines.push(plain);
     // A carried-over sentence was about an earlier call; name what this one touches.
-    if (carried) {
+    if (carried || name === "arvan_dns_delete") {
       const detail = actionDetail(name, args);
       if (detail) lines.push(`(این بار: ${detail})`);
     }
@@ -529,7 +640,7 @@ export function approvalQuestion(store, chatId, name, args, action, intent = "",
     if (title) lines.push(`برای: ${title.length > 90 ? `${title.slice(0, 90).replace(/\s+\S*$/, "")}…` : title}`);
   }
   if (foreign) lines.push(`⚠️ این مالِ ${ownerLabel(store, foreign)} است، نه خودِ درخواست‌کننده.`);
-  if (scope) lines.push("با «بله» بقیهٔ همین نوع کار در همین درخواست دیگر پرسیده نمی‌شود.");
+  if (scope) lines.push("با «بله» همین نوع کار برای همین شخص دیگر هیچ‌وقت پرسیده نمی‌شود.");
   lines.push("اوکیه؟");
   return lines.join("\n");
 }
@@ -549,7 +660,7 @@ function refused(error, detail) {
 export function foreignSecret(store, chatId, args, ownerProjects = []) {
   const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
   const caller = String(root?.caller || "");
-  const own = caller === "owner" ? ownerProjects : caller.startsWith("peer:") ? [caller.slice(5)] : [];
+  const own = caller === "owner" ? ownerProjects : caller.startsWith("peer:") ? selfIds(store, caller) : [];
   const target = String(args?.projectId || "").trim();
   if (!target) return "";
   return own.some((p) => String(p).trim().toLowerCase() === target.toLowerCase()) ? "" : target;
@@ -575,6 +686,7 @@ export function secretsGate(tools, { chatId, asks, store = null, caller = "?", m
 
 // extra: additional tool names that need approval for this caller (e.g. teammate coverage).
 // allowPass(name, args): true lets a call through without asking (e.g. replying in the same chat).
+// mode "escalate": a colleague's read-only chain — refused with the handoff instruction (handoff.mjs).
 // mode "refuse": nobody can approve on this path yet (external peers until a two-party approval
 // flow exists) — gated calls are refused and audited instead of asking.
 export function guardTools(tools, { chatId, asks, store = null, caller = "?", extra = null, allowPass = null, mode = "ask", verdictOf = classify } = {}) {
@@ -587,13 +699,24 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
       ...tool,
       ...(mayAsk(name, extra) && mode === "ask" ? { inputSchema: withIntent(tool.inputSchema) } : {}),
       async execute(rawArgs) {
-        const { [WHY]: _why, [INTENT]: intent = "", ...args } = rawArgs || {};
+        const { [WHY]: _why, [INTENT]: intent = "", ...rest } = rawArgs || {};
+        // A shell step's title is for the chat row only: it must not change what an approval or a
+        // remembered answer is keyed on (the same command with another title is the same command).
+        const { description: _title, ...bare } = rest;
+        const args = STEP_TITLED.has(name) ? bare : rest;
         let verdict = verdictOf(name, args);
         if (!verdict && extra?.has(name)) verdict = { approve: EXTRA_LABELS[name] || `اجرای «${name}»` };
         if (!verdict || allowPass?.(name, args)) return inner(args);
         if (verdict.block) {
           store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "blocked", detail: verdict.block });
           return refused(verdict.block);
+        }
+        // A colleague's Telegram chain only reads (handoff.mjs): the write is refused with the way
+        // to hand it to the owner's own chats, and nobody is asked per call.
+        if (mode === "escalate") {
+          const reason = escalateReason(verdict.approve);
+          store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "escalate", detail: verdict.approve });
+          return refused(reason);
         }
         if (mode === "refuse") {
           const reason = `${verdict.approve} برای «${caller}» از این مسیر مجاز نیست؛ این کار را صاحب زیرساخت (Owner) باید مستقیم انجام دهد`;
@@ -605,6 +728,11 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
         if (known && Date.now() - known.at < DECISION_TTL_MS) {
           if (known.yes) return inner(args);
           return refused("Owner همین کار را قبلاً رد کرده؛ دوباره نپرس و راه دیگری هم برای دور زدنش نزن — به درخواست‌کننده بگو چه چیزی لازم بود و چرا انجام نشد", known.conf);
+        }
+        const learned = learnedGrant(store, chatId, name, args);
+        if (learned) {
+          store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "learned", approver: "owner", detail: `قبلاً برای همین شخص و همین محدوده «بله» گفته شده (${learned.at})` });
+          return inner(args);
         }
         const askedAt = unanswered.get(key);
         if (askedAt && Date.now() - askedAt < UNANSWERED_TTL_MS) {
@@ -639,6 +767,12 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
             "Owner تازه به درخواست مرتبطِ همین زنجیره پاسخ «نه» داده؛ همین کار را دوباره نپرس — نتیجه را به درخواست‌کننده گزارش کن",
           );
         }
+        const order = ownerOrder(store, chatId);
+        if (order) {
+          learnGrant(store, chatId, name, args, order.text);
+          store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "owner-ordered", approver: "owner", detail: `${OWNER.nameFa} خودش در همین گفتگو نوشت: «${order.text}»` });
+          return inner(args);
+        }
         const blessing = blessings.get(root);
         if (blessing && Date.now() < blessing.until) {
           blessings.delete(root); // one use only
@@ -659,7 +793,7 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
         // /api/peers/:id {trustInPod}) does not wait on the owner for kube_exec — the owner was the
         // bottleneck (three asks in one request). And every colleague runs kube_exec on their OWN
         // namespace without asking: their own kubeconfig already grants pods/exec there.
-        if (name === "kube_exec" && peerRooted(store, chatId) && (peerTrust(store, chatId)?.inPod || !foreignTarget(store, chatId, args))) {
+        if ((name === "kube_exec" || name === "kube_create") && peerRooted(store, chatId) && (peerTrust(store, chatId)?.inPod || !foreignTarget(store, chatId, args))) {
           const own = !foreignTarget(store, chatId, args);
           store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "trusted", detail: own ? "پادِ namespaceِ خودِ همکار" : "همکارِ مورد اعتماد Owner برای اجرای داخل پاد" });
           return inner(args);
@@ -699,10 +833,18 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
         }
         const conf = await pending;
         const yes = consentOf(conf);
+        // He typed a question back («کجا در جریانه که من نمیبینم؟») instead of answering: that is not
+        // a «نه». Remembered as one, it blocked the same step for 6 hours (2026-10-21, chat 8e1ce443).
+        const reply = String(conf?.answer || "").trim();
+        if (conf?.answered && !yes && /[؟?]/.test(reply) && !NO_RE.test(reply) && !NEG_ANYWHERE.test(reply)) {
+          store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "clarify", approver: "owner", detail: conf });
+          return refused(`Owner به‌جای جواب سؤال پرسید: «${reply.slice(0, 300)}». این «نه» نیست: اول در همین چت جوابش را بده و بگو دقیقاً چه کاری و برای چه می‌خواهی، بعد همین فراخوانی را دوباره بزن`);
+        }
         // Only a real answer is remembered; an unanswered question is remembered as *asked* (see
         // above) so retries report instead of re-asking.
         if (conf?.answered) {
           decisions.set(key, { yes, conf, at: Date.now() });
+          if (yes) learnGrant(store, chatId, name, args, question);
           unanswered.delete(key);
         } else {
           unanswered.set(key, Date.now());

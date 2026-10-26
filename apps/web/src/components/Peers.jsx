@@ -36,15 +36,15 @@ const DECISION = {
   blocked: ["text-bad", t("مسدود (مخرب)")],
 };
 
+// What each tab is for, in words anyone reads (owner 2026-10-20: «قابل فهم برای همه نیست»).
 const TABS = [
-  { id: "people", label: t("همکاران") },
-  { id: "network", label: t("شبکهٔ ایجنت‌ها") },
-  { id: "audit", label: t("کارهای برگشت‌ناپذیر") },
+  { id: "people", label: t("از ما کار می‌خواهند"), hint: t("دستیار هر همکار با کلید خودش از ما کار می‌خواهد. روی هر همکار بزنید: کارهایی که خواسته، به چه چیزهایی دسترسی دارد، و دستگاه‌هایش.") },
+  { id: "network", label: t("صدا زدن با @"), hint: t("به دستیار همکاران کار بسپارید: در هر گفتگو اسمشان را با @ بنویسید؛ کار همان‌جا جلو می‌رود و جوابشان در همان گفتگو می‌آید.") },
+  { id: "audit", label: t("کارهای برگشت‌ناپذیر"), hint: t("هر بار که دستیاری خواست کاری برگشت‌ناپذیر بکند: چه کسی، چه کاری، و نتیجه.") },
 ];
 
 export function PeersPage({ onBack }) {
   const [data, setData] = useState(null);
-  const [catalog, setCatalog] = useState([]);
   const [adding, setAdding] = useState(false);
   const [tab, setTab] = useState("people");
   const [query, setQuery] = useState("");
@@ -60,7 +60,6 @@ export function PeersPage({ onBack }) {
   }, []);
   useEffect(() => {
     load();
-    api("/api/tool-catalog").then((r) => setCatalog((r.tools || r.names || []).map((t) => (typeof t === "string" ? t : t.name))), () => {});
     const timer = setInterval(load, 15_000);
     return () => clearInterval(timer);
   }, [load]);
@@ -70,7 +69,7 @@ export function PeersPage({ onBack }) {
   if (opened) {
     return (
       <Page>
-        <PeerDetail user={opened} catalog={catalog} defaults={data?.defaultMessages || {}} onChange={load} onBack={() => setOpenId(null)} />
+        <PeerDetail user={opened} defaults={data?.defaultMessages || {}} onChange={load} onBack={() => setOpenId(null)} />
       </Page>
     );
   }
@@ -89,9 +88,6 @@ export function PeersPage({ onBack }) {
           </button>
         ) : null}
       </div>
-      <p className="mb-4 text-sm leading-6 text-muted-foreground">
-        ایجنت هر همکار با توکن خودش به {BRAND.name} وصل می‌شود و فقط ابزارهایی را دارد که شما باز کرده‌اید. کار برگشت‌ناپذیر از این مسیر انجام نمی‌شود.
-      </p>
 
       <div role="tablist" className="mb-4 flex gap-1 rounded-xl bg-muted/60 p-1 text-sm">
         {TABS.map((t) => (
@@ -100,6 +96,10 @@ export function PeersPage({ onBack }) {
           </button>
         ))}
       </div>
+      <p className="-mt-2 mb-4 text-sm leading-6 text-muted-foreground">
+        {TABS.find((t) => t.id === tab)?.hint}
+        {tab === "people" ? ` هر دستیار فقط ابزارهایی را دارد که شما باز کرده‌اید و کار برگشت‌ناپذیر بدون تأیید شما در ${BRAND.name} انجام نمی‌شود.` : ""}
+      </p>
 
       {tab === "network" ? <NetworkSection /> : tab === "audit" ? <Audit /> : (
         <>
@@ -169,7 +169,6 @@ function Audit() {
   if (!approvals) return <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>;
   return (
     <>
-      <p className="mb-3 text-xs text-muted-foreground">{t("هر بار که ایجنتی خواست کاری برگشت‌ناپذیر بکند، اینجا ثبت می‌شود: چه کسی، چه کاری، و نتیجه.")}</p>
       {approvals.length ? (
         <div className="overflow-hidden rounded-xl border bg-card">
           {approvals.map((a) => {
@@ -223,7 +222,7 @@ const SECTIONS = [
   { id: "devices", label: t("دستگاه‌ها") },
 ];
 
-function PeerDetail({ user, catalog, defaults, onChange, onBack }) {
+function PeerDetail({ user, defaults, onChange, onBack }) {
   const [section, setSection] = useState("work");
   const [issued, setIssued] = useState(null);
   const toggle = (enabled) =>
@@ -269,9 +268,9 @@ function PeerDetail({ user, catalog, defaults, onChange, onBack }) {
 
       {section === "work" ? <PeerWork userId={user.id} label={user.label} /> : section === "access" ? (
         <>
-          <p className="mb-2 text-xs text-muted-foreground">{t("این همکار به کدام ایجنت‌ها می‌تواند کار بدهد، با کدام ابزارها و تا چه سقفی. حداکثر ۲ درخواست باز در هر ایجنت.")}</p>
+          <p className="mb-2 text-xs text-muted-foreground">{t("این همکار به همهٔ ایجنت‌ها کار می‌دهد و ایجنت با همهٔ ابزارهایش جوابش را می‌دهد؛ کار برگشت‌ناپذیر و دست‌زدن به مالِ کس دیگر فقط با تأیید شما. اینجا فقط مدل و سقف مصرف (اختیاری). حداکثر ۲ درخواست باز در هر ایجنت.")}</p>
           <div className="space-y-2">
-            {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} catalog={catalog} defaults={defaults} onChange={onChange} />)}
+            {user.quotas.map((q) => <QuotaRow key={q.agent} userId={user.id} quota={q} defaults={defaults} onChange={onChange} />)}
           </div>
         </>
       ) : (
@@ -457,38 +456,27 @@ function UsageMeter({ window, used, limit }) {
   );
 }
 
-function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
+function QuotaRow({ userId, quota, defaults, onChange }) {
   const [editing, setEditing] = useState(false);
-  const [tools, setTools] = useState(quota.tools || []);
-  const [pick, setPick] = useState("");
   const [limits, setLimits] = useState(() => limitsForm(quota));
-  useEffect(() => setTools(quota.tools || []), [quota.tools]);
   useEffect(() => setLimits(limitsForm(quota)), [quota]);
   const field = (key) => ({ value: limits[key], onChange: (e) => setLimits({ ...limits, [key]: e.target.value }) });
 
   const save = async () => {
     try {
-      const body = { agent: quota.agent, tools };
-      // Limits only on an agent the colleague keeps (an empty tool list closes the agent).
-      if (tools.length) {
-        Object.assign(body, {
-          model: limits.model.trim() || null,
-          models: limits.models.split(/[\s,،]+/).filter(Boolean), // i18n-ignore (Persian comma)
-          budget: { hourly: String(limits.hourly).trim() || null, daily: String(limits.daily).trim() || null },
-          messages: { overBudget: limits.overBudget, unavailable: limits.unavailable },
-        });
-      }
+      const body = {
+        agent: quota.agent,
+        model: limits.model.trim() || null,
+        models: limits.models.split(/[\s,،]+/).filter(Boolean), // i18n-ignore (Persian comma)
+        budget: { hourly: String(limits.hourly).trim() || null, daily: String(limits.daily).trim() || null },
+        messages: { overBudget: limits.overBudget, unavailable: limits.unavailable },
+      };
       await api(`/api/peers/${userId}/quota`, { method: "PUT", body });
       setEditing(false);
       onChange();
     } catch (e) {
       toast.error(e.message);
     }
-  };
-  const add = () => {
-    const name = pick.trim();
-    if (name && !tools.includes(name)) setTools([...tools, name]);
-    setPick("");
   };
 
   return (
@@ -498,43 +486,13 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
         {editing ? (
           <span className="ms-auto flex gap-1">
             <button type="button" onClick={save} className="press flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-primary-foreground"><Check className="size-3.5" /> {t("ذخیره")}</button>
-            <button type="button" onClick={() => { setTools(quota.tools || []); setLimits(limitsForm(quota)); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">{t("انصراف")}</button>
+            <button type="button" onClick={() => { setLimits(limitsForm(quota)); setEditing(false); }} className="press rounded-full px-2.5 py-0.5 hover:bg-muted">{t("انصراف")}</button>
           </span>
         ) : (
           <button type="button" onClick={() => setEditing(true)} className="press ms-auto rounded-full px-2.5 py-0.5 text-primary hover:bg-muted">{t("ویرایش")}</button>
         )}
       </div>
-      {tools.length && !editing ? (
-        <details className="text-xs">
-          <summary className="cursor-pointer text-muted-foreground">{tools.length.toLocaleString("fa-IR")} ابزار مجاز</summary>
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {tools.map((t) => <span key={t} className="ltr rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">{t}</span>)}
-          </div>
-        </details>
-      ) : tools.length ? (
-        <div className="flex flex-wrap gap-1">
-          {tools.map((tool) => (
-            <span key={tool} className="ltr flex items-center gap-1 rounded-full border bg-background px-2 py-0.5 font-mono text-[11px]">
-              {tool}
-              {editing ? (
-                <button type="button" onClick={() => setTools(tools.filter((x) => x !== tool))} aria-label={t("حذف {tool}", { tool })}><X className="size-3" /></button>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">{t("بدون دسترسی (بسته) — این همکار نمی‌تواند به این ایجنت کار بدهد.")}</p>
-      )}
-      {editing ? (
-        <div className="mt-2 flex gap-2">
-          <input list={`catalog-${userId}-${quota.agent}`} value={pick} onChange={(e) => setPick(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} placeholder={t("نام ابزار")} className={`ltr ${input} py-1 font-mono text-xs`} />
-          <datalist id={`catalog-${userId}-${quota.agent}`}>
-            {catalog.filter((n) => !tools.includes(n)).map((n) => <option key={n} value={n} />)}
-          </datalist>
-          <button type="button" onClick={add} className="press rounded-lg border px-3 text-xs hover:bg-muted">{t("افزودن")}</button>
-        </div>
-      ) : null}
-      {quota.tools?.length && !editing ? (
+      {!editing ? (
         <>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
             {t("مدل:")} <span className="ltr font-mono">{quota.model || t("پیش‌فرض ایجنت")}</span>
@@ -546,7 +504,7 @@ function QuotaRow({ userId, quota, catalog, defaults, onChange }) {
           </div>
         </>
       ) : null}
-      {editing && tools.length ? (
+      {editing ? (
         <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
           <label className="space-y-1">
             <span className="text-muted-foreground">{t("مدل پیش‌فرض (account:model، خالی = پیش‌فرض ایجنت)")}</span>

@@ -4,13 +4,15 @@ import { ChevronDown, Network, Pencil, Square, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND, readSetting, writeSetting } from "../brand.js";
+import { uiFlag, uiPrefsReady, useFlag } from "../ui-prefs.js";
+import { TelegramFolders } from "./TelegramChat.jsx";
 import { ago } from "../chat-list.js";
 import { isRtlText } from "../dir.js";
 import { exactTime } from "../elapsed.js";
 import { isRtl, num, t } from "../i18n.js";
 import {
   PICKUPS, clock, connectionLine, initialOf, legacyThreads, messageAuthor, motherName, noteLine, othersThreads, peopleSections, personChip, pollStore, stateChip, threadState,
-  waitingKind, waitingSend,
+  waitingKind, waitingSend, watchHint,
 } from "../telegram.js";
 
 // Telegram v2: the assistant answers colleagues in the owner's Telegram on his behalf. Each watched person (or group) has one mother chat: their
@@ -24,9 +26,11 @@ const POLL_MS = 15_000;
 
 // One poller per endpoint for the whole page (telegram.js pollStore).
 const store = pollStore((path) => api(path), POLL_MS);
-const useTelegram = (path) => useSyncExternalStore(store.subscribe(path), () => store.data(path));
+export const useTelegram = (path) => useSyncExternalStore(store.subscribe(path), () => store.data(path));
 export const refreshTelegram = store.refresh;
-const usePerson = (id) => useTelegram(PEOPLE)?.people?.find((p) => p.id === id) || null;
+export const FEED_PATH = FEED;
+export const PEOPLE_PATH = PEOPLE;
+export const usePerson = (id) => useTelegram(PEOPLE)?.people?.find((p) => p.id === id) || null;
 
 // A person as the Telegram page shows them: the localized name (server: fa_name, else Telegram's) and
 // the Telegram profile photo; with no photo (or one that fails to load) a circle with the first letter.
@@ -59,10 +63,10 @@ export async function patchAccess(id, patch) {
 }
 
 // Turning the watcher on also makes the mother chat; it opens.
-async function watchOn(id, { open = true } = {}) {
+export async function watchOn(id, { open = true } = {}) {
   try {
     const { chatId } = await patchAccess(id, { watch: true });
-    toast.success(t("واچر روشن شد"));
+    toast.success(t("پاسخ خودکار روشن شد"));
     if (open && chatId) navigate(chatId);
   } catch (error) {
     failed(error);
@@ -75,7 +79,7 @@ export async function openMother(personId, chatId = null) {
     const id = chatId || (await api(`/api/telegram/persons/${personId}/mother`, { method: "POST" })).chatId;
     if (id) navigate(id);
   } catch (error) {
-    if (error.status === 409) toast.error(t("واچر خاموش است — اول روشنش کنید"));
+    if (error.status === 409) toast.error(t("پاسخ خودکار به این شخص خاموش است — اول روشنش کنید"));
     else failed(error);
   }
 }
@@ -86,7 +90,7 @@ export async function globalChatId() {
   return id;
 }
 
-async function openGlobal(replace = false) {
+export async function openGlobal(replace = false) {
   try {
     const id = await globalChatId();
     if (replace) window.location.replace(`#/c/${id}`);
@@ -101,13 +105,21 @@ async function openGlobal(replace = false) {
 export function TelegramRedirect({ personId }) {
   useEffect(() => {
     if (!personId) return void openGlobal(true);
-    api(`/api/telegram/persons/${personId}/mother`, { method: "POST" }).then(
-      ({ chatId }) => (chatId ? window.location.replace(`#/c/${chatId}`) : openGlobal(true)),
-      (error) => {
-        if (error.status !== 409) failed(error);
-        openGlobal(true);
-      },
-    );
+    let alive = true;
+    // «تلگرام مثل خود تلگرام» draws this address itself (App.jsx): wait for the flags before leaving it.
+    uiPrefsReady.then(() => {
+      if (!alive || uiFlag("telegramChat")) return;
+      api(`/api/telegram/persons/${personId}/mother`, { method: "POST" }).then(
+        ({ chatId }) => (chatId ? window.location.replace(`#/c/${chatId}`) : openGlobal(true)),
+        (error) => {
+          if (error.status !== 409) failed(error);
+          openGlobal(true);
+        },
+      );
+    });
+    return () => {
+      alive = false;
+    };
   }, [personId]);
   return <p className="py-10 text-center text-sm text-muted-foreground">{t("در حال باز کردن…")}</p>;
 }
@@ -120,14 +132,14 @@ const TONE = {
   muted: "bg-muted text-muted-foreground",
 };
 
-function Chip({ chip, className = "" }) {
+export function Chip({ chip, className = "" }) {
   if (!chip) return null;
   return <span className={`shrink-0 whitespace-nowrap rounded-full px-1.5 text-[11px] leading-5 ${TONE[chip.tone] || TONE.muted} ${className}`}>{chip.label}</span>;
 }
 
-const Dots = () => <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>;
+export const Dots = () => <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>;
 
-function Toggle({ checked, onChange, label, disabled = false, title }) {
+export function Toggle({ checked, onChange, label, disabled = false, title }) {
   return (
     <Switch.Root
       checked={checked}
@@ -145,7 +157,12 @@ function Toggle({ checked, onChange, label, disabled = false, title }) {
 
 // ---------- the sidebar's Telegram tab ----------
 
-export function TelegramList({ query, activeId, activePersonId, onNavigate }) {
+// «تلگرام مثل خود تلگرام» (flag telegramChat): folders as icons and every person in one list (TelegramChat.jsx).
+export function TelegramList(props) {
+  return useFlag("telegramChat") ? <TelegramFolders {...props} /> : <TelegramListClassic {...props} />;
+}
+
+function TelegramListClassic({ query, activeId, activePersonId, onNavigate }) {
   const people = useTelegram(PEOPLE);
   const feed = useTelegram(FEED);
   // Stays as the owner left it across reloads and pages (owner 2026-10-19).
@@ -197,14 +214,14 @@ export function TelegramList({ query, activeId, activePersonId, onNavigate }) {
         ) : null,
       )}
       {people && !sections.people.length && !sections.groups.length ? (
-        <p className="px-3 py-4 text-center text-xs leading-5 text-muted-foreground">{t("واچر کسی روشن نیست. از «خاموش» یکی را روشن کنید تا {name} جوابش را بدهد.", { name: BRAND.name })}</p>
+        <p className="px-3 py-4 text-center text-xs leading-5 text-muted-foreground">{t("پاسخ خودکار برای کسی روشن نیست. از «خاموش» یکی را روشن کنید تا {name} جوابش را بدهد.", { name: BRAND.name })}</p>
       ) : null}
       {sections.off.length ? (
         <div className="mb-2">
           <button type="button" onClick={() => setOffOpen(!offOpen)} aria-expanded={offOpen} className="flex w-full items-center gap-1.5 rounded-md px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground hover:text-foreground">
             <ChevronDown className={`size-3 shrink-0 transition-transform ${offOpen ? "" : "-rotate-90 rtl:rotate-90"}`} />
-            <span className="flex-1 text-start">{t("خاموش")}</span>
-            <span className="tabular-nums">{num(sections.off.length)}</span>
+            <span className="flex-1 text-start" title={t("جواب خودکار نمی‌گیرند؛ گفتگوهای شما هنوز می‌توانند برایشان پیام بفرستند")}>{t("پاسخ خودکار خاموش")}</span>
+            <span className="tabular-nums">{sections.off.length.toLocaleString("fa-IR")}</span>
           </button>
           {offOpen || query.trim() ? <ul>{sections.off.map((p) => <OffRow key={p.id} person={p} onNavigate={onNavigate} />)}</ul> : null}
         </div>
@@ -236,13 +253,16 @@ function PersonRow({ person: p, active, waits, onOpen }) {
 }
 
 // A person whose watcher is off: a look at the last messages and the switch; opening never makes a chat.
+// «Off» is only the auto-reply: the owner's chats still write to them, and each such line names the
+// chat that sent it and opens it (a colleague 2026-10-24: «چطور به من پیام داد وقتی خاموشم؟ و کلیک
+// روی من پیامی که داده بود را نشان نمی‌داد»).
 function OffRow({ person: p, onNavigate }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState(null);
   useEffect(() => {
     if (!open) return undefined;
     let alive = true;
-    api(`/api/telegram/persons/${p.id}/messages?limit=3`).then((r) => alive && setMessages(r.messages || []), () => alive && setMessages([]));
+    api(`/api/telegram/persons/${p.id}/messages?limit=5`).then((r) => alive && setMessages(r.messages || []), () => alive && setMessages([]));
     return () => {
       alive = false;
     };
@@ -267,21 +287,37 @@ function OffRow({ person: p, onNavigate }) {
                 {p.username ? <p className="ltr truncate text-xs text-muted-foreground">@{p.username}</p> : null}
               </div>
             </div>
-            <ul className="my-2 space-y-1.5">
+            <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{BRAND.name} خودش جوابشان را نمی‌دهد؛ گفتگوهای شما هنوز می‌توانند برایشان پیام بفرستند.</p>
+            <ul className="scrollbar-thin my-2 max-h-72 space-y-1.5 overflow-y-auto">
               {messages == null ? <li className="text-xs text-muted-foreground">{t("در حال خواندن…")}</li> : null}
               {messages?.length === 0 ? <li className="text-xs text-muted-foreground">{t("پیامی نیست.")}</li> : null}
               {(messages || []).map((m) => (
-                <li key={m.id} className="rounded-lg bg-muted/50 px-2 py-1.5 text-xs leading-5">
-                  <span className="text-muted-foreground">{messageAuthor(m)}: </span>
+                <li key={m.id} className={`rounded-lg px-2 py-1.5 text-xs leading-5 ${m.direction === "out" ? "bg-primary/8" : "bg-muted/50"}`}>
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate" dir="auto">{messageAuthor(m)}</span>
+                    <span className="shrink-0 tabular-nums" title={exactTime(m.at)}>{ago(m.at)}</span>
+                  </span>
                   <span className="line-clamp-3 whitespace-pre-wrap break-words" dir="auto">{m.text}</span>
+                  {m.data?.fromChat ? (
+                    <a
+                      href={`#/c/${m.data.fromChat}`}
+                      onClick={() => {
+                        setOpen(false);
+                        onNavigate?.();
+                      }}
+                      className="mt-0.5 inline-block text-primary hover:underline"
+                    >
+                      باز کردن همان گفتگو
+                    </a>
+                  ) : null}
                 </li>
               ))}
             </ul>
             <label className="flex items-center justify-between gap-3 border-t pt-2">
-              <span className="text-xs">{t("روشن کردن واچر")}</span>
+              <span className="text-xs">{t("روشن کردن پاسخ خودکار")}</span>
               <Toggle
                 checked={false}
-                label={t("روشن کردن واچر")}
+                label={t("روشن کردن پاسخ خودکار")}
                 onChange={() => {
                   setOpen(false);
                   watchOn(p.id);
@@ -302,7 +338,7 @@ export function WatchPill({ personId }) {
   const person = usePerson(personId);
   if (!person) return null;
   const toggle = () =>
-    patchAccess(personId, { watch: !person.watch }).then(() => toast.success(person.watch ? t("واچر خاموش شد") : t("واچر روشن شد")), failed);
+    patchAccess(personId, { watch: !person.watch }).then(() => toast.success(person.watch ? t("پاسخ خودکار خاموش شد") : t("پاسخ خودکار روشن شد")), failed);
   return (
     <button
       type="button"
@@ -310,7 +346,7 @@ export function WatchPill({ personId }) {
       title={person.watch ? t("{name} پیام‌های این نفر را می‌گیرد و جواب می‌دهد", { name: BRAND.name }) : t("{name} به پیام‌های این نفر کاری ندارد", { name: BRAND.name })}
       className={`press shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${person.watch ? "border-primary/40 bg-primary/10 text-primary" : "text-muted-foreground"}`}
     >
-      {person.watch ? t("واچر روشن") : t("واچر خاموش")}
+      {person.watch ? t("پاسخ خودکار روشن") : t("پاسخ خودکار خاموش")}
     </button>
   );
 }
@@ -367,7 +403,7 @@ export function GlobalPanel({ chat, sheet, onCloseSheet }) {
       <details open={help} onToggle={(e) => toggleHelp(e.currentTarget.open)} className="g-box rounded-xl border bg-card px-3 py-2 text-xs leading-6">
         <summary className="cursor-pointer font-medium">{t("این بخش چطور کار می‌کند؟")}</summary>
         <p className="mt-1 text-muted-foreground">
-          {t("{name} از طرف شما در تلگرام جواب همکاران را می‌دهد. هر کسی که واچرش روشن است یک چت مادر دارد: پیام‌هایش آنجا می‌آید و هر کار واقعی‌اش یک ترد کنار همان چت می‌شود. در «🌐 {name} — همه» گزارش همه را می‌بینید و چیزهایی که منتظر شماست. آنچه اینجا می‌نویسید فقط به {name} می‌رسد، نه به همکار؛ هر پیامی که به همکار می‌رود یک کارت «📤 فرستاد» دارد.", { name: BRAND.name })}
+          {t("{name} از طرف شما در تلگرام جواب همکاران را می‌دهد. هر کسی که پاسخ خودکارش روشن است یک چت مادر دارد: پیام‌هایش آنجا می‌آید و هر کار واقعی‌اش یک ترد کنار همان چت می‌شود. در «🌐 {name} — همه» گزارش همه را می‌بینید و چیزهایی که منتظر شماست. آنچه اینجا می‌نویسید فقط به {name} می‌رسد، نه به همکار؛ هر پیامی که به همکار می‌رود یک کارت «📤 فرستاد» دارد.", { name: BRAND.name })}
         </p>
       </details>
 
@@ -461,9 +497,9 @@ export function MotherPanel({ chat, sheet, onCloseSheet }) {
       <PersonHeader personId={personId} person={person} fallback={motherName(chat)} />
 
       <div className="mt-3 space-y-3 rounded-xl border px-3 py-2.5">
-        <label className="flex items-center justify-between gap-3" title={t("روشن: پیام‌های این نفر به همین چت می‌رسد و {name} جواب می‌دهد. خاموش: فقط ثبت می‌شوند.", { name: BRAND.name })}>
-          <span className="text-xs">{watch ? t("واچر روشن") : t("واچر خاموش")}</span>
-          <Toggle checked={watch} disabled={!person} onChange={(on) => setAccess({ watch: on }, on ? t("واچر روشن شد") : t("واچر خاموش شد"))} label={t("واچر")} />
+        <label className="flex items-center justify-between gap-3" title={watchHint()}>
+          <span className="text-xs">{watch ? t("پاسخ خودکار به این شخص: روشن") : t("پاسخ خودکار به این شخص: خاموش")}<span className="mt-0.5 block text-[11px] leading-5 text-muted-foreground">{watchHint()}</span></span>
+          <Toggle checked={watch} disabled={!person} onChange={(on) => setAccess({ watch: on }, on ? t("پاسخ خودکار روشن شد") : t("پاسخ خودکار خاموش شد"))} label={t("پاسخ خودکار")} />
         </label>
         <label className="block text-xs">
           {t("پیام‌ها را کی بردارد؟")}
@@ -525,7 +561,7 @@ export function MotherPanel({ chat, sheet, onCloseSheet }) {
 }
 
 // The mother panel's head: photo, localized name (editable; empty = automatic again), Telegram's own name.
-function PersonHeader({ personId, person, fallback }) {
+export function PersonHeader({ personId, person, fallback }) {
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState(false);
   const name = person?.name || fallback;
@@ -661,6 +697,9 @@ export function NoteRow({ note }) {
       <div className={box}>{body}</div>
     );
   }
+  // A colleague's message that went to a fork, not into this chat (server proposals.mjs): where it
+  // went and why, and «بیار اینجا» to bring it in by the owner's own click.
+  if (note.kind === "proposal") return <ProposalNote note={note} />;
   if (note.kind === "report") {
     const chip = stateChip(note.state);
     const sent = Array.isArray(note.sent) ? note.sent.filter(Boolean) : [];
@@ -684,14 +723,49 @@ export function NoteRow({ note }) {
       <div className="g-box rounded-xl border bg-card px-3 py-2">{body}</div>
     );
   }
+  // «روشن کن» already pressed (or turned on elsewhere): the card says so and the button goes.
+  const switchedOn = note.kind === "unwatched" && person?.watch;
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 px-4 text-center text-xs leading-5 text-muted-foreground">
-      <span className="min-w-0 whitespace-pre-wrap break-words" dir="auto">{noteLine(named)}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words" dir="auto">{switchedOn ? `✅ ${named.name || t("کسی")} پیام داد — پاسخ خودکار به او روشن شد` : noteLine(named)}</span>
       {note.kind === "unwatched" && note.text ? <span className="w-full truncate opacity-80" dir="auto">«{note.text}»</span> : null}
-      {note.kind === "unwatched" && note.personId ? (
+      {note.kind === "unwatched" && !switchedOn ? <span className="w-full opacity-80">{watchHint()}</span> : null}
+      {note.kind === "unwatched" && note.personId && !switchedOn ? (
         <button type="button" onClick={() => watchOn(note.personId, { open: false })} className="press rounded-md border px-2 py-0.5 text-foreground hover:bg-muted">{t("روشن کن")}</button>
       ) : null}
       {note.at ? <span className="tabular-nums opacity-70">{clock(note.at)}</span> : null}
+    </div>
+  );
+}
+
+function ProposalNote({ note }) {
+  const [state, setState] = useState("open");
+  const bring = async () => {
+    setState("busy");
+    try {
+      await api(`/api/chats/${note.here}/proposals/${note.proposalId}/accept`, { method: "POST" });
+      setState("done");
+    } catch (error) {
+      setState("open");
+      toast.error(error?.status === 404 ? t("این پیام قبلاً آورده شده") : t("آوردن پیام ممکن نشد"));
+    }
+  };
+  return (
+    <div className="g-box rounded-xl border bg-card px-3 py-2 text-xs leading-5">
+      <span className="flex items-start gap-2">
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words" dir="auto">
+          📥 پیام {note.name || t("همکار")} {note.mine ? t("دربارهٔ همین کار بود؛ چون اینجا مشغول بودید") : t("موضوع دیگری بود؛")} به «{note.title || t("انشعاب")}» رفت{note.text ? ` — ${note.text}` : ""}
+        </span>
+        <span className="shrink-0 tabular-nums text-muted-foreground">{clock(note.at)}</span>
+      </span>
+      <span className="mt-2 flex gap-2">
+        <button type="button" onClick={() => navigate(note.chatId)} className="press rounded-md border px-2 py-0.5 hover:bg-muted">{t("باز کن")}</button>
+        {state === "done" ? (
+          <span className="px-2 py-0.5 text-muted-foreground">{t("آورده شد")}</span>
+        ) : (
+          <button type="button" disabled={state === "busy"} onClick={bring} className="press rounded-md border px-2 py-0.5 hover:bg-muted disabled:opacity-50">{t("بیار اینجا")}</button>
+        )}
+      </span>
     </div>
   );
 }

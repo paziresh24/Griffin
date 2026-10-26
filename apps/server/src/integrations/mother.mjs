@@ -158,8 +158,18 @@ closes (there is no end_agent). Nothing you write here reaches them by itself:
   means here: do not call send_to_person. If it (or edit_sent / delete_sent) answers {held: true},
   nothing reached them: it waits for ${OWNER.name} as a draft (reason owner_replied: he wrote to them himself;
   paused / unwatched: he stopped the answers) — say so in your report and do not try again.
+- Agents talk to agents on the agents' network, not in Telegram (owner 2026-10-20). If «${name}» is a
+  colleague's own assistant (it signs its messages, or it is a bot) its install is on the network
+  (network_agents; the colleague's name is its owner): send_to_person to it is carried there for you —
+  queued and delivered by itself while that agent is updating or offline, its answer waking this chat —
+  so an update is never a reason to wait or to look for another way. To start a talk with a colleague's
+  agent yourself, use network_ask. A «not on the network» answer means: network_agents, network_connect
+  {url}, and only after that telegram_because. Telegram is for people.
 - Every colleague message gets send_to_person, a reaction, or nothing. Small talk, thanks, a joke: a
   reaction or one short send, or nothing.
+- A message marked «… دقیقه پیش وقتی در حال آپدیت بودی رسید» waited while you were restarting: when you
+  write to them about it, start with half a line saying the delay was your update («ببخشید، در حال
+  آپدیت بودم»), so they know you were updating, not dead.
 - Real work (a fix, an access request, an investigation): open a thread — one \`delegate\` per issue,
   a short clear title as the first line of the request — and send one short line («دارم بررسی می‌کنم»).
 - A follow-up about work already open: \`subtasks\` list, then \`steer\` that thread. Never a second
@@ -238,12 +248,13 @@ export function createMotherTools({ store, runner, chatId, name, sendToPerson, e
         properties: {
           text: { type: "string", minLength: 1, maxLength: 3800 },
           replyTo: { type: "string", description: "reply to this message of theirs instead of the latest, e.g. \"812\" (the (#812) on their line)" },
+          telegram_because: { type: "string", description: "only for a colleague's AGENT with no path on the agents' network: one line on what you tried (network_agents, network_connect). Never for a human." },
         },
         required: ["text"],
         additionalProperties: false,
       },
-      async execute({ text, replyTo = null }) {
-        return ok(await sendToPerson(String(text || ""), replyTo ? { replyTo } : undefined));
+      async execute({ text, replyTo = null, telegram_because: because = "" }) {
+        return ok(await sendToPerson(String(text || ""), { ...(replyTo ? { replyTo } : {}), ...(because ? { telegramBecause: because } : {}) }));
       },
     },
     react: {

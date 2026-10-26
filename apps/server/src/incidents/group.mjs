@@ -62,6 +62,7 @@ export function groupAlerts(alerts) {
         members: [],
         seenFrom: [],
         startsAt: alert.startsAt,
+        sourceId: alert.sourceId || null,
       };
       groups.set(key, g);
     }

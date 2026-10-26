@@ -1,48 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "radix-ui";
 import {
-  AlarmClock, Radar, TerminalSquare, Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronRight,
-  CircleHelp, ExternalLink, Filter, FolderInput, FolderPlus, FolderTree, LogOut, Mail, MailOpen, MessageCircle, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Search,
-  Box, Inbox, PanelRightClose, Server, Settings2, Trash2, Users, X,
+  Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronRight,
+  BellRing, CircleHelp, ExternalLink, Filter, FolderInput, FolderPlus, FolderTree, Mail, MailOpen, MoreHorizontal, Pencil, Pin, PinOff, Plus, RotateCcw, Search,
+  Box, Inbox, LayoutDashboard, PanelRightClose, Server, Settings2, Store, Trash2, Users, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate, usePolling } from "../api.js";
 import { BRAND, agentMeta, iconUrl, readSetting, writeSetting } from "../brand.js";
 import { PROFILE_EVENT, ownerView } from "../profile.js";
 import { textDir } from "../dir.js";
-import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, searchChats, sortChats } from "../chat-list.js";
+import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, reminderLabel, searchChats, sortChats } from "../chat-list.js";
 import { isUnreadChat, markSeen, markUnread, seenOf, useSeenVersion } from "../seen.js";
 import { isPlainClick } from "../sidebar-width.js";
-import { NAV_ITEMS, useFlag, useUiPrefs } from "../ui-prefs.js";
+import { setUiPrefs, useFlag, useUiPrefs } from "../ui-prefs.js";
 import { AgentGlyph, AgentPicker } from "./Controls.jsx";
 import { TelegramList } from "./Telegram.jsx";
-import { SidebarNotes } from "./Notes.jsx";
 import { SidebarSuggestions } from "./ChatTools.jsx";
 import { useInbox } from "../inbox.js";
 import { peoplePath } from "../inbox-people.js";
 import { exactTime } from "../elapsed.js";
 import { inboxRow, shortAgo } from "../karsara-shell.js";
 import { OneList, RepoNewChat, UserMenu } from "./SidebarOneList.jsx";
-import { UpdateNotice } from "./UpdateNotice.jsx";
+import { UpdateNotice, useUpdateDot } from "./UpdateNotice.jsx";
 import { HostNotice } from "./HostNotice.jsx";
+import { TwoStepNotice } from "./TwoStepNotice.jsx";
 import { ListStatus } from "./ListStatus.jsx";
-import { PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
+import { FeedbackBarButton, PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
+import { useListChoice, useSectionOrder } from "../list-prefs.js";
+import { groupOrder, sectionDrag } from "../drag.js";
+import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
+import { NavLauncher, NavSlot, PaletteKey, PinnedRow, SectionMenuFoot, SectionMenuItems, navStyleOf, useSections } from "./SectionNav.jsx";
 import { t } from "../i18n.js";
 
 const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));
-
-// A list choice kept across reloads; a stored value that is no longer offered falls back.
-function useStored(key, initial, allowed) {
-  const [value, setValue] = useState(() => {
-    const saved = readSetting(key, initial);
-    return allowed.some((item) => item.id === saved) ? saved : initial;
-  });
-  const set = (next) => {
-    setValue(next);
-    writeSetting(key, next);
-  };
-  return [value, set];
-}
 
 // Each tab lists only its own threads: «گفتگو» is what the owner started by hand; Telegram-born,
 // peer, ops-room and job threads live under their tabs. Sub-agent chats never appear here: the parent
@@ -59,7 +50,7 @@ const SECTIONS = {
 const sourceOf = (chat) => (chat.global ? "telegram" : chat.source || "manual");
 const sectionOfPage = (page) => Object.keys(SECTIONS).find((k) => SECTIONS[k].page === page && page) || null;
 
-export function Sidebar({ chats, archived, groups = [], loading = false, failed = false, onRetry = null, filter = "all", onFilter, onNewChat = null, activeId, activeSource = null, activePersonId = null, page = null, agent, onAgentChange, agentLocked = false, onClose, onHide }) {
+export function Sidebar({ chats, archived, groups = [], looseAt = null, loading = false, failed = false, onRetry = null, filter = "all", onFilter, onNewChat = null, activeId, activeSource = null, activePersonId = null, page = null, agent, onAgentChange, onClose, onHide }) {
   const { look, flags } = useUiPrefs();
   const k = look === "karsara";
   // «یک فهرست برای همه»: the owner's chats, the job runs and the peers' chats share one list, which stays
@@ -79,11 +70,28 @@ export function Sidebar({ chats, archived, groups = [], loading = false, failed 
     window.location.hash = hash;
     onClose?.();
   };
-  // «جدید» and the top sections (Settings → «ظاهر و بخش‌ها»), the same in both lists.
+  // «فضای کار» and the top sections (which sections: «بازارچه»; how: Settings → «ظاهر»), the same in both
+  // lists. «فضای کار» (was «جدید» with a robot, a colleague 2026-10-24) and its «+» both open the home page:
+  // what waits for the owner above, a new chat's box below.
   const nav = {
     top: (
-      <div className="mt-2 px-2">
-        <NavButton k={k} active={!page && !activeId} icon={Bot} href="#/" label={t("جدید")} onClick={() => startChat(null)} badge={flags.homeBoard ? inbox.count : 0} />
+      <div className="mt-2 flex items-center gap-1 px-2">
+        <div className="min-w-0 flex-1">
+          <NavButton k={k} active={!page && !activeId} icon={LayoutDashboard} href="#/" label={t("فضای کار")} onClick={() => startChat(null)} badge={flags.homeBoard ? inbox.count : 0} />
+        </div>
+        <a
+          href="#/"
+          onClick={(event) => {
+            if (!isPlainClick(event)) return;
+            event.preventDefault();
+            startChat(null);
+          }}
+          className={k ? "kc-icon-btn shrink-0" : "press flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"}
+          title={t("گفتگوی جدید")}
+          aria-label={t("گفتگوی جدید")}
+        >
+          <Plus className="size-4" />
+        </a>
       </div>
     ),
     // The one list marks a section by the page alone (an open job run keeps «جاب» unmarked, as Karsara does).
@@ -93,8 +101,24 @@ export function Sidebar({ chats, archived, groups = [], loading = false, failed 
   return (
     <aside className={k ? "flex h-full w-full flex-col bg-background" : "g-sidebar flex h-full w-full flex-col bg-card"}>
       <div className={`flex min-w-0 items-center ${k ? "gap-2 px-2 pb-2 pt-[max(env(safe-area-inset-top),0.6rem)]" : "gap-3 px-3 pb-3 pt-[max(env(safe-area-inset-top),0.85rem)]"}`}>
-        {k ? null : <img src={iconUrl()} alt={BRAND.name} className="size-10 shrink-0 rounded-xl" title={BRAND.name} />}
-        <AgentPicker agent={agent} onChange={onAgentChange} locked={agentLocked} className={k ? "min-w-[10rem]" : "min-w-[11rem]"} />
+        {/* The logo goes home, to a new chat (a colleague 2026-10-24: «لوگوهای بالا به صفحهٔ جدید هدایت نمی‌کنند»). */}
+        {k ? null : (
+          <a
+            href="#/"
+            onClick={(event) => {
+              if (!isPlainClick(event)) return;
+              event.preventDefault();
+              startChat(null);
+            }}
+            className="press shrink-0 rounded-xl"
+            title={`${BRAND.name} — فضای کار`}
+            aria-label={t("فضای کار")}
+          >
+            <img src={iconUrl()} alt={BRAND.name} className="size-10 rounded-xl" />
+          </a>
+        )}
+        <AgentPicker agent={agent} onChange={(id) => (onAgentChange?.(id), onClose?.())} onAdd={() => go("/agents/new")} className={k ? "min-w-[10rem]" : "min-w-[11rem]"} />
+        {navStyleOf(flags) === "launcher" ? <NavLauncher go={go} activeSection={oneList ? sectionOfPage(page) : section} /> : null}
         {onHide ? (
           <button type="button" onClick={onHide} className={k ? "kc-icon-btn ms-auto hidden shrink-0 md:inline-flex" : "ms-auto hidden shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex"} aria-label={t("پنهان کردن فهرست گفتگوها")} title={t("پنهان کردن فهرست گفتگوها (Ctrl+B یا ⌘B)")}>
             <PanelRightClose className={k ? undefined : "size-4"} />
@@ -108,13 +132,14 @@ export function Sidebar({ chats, archived, groups = [], loading = false, failed 
       </div>
 
       {oneList ? (
-        <OneList chats={chats} archived={archived} groups={groups} loading={loading} failed={failed} onRetry={onRetry} onNewChat={onNewChat} activeId={activeId} onClose={onClose} nav={nav} karsara={k} />
+        <OneList chats={chats} archived={archived} groups={groups} looseAt={looseAt} loading={loading} failed={failed} onRetry={onRetry} onNewChat={onNewChat} activeId={activeId} onClose={onClose} nav={nav} karsara={k} />
       ) : (
         <TabList
           section={section}
           chats={chats}
           archived={archived}
           groups={groups}
+          looseAt={looseAt}
           filter={filter}
           onFilter={onFilter}
           loading={loading}
@@ -131,6 +156,7 @@ export function Sidebar({ chats, archived, groups = [], loading = false, failed 
       )}
 
       <HostNotice />
+      <TwoStepNotice />
       <UpdateNotice />
       {flags.userMenu ? <UserMenu onNavigate={onClose} /> : <UserBar onNavigate={onClose} k={k} />}
     </aside>
@@ -139,9 +165,10 @@ export function Sidebar({ chats, archived, groups = [], loading = false, failed 
 
 // Each tab's own list (the one list off): «گفتگو» is what the owner started by hand; Telegram-born,
 // peer, ops-room and job threads live under their tabs.
-function TabList({ section, chats, archived, groups, loading, failed, onRetry, filter, onFilter, activeId, activePersonId, nav, startChat, onClose, k, inboxOn }) {
+function TabList({ section, chats, archived, groups, looseAt, loading, failed, onRetry, filter, onFilter, activeId, activePersonId, nav, startChat, onClose, k, inboxOn }) {
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useStored("griffin.sidebar.sort", "updated", SORTS);
+  const [sort, setSort] = useListChoice("sort", "griffin.sidebar.sort", "updated", SORTS);
+  const [sectionOrders, setSectionOrder] = useSectionOrder(); // sections dragged into the owner's order (drag.js)
   const seenVersion = useSeenVersion(); // read state re-shapes the list (unread filter, sort, groups)
   // Telegram and peer threads group by whose they are by default, so one person's threads can be
   // folded away while another's stay open. The choice is kept, so the owner's groups stay up.
@@ -236,16 +263,25 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
         isUnread,
         agentLabel: (id) => agentMeta(id).label,
         groups,
+        looseAt,
+        sectionOrder: sectionOrders[groupBy],
         narrowed: Boolean(query.trim()) || filter !== "all" || showArchived,
         scope: section,
       }),
-    [prepared, groupBy, groups, query, filter, showArchived, section, seenVersion],
+    [prepared, groupBy, groups, looseAt, sectionOrders, query, filter, showArchived, section, seenVersion],
   );
 
   const open = (id) => {
     navigate(id);
     onClose?.();
   };
+  const order = useMemo(() => groupOrder(groups, looseAt), [groups, looseAt]); // drag and drop (drag.js)
+  // The ungrouped sections (by repository, …) in the order they show, for dragging their headings.
+  const sectionKeys = sections.filter((s) => s.loose).map((s) => s.key);
+  const dragOf = (item) =>
+    showArchived
+      ? { handle: null, slots: [] }
+      : sectionDrag(item, { groupBy, groupsOrder: order, hasGroups: section === "manual" && groups.length > 0, sectionKeys, onOrder: (keys) => setSectionOrder(groupBy, keys) });
   const otherThreads = section === "telegram" ? prepared.filter((c) => !c.mother && !c.global) : [];
 
   return (
@@ -269,6 +305,7 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
             </button>
           ) : null}
           {section === "telegram" ? null : <>
+            <PaletteKey />
             <SortMenu sort={sort} groupBy={groupBy} defaultGroupBy={defaultGroupBy} onSort={setSort} onGroupBy={setGroupBy} k={k} />
             <FilterMenu filter={filter} onFilter={setFilter} k={k} />
           </>}
@@ -280,7 +317,6 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
       {nav.top}
 
       <nav className="scrollbar-thin mt-0.5 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {section === "manual" && !showArchived ? <SidebarNotes refreshKey={chats} onNavigate={onClose} karsara={k} /> : null}
         <SidebarSuggestions refreshKey={chats} onNavigate={onClose} karsara={k} />
         {nav.sections}
 
@@ -336,6 +372,8 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
               groups={groups}
               activeId={activeId}
               onOpen={open}
+              dropTarget={showArchived ? null : item.key === "pinned" ? { kind: "pinned" } : item.groupId ? { kind: "group", id: item.groupId } : item.loose ? { kind: "loose" } : null}
+              drag={dragOf(item)}
               collapsible={item.collapsible || Boolean(item.title)}
               collapsed={(item.collapsible || Boolean(item.title)) && Boolean(collapsed[item.key])}
               limit={item.title ? SECTION_LIMIT : 0}
@@ -352,7 +390,8 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
               {t("گروه جدید")}
             </button>
           ) : null}
-          {!prepared.length ? (
+          {/* Not «گفتگویی نیست» while the list is still being read: loading and a failed read say so. */}
+          <ListStatus loading={loading && !chats.length} failed={failed} onRetry={onRetry} empty={!prepared.length} k={k}>
             <div className="px-3 py-6 text-center text-sm text-muted-foreground">
               <p>{t("گفتگویی نیست.")}</p>
               {filter !== "all" ? (
@@ -361,6 +400,16 @@ function TabList({ section, chats, archived, groups, loading, failed, onRetry, f
                 </button>
               ) : null}
             </div>
+          </ListStatus>
+          {showArchived && archivedHere.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => deleteAllArchived(archivedHere.map((c) => c.id))}
+              className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
+            >
+              <Trash2 className="size-3.5" />
+              {`حذف دائم همه بایگانی (${archivedHere.length})`}
+            </button>
           ) : null}
           {archivedHere.length > 0 || showArchived ? (
             <button
@@ -461,6 +510,7 @@ function MenuPick({ icon: Icon, label, selected, onClick }) {
 // تنظیمات بمونه فقط و خروج», then «چرا پروفایل رفت؟»): his name and photo (opens Settings → حساب), the
 // Settings icon and log out; agents, token usage and the rest live in Settings.
 function UserBar({ onNavigate, k: karsara = false }) {
+  const updateDot = useUpdateDot(); // «آپدیت فقط در تنظیمات»: a new release waits there
   // Something to connect (no engine with a working key): marked here, so it is seen without opening Settings.
   const [setupMissing, setSetupMissing] = useState(false);
   useEffect(() => {
@@ -515,7 +565,6 @@ function UserBar({ onNavigate, k: karsara = false }) {
     onNavigate?.();
   };
   const [menu, setMenu] = useState(false);
-  const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
   const button = "press relative flex size-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:bg-muted hover:text-foreground";
 
   return (
@@ -540,22 +589,27 @@ function UserBar({ onNavigate, k: karsara = false }) {
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content side="top" align="start" sideOffset={8} collisionPadding={8} className="g-menu pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-lg" dir="rtl">
-            {PROFILE_ITEMS.map(({ id, icon: Icon, label }) => (
-              <button key={id} type="button" className="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" onClick={() => { setMenu(false); profileAction(id, { editProfile: () => openSettings("account") }); }}>
-                <Icon className="size-4 text-muted-foreground" />
-                <span>{label}</span>
-              </button>
+            {/* «جای بخش‌ها: منوی کاربر»: the sections first (SectionNav.jsx); nothing otherwise. */}
+            <SectionMenuItems onPick={() => { setMenu(false); onNavigate?.(); }} rowClass="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" />
+            {PROFILE_ITEMS.map(({ id, icon: Icon, label, rule }) => (
+              <div key={id}>
+                {rule ? <div className="my-1 border-t" /> : null}
+                <button type="button" className="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" onClick={() => { setMenu(false); profileAction(id, { editProfile: () => openSettings("account") }); }}>
+                  <Icon className={`size-4 text-muted-foreground ${id === "logout" ? "-scale-x-100" : ""}`} />
+                  <span>{label}</span>
+                </button>
+              </div>
             ))}
+            <SectionMenuFoot />
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      <button type="button" onClick={() => openSettings()} className={button} title={t("تنظیمات")} aria-label={t("تنظیمات")}>
+      <button type="button" onClick={() => openSettings(updateDot ? "health" : undefined)} className={button} title={updateDot ? t("تنظیمات · نسخهٔ تازه آماده است") : t("تنظیمات")} aria-label={t("تنظیمات")}>
         <Settings2 className="size-4" />
+        {updateDot && !setupMissing ? <span className="absolute end-2 top-2 size-2 rounded-full bg-primary" role="img" aria-label={t("نسخهٔ تازه آماده است")} /> : null}
         {setupMissing ? <span className="absolute end-2 top-2 size-2 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : null}
       </button>
-      <button type="button" onClick={logout} className={button} title={t("خروج")} aria-label={t("خروج")}>
-        <LogOut className="size-4 -scale-x-100" />
-      </button>
+      <FeedbackBarButton className={button} />
     </div>
   );
 }
@@ -564,26 +618,54 @@ function UserBar({ onNavigate, k: karsara = false }) {
 // plain click stays in this one. Under the Karsara skin a flat list row (g-nav-row).
 // The top sections, as the owner set them in Settings → ظاهر (sidebar-nav.js): rows, or one row of
 // icons; hidden ones under «بیشتر», and shown anyway while one of them is the open page.
-const NAV_TARGETS = {
-  telegram: { section: "telegram", icon: MessageCircle, path: "/telegram" },
-  jobs: { section: "job", icon: AlarmClock, path: "/jobs" },
-  incidents: { section: "ops", icon: Radar, path: "/incidents" },
-  peers: { section: "peer", icon: Users, path: "/peers" },
-  workbench: { section: "workbench", icon: TerminalSquare, path: "/workbench" },
-};
 
 function SidebarNav({ section, go, k: karsara = false, flags }) {
   const [more, setMore] = useState(false);
-  const items = NAV_ITEMS.map((item) => ({ ...item, ...NAV_TARGETS[item.id] }));
-  const hidden = flags.navHidden || [];
-  const shown = items.filter((item) => !hidden.includes(item.id) || section === item.section);
+  // Every section that is on, in the order the owner dragged them into (SectionNav.jsx).
+  const { items, ids, hidden, moduleSection, reorder } = useSections();
+  const activeSection = moduleSection || section;
+  const style = navStyleOf(flags);
+  const shown = items.filter((item) => !hidden.includes(item.id) || activeSection === item.section);
   const rest = items.filter((item) => !shown.includes(item));
   const icons = flags.navIcons;
+  // «جای بخش‌ها» (Settings → ظاهر): the launcher keeps only the pinned rows here (its grid is in the
+  // header), the menu none (the user menu and Ctrl+K have them), the rail none on a computer (the rows
+  // stay on a phone, where there is no rail).
+  if (style === "menu") return null;
+  if (style === "launcher") {
+    const pinned = items.filter((item) => !hidden.includes(item.id));
+    return pinned.length ? (
+      <div className="space-y-0.5">
+        {pinned.map((item) => (
+          <NavSlot key={item.id} id={item.id} ids={ids} onOrder={reorder}>
+            <PinnedRow item={item} active={activeSection === item.section} onGo={go} onUnpin={(id) => setUiPrefs({ flags: { navHidden: [...hidden, id] } })} />
+          </NavSlot>
+        ))}
+      </div>
+    ) : null;
+  }
+  if (style === "rail") {
+    return (
+      <div className={`md:hidden ${karsara ? "" : "space-y-0.5"}`}>
+        {items.map(({ id, label, icon, path, section: target }) => (
+          <NavButton key={id} active={activeSection === target} icon={icon} href={`#${path}`} label={label} onClick={() => go(path)} k={karsara} />
+        ))}
+      </div>
+    );
+  }
   const openSettings = () => {
     setMore(false);
-    writeSetting("griffin.settings.section", "appearance");
+    writeSetting("griffin.settings.section", "market");
     go("/settings");
   };
+  // Always in sight, so a module that is off (the MR list …) can be found without knowing «بیشتر» exists.
+  const storeLink = icons ? (
+    <button type="button" data-tip={t("بازارچه · بخش‌های بیشتر")} aria-label={t("بازارچه: بخش‌های بیشتر")} onClick={openSettings} className="g-icon-btn g-sn-tip g-sn-tip-below flex size-9 items-center justify-center rounded-lg text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground hover:opacity-100">
+      <Store className="size-4" />
+    </button>
+  ) : (
+    <NavButton active={false} icon={Store} href="#/settings" label={t("بازارچه · بخش‌های بیشتر")} onClick={openSettings} k={karsara} />
+  );
   // «ردیف «بیشتر»» off: hidden sections are not offered at all (Karsara's list).
   const moreMenu = flags.navMore && (rest.length || icons) ? (
     <Popover.Root open={more} onOpenChange={setMore}>
@@ -622,8 +704,8 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
           ))}
           {rest.length ? <div className="my-1 h-px bg-border" /> : null}
           <button type="button" onClick={openSettings} className="g-menu-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
-            <Settings2 className="size-3.5 shrink-0" />
-            {t("تنظیم بخش‌های منو…")}
+            <Store className="size-3.5 shrink-0" />
+            بازارچه: بخش‌ها و منو…
           </button>
         </Popover.Content>
       </Popover.Portal>
@@ -634,32 +716,38 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
     return (
       <div className="flex flex-wrap items-center gap-1 px-1">
         {shown.map(({ id, label, icon: Icon, path, section: target }) => (
+          <NavSlot key={id} id={id} ids={ids} onOrder={reorder} horizontal>
           <a
-            key={id}
             href={`#${path}`}
-            title={label}
+            data-tip={label}
             aria-label={label}
-            aria-current={section === target ? "page" : undefined}
+            aria-current={activeSection === target ? "page" : undefined}
             onClick={(event) => {
               if (!isPlainClick(event)) return;
               event.preventDefault();
               go(path);
             }}
-            className={`g-icon-btn flex size-9 items-center justify-center rounded-lg transition-colors ${section === target ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+            className={`g-icon-btn g-sn-tip g-sn-tip-below flex size-9 items-center justify-center rounded-lg transition-colors ${activeSection === target ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
           >
             <Icon className="size-4" />
           </a>
+          </NavSlot>
         ))}
         {moreMenu}
+        <span className="mx-1 h-[18px] w-px bg-border" aria-hidden />
+        {storeLink}
       </div>
     );
   }
   return (
     <div className={karsara ? undefined : "space-y-0.5"}>
       {shown.map(({ id, label, icon, path, section: target }) => (
-        <NavButton key={id} active={section === target} icon={icon} href={`#${path}`} label={label} onClick={() => go(path)} k={karsara} />
+        <NavSlot key={id} id={id} ids={ids} onOrder={reorder}>
+          <NavButton active={activeSection === target} icon={icon} href={`#${path}`} label={label} onClick={() => go(path)} k={karsara} />
+        </NavSlot>
       ))}
       {moreMenu}
+      {storeLink}
     </div>
   );
 }
@@ -702,8 +790,10 @@ const groupFailed = () => {
 // chat always shows. Folding the whole section is its title's chevron.
 const SECTION_LIMIT = 5;
 
-function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat, limit = 0, more = false, onMore }) {
+function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, dropTarget = null, drag = null, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat, limit = 0, more = false, onMore }) {
   const [menu, setMenu] = useState(false);
+  const drop = useSectionDrop({ target: dropTarget, slots: drag?.slots || [] });
+  const handle = drag?.handle ? groupDragProps(drag.handle.id, drag.handle.scope) : {};
   // Folded, the open chat alone stays in sight (owner 2026-10-17: the folder holding the open chat
   // would not fold at all).
   const shown = collapsed
@@ -723,9 +813,9 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
     }
   };
   return (
-    <div className="mb-2">
+    <div className="g-drop mb-2 rounded-lg" {...drop}>
       {collapsible ? (
-        <div className="group relative flex items-center">
+        <div className="group relative flex items-center" {...handle} title={drag?.handle ? t("برای جابه‌جایی بکشید") : undefined}>
           <button
             type="button"
             onClick={onToggle}
@@ -742,6 +832,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             <button
               type="button"
               onClick={() => onNewChat(group.id)}
+              data-no-drag=""
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
               title={t("گفتگوی جدید در «{name}»", { name: group.name })}
               aria-label={t("گفتگوی جدید در گروه {name}", { name: group.name })}
@@ -754,6 +845,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             <button
               type="button"
               onClick={() => setMenu(!menu)}
+              data-no-drag=""
               className="me-1 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
               aria-label={t("گزینه‌های گروه {name}", { name: group.name })}
             >
@@ -821,8 +913,9 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
   return (
     <li className="relative">
       <div
-        className={`g-chat-row group flex items-center rounded-lg ${active ? "bg-muted" : "hover:bg-muted/60"}`}
+        className={`g-chat-row group relative flex items-center rounded-lg ${active ? "bg-muted" : "hover:bg-muted/60"}`}
         data-active={active ? "true" : undefined}
+        {...chatDragProps(chat)}
         onContextMenu={(event) => {
           // Right click = the «گزینه‌ها» menu. Shift+right click keeps the browser's own menu.
           if (event.shiftKey) return;
@@ -852,15 +945,17 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
           ) : state.failed ? (
             <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطادار")} />
           ) : null}
+          {chat.reminderAt ? <span className="shrink-0" title={reminderLabel(chat.reminderAt)}><BellRing className="size-3.5 text-muted-foreground" aria-label={reminderLabel(chat.reminderAt)} /></span> : null}
           {unread ? <span className="size-2 shrink-0 rounded-full bg-signal ring-2 ring-signal/25" title={t("محتوای دیده‌نشده")} /> : null}
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" title={exactTime(chat.updatedAt || chat.createdAt)}>
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground md:group-focus-within:invisible md:group-hover:invisible" title={exactTime(chat.updatedAt || chat.createdAt)}>
             {timeAgo ? shortAgo(chat.updatedAt || chat.createdAt) : ago(chat.updatedAt || chat.createdAt)}
           </span>
         </a>
         <button
           type="button"
           onClick={() => (menu ? closeMenu() : setMenu(true))}
-          className="me-1 rounded p-1 text-muted-foreground opacity-100 hover:bg-background md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
+          data-no-drag=""
+          className="me-1 rounded p-1 text-muted-foreground opacity-100 hover:bg-background md:absolute md:end-2 md:top-1/2 md:me-0 md:-translate-y-1/2 md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
           aria-label={t("گزینه‌ها")}
         >
           <MoreHorizontal className="size-4" />
@@ -926,6 +1021,7 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
             <ChatMenuItem icon={chat.archived ? ArchiveRestore : Archive} onClick={() => { closeMenu(); patch({ archived: !chat.archived }); }}>
               {chat.archived ? t("خروج از بایگانی") : t("بایگانی")}
             </ChatMenuItem>
+            {chat.archived ? <ChatMenuItem icon={Trash2} onClick={() => { closeMenu(); deleteForGood(chat); }}>{t("حذف دائم")}</ChatMenuItem> : null}
             <ChatMenuItem icon={ExternalLink} onClick={() => { closeMenu(); window.open(`#/c/${chat.id}`, "_blank", "noopener"); }}>
               {t("باز کردن در تب جدید")}
             </ChatMenuItem>
@@ -939,7 +1035,7 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
                 {chat.runsOn.bypass ? (
                   <div className="flex items-start gap-2 px-3 py-2 text-xs text-muted-foreground">
                     <Server className="mt-0.5 size-3.5 shrink-0" />
-                    <span>{t("در حالت «بدون پرسیدن» با کاربر خود شما روی سرور اجرا می‌شود")}</span>
+                    <span>{t("در حالت «خودکار» و «بدون پرسیدن» با کاربر خود شما روی سرور اجرا می‌شود")}</span>
                   </div>
                 ) : RUNS_ON.map(([id, label, Icon]) => (
                   <button key={id} type="button" onClick={() => { closeMenu(); patch({ runsOn: id === chat.runsOn.default ? null : id }); }} className="g-menu-row flex w-full items-center gap-2 px-3 py-2 hover:bg-muted">
@@ -960,6 +1056,19 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
 
 // host = on the server as the owner (his ssh keys, kubectl, git); container = inside Griffin, without them.
 const RUNS_ON = [["host", t("روی سرور، با دسترسی کامل شما"), Server], ["container", t("داخل کانتینر، بدون کلیدهای شما"), Box]];
+// Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
+function deleteForGood(chat) {
+  if (!window.confirm(`گفتگوی «${chat.title}» برای همیشه حذف شود؟ برگشتی ندارد.`)) return;
+  api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(() => toast.success(t("حذف شد")), failed);
+}
+function deleteAllArchived(ids) {
+  if (!window.confirm(`همه ${ids.length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.`)) return;
+  api("/api/chats/delete-archived", { method: "POST", body: { ids } }).then(
+    (r) => toast.success(r.skipped?.length ? `${r.deleted.length} حذف شد؛ ${r.skipped.length} در حال کار بود` : `${r.deleted.length} حذف شد`),
+    failed,
+  );
+}
+
 const failed = (error) => toast.error(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("انجام نشد"));
 
 // «ردیف صندوق تلگرام» (flag inboxRow): above the owner's list while the install's DM mode is "inbox".

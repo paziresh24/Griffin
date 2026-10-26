@@ -28,12 +28,15 @@ const read = (file) => {
   }
 };
 
-/** Changes newer than `current` (newest first). Unknown current: the latest few. */
-export function changesSince(changes, current, max = 40) {
+/** Changes newer than `current` (newest first). An install runs a commit of main (a merge), which an
+ *  entry names as `main`; an MR's own commit never matches it (every offer said «۱۰ تغییر», the old
+ *  fallback, 2026-10-24). Current older than the whole list: all of it. */
+export function changesSince(changes, current, max = 60) {
   if (!Array.isArray(changes)) return [];
   const clean = changes.filter((c) => c && typeof c.text === "string" && /^[0-9a-f]{7,40}$/.test(String(c.commit || "")));
-  const at = current ? clean.findIndex((c) => String(c.commit).startsWith(current) || current.startsWith(String(c.commit))) : -1;
-  return (at < 0 ? clean.slice(0, 10) : clean.slice(0, at)).slice(0, max);
+  const same = (sha) => Boolean(sha) && (String(sha).startsWith(current) || current.startsWith(String(sha)));
+  const at = current ? clean.findIndex((c) => same(c.main) || same(c.commit)) : -1;
+  return (at < 0 ? clean : clean.slice(0, at)).slice(0, max);
 }
 
 const PERSIAN = /[\u0600-\u06FF]/;
@@ -65,6 +68,7 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
   const file = (name) => path.join(dir, name);
   let fa = null; // commit -> Persian line
   let translating = null;
+  let failedAt = 0;
   const cache = () => (fa ??= read(file("fa.json")) || {});
 
   /** The same list with every line in Persian; English ones still waiting are translated in the background. */
@@ -72,7 +76,9 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
     const list = Array.isArray(changes) ? changes : [];
     const known = cache();
     const todo = list.filter((c) => !PERSIAN.test(c.text) && !known[c.commit]);
-    if (todo.length && translate && !translating) {
+    // A failed try waits half an hour: every page load asked again (an out-of-credit account was
+    // called every minute and a half on a colleague's install, 2026-10-21).
+    if (todo.length && translate && !translating && Date.now() - failedAt > 30 * 60_000) {
       const batch = todo.slice(0, 40);
       translating = Promise.resolve()
         .then(() => translate(`${TRANSLATE_PROMPT}\n\n${JSON.stringify(batch.map((c) => c.text))}`))
@@ -85,7 +91,10 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
           fs.mkdirSync(dir, { recursive: true });
           fs.writeFileSync(file("fa.json"), JSON.stringify(next));
         })
-        .catch((error) => log.error?.(`[update] changelog translation: ${error?.message || error}`))
+        .catch((error) => {
+          failedAt = Date.now();
+          log.error?.(`[update] changelog translation: ${error?.message || error}`);
+        })
         .finally(() => (translating = null));
     }
     return list.map((c) => (PERSIAN.test(c.text) ? c : known[c.commit] ? { ...c, text: known[c.commit] } : c));
@@ -105,7 +114,10 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
       current,
       available: newer ? { commit: newer.commit, at: newer.at || null, changes: persian(changesSince(newer.changes, current)) } : null,
       translating: Boolean(translating),
-      requested: newer && request?.commit === newer.commit ? request.commit : null,
+      // A press is for «the update», not one commit: a release published after it is taken by the same
+      // press (a colleague 2026-10-24 waited two idle hours — a newer release had come, and his press
+      // no longer matched it — until he pressed again).
+      requested: newer && SHA.test(String(request?.commit || "")) ? newer.commit : null,
       // A failure only counts for the release still offered (a newer one starts fresh).
       status: newer && status?.commit === newer.commit ? { state: status.state, at: status.at || null, size: Number(status.size) || 0 } : null,
       // When the host last looked for a release (it rewrites available.json every minute).

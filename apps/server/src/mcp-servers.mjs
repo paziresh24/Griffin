@@ -68,6 +68,37 @@ export function mergeServer(input, stored) {
 export const claudeJsonPath = (env = process.env, home = os.homedir()) =>
   env.CLAUDE_CONFIG_DIR ? path.join(env.CLAUDE_CONFIG_DIR, ".claude.json") : path.join(home, ".claude.json");
 
+// A session runs with its own CLAUDE_CONFIG_DIR (an account folder, claude-account-dir.mjs) and reads the
+// servers from <that dir>/.claude.json, not from the file the page and the tools write. Before a run,
+// put the written list into the session's file: only `mcpServers` is replaced (Claude Code's own state
+// there stays), a removal carries over too, and nothing is written when it is already the same.
+export function syncMcpServers({ to, from = claudeJsonPath() }) {
+  if (!to) return false;
+  const target = path.join(to, ".claude.json");
+  if (path.resolve(target) === path.resolve(from)) return false;
+  const load = (file) => {
+    try {
+      const state = JSON.parse(fs.readFileSync(file, "utf8"));
+      return state && typeof state === "object" && !Array.isArray(state) ? state : {};
+    } catch (error) {
+      if (error.code === "ENOENT") return {};
+      throw error;
+    }
+  };
+  const servers = load(from).mcpServers;
+  const wanted = servers && typeof servers === "object" ? servers : {};
+  const state = load(target);
+  const have = state.mcpServers && typeof state.mcpServers === "object" ? state.mcpServers : {};
+  if (JSON.stringify(have) === JSON.stringify(wanted)) return false;
+  const next = { ...state, mcpServers: wanted };
+  if (!Object.keys(wanted).length) delete next.mcpServers;
+  fs.mkdirSync(to, { recursive: true });
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, target);
+  return true;
+}
+
 export function createMcpServers({ file = claudeJsonPath() } = {}) {
   function read() {
     try {

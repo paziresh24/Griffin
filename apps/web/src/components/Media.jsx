@@ -4,6 +4,7 @@ import { Streamdown } from "streamdown";
 import { useApiBase } from "../base.js";
 import { textDir } from "../dir.js";
 import { t } from "../i18n.js";
+import { DirBlock } from "./DirBlock.jsx";
 
 const TEXT = /^text\/|^application\/(json|yaml|xml|x-ndjson)$/;
 
@@ -99,7 +100,7 @@ function TextView({ url, type }) {
     const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
     return (
       <div className="scrollbar-thin sd-block max-h-[32rem] overflow-auto rounded-md border px-4 py-3 text-sm" dir={dir}>
-        <Streamdown dir={dir}>{text}</Streamdown>
+        <Streamdown dir={dir} BlockComponent={DirBlock}>{text}</Streamdown>
       </div>
     );
   }

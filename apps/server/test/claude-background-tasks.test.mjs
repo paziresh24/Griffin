@@ -454,3 +454,15 @@ test("steer on, nothing steered: Stop is the plain interrupt, as before", async 
   assert.deepEqual(fake.processes[0].interrupts, [null]);
   agent.close();
 });
+
+// Owner 2026-10-21: interrupt() answered but a hung tool never let the turn end — the chat stayed on «در حال کار».
+test("Stop: interrupt answers but the turn never ends — the hard stop ends it after the grace", async () => {
+  const fake = fakeClaude();
+  const agent = createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl: fake.queryImpl }).create(fullOwner({ stopGraceMs: 50 }));
+  const run = await agent.send("hold A");
+  await until(() => fake.processes[0]?.holding);
+  await run.cancel();
+  const result = await Promise.race([run.wait(), new Promise((resolve) => setTimeout(() => resolve("stuck"), 1_500))]);
+  assert.equal(result.status, "cancelled");
+  agent.close();
+});

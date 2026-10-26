@@ -436,12 +436,25 @@ function AppearanceStep({ onNext }) {
   );
 }
 
-// Picks an engine, puts a key (or a Claude sign-in) on an account and tests it for real. The base
-// account of that kind is used while it has no key; otherwise a new account is made, so adding a
-// second Claude or an OpenRouter next to Z.ai never overwrites the one that works.
+// Adding an engine, one plain question at a time (owner 2026-10-19: colleagues could not follow the old
+// form — «فقط … رو در موتورها دارم، چطور بقیه رو اضافه کنم؟»):
+//   ۱) با چه چیزی وصل می‌شوید؟ (اشتراک Claude / کلید API / مدل محلی یا سرویس دیگر)
+//   ۲) وصل شدن: برای اشتراک سه قدم شمارهٔ‌دار (باز کردن صفحه ← وارد شدن ← گذاشتن کد)، برای کلید فقط
+//      «کلید را از کجا بگیرم» و جای کلید
+//   ۳) وصل شد: یک اسم، و این‌که ایجنت اصلی هم از آن استفاده کند.
+// The account is made only when the connection starts, and the base account of a kind is used while it
+// has no key; otherwise a new account is made, so a second Claude never overwrites the one that works.
+const ROUTES = [
+  { id: "sub", title: t("اشتراک Claude"), blurb: t("اگر در claude.ai اشتراک (Pro یا Max) دارید یا شخصی اشتراکش را در اختیارتان می‌گذارد. فقط وارد حساب می‌شوید؛ کلید لازم نیست."), tag: t("ساده‌ترین راه"), engine: "claude-sub" },
+  { id: "key", title: t("کلید API"), blurb: t("از Claude، OpenAI، Z.ai، OpenRouter یا Cursor یک کلید می‌گیرید و این‌جا می‌گذارید."), services: ["claude-api", "zai", "openai", "openrouter", "cursor"] },
+  { id: "other", title: t("مدل روی سرور خودم یا سرویس دیگر"), blurb: t("Ollama، یا هر سرویسی که مثل OpenAI کار می‌کند."), services: ["ollama", "custom"] },
+];
+
 function EngineStep({ onNext, moveDefault, goto }) {
+  const [stage, setStage] = useState("route"); // route → service → connect → done
+  const [route, setRoute] = useState(null);
   const [choice, setChoice] = useState(null);
-  const [label, setLabel] = useState("");
+  const [name, setName] = useState("");
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
@@ -460,7 +473,29 @@ function EngineStep({ onNext, moveDefault, goto }) {
     setModel(e.model ?? "");
     setModels([]);
     setResult(null);
+    setKey("");
     if (account && account.kind !== e.provider) setAccount(null);
+    setStage("connect");
+  };
+  const chooseRoute = (r) => {
+    setRoute(r);
+    if (r.engine) pick(ENGINES.find((e) => e.id === r.engine));
+    else setStage("service");
+  };
+  const back = () => {
+    setResult(null);
+    if (stage === "connect") setStage(route?.engine ? "route" : "service");
+    else setStage("route");
+  };
+  const again = () => {
+    setStage("route");
+    setRoute(null);
+    setChoice(null);
+    setAccount(null);
+    setName("");
+    setKey("");
+    setResult(null);
+    setModels([]);
   };
 
   const resolveAccount = async () => {
@@ -470,9 +505,11 @@ function EngineStep({ onNext, moveDefault, goto }) {
     let id;
     if (base && !base.hasKey) {
       id = base.id;
-      await api(`/api/providers/${id}`, { method: "PATCH", body: { enabled: true, ...(label.trim() ? { label: label.trim() } : {}) } });
+      await api(`/api/providers/${id}`, { method: "PATCH", body: { enabled: true } });
     } else {
-      ({ id } = await api("/api/providers", { method: "POST", body: { kind: engine.provider, label: label.trim() || engine.label, preset: engine.preset || "" } }));
+      // A second Claude has no name yet: the list then shows «Claude · email» or «Claude · 2», and the
+      // name asked at the end replaces it. A service keeps its own name.
+      ({ id } = await api("/api/providers", { method: "POST", body: { kind: engine.provider, label: engine.provider === "claude" ? "" : engine.label, preset: engine.preset || "" } }));
     }
     setAccount({ id, kind: engine.provider });
     return id;
@@ -489,7 +526,6 @@ function EngineStep({ onNext, moveDefault, goto }) {
       if (engine.preset) body.preset = engine.preset;
       if (engine.custom) body.baseUrl = baseUrl.trim();
       if (model.trim()) body.model = model.trim();
-      if (label.trim()) body.label = label.trim();
       await api(`/api/providers/${id}`, { method: "PATCH", body });
       await verify(id);
     } catch (e) {
@@ -498,16 +534,15 @@ function EngineStep({ onNext, moveDefault, goto }) {
     setBusy(false);
   };
 
-  // After a key or a browser sign-in: test it for real; on success list its models and, if asked,
-  // put the main agent on it.
+  // After a key or a browser sign-in: test it for real; on success list its models and go to the last page.
   const verify = async (id) => {
     const r = await api(`/api/doctor/engine/${id}`);
     setResult(r);
     if (!r.ok) return;
-    if (useForMain) await api("/api/agents/griffin", { method: "PATCH", body: { provider: id } }).catch(() => {});
     await api("/api/doctor/heal", { method: "POST" }).catch(() => {});
     const list = await api(`/api/models?provider=${encodeURIComponent(id)}`).then((d) => d.models || []).catch(() => []);
     setModels(list);
+    setStage("done");
   };
 
   const saveModel = async (value) => {
@@ -515,66 +550,133 @@ function EngineStep({ onNext, moveDefault, goto }) {
     if (account && value) await api(`/api/providers/${account.id}`, { method: "PATCH", body: { model: value } }).catch((e) => toast.error(e.message));
   };
 
+  // The last page's buttons: the name (saved alone, nothing to test) and the main agent's engine.
+  const finish = async (then) => {
+    setBusy(true);
+    try {
+      if (account && name.trim()) await api(`/api/providers/${account.id}`, { method: "PATCH", body: { label: name.trim() } });
+      if (account && useForMain) await api("/api/agents/griffin", { method: "PATCH", body: { provider: account.id } }).catch(() => {});
+      then();
+    } catch (e) {
+      toast.error(e.message);
+    }
+    setBusy(false);
+  };
+
+  const services = route?.services ? route.services.map((id) => ENGINES.find((e) => e.id === id)).filter(Boolean) : [];
+  const backButton = stage === "route" || stage === "done" ? null : (
+    <button type="button" onClick={back} className="press -mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+      <ArrowRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" /> برگشت
+    </button>
+  );
+
   return (
     <div className="space-y-4">
-      <h2 className="flex items-center gap-2 text-lg font-semibold"><Cpu className="size-5" /> {t("کدام موتور؟")}</h2>
-      <p className="text-sm leading-7 text-muted-foreground">{t("ایجنت‌ها با این فکر می‌کنند و جواب می‌دهند. یکی کافی است و بعداً می‌شود موتورهای دیگر هم اضافه کرد. کلید رمزنگاری‌شده روی همین سرور می‌ماند و جایی نمایش داده نمی‌شود.")}</p>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {ENGINES.map((e) => (
-          <button key={e.id} type="button" onClick={() => pick(e)} aria-pressed={choice === e.id} className={`press g-card rounded-xl border p-3 text-start ${choice === e.id ? "border-primary bg-primary/10 g-choice-on" : "hover:bg-muted/50"}`}>
-            <span className="block text-sm font-medium">{e.label}</span>
-            <span className="mt-0.5 block text-xs text-muted-foreground">{e.blurb}</span>
-            {e.proxy ? <span className="mt-1 block text-[11px] text-muted-foreground">{t("سرور در ایران: پراکسی لازم است")}</span> : null}
-          </button>
-        ))}
-      </div>
-      {engine ? (
-        <div className="space-y-3 rounded-2xl border bg-card p-4">
-          <dl className="space-y-1.5 text-xs leading-6">
-            <div><dt className="inline font-medium">{t("چیست:")} </dt><dd className="inline text-muted-foreground">{engine.what}</dd></div>
-            <div><dt className="inline font-medium">{t("هزینه:")} </dt><dd className="inline text-muted-foreground">{engine.cost}</dd></div>
-            {engine.link ? (
-              <div>
-                <dt className="inline font-medium">{engine.noKey ? t("نصب: ") : engine.id === "claude-sub" ? t("اشتراک: ") : t("کلید از کجا: ")}</dt>
-                <dd className="inline"><a href={engine.link} target="_blank" rel="noreferrer" className="text-primary underline" dir="ltr">{engine.linkLabel}</a></dd>
-              </div>
-            ) : null}
-            {engine.proxy !== undefined ? <div><dt className="inline font-medium">{t("سرور در ایران:")} </dt><dd className="inline text-muted-foreground">{engine.proxy ? t("این سرویس IP ایران را رد می‌کند؛ قدم «پراکسی» باید درست شده باشد.") : t("معمولاً بدون پراکسی کار می‌کند.")}</dd></div> : null}
-            {engine.extra ? <p className="text-muted-foreground">{engine.extra}</p> : null}
-          </dl>
-          <input className={field} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`نام (اختیاری، مثلاً ${engine.label} شخصی)`} />
-          {engine.id === "claude-sub" ? <ClaudeSignin id={() => resolveAccount()} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} /> : null}
-          {engine.id === "claude-sub" ? <p className="text-xs text-muted-foreground">{t("یا اگر توکن را از قبل داری (با دستور ‎claude setup-token‎ ساخته می‌شود):")}</p> : null}
-          {engine.custom ? <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" /> : null}
-          {engine.noKey ? null : <input className={field} dir="ltr" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={engine.placeholder} />}
-          {keyWarning ? <p className="text-xs text-amber-600">{keyWarning}</p> : null}
-          {engine.provider === "openai" && !models.length ? (
-            <label className="block">
-              <span className="mb-1 block text-xs text-muted-foreground">{t("مدل (بعد از تست، فهرست مدل‌ها را می‌بینی و عوضش می‌کنی)")}</span>
-              <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" />
-            </label>
-          ) : null}
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={useForMain} onChange={(e) => setUseForMain(e.target.checked)} className="size-4 accent-[var(--color-primary)]" />
-            {t("ایجنت اصلی از این موتور استفاده کند")}
+      {backButton}
+      {stage === "route" ? (
+        <>
+          <h2 className="flex items-center gap-2 text-lg font-semibold"><Cpu className="size-5" /> {t("با چه چیزی وصل شویم؟")}</h2>
+          <p className="text-sm leading-7 text-muted-foreground">{t("موتور همان چیزی است که دستیار با آن فکر می‌کند و جواب می‌دهد. یکی را انتخاب کنید؛ هر وقت خواستید می‌توانید موتور دیگری هم اضافه کنید.")}</p>
+          <div className="space-y-2">
+            {ROUTES.map((r) => (
+              <button key={r.id} type="button" onClick={() => chooseRoute(r)} className="press g-card flex w-full items-start gap-3 rounded-xl border p-4 text-start hover:border-primary/60 hover:bg-muted/40">
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2 text-sm font-semibold">{r.title}{r.tag ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-normal text-primary">{r.tag}</span> : null}</span>
+                  <span className="mt-1 block text-xs leading-6 text-muted-foreground">{r.blurb}</span>
+                </span>
+                <ArrowLeft className="mt-1 size-4 shrink-0 text-muted-foreground ltr:rotate-180" />
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {stage === "service" ? (
+        <>
+          <h2 className="text-lg font-semibold">{route?.id === "key" ? t("کلید کدام سرویس را دارید؟") : t("کدام یک؟")}</h2>
+          <div className="space-y-2">
+            {services.map((e) => (
+              <button key={e.id} type="button" onClick={() => pick(e)} className="press g-card flex w-full items-start gap-3 rounded-xl border p-3 text-start hover:border-primary/60 hover:bg-muted/40">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">{e.label}</span>
+                  <span className="mt-0.5 block text-xs leading-6 text-muted-foreground">{e.blurb}</span>
+                </span>
+                <ArrowLeft className="mt-1 size-4 shrink-0 text-muted-foreground ltr:rotate-180" />
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {stage === "connect" && engine ? (
+        <>
+          <h2 className="text-lg font-semibold">{engine.id === "claude-sub" ? t("ورود با اشتراک Claude") : `اتصال ${engine.label}`}</h2>
+          {engine.id === "claude-sub" ? (
+            <ClaudeSignin id={() => resolveAccount()} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} />
+          ) : (
+            <div className="space-y-3">
+              {engine.link ? (
+                <p className="text-sm leading-7">
+                  {engine.noKey ? t("اول Ollama را نصب کنید: ") : t("کلید را از این صفحه بگیرید: ")}
+                  <a href={engine.link} target="_blank" rel="noreferrer" className="text-primary underline" dir="ltr">{engine.linkLabel}</a>
+                </p>
+              ) : null}
+              <p className="text-xs leading-6 text-muted-foreground">{engine.cost}</p>
+              {engine.custom ? <input className={field} dir="ltr" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={t("آدرس سرویس، مثلاً https://api.example.com/v1")} aria-label={t("آدرس سرویس")} /> : null}
+              {engine.noKey ? null : (
+                <label className="block space-y-1">
+                  <span className="text-sm font-medium">{t("کلید را این‌جا بگذارید")}</span>
+                  <input className={field} dir="ltr" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder={engine.placeholder} />
+                </label>
+              )}
+              {keyWarning ? <p className="text-xs text-amber-600">{keyWarning}</p> : null}
+              {engine.extra ? <p className="text-xs leading-6 text-muted-foreground">{engine.extra}</p> : null}
+              {engine.provider === "openai" ? (
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">{t("تنظیم پیشرفته (مدل)")}</summary>
+                  <label className="mt-2 block">
+                    <span className="mb-1 block text-muted-foreground">{t("اسم مدل؛ خالی بگذارید تا پیش‌فرض بیاید. بعد از وصل شدن فهرست مدل‌ها را می‌بینید.")}</span>
+                    <input className={field} dir="ltr" value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" />
+                  </label>
+                </details>
+              ) : null}
+              <button type="button" onClick={test} disabled={busy || (!engine.noKey && !key.trim()) || (engine.custom && !baseUrl.trim())} className={primary}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} وصل کن و امتحان کن
+              </button>
+            </div>
+          )}
+          {result && !result.ok ? <ProbeResult result={result} engine={engine} onProxy={goto ? () => goto("proxy") : null} /> : null}
+          {result && !result.ok && (result.cause === "region" || result.cause === "network") ? <ProxyStep onSaved={test} inline /> : null}
+        </>
+      ) : null}
+
+      {stage === "done" && engine ? (
+        <div className="space-y-4">
+          <p className="flex items-center gap-2 rounded-xl bg-ok/10 px-3 py-3 text-sm font-medium text-ok"><Check className="size-5" /> {t("وصل شد و جواب داد.")}</p>
+          <label className="block space-y-1">
+            <span className="text-sm font-medium">{t("این حساب را چه بنامیم؟")} <span className="text-xs font-normal text-muted-foreground">{t("(اختیاری)")}</span></span>
+            <input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={engine.provider === "claude" ? t("مثلاً: Claude آیدا") : `مثلاً: ${engine.label} شخصی`} />
+            <span className="block text-xs leading-6 text-muted-foreground">{t("این اسم را در فهرست موتورها، انتخاب مدل و بخش مصرف می‌بینید. خالی بگذارید تا خودکار نام‌گذاری شود. بعداً هم با مداد کنار اسم عوض می‌شود.")}</span>
           </label>
-          <button type="button" onClick={test} disabled={busy || (!engine.noKey && !key.trim()) || (engine.custom && !baseUrl.trim())} className={primary}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} {t("ذخیره و تست")}
-          </button>
-          {result ? <ProbeResult result={result} engine={engine} onProxy={goto ? () => goto("proxy") : null} /> : null}
-          {result?.ok && models.length ? (
-            <label className="block">
-              <span className="mb-1 block text-xs text-muted-foreground">مدل پیش‌فرض این موتور ({models.length} مدل)</span>
+          {models.length > 1 ? (
+            <label className="block space-y-1">
+              <span className="text-sm font-medium">{t("مدل پیش‌فرض این موتور")}</span>
               <select className={field} dir="ltr" value={model} onChange={(e) => saveModel(e.target.value)}>
                 <option value="">{t("پیش‌فرض سرویس")}</option>
                 {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
               </select>
             </label>
           ) : null}
-          {result && !result.ok && (result.cause === "region" || result.cause === "network") ? <ProxyStep onSaved={test} inline /> : null}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={useForMain} onChange={(e) => setUseForMain(e.target.checked)} className="size-4 accent-[var(--color-primary)]" />
+            ایجنت اصلی با این موتور کار کند
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => finish(onNext)} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} بعدی <ArrowLeft className="size-4 ltr:rotate-180" /></button>
+            <button type="button" onClick={() => finish(again)} disabled={busy} className="press rounded-lg border px-3 py-2 text-sm">{t("یک موتور دیگر هم اضافه می‌کنم")}</button>
+          </div>
         </div>
       ) : null}
-      {result?.ok ? <button type="button" onClick={onNext} className={primary}>{t("بعدی")} <ArrowLeft className="size-4 ltr:rotate-180" /></button> : null}
     </div>
   );
 }

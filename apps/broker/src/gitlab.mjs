@@ -277,13 +277,13 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
     },
 
     gitlab_mr: {
-      description: "Read or merge a GitLab merge request. Reading is free; merging is a live mutation and is disabled unless the broker caller explicitly allows it.",
+      description: "Read, close/reopen or merge a GitLab merge request. Reading is free; the rest are live changes and disabled unless the broker caller explicitly allows it. close keeps the branch and can be undone with reopen.",
       inputSchema: {
         type: "object",
         properties: {
           project: { type: "string" },
           iid: { type: "integer", minimum: 1 },
-          action: { type: "string", enum: ["view", "ready", "merge"], description: "ready = remove the Draft: prefix so it can be merged" },
+          action: { type: "string", enum: ["view", "ready", "close", "reopen", "merge"], description: "ready = remove the Draft: prefix so it can be merged; close/reopen = the MR only, the branch stays" },
           mergeMethod: { type: "string", enum: ["merge", "squash", "rebase_merge", "ff"] },
           sha: { type: "string", maxLength: 64 },
         },
@@ -306,6 +306,10 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
           const title = String(current.title || "").replace(/^(Draft:|\[Draft\]|\(Draft\))\s*/i, "");
           const { body } = await api(path, { method: "PUT", json: { title } });
           return { iid, project: args.project, title: body.title, draft: Boolean(body.draft), webUrl: body.web_url, source: "gitlab api" };
+        }
+        if (action === "close" || action === "reopen") {
+          const { body } = await api(path, { method: "PUT", json: { state_event: action } });
+          return { iid, project: args.project, state: body.state, webUrl: body.web_url, source: "gitlab api" };
         }
         const method = args.mergeMethod || "merge";
         if (!MR_MERGE_STATES.has(method)) throw new ToolInputError("invalid merge method");
@@ -486,6 +490,55 @@ export function createGitlabTools({ vault, fetchImpl = fetch, canMutate = () => 
         });
         const commits = (body || []).map((c) => ({ id: c.short_id, at: c.committed_date, author: c.author_name, title: c.title, message: String(c.message || "").slice(0, 600) }));
         return { project: args.project, path: args.path || null, commits, source: "gitlab api" };
+      },
+    },
+
+    gitlab_mrs: {
+      description:
+        "List merge requests of one GitLab project (newest update first), or across the whole instance when project is omitted: iid, title, author, state, draft, branches, pipeline status, updated time, link. Read-only. Use it to find the MR a colleague means, then gitlab_mr / gitlab_mr_changes for its detail.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          project: { type: "string", description: "id or path like group/name; omit for every project the token can see" },
+          state: { type: "string", enum: ["opened", "merged", "closed", "all"], description: "default opened" },
+          author: { type: "string", maxLength: 100, description: "GitLab username" },
+          search: { type: "string", maxLength: 200, description: "words in the title or description" },
+          limit: { type: "integer", minimum: 1, maximum: 100 },
+        },
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const state = args.state || "opened";
+        if (!["opened", "merged", "closed", "all"].includes(state)) throw new ToolInputError("invalid state");
+        const path = args.project ? `/projects/${projectRef(args.project)}/merge_requests` : "/merge_requests";
+        const { body } = await api(path, {
+          params: { state, scope: args.project ? undefined : "all", author_username: args.author || undefined, search: args.search || undefined, order_by: "updated_at", sort: "desc", per_page: Math.min(Number(args.limit) || 30, 100) },
+        });
+        return {
+          project: args.project || null,
+          state,
+          mergeRequests: (body || []).map((m) => ({
+            iid: m.iid,
+            project: m.references?.full ? String(m.references.full).replace(/!\d+$/, "") : args.project || null,
+            title: m.title,
+            author: m.author?.username || null,
+            state: m.state,
+            draft: Boolean(m.draft),
+            sourceBranch: m.source_branch,
+            targetBranch: m.target_branch,
+            pipeline: m.head_pipeline?.status || null,
+            detailedMergeStatus: m.detailed_merge_status || null,
+            hasConflicts: Boolean(m.has_conflicts),
+            labels: Array.isArray(m.labels) ? m.labels : [],
+            reviewers: (m.reviewers || []).map((r) => r.username),
+            changesCount: m.changes_count == null ? null : String(m.changes_count),
+            comments: Number(m.user_notes_count) || 0,
+            createdAt: m.created_at || null,
+            updatedAt: m.updated_at,
+            webUrl: m.web_url,
+          })),
+          source: "gitlab api merge_requests",
+        };
       },
     },
 

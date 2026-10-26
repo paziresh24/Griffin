@@ -5,7 +5,8 @@
 const KEY = "ui-prefs";
 const LOOKS = ["griffin", "karsara"];
 const FLAG = /^[a-zA-Z][a-zA-Z0-9]{0,40}$/;
-const NAV = /^[a-z]{1,30}$/;
+// A sidebar section: a core one (telegram) or a module page (m:<module>:<page>, web ui-prefs.js).
+const NAV = /^(?:[a-z]{1,30}|m:[a-z0-9-]{2,32}:[a-z0-9-]{1,40})$/;
 
 export function cleanUiPrefs(body) {
   const out = {};
@@ -14,7 +15,9 @@ export function cleanUiPrefs(body) {
   for (const [key, value] of Object.entries(body?.flags && typeof body.flags === "object" ? body.flags : {}).slice(0, 80)) {
     if (!FLAG.test(key)) continue;
     if (typeof value === "boolean") flags[key] = value;
-    else if (Array.isArray(value) && value.length <= 20 && value.every((v) => typeof v === "string" && NAV.test(v))) flags[key] = [...new Set(value)];
+    // A choice among a few named ones (navStyle: «جای بخش‌ها»).
+    else if (key === "navStyle" && typeof value === "string" && /^[a-z]{1,20}$/.test(value)) flags[key] = value;
+    else if (Array.isArray(value) && value.length <= 40 && value.every((v) => typeof v === "string" && NAV.test(v))) flags[key] = [...new Set(value)];
   }
   out.flags = flags;
   // The page's prefs revision (ui-prefs.js PREFS_REV): which preset changes this copy already saw.

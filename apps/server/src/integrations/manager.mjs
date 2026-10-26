@@ -15,6 +15,7 @@ import { chartMedia } from "../chart-image.mjs";
 import { normalizeProvider, splitModel } from "../providers/ids.mjs";
 import { openWorkFor } from "../related.mjs";
 import { markMessengerOrigin } from "../chat-origin.mjs";
+import { ownMessengerChat } from "../db.mjs";
 import { PERSONA } from "../persona.mjs";
 import { ensureGlobal, ensureMother, isGlobalChat, joinThread, motherChatId, migrateTelegramV2, migrateWatchEnables, motherInfo, syncMotherNames, watching } from "./mother.mjs";
 import { createDesk } from "./desk.mjs";
@@ -25,8 +26,11 @@ import { createDesk } from "./desk.mjs";
 // final text — only send_to_person reaches the colleague; ask_owner confirmations go to the Owner's
 // Telegram bot so they are unmistakable — not buried in the owner's own Saved Messages.
 const PARTS_TTL_MS = 10 * 60_000;
+// /chats on the bot: buttons per page, and how much of the picked chat's last answer is shown.
+const CHAT_MENU_SIZE = 8;
+const CHAT_LAST_MAX = 1500;
 
-export function createIntegrations({ store, runner, timelines = null, asks, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, pendingWork = () => 0, burstMs = 0, telegramApp = () => null, ownerJobApprovals = () => false, telegramBotApi: telegramBotApiRaw = "", inbox = null, sendFiles = () => true, modelChoices = null, log = console }) {
+export function createIntegrations({ store, runner, timelines = null, asks, network = null, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, pendingWork = () => 0, burstMs = 0, telegramApp = () => null, ownerJobApprovals = () => false, telegramBotApi: telegramBotApiRaw = "", inbox = null, sendFiles = () => true, modelChoices = null, log = console }) {
   const channels = new Map(); // integrationId -> channel
   const partsHeld = new Map(); // `${integrationId}:${externalChat}` -> { total, parts, at, timer, args } (receivePeerAgent)
   // Each ask_owner gets a short id embedded in Telegram callback_data so buttons cannot
@@ -41,6 +45,17 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   const endAfterRun = new Map(); // chatId -> { integrationId, peer, note }
   const lastStatusAt = new Map(); // chatId -> ms of last status push (debounce)
   const webhookSecrets = new Map(); // integrationId -> secret_token for Telegram webhook
+  const chatMenus = new Map(); // pickId -> { id, externalChat, ids, page, query } of a /chats list
+
+  // The owner's own private chat with a bot: proven (db.mjs ownMessengerChat), or a paired private
+  // chat (a positive id is a person, not a group) on an install with no Telegram account to prove it
+  // by — pairing took the code from his settings. Only the proven one leaves a chat it moves onto
+  // unmarked (db.mjs linkChat); the other marks it as a Telegram chat, as before.
+  function ownBotChat(id, externalChat) {
+    if (ownMessengerChat(store, id, externalChat)) return true;
+    const integ = store.getIntegration(id);
+    return Boolean(BOT_KINDS[integ?.kind]) && /^\d+$/.test(String(externalChat)) && (integ.settings?.pairedChats || []).map(String).includes(String(externalChat));
+  }
 
   function newAskId() {
     return crypto.randomBytes(4).toString("hex");
@@ -217,7 +232,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
   }
   const accountEntry = () => [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account") || null;
   const desk = createDesk({
-    store, runner, timelines, pendingWork, burstMs, log, motherChat,
+    store, runner, timelines, pendingWork, burstMs, log, motherChat, network,
     channelOf: (id) => channels.get(id),
     accountChannel: () => accountEntry()?.[1] || null,
   });
@@ -455,6 +470,72 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       store.linkChat(id, externalChat, null);
     },
 
+    // /chats on the bot (bots.mjs): the owner's own chats as the web lists them («گفتگوهای اخیر»),
+    // a tap moves this messenger chat onto one, so what he writes next goes there and its answers
+    // come back here (owner 2026-10-25: «لیست چت‌ها رو به بات تلگرام هم اضافه کن که بتونیم از تلگرام
+    // چتامون رو ببینیم و پاسخ بدیم»). Only in his proven own chat (db.mjs ownMessengerChat): a group
+    // or a Bale bot could hand his chats to someone else's typing.
+    chatMenu(id, externalChat, { page = 0, query = "" } = {}) {
+      if (!ownBotChat(id, externalChat)) return { text: "فهرست گفتگوها فقط در گفتگوی خصوصی خودتان با ربات باز می‌شود." };
+      const q = String(query || "").trim().toLowerCase();
+      const all = store.listChatsBySource({ archived: false })
+        .filter((c) => c.source === "manual" && (c.caller || "owner") === "owner" && !isGlobalChat(store, c.id))
+        .filter((c) => !q || String(c.title || "").toLowerCase().includes(q));
+      if (!all.length) return { text: q ? `گفتگویی با «${query}» پیدا نشد.` : "گفتگویی نیست؛ همین‌جا بنویسید تا یکی شروع شود." };
+      const size = CHAT_MENU_SIZE;
+      const pages = Math.ceil(all.length / size);
+      const at = Math.min(Math.max(0, Number(page) || 0), pages - 1);
+      const rows = all.slice(at * size, at * size + size);
+      const current = store.linkedChat(id, externalChat);
+      const pickId = newAskId();
+      chatMenus.set(pickId, { id, externalChat: String(externalChat), ids: rows.map((c) => c.id), page: at, query: q, at: Date.now() });
+      if (chatMenus.size > 50) chatMenus.delete(chatMenus.keys().next().value);
+      const mark = (c) => (c.id === current ? "✔︎ " : asks?.isWaiting?.(c.id) ? "❓ " : runner.isActive(c.id) ? "⏳ " : "");
+      const buttons = rows.map((c, index) => ({ index, text: `${mark(c)}${String(c.title || "بی‌نام").replace(/\s+/g, " ").trim()}` }));
+      const head = q ? `گفتگوهای «${query}»` : "گفتگوهای اخیر";
+      return {
+        pickId,
+        text: `${head}${pages > 1 ? ` (صفحهٔ ${(at + 1).toLocaleString("fa-IR")} از ${pages.toLocaleString("fa-IR")})` : ""}\nیکی را بزنید؛ پیام‌های بعدی‌تان به همان گفتگو می‌رود و جوابش همین‌جا می‌آید. ⏳ در حال کار · ❓ منتظر جواب شما · /new گفتگوی تازه`,
+        buttons,
+        more: at + 1 < pages,
+        back: at > 0,
+      };
+    },
+
+    // A tap on that list: this messenger chat now talks to that chat. Returns what to show: the
+    // chat's title and its last answer, so he sees where it stands before he replies.
+    async pickChat(id, externalChat, pickId, index) {
+      const menu = chatMenus.get(String(pickId));
+      if (!menu || menu.id !== id || menu.externalChat !== String(externalChat)) return null;
+      if (!ownBotChat(id, externalChat)) return null;
+      const chatId = menu.ids[Number(index)];
+      const chat = chatId ? store.getChat(chatId) : null;
+      if (!chat || chat.archived) return null;
+      store.linkChat(id, externalChat, chat.id);
+      let last = "";
+      try {
+        const { messages } = timelines ? (await timelines.get(chat.id)).timeline : foldEvents(store.allEvents(chat.id));
+        const run = lastRun(messages);
+        last = run ? String(deliverable(run).text || "").trim() : "";
+      } catch (error) {
+        log.error?.(`[integrations] pickChat ${chat.id}: ${error.message}`);
+      }
+      return {
+        title: chat.title || "بی‌نام",
+        last: last.length > CHAT_LAST_MAX ? `…${last.slice(-CHAT_LAST_MAX)}` : last,
+        running: runner.isActive(chat.id),
+        waiting: Boolean(asks?.isWaiting?.(chat.id)),
+        url: publicUrl ? `${publicUrl}/#/c/${chat.id}` : null,
+      };
+    },
+
+    // Another page of the same list (its «بعدی/قبلی» buttons).
+    chatMenuPage(id, externalChat, pickId, step) {
+      const menu = chatMenus.get(String(pickId));
+      if (!menu || menu.id !== id || menu.externalChat !== String(externalChat)) return null;
+      return bridge.chatMenu(id, externalChat, { page: menu.page + step, query: menu.query });
+    },
+
     async stop(id, externalChat) {
       const chatId = store.linkedChat(id, externalChat);
       if (!chatId || !runner.isActive(chatId)) return false;
@@ -577,7 +658,11 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
       // PLAN_APPROVAL): it approves the plan instead of waiting in the queue behind it, as in Karsara.
       if (ownerText && existing && (existing.caller || "owner") === "owner" && !images.length && asks?.approvePlanByText?.(chatId, text)) return { delivered: "tool" };
       try {
-        return await runner.send(chatId, { text, images, intent: runner.isActive(chatId) ? "queue" : "send", ownerText });
+        // Someone else's words (a forward, a group member) carry who wrote them on the event, so the
+        // trust checks that read events (knowledge-trust.mjs, owner-chat-tools.mjs) see them even in
+        // one of his own chats he moved onto with /chats (db.mjs linkChat leaves that chat unmarked).
+        const from = ownerText ? null : { kind: "telegram", name: forwarded ? "پیام بازارسال‌شده" : profile?.display_name || title || "تلگرام", ...(!forwarded && profile?.id && !ownMessengerChat(store, id, externalChat) ? { personId: profile.id } : {}) };
+        return await runner.send(chatId, { text, images, intent: runner.isActive(chatId) ? "queue" : "send", ownerText, ...(from ? { from } : {}) });
       } catch (error) {
         await channels.get(id)?.deliver(externalChat, { text: `خطا: ${error.message}` });
         return null;
@@ -667,10 +752,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
           }
         }
         const profile = store.getAgentProfile("griffin");
-        if (!profile?.meta?.callers?.[caller]) {
-          log.error?.(`[integrations] peer-agent ${userId}: no griffin quota for ${caller}`);
-          return null;
-        }
+        if (!profile) return null;
         const chat = store.createChat({
           title: `🤖 ${label}: ${autoTitle(text)}`,
           mode: "agent",
@@ -765,7 +847,15 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
     if (!bot || !ownerId) return false;
     ensureBotPaired(bot.id, ownerId);
     const link = publicUrl && chatId ? `\n${publicUrl}/#/c/${chatId}` : "";
-    await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+    // The bot API drops a request now and then («fetch failed»: 4 of 33 ops-room tell_owner calls on
+    // 2026-10-20/21); the agent then sent the same news again. One quiet retry covers it.
+    try {
+      await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+    } catch (error) {
+      if (!/fetch failed|ECONNRESET|ETIMEDOUT|socket/i.test(String(error?.message || error))) throw error;
+      await new Promise((r) => setTimeout(r, 3000));
+      await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+    }
     return true;
   }
 
@@ -1221,9 +1311,10 @@ export function createIntegrations({ store, runner, timelines = null, asks, peer
 
     // Another session wrote to a colleague from the owner's account (/api/telegram/send): the
     // owner is in that conversation (R2/R3), like his own hand-typed line.
-    ownerWrote(peer, text) {
+    // from: { chatId, title } when one of this install's own chats sent it (telegram_send).
+    ownerWrote(peer, text, from = null) {
       const id = accountEntry()?.[0];
-      if (id && peer) desk.ownerLine(id, String(peer), { text: String(text || ""), by: "session" });
+      if (id && peer) desk.ownerLine(id, String(peer), { text: String(text || ""), by: "session", from });
     },
 
     // One of the owner's own chats wrote to a colleague (telegram_send): one more thread their reply may belong to.

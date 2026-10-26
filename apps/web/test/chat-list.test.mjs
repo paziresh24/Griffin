@@ -2,7 +2,8 @@
 // resizable width and the clipboard fallback.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, sortChats } from "../src/chat-list.js";
+import fs from "node:fs";
+import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, reminderLabel, sortChats } from "../src/chat-list.js";
 import { clampSidebarWidth, isPlainClick, isSidebarToggle, loadSidebarHidden, loadSidebarWidth, SIDEBAR_WIDTH } from "../src/sidebar-width.js";
 import { copyText } from "../src/copy.js";
 
@@ -13,6 +14,8 @@ const shape = (sections) => sections.map((s) => [s.title, s.chats.map((c) => c.i
 
 test("chatState: asking the owner outranks running, then unread, read, error", () => {
   assert.equal(chatState(chat("a", { runStatus: "running" }), () => true).id, "running");
+  // A background task it waits on (a watcher) wakes it again: still at work.
+  assert.equal(chatState(chat("a", { runStatus: "finished", backgroundTasks: 1 }), () => false).id, "running");
   assert.equal(chatState(chat("a", { runStatus: "running", waitingForOwner: true }), () => true).id, "ask");
   assert.equal(chatState(chat("a", { runStatus: "error" }), () => false).id, "error");
   assert.equal(chatState(chat("a"), () => true).id, "unread");
@@ -221,4 +224,31 @@ test("sidebar search: a chat matches by title or by the server's message hits", 
 test("by repo (like Claude Desktop's folders), pinned chats stay on top", () => {
   const list = [{ id: "a", repo: "infra-repo" }, { id: "p", repo: "infra-repo", pinned: true }, { id: "b" }];
   assert.deepEqual(groupChats(list, "repo").map((s) => [s.title, s.chats.map((c) => c.id)]), [["سنجاق‌شده", ["p"]], ["infra-repo", ["a"]], ["بدون مخزن", ["b"]]]);
+});
+
+// Colleagues' agents' chats have no owner key; grouped by owner they all sat in «بدون صاحب» (owner 2026-10-20).
+test("by owner: each colleague's agent gets its own section, named by the server's label", () => {
+  const chats = [
+    { id: "a", caller: "peer:sara-jafari", peerLabel: "آیدا جعفری", updatedAt: "2026-10-20T10:00:00Z" },
+    { id: "b", caller: "peer:net-karsara-kazemi-example-org", peerLabel: "یارا (علیرضا کاظمی)", updatedAt: "2026-10-20T09:00:00Z" },
+    { id: "c", caller: "peer:sara-jafari", peerLabel: "آیدا جعفری", updatedAt: "2026-10-20T08:00:00Z" },
+    { id: "d", caller: "team", ownerKey: "person:7", ownerLabel: "آقای کریمی" },
+    { id: "e", caller: "owner" },
+  ];
+  const sections = groupChats(chats, "owner", { scope: "peer" });
+  assert.deepEqual(sections.map((s) => [s.title, s.chats.map((c) => c.id)]), [
+    ["آیدا جعفری", ["a", "c"]],
+    ["یارا (علیرضا کاظمی)", ["b"]],
+    ["آقای کریمی", ["d"]],
+    ["بدون صاحب", ["e"]],
+  ]);
+});
+
+test("a chat with a reminder still to run gets a clock in both sidebars, like the question mark", () => {
+  assert.match(reminderLabel(new Date().toISOString()), /^یادآور فعال · /);
+  assert.equal(reminderLabel(null), "یادآور فعال");
+  for (const file of ["Sidebar.jsx", "SidebarOneList.jsx"]) {
+    const src = fs.readFileSync(new URL(`../src/components/${file}`, import.meta.url), "utf8");
+    assert.match(src, /chat\.reminderAt \? [\s\S]{0,120}<BellRing /, file);
+  }
 });

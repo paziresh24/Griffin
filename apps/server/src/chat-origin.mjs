@@ -23,32 +23,14 @@
 // another chat. So receive() writes a durable marker when it creates the chat, and the routing
 // facts are read only to cover chats made before the marker.
 
+import { ownMessengerChat } from "./db.mjs";
 import { instructionFilePaths } from "./providers/state-guard.mjs";
 import { isGlobalChat, motherInfo } from "./integrations/mother.mjs";
 
 export const ORIGIN_KEY = (chatId) => `origin:${chatId}`;
 
-/** The owner's own Telegram user id, from the connected Telegram account only (no guess). */
-export function ownerTelegramUserId(store) {
-  for (const integ of store.listIntegrations?.() || []) {
-    const id = integ?.settings?.me?.id;
-    if (integ?.kind === "telegram_account" && id) return String(id);
-  }
-  return null;
-}
-
 /** True when a message on (integration, externalChat) is proven to come from the owner's own chat. */
-export function isOwnerTelegramSource(store, integrationId, externalChat) {
-  const integ = store.getIntegration?.(integrationId);
-  if (!integ) return false;
-  const ext = String(externalChat);
-  if (integ.kind === "telegram_account") return ext === "me";
-  if (integ.kind === "telegram_bot") {
-    const owner = ownerTelegramUserId(store);
-    return Boolean(owner) && ext === owner;
-  }
-  return false;
-}
+export const isOwnerTelegramSource = (store, integrationId, externalChat) => ownMessengerChat(store, integrationId, externalChat);
 
 /**
  * Records how `chatId` was born from a messenger message: the owner's own chat, or someone else's.

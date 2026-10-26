@@ -254,7 +254,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
 
     nsin_dns_create: {
       description:
-        "Create a DNS record on a NSIN domain. For proxied A/AAAA/CNAME/ANAME, destination is the origin. Call ask_owner before mutating live DNS.",
+        "Create a DNS record on a NSIN domain. For proxied A/AAAA/CNAME/ANAME, destination is the origin. The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: {
@@ -296,7 +296,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     },
 
     nsin_dns_update: {
-      description: "Update an existing DNS record by id. Call ask_owner before mutating live DNS.",
+      description: "Update an existing DNS record by id. The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: {
@@ -338,7 +338,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     },
 
     nsin_dns_delete: {
-      description: "Delete a DNS record by id. Call ask_owner first.",
+      description: "Delete a DNS record by id. The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: { domain: { type: "string" }, recordId: { type: "integer", minimum: 1 } },
@@ -370,7 +370,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     },
 
     nsin_ssl_issue: {
-      description: "Request certificate issuance now (instead of waiting for the cycle). Call ask_owner first.",
+      description: "Request certificate issuance now (instead of waiting for the cycle). The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: { domain: { type: "string" } },
@@ -402,7 +402,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
 
     nsin_developer_mode: {
       description:
-        "Enable or disable developer mode (bypass edge cache; temporary). Call ask_owner before enabling on production.",
+        "Enable or disable developer mode (bypass edge cache; temporary). The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: {
@@ -550,7 +550,7 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     },
 
     nsin_rule_toggle: {
-      description: "Enable or disable one edge rule by id. Call ask_owner before disabling security/WAF rules.",
+      description: "Enable or disable one edge rule by id. The call asks the owner itself — do not ask_owner first.",
       inputSchema: {
         type: "object",
         properties: {

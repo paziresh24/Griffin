@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  cleanupChatWorktree, ensureChatWorktree, hasUnpushedCommits, isWorktreeClean, listRepos,
+  cleanupChatWorktree, ensureChatWorktree, hasUnpushedCommits, isWorktreeClean, linkIgnoredFiles, listRepos,
   removeChatWorktree, repoLockKey, worktreeDir, worktreeIsDisposable,
 } from "../src/worktrees.mjs";
 
@@ -56,6 +56,54 @@ test("two chats get two different worktrees; the main checkout is untouched", as
     // calling again for the same chat returns the same worktree, does not recreate it
     const again = await ensureChatWorktree({ reposRoot, repo: "myrepo", chatId: "chat-aaaaaaaa" });
     assert.equal(again, dir1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ignored files of the main checkout are linked into a new worktree and do not make it dirty", async () => {
+  const { root, reposRoot, repoDir } = setupRepo();
+  try {
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), ".env\np24*.db\n");
+    git(["add", ".gitignore"], repoDir);
+    git(["commit", "-q", "-m", "ignore"], repoDir);
+    git(["push", "-q", "origin", "main"], repoDir);
+    fs.writeFileSync(path.join(repoDir, ".env"), "KEY=1\n");
+    fs.writeFileSync(path.join(repoDir, "p24.db"), "db");
+    fs.writeFileSync(path.join(repoDir, "notes.txt"), "untracked, not ignored");
+    fs.writeFileSync(path.join(repoDir, ".worktreeinclude"), "# carried\np24.db\nnotes.txt\n../escape\n");
+    const dir = await ensureChatWorktree({ reposRoot, repo: "myrepo", chatId: "chat-link0001", linkIgnored: ".env, missing.env, a.txt" });
+    assert.equal(fs.readFileSync(path.join(dir, ".env"), "utf8"), "KEY=1\n");
+    assert.equal(fs.readFileSync(path.join(dir, "p24.db"), "utf8"), "db");
+    assert.ok(fs.lstatSync(path.join(dir, ".env")).isSymbolicLink());
+    assert.ok(!fs.existsSync(path.join(dir, "notes.txt")), "a file git does not ignore is never linked");
+    assert.ok(!fs.lstatSync(path.join(dir, "a.txt")).isSymbolicLink(), "a tracked file stays the checkout's own");
+    assert.equal(await isWorktreeClean({ reposRoot, chatId: "chat-link0001" }), true);
+    fs.writeFileSync(path.join(dir, "scratch.txt"), "wip");
+    assert.equal(await isWorktreeClean({ reposRoot, chatId: "chat-link0001" }), false);
+    // a second call never replaces what is there
+    assert.deepEqual(await linkIgnoredFiles({ repoDir, wtDir: dir, extra: ".env" }), []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a worktree made before the link list existed gets the missing carried files on its next start", async () => {
+  const { root, reposRoot, repoDir } = setupRepo();
+  try {
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), ".env\np24*.db\n");
+    git(["add", ".gitignore"], repoDir);
+    git(["commit", "-q", "-m", "ignore"], repoDir);
+    git(["push", "-q", "origin", "main"], repoDir);
+    fs.writeFileSync(path.join(repoDir, ".env"), "KEY=1\n");
+    fs.writeFileSync(path.join(repoDir, "p24.db"), "real");
+    const dir = await ensureChatWorktree({ reposRoot, repo: "myrepo", chatId: "chat-link0002" });
+    assert.ok(!fs.existsSync(path.join(dir, ".env")), "no list yet: nothing carried");
+    fs.writeFileSync(path.join(dir, "p24.db"), "own");
+    const again = await ensureChatWorktree({ reposRoot, repo: "myrepo", chatId: "chat-link0002", linkIgnored: ".env,p24.db" });
+    assert.equal(again, dir);
+    assert.ok(fs.lstatSync(path.join(dir, ".env")).isSymbolicLink(), "the missing file is linked on the fast path");
+    assert.equal(fs.readFileSync(path.join(dir, "p24.db"), "utf8"), "own", "a file the tree already has is never replaced");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

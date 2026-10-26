@@ -34,7 +34,10 @@ export function createDualServer(listener, { tls = null, onUpgrade = null } = {}
     secure?.on("upgrade", upgrade);
   }
 
+  const sockets = new Set();
   const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
     socket.once("error", () => socket.destroy());
     socket.once("data", (chunk) => {
       socket.pause();
@@ -46,13 +49,14 @@ export function createDualServer(listener, { tls = null, onUpgrade = null } = {}
   });
 
   server.tls = Boolean(secure);
-  // Let the process exit cleanly: closing the TCP listener is not enough while keep-alive
-  // connections are still parked on the inner servers.
+  // Let the process exit cleanly: the TCP listener waits on every socket it accepted, and the inner
+  // servers do not know a socket that never sent a byte or one handed to onUpgrade (a preview's
+  // WebSocket), so every one is dropped here (one kept the port closed 23 minutes, 2026-10-24).
   const close = server.close.bind(server);
   server.close = (callback) => {
-    plain.closeAllConnections?.();
-    secure?.closeAllConnections?.();
-    return close(callback);
+    const result = close(callback);
+    for (const socket of sockets) socket.destroy();
+    return result;
   };
   return server;
 }
@@ -81,6 +85,20 @@ export function parseTrustedProxies(value) {
 export const DEFAULT_TRUSTED_PROXIES = parseTrustedProxies("");
 
 export const trusts = (list, ip) => net.isIP(ip) > 0 && list.check(ip, net.isIPv4(ip) ? "ipv4" : "ipv6");
+
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
+const PROXY_HEADERS = ["x-forwarded-for", "forwarded", "x-real-ip", "x-forwarded-host", "x-forwarded-proto", "true-client-ip", "via"];
+// A request from this machine itself: a loopback peer (or the server's own address) that did not come
+// through a proxy and is not addressed to the public name. Whoever can send one already holds a shell
+// here, and with it the data folder, so a credential from that folder is enough on its own.
+export function fromThisMachine(c, { publicHost = null } = {}) {
+  const socket = c.env?.incoming?.socket;
+  const peer = String(socket?.remoteAddress || "");
+  const sameHost = LOOPBACK.test(peer) || (peer !== "" && peer === String(socket?.localAddress || ""));
+  if (!sameHost) return false;
+  if (PROXY_HEADERS.some((h) => c.req.header(h))) return false;
+  return !(publicHost && c.req.header("host") === publicHost);
+}
 
 // Behind a CDN every request arrives from the edge's own IP and X-Forwarded-For carries the real
 // client. Anyone who reaches the port directly can send that header too, so it is believed only

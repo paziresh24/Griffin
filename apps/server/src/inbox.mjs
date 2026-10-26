@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { ownerAnswers } from "./asks.mjs";
 import { motherInfo } from "./integrations/mother.mjs";
+import { isReminder } from "./later.mjs";
 import { maskText } from "./redact.mjs";
 
 const OWNER_TASKS = "ownertasks";
@@ -75,7 +76,10 @@ function whoOf(store, root) {
   return null;
 }
 
-export function buildInbox({ store, asks }) {
+// isActive(chatId): a run of that chat is under way — its «پیام نرسید» card is being retried right
+// now and comes back only if that retry fails too (2026-10-20: after «ارسال دوباره» the card stayed
+// on the board while the retry ran, and read as «the retry did nothing»).
+export function buildInbox({ store, asks, isActive = () => false }) {
   const asked = [];
   // A requester question is listed only where nobody but the owner can answer it (ownerAnswers);
   // a sim root is a rehearsal.
@@ -126,7 +130,7 @@ export function buildInbox({ store, asks }) {
     // deleteChat leaves the kv row behind. A mother chat's failure is the desk's (its «ارسال نشد»
     // card, which «ولش کن» lets go for good). A sim chain is a rehearsal. A closed (archived) chat leaves the board.
     const chat = store.getChat(chatId);
-    if (!chat || chat.archived || chatId in resuming || motherInfo(store, chatId)) continue;
+    if (!chat || chat.archived || chatId in resuming || motherInfo(store, chatId) || isActive(chatId)) continue;
     if (chat.sim || store.getChat(store.rootChatId(chatId))?.sim) continue;
     kept.push({
       id: `kept:${chatId}`,
@@ -140,7 +144,8 @@ export function buildInbox({ store, asks }) {
     });
   }
 
-  const notes = store.listNotes().filter((n) => n.status === "failed").map((n) => ({
+  // The agent's own reminder that failed is its chat's business, not something the person acts on.
+  const notes = store.listNotes().filter((n) => n.status === "failed" && !isReminder(n)).map((n) => ({
     id: `note:${n.id}`,
     kind: "note",
     noteId: n.id,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, Globe, KeyRound, Languages, Loader2, LogOut, MessageSquare, MessageSquareHeart, Plug, Plus, RefreshCw, Send, ShieldOff, Sparkles, Trash2, UserRound, Wallet, X } from "lucide-react";
+import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, Globe, KeyRound, Languages, Loader2, LogOut, MessageSquare, MessageSquareHeart, MousePointerClick, Plug, Plus, RefreshCw, Send, ShieldOff, Smartphone, Sparkles, Store, Trash2, UserRound, Wallet, X, Pencil, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
@@ -10,10 +10,12 @@ import { BRAND, agentMeta } from "../brand.js";
 import { lang, num, setLang, t } from "../i18n.js";
 import { ProvidersSection } from "./Providers.jsx";
 import { FeedbackInbox } from "./Feedback.jsx";
+import { ClickMapSection } from "./ClickMap.jsx";
 import { AccountingSection } from "./Accounting.jsx";
 import { DoctorSection } from "./Doctor.jsx";
 import { SecretsSection } from "./Secrets.jsx";
 import { McpServersSection } from "./McpServers.jsx";
+import { PhoneSection } from "./Phone.jsx";
 import { ConfigSection } from "./Config.jsx";
 import { profileChanged } from "../profile.js";
 import { TokensSection } from "./Tokens.jsx";
@@ -21,11 +23,14 @@ import { UsageBadge } from "./Usage.jsx";
 import { SttSection } from "./PlanLimits.jsx";
 import { AgentsPage } from "./Agents.jsx";
 import { AppearanceSection } from "./Appearance.jsx";
+import { ModulesSection } from "./Modules.jsx";
 import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { agoPhrase, connectionRows } from "../karsara-shell.js";
 import { exactTime } from "../elapsed.js";
 import { ProxyStep } from "./Setup.jsx";
+import { UpdateNotice } from "./UpdateNotice.jsx";
+import { TwoStepSection } from "./TwoStep.jsx";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -35,28 +40,33 @@ const KIND_META = {
 
 // Ten sections in three groups, tidier than a flat list: name and sessions are one
 // «حساب», chat behaviour and this device's notifications one «گفتگو و اعلان», the live check and the
-// server's status one «سلامت». Old ids still open the right one (ALIASES).
+// server's status one «سلامت». Old ids still open the right one (ALIASES). «بازارچه» (the modules) sits
+// on its own above the groups (owner 2026-10-20: «جاش تو منو خوب نیست»), and holds every module's
+// own settings on its card.
 const SECTIONS = [
   // The karsara look only, and first there: its connection checklist.
   { id: "status", group: t("شما"), label: t("وضعیت"), icon: Activity, title: t("وضعیت اتصال‌ها"), description: "", karsaraOnly: true },
+  { id: "market", group: "", label: t("بازارچه"), icon: Store, title: t("بازارچه"), description: t("بخش‌های گریفین و افزونه‌ها: روشن و خاموش کردن، آمدن در منو و تنظیمات هر کدام، همه روی کارت خودش. تعارض‌ها و جابه‌جایی گفتگوها را خودش حساب می‌کند.") },
   { id: "account", group: t("شما"), label: t("حساب"), icon: UserRound, title: t("حساب"), description: t("نام شما در منو، زبان رابط و نشست‌های ورود.") },
-  { id: "appearance", group: t("شما"), label: t("ظاهر و بخش‌ها"), icon: Palette, title: t("ظاهر و بخش‌ها"), description: t("ظاهر و بخش‌های برنامه، برای شما روی همهٔ دستگاه‌ها.") },
+  { id: "appearance", group: t("شما"), label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("ظاهر و چیدمان برنامه، برای شما روی همهٔ دستگاه‌ها.") },
   { id: "chat", group: t("شما"), label: t("گفتگو و اعلان"), icon: MessageSquare, title: t("گفتگو و اعلان"), description: t("رفتار کادر پیام و ادامهٔ کار، و اعلان روی همین دستگاه.") },
   { id: "agents", group: t("دستیار"), label: t("ایجنت‌ها"), icon: Bot, title: t("ایجنت‌ها"), description: t("هر ایجنت پروفایل خودش را دارد: موتور، مدل و ابزارهای روشن. برای تنظیم، روی کارت بزن.") },
   { id: "providers", group: t("دستیار"), label: t("موتورها"), icon: Cpu, title: t("موتورها"), description: t("حساب‌ها، کلیدها و مدل پیش‌فرض هر موتور.") },
   { id: "connections", group: t("دستیار"), label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد.", { name: BRAND.name }) },
   { id: "proxy", group: t("دستیار"), label: t("پراکسی و VPN"), icon: Globe, title: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
   { id: "mcp", group: t("دستیار"), label: t("سرورهای MCP"), icon: Plug, title: t("سرورهای MCP"), description: t("سرورهای MCP شخصی شما برای Claude Code کامل.") },
+  { id: "phone", group: t("دستیار"), label: t("گوشی"), icon: Smartphone, title: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد؛ ایجنت روی آن adb دارد. بدون نرم‌افزار روی کامپیوتر.") },
   { id: "knowledge", group: t("دستیار"), label: t("دانش"), icon: BookOpen, title: t("دانش"), description: t("فقط یادداشت‌های تأییدشده به قواعد ایجنت می‌روند.") },
   { id: "secrets", group: t("دستیار"), label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
   { id: "health", group: t("سیستم"), label: t("سلامت"), icon: Stethoscope, title: t("سلامت"), description: t("چک زنده و تعمیر با یک کلیک، و وضعیت سرور.") },
+  { id: "clicks", group: t("سیستم"), label: t("نقشهٔ کلیک‌ها"), icon: MousePointerClick, title: t("نقشهٔ کلیک‌ها"), description: t("کجای صفحه بیشتر کلیک می‌شود، کدام کلیک‌ها بی‌اثرند و کدام بخش‌ها زده نمی‌شوند؛ ۱۴ روز اخیر. روی نصب نگه‌دارنده، همهٔ نصب‌ها با هم. فقط نام دکمه و بخش شمرده می‌شود، هرگز متن.") },
   { id: "feedback", group: t("سیستم"), label: t("بازخوردها"), icon: MessageSquareHeart, title: t("بازخوردها"), description: t("بازخورد و درخواست پشتیبانی که به این نصب رسیده، با تصویر صفحه و جزئیات.") },
   // Only on an install that answers GET /api/accounting (accounting.mjs).
   { id: "accounting", group: t("سیستم"), label: t("حسابداری مصرف"), icon: Wallet, title: t("حسابداری مصرف"), description: t("مصرف همهٔ نصب‌ها از دیتابیس خودشان، اکانت‌های مشترک Claude و هشدارها. فقط روی همین نصب."), hubOnly: true },
   { id: "tokens", group: t("سیستم"), label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن روزبه‌روز، به تفکیک مدل و گفتگو.") },
   { id: "config", group: t("سیستم"), label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.") },
 ];
-const ALIASES = { profile: "account", notifications: "chat", doctor: "health" };
+const ALIASES = { profile: "account", notifications: "chat", doctor: "health", modules: "market" };
 // The karsara look: its own list, in its order and words, with no group headings; after it only
 // what a Griffin install also needs (the token page the user menu opens, the look, secrets,
 // configuration). "Agents" is in the user menu there; the live check sits under "Status".
@@ -69,10 +79,11 @@ const KARSARA_SECTIONS = [
   { id: "composer", label: t("گفتگو"), icon: MessageSquare, title: t("گفتگو"), description: t("رفتارهای خودکار گفتگو؛ همه را می‌شود خاموش کرد.") },
   { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: "" },
   { id: "mcp", label: "MCP", icon: Plug, title: t("سرورهای MCP"), description: "" },
+  { id: "phone", label: t("گوشی"), icon: Smartphone, title: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد؛ ایجنت روی آن adb دارد. بدون نرم‌افزار روی کامپیوتر.") },
   { id: "providers", label: t("ارائه‌دهنده‌ها"), icon: KeyRound, title: t("ارائه‌دهنده‌ها"), description: "" },
-  ...["tokens", "feedback", "appearance", "secrets", "config"].map((id) => SECTIONS.find((s) => s.id === id)),
+  ...["market", "tokens", "feedback", "clicks", "appearance", "secrets", "config"].map((id) => SECTIONS.find((s) => s.id === id)),
 ];
-const KARSARA_ALIASES = { profile: "account", chat: "composer", health: "status", doctor: "status" };
+const KARSARA_ALIASES = { profile: "account", chat: "composer", health: "status", doctor: "status", modules: "market" };
 const sectionsFor = (karsara, hub = false) => (karsara ? KARSARA_SECTIONS : SECTIONS.filter((s) => !s.karsaraOnly && (hub || !s.hubOnly)));
 const sectionId = (id, karsara = false) => {
   const next = karsara ? KARSARA_ALIASES[id] || id : ALIASES[id] || (id === "status" ? "health" : id);
@@ -138,7 +149,7 @@ export function SettingsPage({ onBack, onSection }) {
             const heading = !karsara && shownSections[index - 1]?.group !== group;
             return (
               <div key={id}>
-              {heading ? <p className={`px-3 pb-1 text-[11px] font-medium text-muted-foreground ${index ? "pt-4" : ""}`}>{group}</p> : null}
+              {heading && group ? <p className={`px-3 pb-1 text-[11px] font-medium text-muted-foreground ${index ? "pt-4" : ""}`}>{group}</p> : null}
               <button
                 type="button"
                 onClick={() => setSection(id)}
@@ -185,24 +196,34 @@ export function SettingsPage({ onBack, onSection }) {
             {current.id === "connections" ? (
               <ConnectionsSection meta={current} />
             ) : current.id === "status" ? (
-              <KarsaraStatusSection title={current.title} onSection={setSection} />
+              <>
+                <UpdateNotice place="settings" />
+                <KarsaraStatusSection title={current.title} onSection={setSection} />
+              </>
             ) : (
               <>
                 <SectionHeader title={current.title} description={current.description} />
                 {current.id === "health" ? (
-                  <HealthSection />
+                  <>
+                    <UpdateNotice place="settings" />
+                    <HealthSection />
+                  </>
                 ) : section === "secrets" ? (
                   <SecretsSection />
                 ) : section === "feedback" ? (
                   <FeedbackInbox />
+                ) : section === "clicks" ? (
+                  <ClickMapSection />
                 ) : section === "accounting" ? (
                   <AccountingSection />
                 ) : section === "proxy" ? (
                   <ProxyStep heading={false} />
                 ) : section === "mcp" ? (
                   <McpServersSection />
+                ) : section === "phone" ? (
+                  <PhoneSection />
                 ) : section === "config" ? (
-                  <ConfigSection />
+                  <ConfigSection onSection={setSection} />
                 ) : section === "tokens" ? (
                   <div className="space-y-6">
                     <div className="rounded-xl border p-1"><UsageBadge open /></div>
@@ -228,10 +249,13 @@ export function SettingsPage({ onBack, onSection }) {
                     <PushSection />
                   </div>
                 ) : section === "appearance" ? (
-                  <AppearanceSection />
+                  <AppearanceSection onSection={setSection} />
+                ) : section === "market" ? (
+                  <ModulesSection />
                 ) : (
                   <div className="space-y-6">
                     <ProfileSection />
+                    <TwoStepSection />
                     <AccountSection />
                   </div>
                 )}
@@ -688,6 +712,16 @@ function AccountSection() {
     await api("/api/auth/revoke-all", { method: "POST" }).catch((e) => toast.error(e.message));
     window.location.reload();
   };
+  // The new token is shown here once (never stored by the page); this device stays signed in.
+  const [newToken, setNewToken] = useState("");
+  const rotate = async () => {
+    if (!window.confirm(t("توکن ورود عوض شود؟ توکن فعلی (ورود، اسکریپت‌ها و CLI) از کار می‌افتد و بقیهٔ دستگاه‌ها خارج می‌شوند."))) return;
+    try {
+      setNewToken((await api("/api/auth/rotate-token", { method: "POST" })).token);
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
   return (
     <div className="space-y-6">
       <Group>
@@ -714,6 +748,17 @@ function AccountSection() {
       <Group title={t("نشست‌ها")}>
         <Item icon={LogOut} title={t("خروج از این دستگاه")} subtitle={t("کوکی همین مرورگر پاک می‌شود")} onClick={logout} />
         <Item icon={ShieldOff} tint="bg-bad/10 text-bad" title={t("خروج از همهٔ دستگاه‌ها")} subtitle={t("همهٔ نشست‌ها باطل می‌شوند؛ برای ورود دوباره توکن لازم است")} onClick={revokeAll} />
+      <Item icon={KeyRound} tint="bg-bad/10 text-bad" title={t("ریست توکن ورود")} subtitle={t("توکن تازه ساخته می‌شود؛ قبلی و بقیهٔ نشست‌ها باطل می‌شوند")} onClick={newToken ? undefined : rotate}>
+        {newToken ? (
+          <div className="mx-4 mb-3 rounded-xl border bg-muted/40 p-3">
+            <p className="mb-2 text-xs leading-5 text-muted-foreground">{t("توکن تازه فقط همین یک بار نشان داده می‌شود؛ جای امن (مثلاً Infisical) نگهش دارید.")}</p>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate font-mono text-xs" dir="ltr">{newToken}</code>
+              <CopyButton text={newToken} />
+            </div>
+          </div>
+        ) : null}
+      </Item>
       </Group>
     </div>
   );
@@ -900,10 +945,13 @@ function AddDialog({ open, onOpenChange, onAdded }) {
 
 // Knowledge review gate: notes agents write (knowledge_write) land here unreviewed; only
 // reviewed:true notes are injected into that agent's rules. Flipping is owner-only (API).
+// Edit keeps the review state when the owner does it (an agent's edit sends the note back to
+// «در انتظار تأیید»); delete asks twice and moves the note to «حذف‌شده», from where it is restorable.
 const KNOWLEDGE_FILTERS = [
   ["pending", t("در انتظار تأیید")],
   ["reviewed", t("تأییدشده")],
   ["all", t("همه")],
+  ["trash", t("حذف‌شده")],
 ];
 
 function KnowledgeSection() {
@@ -912,11 +960,41 @@ function KnowledgeSection() {
   const [filter, setFilter] = useState("pending");
   const [open, setOpen] = useState(null);
   const [busy, setBusy] = useState(null);
+  const [trash, setTrash] = useState([]);
+  const [editing, setEditing] = useState(null); // { key, agent, file, title, body }
+  const [confirmDel, setConfirmDel] = useState(null); // key waiting for the second «حذف»
 
-  const load = useCallback(() => api("/api/knowledge").then(setData, (e) => toast.error(e.message)), []);
+  const load = useCallback(
+    () => Promise.all([api("/api/knowledge"), api("/api/knowledge/trash")]).then(([notes, bin]) => { setData(notes); setTrash(bin.trash || []); }, (e) => toast.error(e.message)),
+    [],
+  );
   useEffect(() => {
     load();
   }, [load]);
+
+  const act = async (key, run, done) => {
+    setBusy(key);
+    try {
+      await run();
+      await load();
+      if (done) toast.success(done);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const save = () =>
+    act(editing.key, () => api(`/api/knowledge/${editing.agent}/note`, { method: "PUT", body: { file: editing.file, title: editing.title, body: editing.body } }), t("ذخیره شد")).then(() => setEditing(null));
+  const remove = (agent, file, key) => {
+    setConfirmDel(null);
+    act(key, () => api(`/api/knowledge/${agent}/note`, { method: "DELETE", body: { file } }), t("به «حذف‌شده» رفت؛ بازیابی‌شدنی است"));
+  };
+  const purge = (item) => {
+    if (!window.confirm(t("این دانش برای همیشه حذف می‌شود و قابل بازیابی نیست. ادامه؟"))) return;
+    act(`trash/${item.id}`, () => api(`/api/knowledge/${item.agent}/trash`, { method: "DELETE", body: { id: item.id } }), t("برای همیشه حذف شد"));
+  };
+  const restore = (item) => act(`trash/${item.id}`, () => api(`/api/knowledge/${item.agent}/restore`, { method: "POST", body: { id: item.id } }), t("بازیابی شد"));
 
   const flip = async (agent, file, reviewed) => {
     setBusy(`${agent}/${file}`);
@@ -937,9 +1015,12 @@ function KnowledgeSection() {
     reviewed: all.reduce((n, [, notes]) => n + notes.filter((x) => x.reviewed).length, 0),
   };
   counts.all = counts.pending + counts.reviewed;
-  const shown = all
-    .map(([agent, notes]) => [agent, notes.filter((x) => filter === "all" || (filter === "reviewed") === Boolean(x.reviewed))])
-    .filter(([, notes]) => notes.length);
+  counts.trash = trash.length;
+  const shown = filter === "trash"
+    ? []
+    : all
+        .map(([agent, notes]) => [agent, notes.filter((x) => filter === "all" || (filter === "reviewed") === Boolean(x.reviewed))])
+        .filter(([, notes]) => notes.length);
 
   return (
     <div className="space-y-6">
@@ -957,7 +1038,43 @@ function KnowledgeSection() {
         ))}
       </div>
 
-      {!shown.length ? (
+      {filter === "trash" ? (
+        trash.length ? (
+          <Group title={`حذف‌شده · ${trash.length.toLocaleString("fa")}`}>
+            {trash.map((item) => (
+              <Item
+                key={item.id}
+                title={item.title}
+                subtitle={<>{agentMeta(item.agent).label} · <bdi dir="ltr">{item.deletedAt}</bdi></>}
+                trailing={
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={busy === `trash/${item.id}`}
+                      onClick={() => restore(item)}
+                      className="press inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground"
+                    >
+                      {busy === `trash/${item.id}` ? <Loader2 className="size-3 animate-spin" /> : <Undo2 className="size-3" />}
+                      بازیابی
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy === `trash/${item.id}`}
+                      onClick={() => purge(item)}
+                      className="press inline-flex items-center gap-1 rounded-full bg-destructive px-2.5 py-1 text-[11px] font-medium text-white"
+                    >
+                      <Trash2 className="size-3" />
+                      حذف دائمی
+                    </button>
+                  </div>
+                }
+              />
+            ))}
+          </Group>
+        ) : (
+          <p className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">{t("چیزی حذف نشده.")}</p>
+        )
+      ) : !shown.length ? (
         <p className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
           {counts.all ? t("در این دسته یادداشتی نیست.") : t("هنوز یادداشتی نیست. ایجنت‌ها با knowledge_write می‌نویسند و اینجا تأییدش می‌کنی.")}
         </p>
@@ -1000,7 +1117,57 @@ function KnowledgeSection() {
                   {expanded ? (
                     <div className="border-t bg-muted/30 px-4 py-3">
                       <p className="ltr mb-2 text-[11px] text-muted-foreground">{note.file}</p>
-                      <pre className="scrollbar-thin max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs leading-5" dir="auto">{note.body}</pre>
+                      {editing?.key === key ? (
+                        <div className="space-y-2">
+                          <input
+                            value={editing.title}
+                            onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+                            maxLength={120}
+                            className="w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                            dir="auto"
+                          />
+                          <textarea
+                            value={editing.body}
+                            onChange={(e) => setEditing({ ...editing, body: e.target.value })}
+                            rows={12}
+                            className="scrollbar-thin w-full rounded-lg border bg-background p-3 text-xs leading-5 outline-none focus:border-primary"
+                            dir="auto"
+                          />
+                          <p className="text-[11px] text-muted-foreground">{t("ویرایش شما وضعیت تأیید را عوض نمی‌کند. رمز و توکن ننویسید.")}</p>
+                          <div className="flex gap-2">
+                            <button type="button" disabled={busy === key || !editing.title.trim() || !editing.body.trim()} onClick={save} className="press inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50">
+                              {busy === key ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
+                              ذخیره
+                            </button>
+                            <button type="button" onClick={() => setEditing(null)} className="press rounded-full bg-muted px-3 py-1.5 text-xs">{t("انصراف")}</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <pre className="scrollbar-thin max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs leading-5" dir="auto">{note.body}</pre>
+                          <div className="mt-3 flex items-center gap-2">
+                            <button type="button" onClick={() => { setConfirmDel(null); setEditing({ key, agent, file: note.file, title: note.title, body: note.body }); }} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs">
+                              <Pencil className="size-3" />
+                              ویرایش
+                            </button>
+                            {confirmDel === key ? (
+                              <>
+                                <span className="text-xs text-muted-foreground">{t("مطمئنی؟ بازیابی‌شدنی است.")}</span>
+                                <button type="button" disabled={busy === key} onClick={() => remove(agent, note.file, key)} className="press inline-flex items-center gap-1 rounded-full bg-bad px-3 py-1.5 text-xs font-medium text-white">
+                                  {busy === key ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
+                                  بله، حذف
+                                </button>
+                                <button type="button" onClick={() => setConfirmDel(null)} className="press rounded-full bg-muted px-3 py-1.5 text-xs">{t("انصراف")}</button>
+                              </>
+                            ) : (
+                              <button type="button" onClick={() => setConfirmDel(key)} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs text-bad">
+                                <Trash2 className="size-3" />
+                                حذف
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : null}
                 </Item>

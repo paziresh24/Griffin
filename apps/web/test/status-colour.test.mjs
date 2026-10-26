@@ -53,8 +53,10 @@ test("the agent logos beside a chat are a flag, on in both presets", () => {
 });
 
 test("the update notice in the sidebar is neutral grey, not a status or palette colour", () => {
-  const lines = src("components/UpdateNotice.jsx").split("\n").filter((l) => l.includes("g-update mx-2"));
-  assert.ok(lines.length >= 2, "both notices");
+  // One slim line (owner 2026-10-24: «مثل کلاد کد»), the sidebar's and the one in Settings.
+  const lines = src("components/UpdateNotice.jsx").split("\n").filter((l) => l.includes("g-update mx-2") || l.includes("g-update mb-4"));
+  assert.ok(lines.length >= 1, "the notice");
+  assert.match(lines.join("\n"), /h-8/, "one line high in the sidebar");
   for (const line of lines) {
     assert.match(line, /bg-muted/);
     assert.doesNotMatch(line, /signal|(?:text|bg|border)-primary/);

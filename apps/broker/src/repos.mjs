@@ -113,6 +113,12 @@ export function createRepoTools({ vault, host = "", root = genv("REPOS_ROOT", "/
         if (!args.update) return { repo: args.repo, fetched: true, source: "git fetch" };
         const dirty = (await git(["status", "--porcelain", "--untracked-files=no"], opts)).stdout.trim();
         if (dirty) return { repo: args.repo, fetched: true, updated: false, reason: "local changes in the clone", source: "git fetch" };
+        // A checkout an agent left on its own branch (detached, no upstream, or with commits of its own)
+        // is its work: fetched, not moved. It was logged as an error every 10 minutes on six installs (2026-10-21).
+        const skip = (reason) => ({ repo: args.repo, fetched: true, updated: false, reason, source: "git fetch" });
+        const upstream = await git(["rev-parse", "--abbrev-ref", "@{upstream}"], opts).catch(() => null);
+        if (!upstream) return skip("the checkout is not on a branch that tracks origin");
+        if (await git(["merge-base", "--is-ancestor", "HEAD", "@{upstream}"], opts).then(() => false, () => true)) return skip("the checkout has commits of its own");
         await git(["merge", "-q", "--ff-only", "@{upstream}"], opts);
         const head = (await git(["rev-parse", "--short", "HEAD"], opts)).stdout.trim();
         return { repo: args.repo, fetched: true, updated: true, head, source: "git fetch + ff" };

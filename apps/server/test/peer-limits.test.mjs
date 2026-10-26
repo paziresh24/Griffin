@@ -175,10 +175,9 @@ test("PUT /api/peers/:id/quota changes only the fields sent; usage shows on the 
     const app = new Hono();
     auth.routes(app);
     const put = (body) => app.request("/api/peers/alice/quota", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: "griffin", ...body }) });
-    const before = store.getAgentProfile("griffin").meta.callers["peer:alice"].tools;
     assert.equal((await put({ budget: { hourly: 10 } })).status, 200);
     const entry = store.getAgentProfile("griffin").meta.callers["peer:alice"];
-    assert.deepEqual(entry.tools, before, "tools untouched");
+    assert.equal(entry.tools, undefined, "no tool grant per colleague");
     assert.equal(entry.budget.hourly, 10);
     assert.equal((await put({ model: "bogus" })).status, 400);
     const list = await (await app.request("/api/peers")).json();

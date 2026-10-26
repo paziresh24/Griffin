@@ -8,9 +8,10 @@ import { ASK_TOOL } from "./asks.mjs";
 import { maskText } from "./redact.mjs";
 import { isCreditError } from "./engine-state.mjs";
 
-// Which way the install goes when a plan limit stops an owner's chat: "ask" (default since owner
-// 2026-10-19: a switch is never silent in his own chats) or "auto".
-export const planFallbackMode = (value) => (String(value || "").trim().toLowerCase() === "auto" ? "auto" : "ask");
+// Which way the install goes when a plan limit stops an owner's chat: "auto" (default again since
+// owner 2026-10-20: every instance moves on to the next engine account by itself) or "ask" (a card
+// first; set it explicitly in Settings).
+export const planFallbackMode = (value) => (String(value || "").trim().toLowerCase() === "ask" ? "ask" : "auto");
 
 // Claude's text for a spent plan, mirroring the CLI's own limit messages: «You've hit your limit»,
 // «You've hit your weekly limit», «You've reached your Fable limit», «You're out of extra usage»,

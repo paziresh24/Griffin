@@ -4,9 +4,14 @@ import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { BRAND, agentMeta } from "../brand.js";
 import { targetLook, textDir } from "../dir.js";
+import { DirBlock } from "./DirBlock.jsx";
 import { api, navigate, useRoute } from "../api.js";
 import { AskCard } from "./Ask.jsx";
 import { buildEditDiff } from "../edit-diff.js";
+import {
+  GitlabChangesBody, GitlabCommitsBody, GitlabMemberBody, GitlabMrBody, GitlabMrsBody, GitlabPipelineBody, GitlabPushBody, ShellBody, ShellCommand,
+} from "./ToolViews.jsx";
+import { factEntries, hasValue, isLongText, isRecord, isScalar, isUrl, keyLabel, scalarText } from "../tool-detail.js";
 import { MediaView } from "./Media.jsx";
 import { ChartCard } from "./Chart.jsx";
 import { PreviewCard } from "./Preview.jsx";
@@ -17,7 +22,7 @@ import { sentStatus } from "../telegram.js";
 import {
   AlertTriangle, AppWindow, Boxes, Check, ChevronDown, CircleDashed, CircleHelp, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
-  Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox,
+  Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox, Camera, Keyboard, MousePointerClick,
 } from "lucide-react";
 
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
@@ -98,7 +103,7 @@ const TOOLS = {
   gitlab_projects: { icon: GitBranch, label: t("پروژه‌های GitLab"), subtitle: (a) => a.search },
   gitlab_search: { icon: Search, label: t("جستجوی کد GitLab"), subtitle: (a) => `${a.scope || "blobs"}: ${a.search}`, open: true },
   gitlab_file: { icon: FileText, label: t("خواندن فایل GitLab"), subtitle: (a) => `${a.project}/${a.path}`, open: true },
-  gitlab_mr: { icon: GitBranch, label: t("Merge Request گیت‌لب"), subtitle: (a) => `${a.project}!${a.iid} · ${a.action || "view"}`, open: true },
+  gitlab_mr: { icon: GitBranch, label: t("Merge Request گیت‌لب"), subtitle: (a) => `${a.project}!${a.iid} · ${({ ready: t("آمادهٔ ادغام"), merge: t("ادغام") })[a.action] || t("نمایش")}`, open: true },
   infisical_projects: { icon: FolderTree, label: t("پروژه‌های Infisical") },
   infisical_list: { icon: FolderTree, label: t("فهرست Infisical"), subtitle: (a) => a.path },
   infisical_upsert: { icon: KeyRound, label: t("ذخیره در Infisical"), subtitle: (a) => a.name, open: true },
@@ -107,12 +112,28 @@ const TOOLS = {
   arvan_dns_export: { icon: FileText, label: t("خروجی BIND آروان"), subtitle: (a) => a.domain },
   arvan_dnssec: { icon: Lock, label: t("وضعیت DNSSEC"), subtitle: (a) => a.domain },
   arvan_cache_settings: { icon: Cloud, label: t("تنظیمات کش آروان"), subtitle: (a) => a.domain, open: true },
+  arvan_load_balancer_get: { icon: Cloud, label: t("لود‌بالانسر آروان"), subtitle: (a) => [a.domain, a.name].filter(Boolean).join(" / "), open: true },
   arvan_purge_tags: { icon: Cloud, label: t("تگ‌های purge"), subtitle: (a) => a.domain },
   arvan_cache_purge: { icon: Cloud, label: t("پاک‌کردن کش آروان"), subtitle: (a) => [a.domain, a.scope].filter(Boolean).join(" · "), open: true },
   dns_lookup: { icon: Network, label: t("جست‌وجوی DNS"), subtitle: (a) => `${a.type || "A"} ${a.name || ""}`.trim(), open: true },
   http_check: { icon: Globe, label: t("بررسی HTTP"), subtitle: (a) => a.url, open: true },
   web_search: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.query },
   web_fetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
+  // The agent's own browser in the sandbox (browser.mjs).
+  browser_open: { icon: AppWindow, label: t("مرورگر"), subtitle: (a) => a.url || { back: t("برگشت"), forward: t("جلو"), reload: t("بارگذاری دوباره") }[a.go] },
+  browser_snapshot: { icon: AppWindow, label: t("خواندن صفحه در مرورگر") },
+  browser_click: { icon: MousePointerClick, label: t("کلیک در مرورگر"), subtitle: (a) => a.ref || a.selector || a.text },
+  browser_hover: { icon: MousePointerClick, label: t("نگه‌داشتن نشانگر"), subtitle: (a) => a.ref || a.selector || a.text },
+  browser_type: { icon: Keyboard, label: t("نوشتن در مرورگر"), subtitle: (a) => a.ref || a.selector || a.text },
+  browser_select: { icon: Keyboard, label: t("انتخاب گزینه در مرورگر"), subtitle: (a) => (a.values || []).join(t("، ")) },
+  browser_press: { icon: Keyboard, label: t("زدن کلید در مرورگر"), subtitle: (a) => a.key },
+  browser_upload: { icon: FileText, label: t("بارگذاری فایل در مرورگر"), subtitle: (a) => (a.paths || []).join(t("، ")) },
+  browser_wait: { icon: Loader2, label: t("صبر در مرورگر"), subtitle: (a) => a.text || a.textGone || a.selector || (a.seconds ? `${a.seconds}s` : "") },
+  browser_eval: { icon: Terminal, label: t("اجرای JavaScript در صفحه"), subtitle: (a) => a.expression },
+  browser_screenshot: { icon: Camera, label: t("عکس از صفحه"), subtitle: (a) => a.title, open: true },
+  browser_tabs: { icon: AppWindow, label: t("تب‌های مرورگر"), subtitle: (a) => a.action },
+  browser_console: { icon: ScrollText, label: t("خطاهای صفحه") },
+  browser_close: { icon: X, label: t("بستن مرورگر") },
   tls_check: { icon: Lock, label: t("بررسی گواهی TLS"), subtitle: (a) => a.host, open: true },
   nsin_edge_ranges: { icon: Network, label: t("رنج‌های لبهٔ NSIN") },
   nsin_domains: { icon: Cloud, label: t("دامنه‌های NSIN"), subtitle: (a) => a.search },
@@ -143,6 +164,8 @@ const TOOLS = {
   task: { icon: Workflow, label: t("زیرایجنت"), subtitle: (a) => a.description, open: false },
   knowledge_write: { icon: FileText, label: t("یادداشت دانش"), subtitle: (a) => a.title, open: true },
   knowledge_list: { icon: FolderTree, label: t("فهرست دانش"), subtitle: (a) => a.agent },
+  knowledge_edit: { icon: FileText, label: t("ویرایش یادداشت"), subtitle: (a) => a.file },
+  knowledge_delete: { icon: FileText, label: t("حذف یادداشت"), subtitle: (a) => a.file },
   jobs_list: { icon: FolderTree, label: t("فهرست جاب‌ها") },
   jobs_create: { icon: FolderTree, label: t("ساخت جاب"), subtitle: (a) => a.name },
   jobs_update: { icon: FolderTree, label: t("ویرایش جاب"), subtitle: (a) => a.name || a.id },
@@ -182,6 +205,94 @@ const TOOLS = {
   AskUserQuestion: { icon: CircleHelp, label: t("پرسش از شما"), subtitle: (a) => a.questions?.[0]?.question },
   // consult (peers.mjs): another model's answer inside one call; the body is ConsultBody.
   consult: { icon: Users, label: t("مشورت با مدل دیگر"), subtitle: (a) => [a.provider, a.model].filter(Boolean).join(" · "), open: true },
+
+  // Griffin's own tools that had no row label: the English id stays the API name, the row says it in Persian.
+  ask_owner: { icon: CircleHelp, label: t("پرسش از شما"), subtitle: (a) => a.question },
+  ask_requester: { icon: CircleHelp, label: t("پرسش از درخواست‌کننده"), subtitle: (a) => a.question },
+  visualize: { icon: Activity, label: t("رسم نمودار"), subtitle: (a) => a.title },
+  end_agent: { icon: Check, label: t("پایان گفتگو") },
+  notify_owner: { icon: Send, label: t("اعلان به گوشی شما"), subtitle: (a) => a.text },
+  tell_owner: { icon: Send, label: t("خبر به صاحب‌کار"), subtitle: (a) => a.text },
+  build_tool: { icon: Server, label: t("درخواست ساخت ابزار"), subtitle: (a) => a.title, open: true },
+  alerts_active: { icon: AlertTriangle, label: t("هشدارهای فعال"), subtitle: (a) => a.cluster },
+  telegram_edit: { icon: Send, label: t("ویرایش پیام تلگرام"), subtitle: (a) => a.chat, open: true },
+  telegram_delete: { icon: Trash2, label: t("حذف پیام تلگرام"), subtitle: (a) => a.chat, open: true },
+  telegram_watch_list: { icon: Users, label: t("گفتگوهای زیر نظر") },
+  related_chat_send: { icon: Send, label: t("پیام به گفتگوی همان درخواست‌کننده"), subtitle: (a) => a.chat },
+  // Incidents (the ops room).
+  incidents_list: { icon: AlertTriangle, label: t("حادثه‌های باز") },
+  incident_history: { icon: ScrollText, label: t("سابقهٔ حادثه"), subtitle: (a) => a.id },
+  incident_update: { icon: PencilLine, label: t("ثبت بررسی حادثه"), subtitle: (a) => a.id },
+  incident_ack: { icon: Check, label: t("عمدی/شناخته‌شده کردن حادثه"), subtitle: (a) => a.id, open: true },
+  incident_sources: { icon: AlertTriangle, label: t("منابع داده حادثه‌ها") },
+  incident_source_set: { icon: PencilLine, label: t("مدیریت منبع حادثه‌ها"), subtitle: (a) => [a.action, a.name || a.id || a.chat].filter(Boolean).join(" · "), open: true },
+  incident_assign: { icon: Check, label: t("اساین حادثه به چت"), subtitle: (a) => a.id, open: true },
+  incident_suggest: { icon: Check, label: t("پیشنهاد حادثه در فضای کار"), subtitle: (a) => a.title || a.id, open: true },
+  // Jobs and chats.
+  jobs_list: { icon: CalendarClock, label: t("فهرست کارهای زمان‌بندی‌شده") },
+  jobs_create: { icon: CalendarClock, label: t("ساخت کار زمان‌بندی‌شده"), subtitle: (a) => a.name, open: true },
+  jobs_update: { icon: CalendarClock, label: t("ویرایش کار زمان‌بندی‌شده"), subtitle: (a) => a.name || a.id, open: true },
+  jobs_delete: { icon: Trash2, label: t("حذف کار زمان‌بندی‌شده"), subtitle: (a) => a.id, open: true },
+  jobs_run: { icon: CalendarClock, label: t("اجرای فوری کار"), subtitle: (a) => a.id },
+  chat_list: { icon: Inbox, label: t("فهرست گفتگوهای شما"), subtitle: (a) => a.query },
+  chat_read: { icon: Inbox, label: t("خواندن یک گفتگو"), subtitle: (a) => a.chatId },
+  chat_send: { icon: Send, label: t("پیام به گفتگوی دیگر"), subtitle: (a) => a.chatId },
+  chat_archive: { icon: Inbox, label: t("بایگانی گفتگوها"), open: true },
+  chat_suggest: { icon: Inbox, label: t("پیشنهاد گفتگوی تازه"), subtitle: (a) => a.title },
+  chat_dismiss_suggestion: { icon: X, label: t("پس‌گرفتن پیشنهاد"), subtitle: (a) => a.id },
+  chat_chapter: { icon: BookOpen, label: t("فصل تازهٔ گفتگو"), subtitle: (a) => a.title },
+  // Agents, network, MCP servers, self-check.
+  list_agents: { icon: Users, label: t("فهرست ایجنت‌ها") },
+  agent_create: { icon: Users, label: t("ساخت ایجنت"), subtitle: (a) => a.label, open: true },
+  agent_delete: { icon: Trash2, label: t("حذف ایجنت"), subtitle: (a) => a.id, open: true },
+  agent_settings_get: { icon: Server, label: t("خواندن تنظیمات ایجنت") },
+  agent_settings_set: { icon: Server, label: t("تغییر تنظیمات ایجنت"), open: true },
+  agent_tools_list: { icon: ListChecks, label: t("ابزارهای این ایجنت") },
+  agent_tools_enable: { icon: ListChecks, label: t("روشن کردن ابزار برای ایجنت"), subtitle: (a) => (a.tools || []).join(t("، ")), open: true },
+  agent_tools_disable: { icon: ListChecks, label: t("خاموش کردن ابزار ایجنت"), subtitle: (a) => (a.tools || []).join(t("، ")), open: true },
+  network_agents: { icon: Users, label: t("ایجنت‌های همکاران") },
+  network_ask: { icon: Send, label: t("پرسش از ایجنت همکار"), subtitle: (a) => a.agent, open: true },
+  network_reply: { icon: Send, label: t("جواب به ایجنت همکار"), subtitle: (a) => a.agent },
+  network_connect: { icon: Users, label: t("وصل شدن به ایجنت همکار"), subtitle: (a) => a.url },
+  peer_invite: { icon: Users, label: t("دعوت همکار به ایجنت‌ها"), subtitle: (a) => a.label || a.id, open: true },
+  peer_connection: { icon: Network, label: t("وضعیت اتصال ایجنت همکار"), subtitle: (a) => a.user },
+  mcp_server_list: { icon: Server, label: t("سرورهای MCP شما") },
+  mcp_server_add: { icon: Server, label: t("افزودن سرور MCP"), subtitle: (a) => a.name, open: true },
+  mcp_server_login: { icon: KeyRound, label: t("ورود به سرور MCP"), subtitle: (a) => a.name, open: true },
+  mcp_server_remove: { icon: Trash2, label: t("حذف سرور MCP"), subtitle: (a) => a.name, open: true },
+  self_check: { icon: Activity, label: t("بررسی سلامت خود برنامه") },
+  self_fix: { icon: Activity, label: t("اعمال تعمیر پیشنهادی"), subtitle: (a) => a.fix, open: true },
+  // Cluster and GitLab, Infisical, git repos of this chat.
+  kube_create: { icon: Boxes, label: t("ساختن آبجکت در کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.manifest?.kind, a.manifest?.metadata?.name].filter(Boolean).join(" / "), open: true },
+  later: { icon: CalendarClock, label: t("یادآوری برای بعد"), subtitle: (a) => [a.in || a.at, String(a.text || "").slice(0, 60)].filter(Boolean).join(" — ") },
+  kube_copy_secret: { icon: KeyRound, label: t("کپی Secret بین کلاسترها"), subtitle: (a) => [a.fromCluster, a.toCluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
+  cnpg_retry_bootstrap: { icon: Database, label: t("تلاش دوباره برای ساخت دیتابیس"), subtitle: (a) => [a.cluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
+  gitlab_commits: { icon: GitBranch, label: t("کامیت‌های GitLab"), subtitle: (a) => [a.project, a.path].filter(Boolean).join(" / ") },
+  gitlab_mrs: { icon: GitBranch, label: t("فهرست Merge Requestها"), subtitle: (a) => a.project || a.search },
+  gitlab_mr_changes: { icon: GitBranch, label: t("تغییرات Merge Request"), subtitle: (a) => (a.iid ? `${a.project}!${a.iid}` : [a.project, a.from, a.to].filter(Boolean).join(" ")), open: true },
+  gitlab_pipeline: { icon: GitBranch, label: t("وضعیت پایپ‌لاین GitLab"), subtitle: (a) => [a.project, a.id].filter(Boolean).join(" #") },
+  gitlab_propose: { icon: GitBranch, label: t("پیشنهاد تغییر (Merge Request)"), subtitle: (a) => a.title, open: true },
+  gitlab_project_member: { icon: Users, label: t("دادن دسترسی به پروژهٔ GitLab"), subtitle: (a) => `${a.username} → ${a.project}`, open: true },
+  mr_explainer_overview: { icon: GitBranch, label: t("نمای کلی Merge Request"), subtitle: (a) => `${a.project}!${a.iid}` },
+  infisical_access: { icon: KeyRound, label: t("دسترسی‌های Infisical"), subtitle: (a) => a.person || a.project },
+  infisical_create_project: { icon: FolderTree, label: t("ساخت پروژهٔ Infisical"), subtitle: (a) => a.name, open: true },
+  infisical_machine_identity: { icon: KeyRound, label: t("ساخت هویت ماشینی Infisical"), subtitle: (a) => a.name, open: true },
+  git_clone: { icon: GitBranch, label: t("کلون ریپو"), subtitle: (a) => a.project },
+  git_fetch: { icon: GitBranch, label: t("به‌روز کردن ریپو"), subtitle: (a) => a.repo },
+  git_push: { icon: GitBranch, label: t("پوش شاخه"), subtitle: (a) => `${a.repo} · ${a.branch}`, open: true },
+  repo_list: { icon: FolderTree, label: t("فهرست فایل‌های ریپو"), subtitle: (a) => a.path },
+  repo_read: { icon: FileText, label: t("خواندن فایل ریپو"), subtitle: (a) => a.path },
+  repo_search: { icon: Search, label: t("جستجو در ریپو"), subtitle: (a) => a.pattern },
+  repo_write: { icon: PencilLine, label: t("نوشتن فایل ریپو"), subtitle: (a) => a.path, open: true },
+  repo_edit: { icon: PencilLine, label: t("ویرایش فایل ریپو"), subtitle: (a) => a.path, open: true },
+  repo_git: { icon: GitBranch, label: t("دستور git"), subtitle: (a) => (a.args || []).join(" ") },
+  repo_push: { icon: GitBranch, label: t("پوش این شاخه و باز کردن MR"), subtitle: (a) => a.mrTitle, open: true },
+  // vCenter.
+  vcenter_inventory: { icon: Server, label: t("منابع vCenter") },
+  vcenter_vms: { icon: Server, label: t("ماشین‌های مجازی"), subtitle: (a) => a.search },
+  vcenter_vm_get: { icon: Server, label: t("وضعیت یک ماشین مجازی"), subtitle: (a) => a.vm },
+  vcenter_vm_create: { icon: Server, label: t("ساخت ماشین مجازی"), subtitle: (a) => a.name, open: true },
+  vcenter_customization_specs: { icon: Server, label: t("قالب‌های شخصی‌سازی vCenter") },
 };
 
 // A running step under the Karsara skin: a thin spinning ring instead of a spinner icon.
@@ -195,7 +306,7 @@ export function shortTarget(value) {
 }
 
 export function ToolCard(props) {
-  if (props.toolName === "ask_owner") return <AskCard {...props} />;
+  if (props.toolName === "ask_owner" || props.toolName === "ask_requester") return <AskCard {...props} />;
   if (props.toolName === "visualize") return <ChartCard {...props} />;
   if (props.toolName === "preview_start") return <PreviewCard {...props} />;
   if (props.toolName === "ask_agent") return <PeerCard {...props} />;
@@ -368,7 +479,7 @@ function PeerMarkdown({ text }) {
   const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
   return (
     <div className="sd-block chat-text leading-7 [&_pre]:my-2 [&_table]:my-2" dir={dir}>
-      <Streamdown dir={dir} plugins={mdPlugins} shikiTheme={["github-light", "github-dark"]}>
+      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={mdPlugins} shikiTheme={["github-light", "github-dark"]}>
         {text}
       </Streamdown>
     </div>
@@ -697,8 +808,8 @@ function ToolBody({ toolName, args, result, isError }) {
   // The row shows only the sentence, so a failed command keeps the command above the error.
   if (isError && stepTitle(toolName, args) && args.command) {
     return (
-      <div className="space-y-1">
-        <Code text={args.command} />
+      <div className="space-y-1.5">
+        <ShellCommand command={args.command} />
         <ErrorBody result={result} />
       </div>
     );
@@ -712,12 +823,12 @@ function ToolBody({ toolName, args, result, isError }) {
   }
   switch (toolName) {
     case "edit":
-      return result?.diffString ? <Diff text={result.diffString} /> : <Json value={result} />;
+      return result?.diffString ? <Diff text={result.diffString} /> : <GenericDetail args={args} result={result} />;
     case "Edit":
     case "MultiEdit":
     case "Write": {
       const diff = buildEditDiff(args);
-      return diff ? <Diff text={diff} /> : <Json value={result} />;
+      return diff ? <Diff text={diff} /> : <GenericDetail args={args} result={result} />;
     }
     case "read":
       return <Code text={result?.content} footer={result?.totalLines ? t("{n} خط", { n: num(result.totalLines) }) : null} />;
@@ -806,12 +917,23 @@ function ToolBody({ toolName, args, result, isError }) {
     case "kube_exec":
     case "mikrotik_exec":
     case "Bash":
-      return (
-        <div className="space-y-1">
-          <Code text={args.command} />
-          <Code text={typeof result === "string" ? result : result?.output ?? [result?.stdout, result?.stderr].filter(Boolean).join("\n")} />
-        </div>
-      );
+      return <ShellBody toolName={toolName} args={args} result={result} />;
+    case "gitlab_mr":
+      return <GitlabMrBody args={args} result={result} />;
+    case "gitlab_pipeline":
+      return <GitlabPipelineBody args={args} result={result} />;
+    case "gitlab_mrs":
+      return <GitlabMrsBody result={result} />;
+    case "gitlab_mr_changes":
+      return <GitlabChangesBody args={args} result={result} />;
+    case "gitlab_commits":
+      return <GitlabCommitsBody args={args} result={result} />;
+    case "gitlab_propose":
+    case "git_push":
+    case "repo_push":
+      return <GitlabPushBody result={result} />;
+    case "gitlab_project_member":
+      return <GitlabMemberBody args={args} result={result} />;
     case "mikrotik_print":
       return <Table rows={result?.items} footer={result?.truncated ? t("{n} مورد (بریده شد)", { n: num(result?.total ?? 0) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
     case "mikrotik_ping":
@@ -876,15 +998,48 @@ function ToolBody({ toolName, args, result, isError }) {
       return <S3Object value={result} />;
     case "consult":
       return <ConsultBody args={args} result={result} />;
+    case "repo_edit":
+      return (
+        <div className="space-y-1.5">
+          <p className="text-sm" dir="auto">
+            {result?.replaced != null ? `${Number(result.replaced).toLocaleString("fa-IR")} جایگزینی در ` : t("ویرایش ")}
+            <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
+            {args.all ? t(" (همهٔ موارد)") : ""}
+          </p>
+          <Diff text={buildEditDiff({ old_string: args.old, new_string: args.new })} />
+        </div>
+      );
+    case "repo_write":
+      return (
+        <div className="space-y-1.5">
+          <p className="text-sm" dir="auto">
+            نوشته شد: <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
+            {result?.written != null ? ` · ${Number(result.written).toLocaleString("fa-IR")} بایت` : ""}
+          </p>
+          <Diff text={buildEditDiff({ content: args.content })} />
+        </div>
+      );
+    case "repo_read":
+      return result?.binary
+        ? <p className="text-sm text-muted-foreground" dir="auto">فایل باینری است ({Number(result.bytes || 0).toLocaleString("fa-IR")} بایت)؛ متن ندارد.</p>
+        : <Code text={result?.text} footer={`${result?.path || args.path}${result?.shown ? ` · خط ${result.shown[0]} تا ${result.shown[1]} از ${result.lines}` : ""}${result?.cutAtBytes ? t(" · ادامهٔ فایل بریده شد") : ""}`} />;
+    case "repo_list":
+      return <List items={result?.files} total={result?.total} />;
+    case "repo_search":
+      return result?.matches?.length
+        ? <List items={result.matches} total={result.total} unit={t("نتیجه")} />
+        : <p className="text-sm text-muted-foreground" dir="auto">{t("چیزی پیدا نشد.")}</p>;
+    case "repo_git":
+      return (
+        <div className="space-y-1">
+          <Code text={`git ${(args.args || []).join(" ")}`} />
+          <Code text={result?.output} />
+        </div>
+      );
     case "gitlab_version":
       return <p className="ltr font-mono">{result?.version} <span className="text-muted-foreground">({result?.revision})</span></p>;
     default:
-      return (
-        <details open>
-          <summary className="cursor-pointer text-xs text-muted-foreground">{t("جزئیات")}</summary>
-          <Json value={{ args, result }} />
-        </details>
-      );
+      return <GenericDetail args={args} result={result} />;
   }
 }
 
@@ -1112,13 +1267,13 @@ function Code({ text, footer }) {
   );
 }
 
-function List({ items = [], total }) {
+function List({ items = [], total, unit = t("فایل") }) {
   return (
     <div>
       <ul className="ltr scrollbar-thin max-h-72 overflow-auto font-mono text-xs leading-5">
         {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
-      {total ? <p className="mt-1 text-xs text-muted-foreground">{t("{n} فایل", { n: num(total) })}</p> : null}
+      {total ? <p className="mt-1 text-xs text-muted-foreground">{num(total)} {unit}</p> : null}
     </div>
   );
 }
@@ -1149,6 +1304,68 @@ function Table({ rows = [], columns, footer }) {
 
 function Json({ value }) {
   return <Code text={JSON.stringify(value, null, 2)} />;
+}
+
+// The body of a tool without its own view: what was asked, then what came back, each field with a
+// Persian name and its natural shape. The raw JSON stays one click away for whoever wants it.
+function GenericDetail({ args, result }) {
+  const payload = unwrapPeerFact(result);
+  const asked = factEntries(args).length > 0;
+  const empty = !hasValue(payload) || (isRecord(payload) && !factEntries(payload).length) || (Array.isArray(payload) && !payload.length);
+  return (
+    <div className="space-y-3">
+      {asked ? (
+        <section className="space-y-1">
+          <h4 className="text-[11px] font-medium text-muted-foreground">{t("درخواست")}</h4>
+          <Facts data={args} />
+        </section>
+      ) : null}
+      <section className="space-y-1">
+        <h4 className="text-[11px] font-medium text-muted-foreground">{t("نتیجه")}</h4>
+        {empty ? <p className="text-sm text-muted-foreground" dir="auto">{t("چیزی برنگشت.")}</p> : isRecord(payload) ? <Facts data={payload} /> : <FactValue value={payload} depth={0} />}
+      </section>
+      <details>
+        <summary className="cursor-pointer text-[11px] text-muted-foreground">{t("نمایش خام (JSON)")}</summary>
+        <Json value={{ args, result }} />
+      </details>
+    </div>
+  );
+}
+
+// An object as «name: value» lines. A short value sits beside its name; a long one, a list or a
+// nested object sits under it. Fields that are empty are left out.
+function Facts({ data, depth = 0 }) {
+  const entries = factEntries(data);
+  if (!entries.length) return <p className="text-sm text-muted-foreground">{t("موردی نیست.")}</p>;
+  return (
+    <dl className={`space-y-1.5 ${depth ? "border-s ps-3" : ""}`}>
+      {entries.map(([key, value]) => {
+        const inline = isScalar(value) && !isLongText(value) && !isUrl(value);
+        return (
+          <div key={key} className={inline ? "flex flex-wrap items-baseline gap-x-2" : "space-y-0.5"}>
+            <dt className="shrink-0 text-xs text-muted-foreground">{keyLabel(key)}{inline ? ":" : ""}</dt>
+            <dd className="min-w-0 text-sm"><FactValue value={value} depth={depth} /></dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+function FactValue({ value, depth }) {
+  if (Array.isArray(value)) {
+    if (!value.length) return <span className="text-muted-foreground">{t("خالی")}</span>;
+    if (value.every(isRecord)) return <Table rows={value} footer={`${value.length.toLocaleString("fa-IR")} مورد`} />;
+    return (
+      <ul className="list-disc space-y-0.5 ps-5">
+        {value.map((item, i) => <li key={i}><FactValue value={item} depth={depth + 1} /></li>)}
+      </ul>
+    );
+  }
+  if (isRecord(value)) return depth >= 2 ? <Json value={value} /> : <Facts data={value} depth={depth + 1} />;
+  if (isUrl(value)) return <a href={value} target="_blank" rel="noreferrer" className="ltr break-all text-primary underline">{value}</a>;
+  if (isLongText(value)) return <pre dir="auto" className="scrollbar-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-xs leading-5">{value}</pre>;
+  return <span dir="auto" className="break-words">{scalarText(value) ?? "—"}</span>;
 }
 
 function format(value) {

@@ -277,7 +277,7 @@ test("TELEGRAM_INSTRUCTION_GUARD off (no instructionPaths) or no full Claude Cod
     instructionPaths: [path.join(env.claudeDir, "memory")],
   });
   await (await scoped.send("go")).wait();
-  assert.equal(seen.hooks.PreToolUse.length, 1, "without full Claude Code only the file guard runs");
+  assert.equal(seen.hooks.PreToolUse.length, 2, "without full Claude Code only the file guard and the plan-mode guard run");
 });
 
 test("review: Bash in the agent folder (a bot chat without a repo) keeps ordinary commands", async () => {

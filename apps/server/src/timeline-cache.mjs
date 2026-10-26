@@ -15,6 +15,28 @@ import { emptyTimeline, foldEvents } from "@griffin/timeline";
 const gzip = promisify(zlib.gzip);
 const yieldToLoop = () => new Promise((resolve) => setImmediate(resolve));
 
+// A page of messages is never cut inside a run that is still going (its later events would find
+// nothing to land on), but only that many messages before the cut are looked at for one.
+const RUNNING_LOOKBACK = 50;
+const TAILS_KEPT = 3;
+
+/** Where the last `limit` messages start; 0 = show all. */
+export function tailStart(messages, limit) {
+  let cut = Math.max(0, messages.length - limit);
+  for (let i = cut - 1; i >= Math.max(0, cut - RUNNING_LOOKBACK); i -= 1) {
+    if (messages[i].role === "assistant" && messages[i].status === "running") cut = i;
+  }
+  return cut;
+}
+
+/** The `limit` messages just before the one called `before`; null when there is no such message. */
+export function olderPage(timeline, before, limit) {
+  const at = timeline.messages.findIndex((m) => m.id === before);
+  if (at < 0) return null;
+  const from = Math.max(0, at - limit);
+  return { messages: timeline.messages.slice(from, at), earlier: from };
+}
+
 export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageSize = 2000 }) {
   // A copy the browser kept is only as good as the code that folded it: a restart changes rev.
   const rev = randomBytes(6).toString("hex");
@@ -63,6 +85,25 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
     }
     const entry = { timeline, rev, body: Buffer.from(JSON.stringify({ timeline, rev })), packed: null, packing: null, kept: 0 };
     // The gzipped body is made on first use, off the main thread, and kept with the entry.
+    // The last `limit` messages (timeline.earlier = how many come before them): what a big chat's
+    // first open needs; the rest is fetched page by page (olderPage).
+    entry.tails = new Map();
+    entry.tail = (limit) => {
+      const cut = tailStart(timeline.messages, limit);
+      if (!cut) return entry;
+      let tail = entry.tails.get(limit);
+      if (!tail) {
+        const body = Buffer.from(JSON.stringify({ timeline: { ...timeline, messages: timeline.messages.slice(cut), earlier: cut }, rev }));
+        tail = { body, packed: null, packing: null };
+        tail.gzip = () => {
+          tail.packing ||= gzip(body, { level: 4 }).then((packed) => (tail.packed = packed));
+          return tail.packing;
+        };
+        entry.tails.set(limit, tail);
+        if (entry.tails.size > TAILS_KEPT) entry.tails.delete(entry.tails.keys().next().value);
+      }
+      return tail;
+    };
     entry.gzip = () => {
       if (entry.packed) return Promise.resolve(entry.packed);
       entry.packing ||= gzip(entry.body, { level: 4 }).then((packed) => {

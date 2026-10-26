@@ -801,3 +801,68 @@ test("bot: /model shows one button per model and a tap pins it; a failing webhoo
     await cleanup();
   }
 });
+
+// Owner 2026-10-25: the bot's chats list with his other chats, and /chats on the bot opens any of them.
+test("bot: the owner's bot chats list as his own; /chats moves the bot onto a web chat and back to its answers", async () => {
+  const { store, bot, integrations, runner, cleanup } = setup();
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "999:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    // The connected Telegram account proves 42 is the owner himself (chat-origin.mjs).
+    store.createIntegration({ kind: "telegram_account", name: "acc", secret: "", settings: { me: { id: 42 } } });
+    bot.push(msg(42, `/start ${added.pairingCode}`));
+    await until(() => bot.sent().length === 1);
+    bot.push(msg(42, "سلام", { from: { id: 42 } }));
+    await until(() => store.linkedChat(added.id, "42"));
+    const botChat = store.linkedChat(added.id, "42");
+    const source = (chatId) => store.listChatsBySource().find((c) => c.id === chatId)?.source;
+    assert.equal(source(botChat), "manual", "a /new on the bot is a chat like any other");
+
+    const web = store.createChat({ title: "کار وب" });
+    await runner.send(web.id, { text: "شروع", ownerText: true });
+    await until(() => !runner.isActive(web.id));
+
+    bot.push(msg(42, "/chats", { from: { id: 42 } }));
+    await until(() => bot.sent().some((c) => c.body.reply_markup?.inline_keyboard?.some((row) => /کار وب/.test(row[0].text))));
+    const menu = bot.sent().find((c) => c.body.reply_markup?.inline_keyboard?.some((row) => /کار وب/.test(row[0].text)));
+    const rows = menu.body.reply_markup.inline_keyboard.map((row) => row[0]);
+    assert.ok(rows.some((b) => b.text.startsWith("✔︎")), "the current chat is ticked");
+    const pick = rows.find((b) => /کار وب/.test(b.text));
+    assert.match(pick.callback_data, /^c:[a-f0-9]+:\d+$/);
+
+    // Someone else's tap is nothing.
+    bot.push({ callback_query: { id: "x", data: pick.callback_data, from: { id: 7 }, message: { chat: { id: 42 }, message_id: 9 } } });
+    bot.push({ callback_query: { id: "c1", data: pick.callback_data, from: { id: 42 }, message: { chat: { id: 42 }, message_id: 9 } } });
+    await until(() => bot.sent().some((c) => /💬 کار وب/.test(c.body.text || "")));
+    assert.equal(store.linkedChat(added.id, "42"), web.id);
+    assert.match(bot.sent().find((c) => /💬 کار وب/.test(c.body.text || "")).body.text, /آخرین جواب/);
+    assert.equal(source(web.id), "manual");
+    assert.equal(store.getKv(`tg-origin:${web.id}`), null, "his own bot chat does not make it a Telegram chat for good");
+    assert.deepEqual(store.foreignLinksForChat(web.id), []);
+
+    bot.push(msg(42, "ادامه بده", { from: { id: 42 } }));
+    await until(() => store.allEvents(web.id).some((e) => e.type === "user" && e.data.text === "ادامه بده"));
+    const own = store.allEvents(web.id).find((e) => e.type === "user" && e.data.text === "ادامه بده");
+    assert.equal(own.data.ownerText, true);
+    assert.equal(own.data.from, undefined);
+    await until(() => !runner.isActive(web.id));
+    bot.push(msg(42, "متن کس دیگر", { from: { id: 42 }, forward_date: 1 }));
+    await until(() => store.allEvents(web.id).some((e) => e.type === "user" && e.data.text === "متن کس دیگر"));
+    const fwd = store.allEvents(web.id).find((e) => e.type === "user" && e.data.text === "متن کس دیگر");
+    assert.equal(fwd.data.from?.kind, "telegram", "a forward is marked as someone else's words");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("bot: /chats is refused in a group", async () => {
+  const { bot, integrations, cleanup } = setup();
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "999:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    bot.push(msg(-100, `/start ${added.pairingCode}`));
+    await until(() => bot.sent().length === 1);
+    bot.push(msg(-100, "/chats", { from: { id: 42 } }));
+    await until(() => bot.sent().some((c) => /فقط در گفتگوی خصوصی/.test(c.body.text || "")));
+  } finally {
+    await cleanup();
+  }
+});

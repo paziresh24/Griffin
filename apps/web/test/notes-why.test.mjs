@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createNotesStore, noteBody, noteError, noteWhen, untilLabel } from "../src/notes.js";
+import { createNotesStore, noteBody, noteError, noteWhen, sidebarNotes, untilLabel } from "../src/notes.js";
 import { changeLabel, whyRows } from "../src/why.js";
 
 test("a note's body: into a chat, or a new chat keeping an explicit «no repo»", () => {
@@ -50,4 +50,10 @@ test("why rows: a fine stretch of tools is one line; failures, decisions and odd
   assert.equal(whyRows([{ kind: "end", status: "error", error: "x" }])[0].label, "با خطا تمام شد");
   assert.match(changeLabel({ kind: "tools", change: "added", names: ["debug_exec"] }), /debug_exec/);
   assert.equal(changeLabel({ kind: "engine", key: "model" }), "مدل عوض شد");
+});
+
+test("the sidebar lists the person's own notes; the agent's reminders stay in their chat", () => {
+  const items = [{ id: "a", text: "بعداً بپرس" }, { id: "r", text: "CI را چک کن", reminder: true, chatId: "c1" }];
+  assert.deepEqual(sidebarNotes(items).map((n) => n.id), ["a"]);
+  assert.deepEqual(sidebarNotes(null), []);
 });

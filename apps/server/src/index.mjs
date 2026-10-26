@@ -6,25 +6,28 @@ import http from "node:http";
 import os from "node:os";
 import { Worker } from "node:worker_threads";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getRequestListener } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp } from "./app.mjs";
 import { createDualServer, loadTls, parseTrustedProxies } from "./listen.mjs";
 import { ASK_REQUESTER_TOOL, ASK_TOOL, createAsks } from "./asks.mjs";
 import { ASK_AGENT_TOOL, CONSULT_TOOL, DELEGATE_TOOL, SUBTASKS_TOOL, CONSULT_MAX_TURNS, CONSULT_WITHHELD, consultCandidates, consultOf, createPeers, resolveConsultAccounts } from "./peers.mjs";
-import { createKnowledge, listAgentNotes, playbookIndex, reviewedRunbooks, setNoteReviewed } from "./knowledge.mjs";
+import { createKnowledge, deleteNote, editNote, listAgentNotes, listTrash, purgeNote, playbookIndex, readAudit, restoreNote, reviewedRunbooks, setNoteReviewed } from "./knowledge.mjs";
 import { createChatTrust } from "./knowledge-trust.mjs";
 import { brokerPaths, claudeCodeOptions, createOwnerJobs, jobWriterOf, migrateJobModes, OWNER_JOBS_FLAG, runAccess } from "./jobs/owner-jobs.mjs";
 import { createVisualizer, VISUALIZE_TOOL } from "./charts.mjs";
 import { createShowMedia, SHOW_MEDIA_TOOL } from "./media.mjs";
-import { createPreviews } from "./previews.mjs";
+import { createPreviews, localExec, previewRunsLocal } from "./previews.mjs";
+import { createBrowser } from "./browser.mjs";
 import { createWebTools } from "./web-search.mjs";
 import { createAuth } from "./auth.mjs";
 import { openStore } from "./db.mjs";
+import { telegramChatRoutes } from "./telegram-chat.mjs";
 import { createBackups } from "./backup.mjs";
 import { genv, resolveDbPath } from "./env.mjs";
 import { listPrefsRoutes } from "./list-prefs.mjs";
-import { buildRules, installRules } from "./prompt.mjs";
+import { BYPASS_NOTE, buildRules, installRules } from "./prompt.mjs";
 import { buildManifest, recordManifest } from "./manifest.mjs";
 import { simulateTools } from "./sim.mjs";
 import { createRunner, keptList, ownerTyped } from "./runner.mjs";
@@ -33,8 +36,10 @@ import { engineState, isCreditError, probeVerdict, rankByState, sameModelNames }
 import { archiveIdleChats } from "./idle-archive.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler, STUCK_TITLE } from "./titles.mjs";
+import { accountLoad, balanceAccounts } from "./account-balance.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
 import { STT_DEFAULTS, sttRoutes } from "./stt.mjs";
+import { hasLiveBorrower, treeBorrowers, treeOwnerId, treeToRelease } from "./tree-borrowers.mjs";
 import { chatTreeState, cleanupChatWorktree, currentWorktree, ensureChatWorktree, isValidRepoName, listRepos, parkedTrees, shortId, sweepChatWorktrees, switchChatWorktree, worktreeCreationSettled } from "./worktrees.mjs";
 import { createRepoChatTools, repoRules } from "./repo-tools.mjs";
 import { createIntegrations, integrationRoutes } from "./integrations/manager.mjs";
@@ -43,12 +48,16 @@ import { createJobs } from "./jobs/index.mjs";
 import { jobRoutes } from "./jobs/routes.mjs";
 import { createJobTools } from "./jobs/tools.mjs";
 import { accountHistory, createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
-import { COVERAGE_CALLER, END_AGENT_TOOL, TEAM_MUTATING, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
+import { COVERAGE_CALLER, END_AGENT_TOOL, coverageOwnerNote, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
+import { HANDOFF_TOOL, handoffTool, watchHandoffs } from "./handoff.mjs";
 import { createMotherTools, globalContext, isGlobalChat, motherContext, motherInfo, watchJoinedThreads } from "./integrations/mother.mjs";
 import { deliverable } from "./integrations/format.mjs";
 import { fillPersianNames } from "./integrations/fa-names.mjs";
-import { confirmWithOwner, fenceBackdoors, guardTools, isYes, noteOwnerAnswer, secretsGate } from "./guard.mjs";
+import { classify, confirmWithOwner, fenceBackdoors, guardTools, isYes, noteOwnerAnswer, secretsGate } from "./guard.mjs";
 import { reviewChanges } from "./review.mjs";
+import { laterTool } from "./later.mjs";
+import { linkSharedMemory, repoMemoryRules } from "./shared-memory.mjs";
+import { buildSkills } from "./skills-map.mjs";
 import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHop, openWorkFor, relatedRules, thirdPartyKey } from "./related.mjs";
 import { createChatTools, restrictForReadOnlySide, sideIsReadOnly } from "./chat-tools.mjs";
 import { createUpdates } from "./update.mjs";
@@ -59,9 +68,10 @@ import { TELEGRAM_LEDGER_CONFIG, ledgerRecorder, ledgerTools } from "./telegram-
 import { watchListTools } from "./integrations/telegram-watch-list.mjs";
 import { INBOX_PROMPT, createInbox, createInboxTools, dmMode, inboxRoutes, restrictForInbox } from "./telegram-inbox.mjs";
 import { TELEGRAM_BOT_API_CONFIG } from "./integrations/bots.mjs";
-import { OWNER_TASK_TOOL, TODO_TOOL, offersOwnerTask, ownerTaskTool, todoWriteTool, watchTodos } from "./todos.mjs";
+import { OWNER_TASK_TOOL, TODO_TOOL, offersOwnerTask, openChoresLine, ownerTaskTool, todoWriteTool, watchTodos } from "./todos.mjs";
 import { inboxTool } from "./inbox.mjs";
-import { claudeOneShot, claudeCodeLoginKey } from "./providers/claude.mjs";
+import { claudeOneShot, claudeCodeLoginKey, resolveModel, runsFree } from "./providers/claude.mjs";
+import { UPGRADE_TOOL, createUpgrades, upgradeTool } from "./model-upgrade.mjs";
 import { CLAUDE_ENDPOINTS, endpointOf, endpointSettings } from "./providers/claude-endpoint.mjs";
 import { createVerifier } from "./verify.mjs";
 import { allowsModel, peerSettings } from "./peer-limits.mjs";
@@ -75,9 +85,12 @@ import { agentPayload } from "./agents/import.mjs";
 import { griffinStatePaths } from "./providers/state-guard.mjs";
 import { hostTarget, runsOnHost } from "./providers/host-spawn.mjs";
 import { instructionPathsFor } from "./chat-origin.mjs";
+import { createModuleHost } from "./modules/host.mjs";
 import { filterToolsByProfile, publicProfile, rootCallerOf, APP_TOOL_NAMES, CALLER_LABELS, SELF_MGMT_TOOLS, unique as uniqueTools } from "./agents/profiles.mjs";
-import { createIncidentStore, createIntake, incidentView, isTeamReport, vaultAlerts } from "./incidents/index.mjs";
-import { createIncidentTools, createOpsRoom } from "./incidents/opsroom.mjs";
+import { createIncidentStore, createIntake, incidentBucket, incidentView, isTeamReport, vaultAlerts } from "./incidents/index.mjs";
+import { createIncidentTools, createOpsRoom, formatChange } from "./incidents/opsroom.mjs";
+import { ADDABLE_KINDS, createCollector, createSourceStore, parseAlertText, SOURCE_KINDS, sourceView, testSource, webhookItems } from "./incidents/sources.mjs";
+import { createSourceTools, INCIDENT_SUGGEST } from "./incidents/tools.mjs";
 import { createBusinessSource } from "./incidents/business.mjs";
 import { bindChatTools, createAgentSettingsTools } from "./agents/settings-tools.mjs";
 import { createCustomAgent, customCallers, MAX_INSTRUCTIONS } from "./agents/create.mjs";
@@ -109,9 +122,11 @@ import { createClaudeSignin } from "./claude-signin.mjs";
 import { accountLoginDir, linkSharedEntries, loginDirKey, mainConfigDir, removeLoginDir } from "./claude-account-dir.mjs";
 import { createDoctor, hookConsoleErrors, recentErrors } from "./doctor.mjs";
 import { createFeedback } from "./feedback.mjs";
+import { createClicks } from "./ui-clicks.mjs";
 import { agentNameError, currentProduct } from "./identity.mjs";
 import { setupPrompt } from "./setup-prompt.mjs";
 import { brandRoutes, createBrand, upgradeBrandCss } from "./brand.mjs";
+import { createPhoneBridge, PHONE_PATH } from "./phone-bridge.mjs";
 import { shellHandler } from "./shell.mjs";
 import { NAMES, randomName } from "./first-name.mjs";
 import { probeEgress } from "./egress-probe.mjs";
@@ -124,6 +139,8 @@ import { withinTime } from "./time-limit.mjs";
 import { telegramForShares } from "./private-share.mjs";
 import { createVpn, VPN_ENV } from "./vpn.mjs";
 import { createNetwork } from "./network.mjs";
+import { createMentionNote } from "./mentions.mjs";
+import { decideSend } from "./network-first.mjs";
 import { accountOrg, buildReport, createAccounting, keyFingerprint, REPORT_DAYS } from "./accounting.mjs";
 
 const env = process.env;
@@ -196,10 +213,11 @@ function openaiApiKey() {
 fs.mkdirSync(DATA, { recursive: true });
 const secrets = createSecretStore({ dataDir: DATA });
 // A fresh install gives the built-in agent the engine whose key is present, so the first chat works
-// with whichever key the owner brought. Existing profiles are never changed.
+// with whichever key the owner brought (Claude when there is none yet: the setup wizard signs it in).
+// Existing profiles are never changed.
 const seedProvider = secrets.get("engine/claude") || anthropicApiKey()
   ? "claude"
-  : secrets.get("engine/openai") || openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "cursor";
+  : secrets.get("engine/openai") || openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "claude";
 prepareAgentWorkspaces(WORKSPACE);
 const store = openStore(resolveDbPath(DATA), { seedProvider });
 bindPersonaStore(store);
@@ -224,6 +242,28 @@ const BROKER_SOCKET = genv("BROKER_SOCKET", "/run/griffin/broker.sock");
 const brokerWanted = Boolean(BROKER_SOCKET) && genv("BROKER", "on") !== "off";
 const toolSource = createToolSource({ socketPath: brokerWanted ? BROKER_SOCKET : null, store });
 const brokerEnabled = () => brokerWanted && toolSource.available();
+
+// Modules (modules/<id>/, docs/modules.md): what a person or a team adds to this install without
+// touching the core: agents, tools, pages. Which ones are on is the MODULES config key; empty = none.
+const modules = await createModuleHost({
+  dir: path.resolve(genv("MODULES_DIR", fileURLToPath(new URL("../../../modules", import.meta.url)))),
+  store,
+  enabled: genv("MODULES", ""),
+  product: currentProduct().id,
+  callTool: (name, args) => callBrokerTool(name, args),
+  env: (name, fallback = "") => genv(name, fallback),
+  // A module that stands for a core setting (a Telegram variant is TELEGRAM_DM_MODE) reads and writes it here.
+  getConfig: (key) => genv(key, ""),
+  setConfig: (patch) => config.set(patch),
+  onChange: () => store.bus.emit("chats", { type: "modules" }),
+  defaultProvider: DEFAULT_PROVIDER,
+  // Settings → MCP servers, for a module that declares one in requires.mcp (it reads its key here).
+  mcpServers: createMcpServers(),
+  // api.complete for a module that declared requires.ai (e.g. to summarise with it).
+  complete: (prompt) => titleText(prompt),
+});
+modules.seedAgents();
+for (const m of modules.status().filter((x) => x.enabled)) console.log(`[modules] ${m.id}: ${m.ok ? "on" : `FAILED ${m.error}`}`);
 
 // integrationsHolder breaks the cycle: asks needs to tell integrations a question closed, but
 // integrations itself is constructed later (it takes asks as an argument). tasksHolder is the
@@ -289,18 +329,35 @@ const showMedia = createShowMedia({
   workspace: WORKSPACE,
   resolveRoots: (chatId) => {
     const chat = store.getChat(chatId);
-    return [agentCwd(WORKSPACE, chat?.agent || DEFAULT_AGENT), WORKSPACE];
+    // A chat on a repo also shows files from its own worktree (a side chat or fork: its main chat's);
+    // a host install keeps worktrees outside WORKSPACE, so they were never inside the roots.
+    const tree = store.getChat(treeOwnerId(store, chatId) || chatId)?.worktree_path || chat?.worktree_path;
+    return [agentCwd(WORKSPACE, chat?.agent || DEFAULT_AGENT), WORKSPACE, ...(tree ? [tree] : [])];
   },
 });
 // Live previews (previews.mjs): apps an agent runs in the sandbox, shown in the chat. The sandbox runs
 // the processes (the same box debug_exec uses); /p/<token>/… is proxied to it. exec reaches the broker
 // lazily (callBrokerTool is defined further down), so this can be created before the runner.
+// The person's phone over WebUSB (phone-bridge.mjs): the browser holds the USB side, adb runs here.
+const phone = createPhoneBridge({ store, log: (line) => console.log(`[phone] ${line}`) });
+// A host install without a sandbox runs them on the machine itself (previewRunsLocal; PREVIEW_RUNNER).
+const previewLocal = previewRunsLocal({ setting: genv("PREVIEW_RUNNER", "auto") });
+if (previewLocal) console.log("[preview] no sandbox here: previews run on this machine");
 const previews = createPreviews({
   store,
-  exec: (command) => callBrokerTool("debug_exec", { host: "sandbox", command }, 125_000),
+  exec: previewLocal ? (command) => localExec(command) : (command) => callBrokerTool("debug_exec", { host: "sandbox", command }, 125_000),
   enabled: () => genv("PREVIEW", "on") !== "off",
   previewHost: () => String(genv("PREVIEW_HOST", "")).trim().toLowerCase(),
   publicUrl: () => genv("PUBLIC_URL", ""),
+  ...(previewLocal
+    ? { local: true, sandboxAddr: () => "127.0.0.1", previewDir: path.join(os.homedir(), ".griffin-previews"), dirRoots: [...new Set([path.join(REPOS_ROOT, "_wt"), "/tmp"])] }
+    : { dirRoots: [...new Set([path.join(REPOS_ROOT, "_wt"), "/root", "/tmp"])] }),
+});
+// A real browser (Chromium + Playwright) in the sandbox for every chat (browser.mjs): off with BROWSER=off.
+const browser = createBrowser({
+  store,
+  exec: (command) => callBrokerTool("debug_exec", { host: "sandbox", command }, 125_000),
+  address: () => previews.address(),
 });
 // web_search / web_fetch for every engine (web-search.mjs): off with WEB_SEARCH=off.
 const webTools = createWebTools({ enabled: () => genv("WEB_SEARCH", "on") !== "off", searchUrl: () => genv("WEB_SEARCH_URL", "") });
@@ -315,16 +372,21 @@ const visualizer = createVisualizer({
 
 // One tool-less completion (chat titles, the thread classifier's fallback, change reviewers): the
 // OpenAI-compatible engine when it has a key, else Claude, else nothing ("" keeps the old title).
-async function generateText(prompt, { model = null, effort: forced = null, timeoutMs = 30_000, engine = null } = {}) {
+async function generateText(prompt, { model = null, effort: forced = null, timeoutMs = 30_000, engine = null, strict = false } = {}) {
   if (genv("DEMO") === "1") return /[\u0600-\u06FF]/.test(prompt.split("Question:")[1] || "") ? "گفتگوی نمایشی" : "Demo chat";
   const useClaude = engine === PROVIDER_CLAUDE || (!engine && !providerKey(PROVIDER_OPENAI));
   if (useClaude) {
-    const apiKey = providerKey(PROVIDER_CLAUDE);
-    return apiKey ? claudeOneShot({ apiKey, model: model || genv("TITLE_CLAUDE_MODEL", "haiku"), prompt }) : "";
+    if (!quickClaude()) {
+      if (strict) throw new Error("no Claude account can answer now");
+      return "";
+    }
+    return claudeQuick(prompt, model || genv("TITLE_CLAUDE_MODEL", "haiku"));
   }
   const config = providerConfig(PROVIDER_OPENAI);
   const baseUrl = (config.baseUrl ?? genv("OPENAI_BASE_URL", "")) || "https://api.openai.com/v1";
   const key = providerKey(PROVIDER_OPENAI);
+  // strict (the change reviewers): a missing key is an error, not the title placeholder, which no verdict parser can read.
+  if (!key && strict) throw new Error("OpenAI-compatible key missing");
   if (!key) return "";
   const effort = config.reasoningEffort ?? genv("OPENAI_REASONING_EFFORT", "");
   const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
@@ -347,24 +409,47 @@ function changeReviewers() {
   if (genv("REVIEW") !== "on") return [];
   const reviewers = [];
   if (providerKey(PROVIDER_OPENAI) && !isLimited(PROVIDER_OPENAI)) {
-    reviewers.push({ label: "بازبین OpenAI-compatible", ask: (prompt) => generateText(prompt, { engine: PROVIDER_OPENAI, model: genv("REVIEW_OPENAI_MODEL", "") || null, effort: "medium", timeoutMs: 90_000 }) });
+    reviewers.push({ label: "بازبین OpenAI-compatible", ask: (prompt) => generateText(prompt, { engine: PROVIDER_OPENAI, model: genv("REVIEW_OPENAI_MODEL", "") || null, effort: "medium", timeoutMs: 90_000, strict: true }) });
   }
-  if (providerKey(PROVIDER_CLAUDE) && !isLimited(PROVIDER_CLAUDE)) {
-    reviewers.push({ label: "بازبین Claude", ask: (prompt) => claudeOneShot({ apiKey: providerKey(PROVIDER_CLAUDE), model: genv("REVIEW_CLAUDE_MODEL", "sonnet"), prompt }) });
+  if (quickClaude()) {
+    reviewers.push({ label: "بازبین Claude", ask: (prompt) => claudeQuick(prompt, genv("REVIEW_CLAUDE_MODEL", "sonnet")) });
   }
   return reviewers;
+}
+// The first Claude account that can answer now (enabled, keyed, not at its plan limit, not out of
+// credit), base account first — not always the base one: «claude» out of credit left both reviewers
+// dead (2026-10-20) and every title and changelog translation failing on 8 installs (2026-10-21).
+function quickClaude() {
+  const id = accounts().find((a) => a.kind === PROVIDER_CLAUDE && !claudeEndpoint(a.id) && usableAccount(a.id))?.id;
+  const key = id ? providerKey(id) : "";
+  return key ? { id, key } : null;
+}
+async function claudeQuick(prompt, model) {
+  const account = quickClaude();
+  if (!account) throw new Error("no Claude account can answer now");
+  return claudeOneShot({ apiKey: account.key, model, prompt }).catch((error) => {
+    // Out of credit: remember it so the next one-shot picks another account.
+    if (/credit balance/i.test(String(error?.message))) store.setKv(`credit:${account.id}`, String(Date.now()));
+    throw error;
+  });
 }
 // Folded timelines in memory: opening a chat, titling it and delivering its answer read only new events.
 const timelines = createTimelineCache({ store });
 // No OpenAI-compatible key (a capsule on Claude only): Claude Haiku names the chat, as in Karsara.
 // It used to answer «گفتگو» for every chat.
-const titleText = (prompt) =>
-  genv("DEMO") === "1" || providerKey(PROVIDER_OPENAI) ? generateText(prompt) : claudeOneShot({ apiKey: providerKey(PROVIDER_CLAUDE), model: "haiku", prompt });
+// No account that can answer: no title now (a later run tries again), no error per chat.
+// The OpenAI-compatible endpoint at its rate limit (429, 2026-10-22: eight chats left untitled) hands over to Haiku.
+const titleText = (prompt) => {
+  const haiku = () => (quickClaude() ? claudeQuick(prompt, "haiku") : Promise.resolve(""));
+  if (genv("DEMO") === "1") return generateText(prompt);
+  if (!providerKey(PROVIDER_OPENAI)) return haiku();
+  return generateText(prompt).catch((error) => (quickClaude() ? haiku() : Promise.reject(error)));
+};
 const maybeTitle = createTitler({ store, timelines, generate: titleText });
 // Older chats still carry the first line of the question as title; rename them once, one at a time.
 setTimeout(async () => {
   for (const chat of [...store.listChats({ archived: false }), ...store.listChats({ archived: true })]) {
-    if (chat.title.length > 24 || chat.title === STUCK_TITLE) await maybeTitle(chat.id, { backfill: true });
+    if (chat.title.length > 24 || chat.title === STUCK_TITLE) await maybeTitle(chat.id);
   }
 }, 20_000);
 
@@ -495,6 +580,35 @@ function reconfigureProviders() {
   modelCache = { at: 0, byProvider: {} };
   modelCacheGen += 1;
   vpn.setHosts(engineHosts());
+  try {
+    rehomeProfiles();
+  } catch {
+    /* during boot, before the account helpers exist: the boot call below does it */
+  }
+}
+// An agent on an account with no key or switched off, while another account has a key, moves to
+// the first such one (Cursor is not a target: blocked from Iran). A new install's agents were seeded
+// on Cursor and stayed there after the wizard set up Claude: four installs had «ایجنت روی cursor است
+// که کار نمی‌کند» and one had no engine its agent could use (2026-10-21).
+// An account out of credit counts as dead too (it stays so until a new key), but only an account
+// that can answer now takes the agent then (2026-10-21: a colleague's MR explainer moved from Cursor
+// onto his out-of-credit «claude»).
+function rehomeProfiles() {
+  if (demo) return;
+  // Claude first, then the profile's own kind, then anything: an agent on Claude never lands on GLM
+  // while another Claude account answers (a colleague's moved to their «openai» first, 2026-10-21).
+  const all = accounts().filter((a) => a.enabled && a.kind !== PROVIDER_CURSOR);
+  const pick = (kind, ok) => all.find((a) => a.kind === PROVIDER_CLAUDE && ok(a)) || all.find((a) => a.kind === kind && ok(a)) || all.find(ok);
+  for (const profile of store.listAgentProfiles()) {
+    const dead = !accountEnabled(profile.provider) || !keyedAccount(profile.provider);
+    const broke = !dead && creditAt(profile.provider) > 0;
+    const kind = kindOf(profile.provider);
+    const usable = pick(kind, (a) => usableAccount(a.id));
+    const target = dead ? usable || pick(kind, (a) => keyedAccount(a.id) && !creditAt(a.id)) : broke ? usable : null;
+    if (!target || target.id === profile.provider) continue;
+    store.updateAgentProfile(profile.id, { provider: target.id, model: null });
+    console.log(`[agents] ${profile.id}: ${profile.provider} ${dead ? "has no key" : "is out of credit"} — moved to ${target.id}`);
+  }
 }
 // The hosts of the engines switched on (an OpenAI-compatible base URL, a Claude vendor endpoint): with the
 // built-in VPN they, Telegram and the known AI providers go through it and nothing else does (vpn.mjs).
@@ -564,6 +678,10 @@ function modelCandidates(chat) {
   const prefix = chat?.caller === COVERAGE_CALLER ? "TEAM" : "TEAM_SUB";
   const team = teamRoot ? genv(`${prefix}_PROVIDER`, "") : "";
   if (team) add(team, genv(`${prefix}_MODEL`, ""), effortOf(genv(`${prefix}_EFFORT`, "")));
+  // A colleague's agent (peer:*) opens on PEER_* the same way, light by default when set; it moves
+  // itself to UPGRADE_MODEL for real work (model-upgrade.mjs).
+  const peerFront = isPeerCaller(chat?.caller) ? genv("PEER_PROVIDER", "") : "";
+  if (peerFront) add(peerFront, genv("PEER_MODEL", ""), effortOf(genv("PEER_EFFORT", "")));
   const own = profile?.provider || chat?.provider;
   // The default engine before the agent's own list; it keeps the agent's model only where that
   // model name means the same thing (the same account, or two plain Claude logins).
@@ -622,18 +740,39 @@ const usableAccount = (id) => stateOf(id).state === "ok";
 // PLAN_FALLBACK=ask (plan-fallback.mjs; owner install): an owner's own chat never moves to another
 // engine by itself at a plan limit — a card asks first. Chats nobody types into (jobs, colleagues'
 // threads, subtasks) and consults (same model, account to account) keep the auto-fallback.
-const asksBeforeSwitch = (chat) => planFallbackMode(genv("PLAN_FALLBACK", "ask")) === "ask" && ownerTyped(store, chat) && !consultOf(store, chat?.id);
+const asksBeforeSwitch = (chat) => planFallbackMode(genv("PLAN_FALLBACK", "auto")) === "ask" && ownerTyped(store, chat) && !consultOf(store, chat?.id);
 const keyedAccount = (id) => Boolean(providerKey(id)) || demo;
 // Auto mode ranks the candidates by usability (engine-state.mjs): the first usable one in the
 // chat's own order runs; with none usable, the one whose limit resets soonest; out of credit last.
 // Ask mode keeps the chat's own engine first: it waits or asks, never moves by itself.
+// Config ACCOUNT_BALANCE (account-balance.mjs): a chat starts on the shared Claude account with the
+// most room left and stays there; off = the fixed order above.
+const plainClaude = (id) => kindOf(id) === PROVIDER_CLAUDE && !claudeEndpoint(id);
+function balancedCandidates(chat) {
+  const list = modelCandidates(chat);
+  if (genv("ACCOUNT_BALANCE", "on") === "off") return list;
+  const placed = chat?.id ? store.lastRunProvider(chat.id) : null;
+  return balanceAccounts(list, { isPlain: plainClaude, usable: usableAccount, loadOf: (id) => accountLoad(providers[id]?.lastWindows?.()), placed }).list;
+}
 function routeModel(chat) {
   const ask = asksBeforeSwitch(chat);
-  const list = ask ? modelCandidates(chat) : rankByState(modelCandidates(chat), stateOf);
+  const list = ask ? balancedCandidates(chat) : rankByState(balancedCandidates(chat), stateOf);
   return pickRoute(list, { usable: usableAccount, enabled: accountEnabled, keyed: keyedAccount, ask, kindOf }) || { provider: DEFAULT_PROVIDER, model: "auto", effort: null };
 }
 const accountName = (id) => accounts().find((a) => a.id === id)?.label || claudeEndpoint(id)?.label || (kindOf(id) === PROVIDER_CLAUDE ? "Claude" : id);
 const runModel = routeModel;
+rehomeProfiles();
+// The name a person sees for an engine account: the one it was given, else its kind and number
+// («Claude · 2»), never the raw id («claude-2»). The usage panels use it (owner 2026-10-19).
+function engineLabel(id) {
+  const account = accounts().find((a) => a.id === id);
+  if (account?.label) return account.label;
+  const endpoint = claudeEndpoint(id)?.label;
+  if (endpoint) return endpoint;
+  const kind = account?.kind || kindOf(id) || String(id).split("-")[0];
+  const kindName = { claude: "Claude", openai: "OpenAI-compatible", cursor: "Cursor" }[kind] || kind;
+  return id === kind ? kindName : `${kindName} · ${String(id).slice(kind.length + 1)}`;
+}
 
 // The Telegram /model menu (integrations/manager.mjs modelMenu → modelChoices): each distinct
 // model the chat could run on now, one entry per model with its account(s), in routing order —
@@ -686,10 +825,46 @@ const modelChoices = async (chat) => {
   return ordered.slice(0, 20);
 };
 
+// A colleague's chat (team) or a colleague's agent (peer:*) on its light model may move the message
+// it is on to UPGRADE_MODEL (model-upgrade.mjs): plain Claude only (the same session goes on), never
+// to a model the owner did not allow that peer, never when it already runs on it.
+const upgrades = createUpgrades({
+  target: (chatId) => {
+    const chat = store.getChat(chatId);
+    if (!chat || !(chat.caller === COVERAGE_CALLER || isPeerCaller(chat.caller))) return null;
+    const model = genv("UPGRADE_MODEL", "");
+    if (!model) return null;
+    const route = routeModel(chat);
+    if (!plainClaude(route.provider) || resolveModel(route.model) === resolveModel(model)) return null;
+    if (isPeerCaller(chat.caller)) {
+      const allowed = peerSettings(store.getAgentProfile(chat.agent || DEFAULT_AGENT), chat.caller)?.models || [];
+      if (allowed.length && !allowsModel(allowed, route.provider, model)) return null;
+    }
+    return { model, effort: effortOf(genv("UPGRADE_EFFORT", "")) || null };
+  },
+});
+
 const runner = createRunner({
   store,
+  upgrades,
   runLabel: runModel,
-  annotate: (chatId) => integrationsHolder.current?.desk?.annotate(chatId) || null,
+  // Inside WORKSPACE: the owner's file tools read there, and the host's Claude Code sees the same path.
+  attachmentsRoot: path.join(WORKSPACE, "attachments"),
+  // The owner's own chats: a turn that ends on a promise nothing will wake is sent on once. Not a
+  // subtask or a colleague's request (their answer is taken at the first run's end), nor Telegram
+  // mothers, jobs or the ops room.
+  followThrough: (chat) => !chat.side_of && !chat.job_id && !chat.parent_chat_id && chat.caller === "owner",
+  // network is made further down: a run before it exists has nothing pending there.
+  pendingWork: (chatId) => {
+    let viaNetwork = 0;
+    try {
+      viaNetwork = network.pending(chatId);
+    } catch {
+      /* not made yet */
+    }
+    return (peersHolder.current?.pendingDelegates(chatId) || 0) + viaNetwork;
+  },
+  annotate: (chatId) => [integrationsHolder.current?.desk?.annotate(chatId), openChoresLine(store, chatId)].filter(Boolean).join("\n") || null,
   onFinished: (chatId) => {
     maybeTitle(chatId);
     tasksHolder.current?.sweep().catch(() => {});
@@ -705,6 +880,7 @@ const runner = createRunner({
     // Out of credit is no plan window: marked apart, tried last, and no reset to wait for.
     if (isCreditError(error?.message)) {
       store.setKv(`credit:${limited}`, Date.now());
+      rehomeProfiles();
       const next = runModel(chat).provider;
       console.error(`[${limited}] out of credit — chat ${chat?.id} moves to ${next}`);
       return next !== limited;
@@ -752,7 +928,7 @@ const runner = createRunner({
   notResumable: (chat) => Boolean(consultOf(store, chat?.id)) || Boolean(inboxHolder.current?.isInboxChat(chat?.id)),
   providerFor: (chat) => providers[runModel(chat).provider] || providers[DEFAULT_PROVIDER],
   agentOptions: async (chat) => {
-    if (genv("CLAUDE_CODE", "off") === "on") await mcpOauth.ensureFresh().catch(() => {});
+    if (genv("CLAUDE_CODE", "on") === "on") await mcpOauth.ensureFresh().catch(() => {});
     const agent = chat.agent || DEFAULT_AGENT;
     const caller = chat.caller || "owner";
     const profile = store.getAgentProfile(agent);
@@ -763,6 +939,7 @@ const runner = createRunner({
     const catalogForSettings = uniqueTools([
       ...(brokerNames || []),
       ...APP_TOOL_NAMES,
+      ...modules.toolNames(),
       ...businessDocs.names,
       ...jobToolNames,
       "telegram_dialogs",
@@ -770,6 +947,8 @@ const runner = createRunner({
       "telegram_media",
       "telegram_watch_list",
       "telegram_send",
+      "telegram_edit",
+      "telegram_delete",
     ]);
     const settingsTools = bindChatTools(
       createAgentSettingsTools({ store, catalogNames: () => catalogForSettings, mayRename: (chatId) => chatTrust.ownerRooted(chatId) && chatTrust.isCleanChat(chatId) && !store.getKv(thirdPartyKey(chatId)), confirm: (chatId, question) => asks.confirm(chatId, { question }), engine: { isEngine: (id) => Boolean(kindOf(id)), splitModel } }),
@@ -778,6 +957,7 @@ const runner = createRunner({
 
     const customTools = {
       ...(await toolSource.customTools(chat.id)),
+      ...modules.customTools(chat.id),
       [ASK_TOOL]: asks.tool(chat.id),
       [ASK_REQUESTER_TOOL]: asks.requesterTool(chat.id),
       [ASK_AGENT_TOOL]: peersHolder.current.tool(chat.id),
@@ -795,20 +975,35 @@ const runner = createRunner({
       ...createJobTools({ jobs, targets: () => integrations.targets(), chatId: chat.id, writerOf: jobWriterOf(store, { ownerRooted: (id) => chatTrust.ownerRooted(id) }) }),
       // tell_owner: only the ops room, only in "critical" mode (shadow/record stay silent).
       ...createIncidentTools({ incidents, notify: opsRoom.mode === "critical" && chat.caller === "ops" ? (text) => integrations.notifyOwner(text, chat.id) : null }),
+      // Data sources and workspace chats of the incident layer (incidents/tools.mjs).
+      ...createSourceTools({ store, incidents, sources: incidentSources, secrets, chatId: chat.id, caller, builtins: incidentBuiltins, baseUrl: () => genv("PUBLIC_URL", "").replace(/\/+$/, "") }),
       ...settingsTools,
       ...doctor.tools,
       // A colleague's own conversation may tell an owner chat something (its quota decides).
-      ...(isPeerCaller(caller) ? createPeerChatTools({ store, runner, chat }) : {}),
+      ...(isPeerCaller(caller) ? createPeerChatTools({ store, runner, chat, generate: titleText }) : {}),
     };
     // Per install (TELEGRAM_LEDGER=on, from Karsara): every telegram_send is written to the send
     // ledger under this chat, and the owner's own chats can read it back (telegram-ledger.mjs).
     // In inbox mode (TELEGRAM_DM_MODE=inbox) the ledger is always kept, and each send closes that
     // person's waiting burst in the inbox (telegram-inbox.mjs).
     Object.assign(customTools, createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id), onSent: (peer, text) => {
-      integrations.ownerWrote(peer, text);
+      integrations.ownerWrote(peer, text, { chatId: chat.id, title: store.getChat(chat.id)?.title || chat.title || "" });
       // An owner chat that wrote to someone is one of the threads their reply may belong to (desk.mjs askedBy).
       if (isOwnerChat(store, chat)) integrations.askedBy(peer, chat.id, text);
-    }, record: ledgerAndInbox(chat.id) }));
+    }, record: ledgerAndInbox(chat.id),
+    // A colleague's agent is reached on the agents' network, not by an owner-account message to its bot.
+    networkFirst: async ({ peer, title, text, because, file }) => {
+      const decision = decideSend({ person: store.findPerson(peer), agents: network.list(), because, name: title });
+      if (decision.go === "blocked") return decision.result;
+      if (decision.go !== "network") return null;
+      // The network carries text only; a file for a colleague's agent is refused before anything goes out.
+      if (file) throw new Error(`${title} is a colleague's agent, reached on the agents' network, which carries text only — the file was not sent; send it to a person instead`);
+      const r = await network.say(decision.agent.id, text, { chatId: chat.id });
+      return { sent: true, via: "network", agent: decision.agent.id, ...(r.state === "queued" ? { queued: true } : {}), ...r };
+    },
+    // telegram_send {file}: only this chat's own working folder (its worktree, or the agent's folder);
+    // workDir is set further down, before any tool runs.
+    fileRoots: () => [workDir] }));
     Object.assign(customTools, ledgerTools({ store, chat, enabled: ledgerOn() }));
     Object.assign(customTools, watchListTools({ store }));
 
@@ -817,11 +1012,17 @@ const runner = createRunner({
     const rootCaller = chat.parent_chat_id ? rootCallerOf(store, chat) : caller;
     const rootChatId = store.rootChatId(chat.id);
     const unattended = ["scheduler", "ops"].includes(rootCaller) || Boolean(store.getChat(rootChatId)?.job_id);
+    const teamRooted = rootCaller === COVERAGE_CALLER;
+    // «بدون پرسیدن» in the owner's own chat (and the subtasks it delegates) means no limit at all
+    // (owner 2026-10-21: «وقتی میزارم روی بدون پرسیدن واقعا هیچ محدودیتی نداشته باشه، الان مثل اتوعه»):
+    // no fence, no secrets gate, no reviewers, no file/state guard, no permission card. The other
+    // modes keep them.
+    const ownerBypass = rootCaller === "owner" && !unattended && (store.getChat(rootChatId)?.mode || "agent") === "agent";
     // A job the owner wrote, not «محدود»: his attended tools; gated calls ask him, or nothing asks in
     // «بدون پرسیدن» (jobs/owner-jobs.mjs). Every other run: asOwner = his own attended chain,
     // guardMode as before.
     const ownerJob = unattended && ownerJobs.fullTools(chat.id);
-    const access = runAccess({ rootCaller, unattended, ownerJob, bypass: ownerJob && ownerJobs.bypass(chat.id), coverage: caller === COVERAGE_CALLER });
+    const access = runAccess({ rootCaller, unattended, ownerJob, bypass: ownerJob && ownerJobs.bypass(chat.id), coverage: caller === COVERAGE_CALLER, opsAsks: genv("OPS_MODE", "shadow") === "critical" });
     // Suggest a chat / mark a chapter (chat-tools.mjs): only in chats the owner is reading.
     if (access.asOwner) {
       // Run an app in the sandbox and show it live in the chat (previews.mjs).
@@ -830,6 +1031,8 @@ const runner = createRunner({
       // consult: another model answers inside one call (peers.mjs; it refuses in sub-chats itself).
       customTools[CONSULT_TOOL] = peersHolder.current.consultTool(chat.id);
     }
+    // A browser for every chat (browser.mjs); a saved login belongs to the owner's chains or to that one caller.
+    if (genv("BROWSER", "on") !== "off" && genv("DEMO") !== "1") Object.assign(customTools, browser.tools(chat.id, { scope: access.asOwner ? "owner" : rootCaller }));
     // chat_list / chat_read / chat_send / notify_owner between the owner's own chats (from Karsara;
     // owner-chat-tools.mjs). On by default on every install (owner 2026-10-19); OWNER_CHAT_TOOLS=off.
     if (offersOwnerChatTools(store, chat, { enabled: genv(OWNER_CHAT_TOOLS_CONFIG, "on") !== "off" })) {
@@ -874,24 +1077,24 @@ const runner = createRunner({
     // Irreversible calls in any chain not rooted in the owner need the owner's yes (in code). The
     // question reaches them in Telegram wherever the chain started, so a peer chain asks too
     // instead of refusing outright.
-    filtered = fenceBackdoors(filtered, { chatId: chat.id, store, caller: rootCaller });
-    filtered = secretsGate(filtered, {
+    if (!ownerBypass) filtered = fenceBackdoors(filtered, { chatId: chat.id, store, caller: rootCaller });
+    if (!ownerBypass) filtered = secretsGate(filtered, {
       chatId: chat.id,
       asks,
       store,
       caller: rootCaller,
-      mode: access.guardMode === "refuse" ? "refuse" : "ask",
+      mode: access.guardMode === "refuse" ? "refuse" : teamRooted ? "escalate" : "ask",
       ownerProjects: String(genv("OWNER_INFISICAL_PROJECTS", "")).split(",").filter(Boolean),
     });
-    if (access.guardMode) {
+    if (access.guardMode && !teamRooted) {
       filtered = guardTools(filtered, {
         chatId: chat.id,
         asks,
         store,
         caller: rootCaller,
-        extra: rootCaller === COVERAGE_CALLER ? TEAM_MUTATING : null,
         allowPass: ownJob,
         mode: access.guardMode,
+        verdictOf: (name, args) => modules.verdictOf(name) ?? classify(name, args),
       });
     }
     // A person's mother chat orchestrates and never closes (integrations/mother.mjs); only
@@ -909,6 +1112,8 @@ const runner = createRunner({
         forwardToChat: (target, note, why) => integrations.desk.forwardToChat(chat.id, target, note, why),
       }));
     }
+    // The owner's own chat has no requester but him: ask_requester there only mislabels his question.
+    if (caller === "owner" && !chat.parent_chat_id) delete filtered[ASK_REQUESTER_TOOL];
     // The global chat («🌐 … — همه»): the assistant's Telegram desk (integrations/desk.mjs).
     const desk = !mother && caller === "owner" && isGlobalChat(store, chat.id);
     if (desk) Object.assign(filtered, integrations.desk.globalTools());
@@ -920,16 +1125,38 @@ const runner = createRunner({
           if (peerLink) integrations.bridge.scheduleEnd(chat.id, { integrationId: peerLink.integration_id, peer: peerChat, note });
         },
       });
-      filtered = guardTeamTools(filtered, { chatId: chat.id, asks, store, peerChat });
+      filtered = guardTeamTools(filtered, { chatId: chat.id, asks, store, peerChat, allowPass: ownJob, verdictOf: (name, args) => modules.verdictOf(name) ?? classify(name, args) });
+    } else if (teamRooted) {
+      filtered = guardTeamTools(filtered, { chatId: chat.id, asks, store, allowPass: ownJob, verdictOf: (name, args) => modules.verdictOf(name) ?? classify(name, args) });
+    }
+    // A colleague's Telegram chain only reads; what it may not do goes to one of the owner's own
+    // chats once he starts it (handoff.mjs, owner 2026-10-21).
+    if (teamRooted) {
+      const root = store.getChat(rootChatId);
+      const who = (root?.person_id && store.getPerson?.(root.person_id)?.display_name) || motherInfo(store, rootChatId)?.name || null;
+      filtered[HANDOFF_TOOL] = handoffTool({
+        store,
+        chatId: chat.id,
+        rootChatId,
+        who,
+        // The Telegram line points at his main page, where the card waits — not the colleague's chat.
+        notify: (text, target) => {
+          const home = genv("PUBLIC_URL", "");
+          return Promise.all([push.notify("notify", store.getChat(target), { summary: text }), integrations.notifyOwner(home ? `${text}\n${home}/#/` : text, null)]);
+        },
+      });
     }
     // Every change, in every chain (owner's too), first needs two independent reviewers' yes.
-    if (genv("DEMO") !== "1") filtered = reviewChanges(filtered, { chatId: chat.id, store, asks, reviewers: changeReviewers() });
+    if (genv("DEMO") !== "1" && !ownerBypass) filtered = reviewChanges(filtered, { chatId: chat.id, store, asks, reviewers: changeReviewers() });
+    // A colleague's chat on its light model: upgrade_model moves this message to the stronger one.
+    if (genv("UPGRADE_MODEL", "") && (caller === COVERAGE_CALLER || isPeerCaller(caller))) filtered[UPGRADE_TOOL] = upgradeTool(upgrades, chat.id);
     // The owner's board (todos.mjs, inbox.mjs). One todo tool per engine: Claude has TodoWrite,
     // Cursor updateTodos; decided per run, so a fallback to the OpenAI-compatible engine gets todo_write. A chore for the
     // owner only where he reads the board (offersOwnerTask: his chains and colleagues' Telegram ones,
     // never jobs, the ops room or a peer's /mcp chain); a rehearsal records it (sim.mjs).
     if (kindOf(runModel(chat).provider) === PROVIDER_OPENAI) filtered[TODO_TOOL] = todoWriteTool({ store, chatId: chat.id });
     if (agent === DEFAULT_AGENT && access.asOwner) filtered.inbox_list = inboxTool({ store, asks });
+    filtered.later = laterTool({ store, chatId: chat.id });
     if (offersOwnerTask(ownerJob ? { rootCaller: "owner", unattended: false } : { rootCaller, unattended })) filtered[OWNER_TASK_TOOL] = ownerTaskTool({ store, chatId: rootChatId, askedIn: chat.id, agent });
 
 
@@ -938,7 +1165,8 @@ const runner = createRunner({
     // keeps the forked session by working folder. A folder switch in flight finishes first, and the
     // chat is read after it (its repo may have moved).
     // A consult works in the folder of the chat that asked.
-    const mainId = chat.side_of || store.getKv(`fork-of:${chat.id}`) || consultOf(store, chat.id)?.from;
+    const treeOwner = treeOwnerId(store, chat.id);
+    const mainId = (treeOwner !== chat.id ? treeOwner : null) || consultOf(store, chat.id)?.from;
     await worktreeCreationSettled(REPOS_ROOT, mainId || chat.id);
     const repoChat = mainId ? store.getChat(mainId) || chat : store.getChat(chat.id) || chat;
     let repoContext = null;
@@ -950,6 +1178,7 @@ const runner = createRunner({
         currentDir: repoChat.worktree_path || null,
         onCurrent: (current) => store.updateChat(repoChat.id, { worktreePath: current }),
         fetchRepo: brokerEnabled() ? (repo) => callBrokerTool("git_fetch", { repo }, 130_000) : null,
+        linkIgnored: genv("WORKTREE_LINK"),
         onNote: (note) => store.appendEvent(chat.id, null, "note", { text: note }),
       });
       const moved = store.getKv(`repomove:${repoChat.id}`);
@@ -1000,7 +1229,9 @@ const runner = createRunner({
     // Rules are built from the tools this run really has (after caller filtering and guards).
     const ruleOptions = { agent, caller: quotaCaller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))), mother: Boolean(mother), autoTrust: KNOWLEDGE_AUTO_TRUST && !desk && chatTrust.ownerRooted(chat.id), isTrustedNote: chatTrust.isTrustedNote, businessDocsLabel: "business_docs_search" in filtered ? businessDocs.promptLabel : "" };
     installRules(cwd, ruleOptions);
-    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "");
+    // Claude Code loads the linked memory folder itself; other engines get the index here, only in owner-rooted chats.
+    const repoMemory = repoContext?.repo && kindOf(runModel(chat).provider) !== PROVIDER_CLAUDE && chatTrust.ownerRooted(chat.id) ? repoMemoryRules({ configDir: mainConfigDir(), repoDir: path.join(REPOS_ROOT, repoContext.repo) }) : "";
+    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}${repoMemory ? `\n\n${repoMemory}` : ""}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "") + (ownerBypass ? BYPASS_NOTE : "") + (chatTrust.ownerRooted(chat.id) ? phone.promptLine() : "");
     const seedMessages = chat.agent_id ? null : seedTurns(chat);
     // «چرا؟»: what this session starts with, kept on the chat (manifest.mjs). Never fails the run.
     try {
@@ -1032,14 +1263,18 @@ const runner = createRunner({
     // never the knowledge store, the agent's state and rules, or a worktree's .git. Any other chain
     // (a colleague, a peer, a job, the ops room, the Telegram desk) gets none.
     const workDir = repoContext?.dir || cwd;
+    // One memory per repo, not per worktree (shared-memory.mjs).
+    if (repoContext?.repo) linkSharedMemory({ configDir: mainConfigDir(), workDir, repoDir: path.join(REPOS_ROOT, repoContext.repo) });
     const fileAccess = access.asOwner && !desk && !inboxChat
-      ? { read: [WORKSPACE], write: readOnlySide ? [] : [workDir], deny: [KNOWLEDGE_ROOT, path.join(workDir, ".git"), ...[".cursor", ".claude", ".griffin-openai-sessions", "CLAUDE.md"].map((name) => path.join(cwd, name))] }
+      ? ownerBypass && !readOnlySide
+        ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
+        : { read: [WORKSPACE], write: readOnlySide ? [] : [workDir], deny: [KNOWLEDGE_ROOT, path.join(workDir, ".git"), ...[".cursor", ".claude", ".griffin-openai-sessions", "CLAUDE.md"].map((name) => path.join(cwd, name))] }
       : null;
     // Config CLAUDE_HOST: the owner's full Claude Code runs on the host (providers/host-spawn.mjs). There
     // the data folder is GRIFFIN_CLAUDE_HOST_DATA (the host path of /data), so the guards protect that.
-    const onHost = runsOnHost({ claudeCode: Boolean(fileAccess) && genv("CLAUDE_CODE", "off") === "on", ownerJob, mode: genv("CLAUDE_HOST", "off"), chosen: chat.runs_on, bypass: (chat.mode || "agent") === "agent" && Boolean(hostTarget()) });
+    const onHost = runsOnHost({ claudeCode: Boolean(fileAccess) && genv("CLAUDE_CODE", "on") === "on", ownerJob, mode: genv("CLAUDE_HOST", "off"), chosen: chat.runs_on, bypass: runsFree(chat.mode) && Boolean(hostTarget()) });
     const runData = (onHost && genv("CLAUDE_HOST_DATA", "")) || DATA;
-    const claudeCode = claudeCodeOptions({ fileAccess, claudeCodeOn: !readOnlySide && genv("CLAUDE_CODE", "off") === "on", stateGuardOn: genv("STATE_GUARD", "on") !== "off", statePaths: () => griffinStatePaths({ knowledgeRoot: KNOWLEDGE_ROOT, data: runData, home: runData === DATA ? os.homedir() : path.join(runData, "home") }), ownerJob, dataDir: runData, jobClosed: brokerPaths(toolSource.socketPath) });
+    const claudeCode = claudeCodeOptions({ fileAccess, claudeCodeOn: !readOnlySide && genv("CLAUDE_CODE", "on") === "on", stateGuardOn: genv("STATE_GUARD", "off") === "on" && !ownerBypass, statePaths: () => griffinStatePaths({ knowledgeRoot: KNOWLEDGE_ROOT, data: runData, home: runData === DATA ? os.homedir() : path.join(runData, "home") }), ownerJob, dataDir: runData, jobClosed: brokerPaths(toolSource.socketPath) });
 
     return {
       // Engines with their own file tools (Claude, Cursor) work in the worktree; the agent's own
@@ -1053,9 +1288,14 @@ const runner = createRunner({
       // tool also refuse writes into the knowledge store and the data folder (providers/state-guard.mjs).
       ...claudeCode,
       ...(onHost ? { onHost: true } : {}),
+      // Commits from the owner's chats carry his own GitLab identity, whatever a repo's local config
+      // or the model says (2026-10-21: a clone's user.email was a colleague's and the model copied the
+      // last commit's author — his work showed as other people's). On the host his own
+      // gitconfig already is him.
+      ...(fileAccess && !onHost ? { gitAuthor: await ownerGitAuthor() } : {}),
       // The chat's permission mode (owner 2026-10-17, as in Claude Desktop): in «auto», «ask» and «edits»
       // a step Claude Code wants a permission for becomes a yes/no card for the owner.
-      ...(fileAccess ? { approve: (question) => confirmWithOwner(store, asks, chat.id, question).then(isYes), elicit: (args) => asks.elicit(chat.id, args) } : {}),
+      ...(fileAccess ? { approve: (question) => confirmWithOwner(store, asks, chat.id, question).then((conf) => (conf?.answered ? isYes(conf) : "unanswered")), elicit: (args) => asks.elicit(chat.id, args) } : {}),
       // Config TELEGRAM_INSTRUCTION_GUARD (default on; off turns it off): a chat born from someone else's Telegram
       // message may not write the owner's CLAUDE.md, settings, memory, skills, hooks or core.md
       // (chat-origin.mjs). His own Saved Messages and his own bot chat stay unrestricted.
@@ -1065,11 +1305,11 @@ const runner = createRunner({
       // Config CLAUDE_BACKGROUND_TASKS (default on, as in Karsara): with full Claude Code in his own chats (not his
       // jobs), background shells and agents outlive the turn, each with its own stop (runner.stopTask).
       ...(claudeCode.claudeCode && !ownerJob && genv("CLAUDE_BACKGROUND_TASKS", "on") !== "off" ? { backgroundTasks: true } : {}),
-      // Config PLAN_APPROVAL (default off): in his own chats a Claude plan (ExitPlanMode in plan mode)
+      // Config PLAN_APPROVAL (default on): in his own chats a Claude plan (ExitPlanMode in plan mode)
       // waits on his question card; his approval, or an exact approval word typed in the box or his
       // Telegram (asks.approvePlanByText), moves the chat to agent mode, as in Karsara.
       // Root chats only: a child or a consult inherits plan mode, and its plan is its parent's to present.
-      ...(fileAccess && genv("PLAN_APPROVAL", "off") === "on" && (store.rootChatId?.(chat.id) ?? chat.id) === chat.id
+      ...(fileAccess && genv("PLAN_APPROVAL", "on") === "on" && (store.rootChatId?.(chat.id) ?? chat.id) === chat.id
         ? {
             planApproval: {
               ask: (args) => asks.plan(chat.id, args),
@@ -1080,9 +1320,9 @@ const runner = createRunner({
             },
           }
         : {}),
-      // Config CLAUDE_STEER (default off; needs CLAUDE_BACKGROUND_TASKS on, whose streaming input it
+      // Config CLAUDE_STEER (default on; needs CLAUDE_BACKGROUND_TASKS on, whose streaming input it
       // uses): a message sent mid-run goes into the running turn instead of waiting for it to end.
-      ...(claudeCode.claudeCode && !ownerJob && genv("CLAUDE_BACKGROUND_TASKS", "on") !== "off" && genv("CLAUDE_STEER", "off") === "on" ? { steer: true } : {}),
+      ...(claudeCode.claudeCode && !ownerJob && genv("CLAUDE_BACKGROUND_TASKS", "on") !== "off" && genv("CLAUDE_STEER", "on") === "on" ? { steer: true } : {}),
       stateDir: cwd,
       rules,
       model: { id: runModel(chat).model },
@@ -1106,6 +1346,8 @@ toolBuilderHolder.current = createToolBuilder({
   store,
   runner,
   isYes,
+  // A merged tool reaches this install with the next update: then the chat that asked is woken.
+  hasTool: async (name) => APP_TOOL_NAMES.includes(name) || Boolean((await toolSource.listNames())?.includes(name)),
   confirm: (chatId, question) => confirmWithOwner(store, asks, chatId, question),
   createBuildChat: async ({ title, text }) => {
     const profile = store.getAgentProfile?.(DEFAULT_AGENT);
@@ -1176,12 +1418,15 @@ searchLater(20_000);
 setInterval(refreshRepos, 10 * 60_000).unref();
 
 // An archived chat gives its worktree back when nothing would be lost (clean, nothing unpushed);
-// otherwise it stays and the chat says why. Worktrees of deleted chats go at startup.
+// otherwise it stays and the chat says why. Worktrees of deleted chats go at startup. A tree its
+// side chats or forks still work in stays until the last of them is archived (tree-borrowers.mjs).
 const cleaning = new Set();
 store.bus.on("chats", (change) => {
-  if (change?.type !== "updated" || cleaning.has(change.chatId)) return;
-  const chat = store.getChat(change.chatId);
-  if (!chat?.archived || !chat.repo || !(chat.worktree_path || parkedTrees(REPOS_ROOT, chat.id).length)) return;
+  if (change?.type !== "updated") return;
+  const ownerId = treeToRelease(store, change.chatId);
+  if (!ownerId || cleaning.has(ownerId)) return;
+  const chat = store.getChat(ownerId);
+  if (!(chat.worktree_path || parkedTrees(REPOS_ROOT, chat.id).length)) return;
   cleaning.add(chat.id);
   releaseChatRuns(chat.id)
     .then((stopped) => stopped
@@ -1197,7 +1442,7 @@ store.bus.on("chats", (change) => {
 // Side chats run in the parent's worktree, so before the tree is checked or removed every side
 // chat is stopped, then the parent. False when a run did not stop.
 async function releaseChatRuns(chatId) {
-  const ids = [...store.listSideChats(chatId).map((side) => side.id), chatId];
+  const ids = [...treeBorrowers(store, chatId).map((row) => row.id), chatId];
   for (const id of ids) {
     if (runner.isActive(id)) await runner.cancel(id).catch((error) => console.error(`[worktree] stop ${id}: ${error.message}`));
   }
@@ -1259,7 +1504,8 @@ const folderSwitch = {
   },
 };
 {
-  const states = new Map(store.listRepoChats().map((row) => [shortId(row.id), row.archived ? "archived" : "active"]));
+  // An archived chat whose side chat or fork is still open keeps its tree: they work in it.
+  const states = new Map(store.listRepoChats().map((row) => [shortId(row.id), row.archived && !hasLiveBorrower(store, row.id) ? "archived" : "active"]));
   // A tree whose chat this install doesn't know is only "deleted" when it carries this install's own
   // name. Another app may share the repos folder (Karsara beside a Griffin trial, 2026-10-17: 92 of its
   // live chats lost their trees and branches because they were taken for deleted Griffin chats).
@@ -1274,6 +1520,23 @@ const folderSwitch = {
 // What a fresh session starts with: the chat's own earlier turns, and for a side chat the main
 // chat's conversation before them (side chats). The message being sent now is added
 // by the provider, so a seed ending in it would say it twice.
+// The install's GitLab user (the broker's token) as a git author, or null. Cached an hour; a miss
+// (no broker, GitLab down) is asked again after five minutes.
+let gitAuthorCache = { at: 0, value: null };
+async function ownerGitAuthor() {
+  if (Date.now() - gitAuthorCache.at < (gitAuthorCache.value ? 3_600_000 : 300_000)) return gitAuthorCache.value;
+  let value = null;
+  try {
+    const out = await callBrokerTool("gitlab_version", {}, 30_000);
+    const user = out?.user;
+    if (user?.email) value = { name: user.name || user.username, email: user.email };
+  } catch {
+    /* no identity: git's own config */
+  }
+  gitAuthorCache = { at: Date.now(), value };
+  return value;
+}
+
 function seedTurns(chat) {
   const own = store.priorTurns(chat.id);
   while (own.at(-1)?.role === "user") own.pop();
@@ -1321,9 +1584,9 @@ async function usage() {
     PROVIDERS.map(async (id) => {
       try {
         const q = await providers[id].usage?.();
-        return q ? { id, ...q } : null;
+        return q ? { id, label: engineLabel(id), ...q } : null;
       } catch (error) {
-        return { id, error: String(error?.message || error) };
+        return { id, label: engineLabel(id), error: String(error?.message || error) };
       }
     }),
   );
@@ -1360,15 +1623,18 @@ async function health() {
 // Messenger integrations run inside the app (they need the runner and the chat store).
 // peerAuth comes first: the integrations bridge auto-registers peer users for assistant-signed
 // messages (bindPeerAgentPerson) and needs createUser's default-quota grant.
-const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", ""), businessDocs: businessDocs.names.length > 0 });
+const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", "") });
 // The agents' network (network.mjs): colleagues' installs find each other and talk over their MCP.
-const network = createNetwork({ store, peerAuth, secrets, runner, env: { GRIFFIN_NETWORK_DOMAINS: genv("NETWORK_DOMAINS", "") || undefined, GRIFFIN_NETWORK_SEEDS: genv("NETWORK_SEEDS", "") || undefined }, publicUrl: () => genv("PUBLIC_URL", ""), enabled: () => genv("NETWORK", "on") !== "off" });
+const network = createNetwork({ store, peerAuth, secrets, runner, skills: () => buildSkills({ store, owner: OWNER, reposRoot: REPOS_ROOT, knowledgeRoot: KNOWLEDGE_ROOT, agentId: DEFAULT_AGENT, configDir: mainConfigDir() }), env: { GRIFFIN_NETWORK_DOMAINS: genv("NETWORK_DOMAINS", "") || undefined, GRIFFIN_NETWORK_SEEDS: genv("NETWORK_SEEDS", "") || undefined }, publicUrl: () => genv("PUBLIC_URL", ""), brandColor: () => createBrand(path.join(DATA, "brand")).read().color, enabled: () => genv("NETWORK", "on") !== "off",
+  // What the card tells the other agents besides «ready / updating»: the build, how busy, and whether
+  // any engine can answer now (a plan limit everywhere means a late answer, not a dead agent).
+  presence: () => ({ commit: readBuildCommit() || null, activeRuns: runner.activeCount(), canThink: accounts().some((a) => usableAccount(a.id)), noEngine: !demo && !accounts().some((a) => a.enabled && keyedAccount(a.id)) }) });
 // Telegram DMs in inbox mode (config TELEGRAM_DM_MODE=inbox): one dispatcher chat routes them.
 const inbox = createInbox({ store, runner, history: (peerId) => accountHistory(integrationsHolder.current?.accountClient(), peerId) });
 inboxHolder.current = inbox;
 // The send ledger is kept when the install asks for it, and always in inbox mode (routing reads it).
 // Every send also closes that person's waiting burst in the inbox.
-const ledgerOn = () => genv(TELEGRAM_LEDGER_CONFIG, "off") === "on" || dmMode() === "inbox";
+const ledgerOn = () => genv(TELEGRAM_LEDGER_CONFIG, "on") === "on" || dmMode() === "inbox";
 const ledgerAndInbox = (chatId = null) => {
   const ledger = ledgerRecorder({ store, chatId, enabled: ledgerOn() });
   return ({ peerId, messageId }) => {
@@ -1378,6 +1644,8 @@ const ledgerAndInbox = (chatId = null) => {
 };
 const integrations = createIntegrations({
   inbox,
+  // A colleague's agent is reached over the agents' network, not in Telegram (network-first.mjs).
+  network,
   // A Bot API mirror for Telegram bots on a host that cannot reach api.telegram.org (bots.mjs).
   telegramBotApi: genv(TELEGRAM_BOT_API_CONFIG, ""),
   store, runner, timelines, asks, peerAuth, publicUrl: genv("PUBLIC_URL", ""), telegramProxy: () => parseProxy(genv("TELEGRAM_SOCKS")),
@@ -1561,35 +1829,117 @@ const readBusiness = createBusinessSource({
     return body.result.rows || [];
   },
 });
+// Data sources (sources.mjs), Grafana-style: each install keeps its own list. The three readers that
+// were hard-wired here before are built-in kinds; they are seeded once on the platform owner's own
+// install with a broker (it holds the clusters' alerts and the vault), everyone adds the rest.
+const incidentSources = createSourceStore(store.db, { secrets });
+if (!store.getKv("incident_sources_seeded")) {
+  if (brokerEnabled() && incidentSources.isEmpty()) {
+    incidentSources.add({ id: "clusters", kind: "clusters", name: "کلاسترهای بروکر", by: "seed" });
+    incidentSources.add({ id: "vault", kind: "vault", name: "خزانهٔ ابزارها", by: "seed" });
+  }
+  // Incidents recorded before sources existed came from these three readers.
+  if (incidentSources.get("clusters")) {
+    store.db.prepare("UPDATE incidents SET source_id = CASE cluster WHEN 'business' THEN 'business' WHEN 'vault' THEN 'vault' ELSE 'clusters' END WHERE source_id IS NULL AND cluster NOT IN ('human', 'griffin')").run();
+  }
+  store.setKv("incident_sources_seeded", { at: new Date().toISOString() });
+}
+const incidentBuiltins = {
+  clusters: async () => {
+    const { status, body } = await brokerRequest(toolSource.socketPath, "POST", "/tools/alerts_active", {}, 60_000);
+    if (status !== 200 || !body?.ok) throw new Error(body?.error || `broker http ${status}`);
+    return body.result;
+  },
+  business: async () => {
+    const business = await readBusiness();
+    return { clusters: { business: { ok: business.ok, error: business.error, watchdog: false, count: business.alerts.length } }, alerts: business.alerts };
+  },
+  vault: async () => {
+    const health = await brokerRequest(toolSource.socketPath, "GET", "/healthz", undefined, 10_000).catch(() => null);
+    const vault = vaultAlerts(health?.body?.vault);
+    return { clusters: { vault: { ok: health?.status === 200, error: health ? null : "broker /healthz unreachable", watchdog: false, count: vault.length } }, alerts: vault };
+  },
+};
+const collectAlerts = createCollector({ sources: incidentSources, secrets, builtins: incidentBuiltins });
+
+// A suggestion card the owner started (or dismissed) settles its incidents: started = assigned to the
+// chat it opened. Lazy, on each poll and page load — no hook into the suggestions route.
+function settleIncidentSuggestions() {
+  for (const row of incidents.open()) {
+    if (!row.suggestion_id || row.chat_id) continue;
+    const sug = store.getSuggestion(row.suggestion_id);
+    if (sug?.status === "started" && sug.started_chat_id) incidents.adoptSuggestion(sug.id, sug.started_chat_id);
+    else if (!sug || sug.status === "dismissed") incidents.setSuggestion(row.id, null);
+  }
+}
+
+// An assigned chat hears its incident's changes (worse, back, resolved) — at most once per 30 minutes
+// per incident unless it resolved. The text is the alert's, not the owner's (from kind "incident").
+const assignedToldAt = new Map();
+function tellAssignedChats(changes) {
+  for (const change of changes) {
+    const chatId = change.incident.chat_id;
+    if (!chatId || !store.getChat(chatId) || change.kind === "baseline") continue;
+    const t = Date.now();
+    if (change.kind !== "resolved" && assignedToldAt.get(change.incident.id) > t - 30 * 60_000) continue;
+    assignedToldAt.set(change.incident.id, t);
+    const head = change.kind === "resolved" ? "رفع شد؛ اگر کاری در جریان است، زنده تأیید کن که واقعاً درست شده و نتیجه را با incident_update ثبت کن." : "تغییر کرد؛ اگر روی آن کار می‌کنی ادامه بده، وگرنه یک خط بگو چه شده.";
+    const text = `[حادثهٔ اساین‌شده به این گفتگو ${head}]\n${formatChange(change)}`;
+    runner.send(chatId, { text, images: [], from: { kind: "incident", name: change.incident.alertname }, intent: runner.isActive(chatId) ? "steer" : "send" }).catch((error) => console.error(`[incidents] tell ${chatId}: ${error.message}`));
+  }
+}
+
 const intake = createIntake({
   incidents,
-  fetchAlerts: async () => {
-    const [{ status, body }, business, health] = await Promise.all([
-      brokerRequest(toolSource.socketPath, "POST", "/tools/alerts_active", {}, 60_000),
-      readBusiness(),
-      brokerRequest(toolSource.socketPath, "GET", "/healthz", undefined, 10_000).catch(() => null),
-    ]);
-    if (status !== 200 || !body?.ok) throw new Error(body?.error || `broker http ${status}`);
-    const vault = vaultAlerts(health?.body?.vault);
-    return {
-      clusters: {
-        ...body.result.clusters,
-        business: { ok: business.ok, error: business.error, watchdog: false, count: business.alerts.length },
-        vault: { ok: health?.status === 200, error: health ? null : "broker /healthz unreachable", watchdog: false, count: vault.length },
-      },
-      alerts: [...body.result.alerts, ...business.alerts, ...vault],
-    };
+  fetchAlerts: collectAlerts,
+  // Owner-acked (intentional) incidents stay recorded but do not wake the ops room, unless they get
+  // worse; nor does an alert that came back already marked noise (inherited triage).
+  onChanges: (changes, meta) => {
+    settleIncidentSuggestions();
+    tellAssignedChats(changes);
+    return opsRoom.push(changes.filter((c) => c.kind === "escalated" || (!incidents.isAcked(c.incident) && !(c.kind === "opened" && JSON.parse(c.incident.triage_json || "null")?.inherited))), meta);
   },
-  // Owner-acked (intentional) incidents stay recorded but do not wake the ops room, unless they get worse.
-  onChanges: (changes, meta) => opsRoom.push(changes.filter((c) => c.kind === "escalated" || !incidents.isAcked(c.incident)), meta),
 });
-if (genv("DEMO") !== "1" && opsRoom.mode !== "off") intake.start();
+// Runs whenever the install has a source (OPS_MODE only decides whether the ops room triages).
+if (genv("DEMO") !== "1") intake.start();
+
+// A message in a Telegram chat that is an alert source becomes a pushed alert; the next poll (soon)
+// turns it into an incident.
+let soonPoll = null;
+const pollSoon = () => {
+  if (soonPoll) return;
+  soonPoll = setTimeout(() => {
+    soonPoll = null;
+    intake.poll().catch(() => {});
+  }, 3_000);
+  soonPoll.unref?.();
+};
+store.bus.on("person.message", ({ personId, direction, text }) => {
+  if (direction !== "in") return;
+  const targets = incidentSources.byPerson(personId);
+  if (!targets.length) return;
+  for (const source of targets) {
+    const parsed = parseAlertText(text, { everyMessage: Boolean(source.config.everyMessage) });
+    if (parsed) incidentSources.push(source, parsed);
+  }
+  pollSoon();
+});
 
 // A thread another person's mother chat joined reports there too (integrations/mother.mjs).
 watchJoinedThreads({
   store,
   runner,
   finalTextOf: async (chatId) => deliverable((await timelines.get(chatId)).timeline.messages.findLast((m) => m.role === "assistant") || { parts: [] }).text,
+});
+// A chat the owner started from a colleague chain's handoff reports each finished run back there (handoff.mjs).
+watchHandoffs({
+  store,
+  runner,
+  finalTextOf: async (chatId) => deliverable((await timelines.get(chatId)).timeline.messages.findLast((m) => m.role === "assistant") || { parts: [] }).text,
+  frame: (from, text) => {
+    const mother = motherInfo(store, from);
+    return mother ? coverageOwnerNote(mother.name, text) : text;
+  },
 });
 
 // Human signals: a work DM from a teammate to the owner goes to the ops room as a TeamReport, so
@@ -1620,6 +1970,8 @@ const peerTasks = createPeerTasks({
   cancelChildren: (chatId) => peersHolder.current?.cancelChildren(chatId, { includeDelegates: true }),
   pendingWork: (chatId) => (peersHolder.current?.pendingDelegates(chatId) || 0) + network.pending(chatId),
   childChats: (chatId) => store.listChildChatIds(chatId).map((id) => store.getChat(id)).filter(Boolean),
+  // The small model that names chats also tells a colleague's follow-up from a new request.
+  classify: (prompt) => (demo ? Promise.resolve("0") : titleText(prompt)),
 });
 tasksHolder.current = peerTasks;
 // Fresh-context checker for finished runs (see verify.mjs); needs callBrokerTool above.
@@ -1635,6 +1987,20 @@ const mcp = createMcpHandler({
   version: genv("VERSION", "dev"),
   record: (call) => store.recordPeerCall(call),
 });
+
+// One Telegram line to the owner for each sign-in from the network and each change to two-step sign-in;
+// a right token with a wrong code means the token is out — say what to do.
+function authNotice({ kind, ip, via, name, userAgent }) {
+  const where = `از ${ip || "?"}${userAgent ? ` (${userAgent.slice(0, 80)})` : ""}`;
+  if (kind === "login") return `🔐 ورود تازه به گریفین ${where}${via === "recovery" ? " با کد بازیابی" : via === "passkey" ? ` با passkey «${name || ""}»` : via === "token" ? " — فقط با توکن؛ ورود دومرحله‌ای خاموش است (تنظیمات ← نشست‌ها)" : ""}. اگر شما نبودید: تنظیمات ← نشست‌ها ← ریست توکن.`;
+  if (kind === "passkey-added") return `🔑 passkey تازه «${name || ""}» به گریفین اضافه شد ${where}. اگر شما نبودید، از تنظیمات ← حساب پاکش کنید و توکن را ریست کنید.`;
+  if (kind === "passkey-removed") return `🔑 passkey «${name || ""}» از گریفین پاک شد ${where}.`;
+  if (kind === "code-miss") return `⚠️ کسی با توکن درستِ گریفین ولی کد اشتباه ${where} خواست وارد شود. توکن لو رفته: تنظیمات ← نشست‌ها ← ریست توکن.`;
+  if (kind === "code-locked") return `🚨 چند بار کد اشتباه با توکن درست ${where}؛ ورود با کد از شبکه ۱۵ دقیقه بسته شد. توکن را همین حالا ریست کنید.`;
+  if (kind === "2fa-on") return `🔐 ورود دومرحله‌ای گریفین روشن شد ${where}؛ بقیهٔ دستگاه‌ها خارج شدند.`;
+  if (kind === "2fa-off") return `⚠️ ورود دومرحله‌ای گریفین خاموش شد ${via === "local" ? "از خودِ سرور" : where}.`;
+  return `🔐 گریفین: ${kind}`;
+}
 
 // Proxies whose X-Forwarded-For the login rate limit believes (listen.mjs). A bad value is said
 // and ignored: loopback only.
@@ -1661,10 +2027,12 @@ const app = createApp({
   movedHosts: String(genv("OLD_HOSTS", "")).split(",").map((h) => h.trim().toLowerCase()).filter(Boolean),
   publicUrl: genv("PUBLIC_URL", ""),
   sideChat: () => genv("SIDE_CHAT", "on") !== "off",
+  // «@…» in the owner's message: what he tagged, for the chat's agent (mentions.mjs).
+  mentionNote: createMentionNote({ store, network }),
   // Private share of one chat with one person (private-share.mjs; Karsara's, 2026-10-15). Off by
   // default: the invite and the code go from the owner's Telegram account, to a PERSON only (a group
   // or channel would hand the chat to everyone in it).
-  privateShare: () => genv("PRIVATE_SHARE", "off") === "on",
+  privateShare: () => genv("PRIVATE_SHARE", "on") === "on",
   // The suggested next message comes back when the box is cleared (as in Claude Code); off: typing
   // puts it aside for good, as before.
   nextStepReturns: () => genv("NEXT_STEP_RETURNS", "off") === "on",
@@ -1695,7 +2063,7 @@ const app = createApp({
   usage,
   auth: genv("AUTH") === "off" && HOST === "127.0.0.1"
     ? undefined
-    : createAuth({ dataDir: DATA, store, secureCookie: genv("SECURE_COOKIE") === "1", publicUrl: genv("PUBLIC_URL", ""), trustedProxies: trustedProxies() }),
+    : createAuth({ dataDir: DATA, store, secrets, requireTwoStep: genv("REQUIRE_2FA") === "on", secureCookie: genv("SECURE_COOKIE") === "1", publicUrl: genv("PUBLIC_URL", ""), trustedProxies: trustedProxies(), onEvent: (event) => integrations.notifyOwner(authNotice(event)).catch(() => false) }),
   version: genv("VERSION", "dev"),
   // A timed note («بعداً») that ran — or did not — is one line on the owner's Telegram.
   onNoteRun: (note, { chat, error }) =>
@@ -1717,6 +2085,7 @@ const app = createApp({
       }
     });
     peerAuth.routes(api, { selfMgmtTools: SELF_MGMT_TOOLS });
+    modules.routes(api);
     // Voice dictation in the composer (stt.mjs); the key is a 0600 file like the engine keys.
     sttRoutes(api, {
       getKey: () => secrets.get("stt") || readSecret("STT_API_KEY", "STT_API_KEY_FILE", "stt.api-key"),
@@ -1729,6 +2098,7 @@ const app = createApp({
         language: genv("STT_LANGUAGE", STT_DEFAULTS.language),
       }),
       saveConfig: ({ baseUrl, model, language }) => config.set({ STT_BASE_URL: baseUrl, STT_MODEL: model, STT_LANGUAGE: language }),
+      state: { get: () => store.getKv("stt:broken"), set: (value) => store.setKv("stt:broken", value) },
     });
     // The sidebar's alerts (UpdateNotice area): engines at a plan limit or out of credit, from what
     // runs and tests stored — no engine call here, it is polled.
@@ -1946,6 +2316,11 @@ const app = createApp({
       if (!kindOf(id)) return c.json({ error: "unknown provider" }, 404);
       const kind = kindOf(id);
       const body = await c.req.json().catch(() => ({}));
+      // A rename touches nothing the engine runs on: no provider rebuild (a run in flight keeps its agent).
+      if (Object.keys(body).length === 1 && typeof body.label === "string") {
+        saveAccounts(accounts().map((a) => (a.id === id ? { ...a, label: body.label.trim().slice(0, 40) } : a)));
+        return c.json({ ok: true });
+      }
       const next = { ...providerConfig(id) };
       if (kind === PROVIDER_OPENAI && typeof body.preset === "string") {
         const preset = OPENAI_PRESETS.find((p) => p.id === body.preset);
@@ -2044,7 +2419,7 @@ const app = createApp({
         return c.json({ error: error.message }, 400);
       }
     };
-    api.get("/api/mcp-servers", (c) => mcpReply(c, () => ({ servers: mcpServers.list().map((s) => ({ ...s, ...(s.type === "stdio" ? {} : { login: mcpOauth.status(s.name) }) })), file: mcpServers.file, claudeCode: genv("CLAUDE_CODE", "off") === "on" })));
+    api.get("/api/mcp-servers", (c) => mcpReply(c, () => ({ servers: mcpServers.list().map((s) => ({ ...s, ...(s.type === "stdio" ? {} : { login: mcpOauth.status(s.name) }) })), file: mcpServers.file, claudeCode: genv("CLAUDE_CODE", "on") === "on" })));
     api.put("/api/mcp-servers", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       return mcpReply(c, () => {
@@ -2085,7 +2460,12 @@ const app = createApp({
     });
     // Settings → Configuration: what used to be env-only (config.mjs). Some apply after a restart,
     // which the owner can do from the same page (the container's restart policy brings it back).
-    api.get("/api/config", (c) => c.json({ settings: config.view(), activeRuns: runner.activeCount() }));
+    // Each setting says which modules it belongs to: those are shown on the module's card in the
+    // marketplace (Settings → بازارچه), not in Settings → پیکربندی.
+    api.get("/api/config", (c) => {
+      const owners = modules.configOwners();
+      return c.json({ settings: config.view().map((s) => (owners[s.key] ? { ...s, modules: owners[s.key] } : s)), activeRuns: runner.activeCount() });
+    });
     api.patch("/api/config", async (c) => {
       try {
         const result = config.set(await c.req.json().catch(() => ({})));
@@ -2110,7 +2490,7 @@ const app = createApp({
       store.bus.emit("chats", { type: "config" });
       return c.json(prefs());
     });
-    api.get("/api/features", (c) => c.json({ sideChat: genv("SIDE_CHAT", "on") !== "off", nextStepReturns: genv("NEXT_STEP_RETURNS", "off") === "on", privateShare: genv("PRIVATE_SHARE", "off") === "on" }));
+    api.get("/api/features", (c) => c.json({ sideChat: genv("SIDE_CHAT", "on") !== "off", nextStepReturns: genv("NEXT_STEP_RETURNS", "off") === "on", privateShare: genv("PRIVATE_SHARE", "on") === "on" }));
     api.post("/api/admin/restart", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       const active = runner.activeCount();
@@ -2149,6 +2529,17 @@ const app = createApp({
       },
     });
     feedback.routes(api, peerAuth);
+    // «نقشهٔ کلیک‌ها» (ui-clicks.mjs): what was clicked on this install's pages, to the maintainer's install hourly.
+    const clicks = createClicks({
+      store,
+      network,
+      supportHost: () => genv("SUPPORT_AGENT", ""),
+      selfHost: () => hostOfUrl(genv("PUBLIC_URL", "")),
+      context: () => ({ commit: readBuildCommit() || null, owner: liveOwnerName(OWNER.nameFa || ""), install: hostOfUrl(genv("PUBLIC_URL", "")) }),
+      enabled: () => genv("CLICK_MAP", "on") !== "off",
+    });
+    clicks.routes(api, peerAuth);
+    if (genv("DEMO") !== "1") clicks.start();
     accounting.routes(api, peerAuth);
     accounting.ownerRoutes(api);
     api.post("/api/feedback", async (c) => {
@@ -2256,8 +2647,9 @@ const app = createApp({
     });
     api.get("/api/approvals", (c) => c.json({ approvals: store.listApprovals({ limit: Math.min(Number(c.req.query("limit")) || 100, 500) }) }));
 
-    // Owner workbench on the sandbox (no creds, no kubeconfig): a shell, a file browser and a web
-    // fetcher. All three run as one debug_exec on host "sandbox" — the same box the agent uses.
+    // Owner workbench on the sandbox (no creds, no kubeconfig): a shell and a file browser. Both run as
+    // one debug_exec on host "sandbox" — the same box the agent uses. (Agents have a real browser,
+    // browser.mjs, so there is no page fetcher.)
     // Only with a broker (it holds the sandbox's SSH key).
     const sandbox = (command) => callBrokerTool("debug_exec", { host: "sandbox", command });
     api.post("/api/sandbox/exec", async (c) => {
@@ -2294,20 +2686,9 @@ const app = createApp({
         return c.json({ error: String(error?.message || error) }, 502);
       }
     });
-    api.post("/api/sandbox/fetch", async (c) => {
-      const { url } = await c.req.json().catch(() => ({}));
-      if (typeof url !== "string" || !/^https?:\/\//.test(url)) return c.json({ error: "http(s) url required" }, 400);
-      try {
-        const r = await sandbox(`curl -sSL --max-time 25 -A 'Mozilla/5.0 Griffin' -D /tmp/h -o /tmp/b ${shq(url)} 2>&1; echo "---STATUS $?"; echo "---HEADERS"; cat /tmp/h; echo "---BODY"; head -c 1500000 /tmp/b`);
-        const out = String(r.stdout || "");
-        const headers = out.split("---HEADERS\n")[1]?.split("\n---BODY\n")[0] || "";
-        const body = out.split("\n---BODY\n")[1] || "";
-        const ctype = (/content-type:\s*([^\r\n]+)/i.exec(headers) || [])[1] || "";
-        return c.json({ url, contentType: ctype.trim(), headers: headers.trim(), body });
-      } catch (error) {
-        return c.json({ error: String(error?.message || error) }, 502);
-      }
-    });
+    // The phone bridge (phone-bridge.mjs): its state, and a one-time ticket for the page's WebSocket.
+    api.get("/api/phone", (c) => c.json(phone.status()));
+    api.post("/api/phone/ticket", (c) => c.json({ ticket: phone.ticket(), path: PHONE_PATH }));
     // Live previews (previews.mjs): the chat's card reads its state and link here. The link carries the
     // preview's token, so it goes to the signed-in owner only — never into a tool result or an event.
     api.get("/api/previews", (c) => c.json({ previews: previews.list({ chatId: c.req.query("chat") || null }).map((rec) => previews.view(rec)) }));
@@ -2367,9 +2748,47 @@ const app = createApp({
       const agent = c.req.param("agent");
       if (!store.getAgentProfile(agent)) return c.json({ error: "unknown agent" }, 404);
       const body = await c.req.json().catch(() => ({}));
-      const ok = setNoteReviewed(KNOWLEDGE_ROOT, agent, String(body.file || ""), Boolean(body.reviewed));
+      const ok = setNoteReviewed(KNOWLEDGE_ROOT, agent, String(body.file || ""), Boolean(body.reviewed), { by: { kind: "owner" } });
       if (!ok) return c.json({ error: "note not found" }, 404);
       return c.json({ notes: listAgentNotes(KNOWLEDGE_ROOT, agent).map(withAutoTrust(agent)) });
+    });
+    // Owner-only edit / delete / restore of a note (knowledge.mjs). The owner's edit keeps the review
+    // state; a delete moves the note to the trash (restorable) and every change is audited.
+    const knowledgeResult = (c, agent, out, extra = {}) => {
+      if (out.error) return c.json({ error: out.error }, /^no such note|not in the trash/.test(out.error) ? 404 : 400);
+      return c.json({ ok: true, notes: listAgentNotes(KNOWLEDGE_ROOT, agent).map(withAutoTrust(agent)), ...extra });
+    };
+    api.put("/api/knowledge/:agent/note", async (c) => {
+      const agent = c.req.param("agent");
+      if (!store.getAgentProfile(agent)) return c.json({ error: "unknown agent" }, 404);
+      const body = await c.req.json().catch(() => ({}));
+      const file = String(body.file || "");
+      const out = editNote(KNOWLEDGE_ROOT, agent, file, { title: body.title, body: body.body }, { by: { kind: "owner" } });
+      return knowledgeResult(c, agent, out);
+    });
+    api.delete("/api/knowledge/:agent/note", async (c) => {
+      const agent = c.req.param("agent");
+      if (!store.getAgentProfile(agent)) return c.json({ error: "unknown agent" }, 404);
+      const body = await c.req.json().catch(() => ({}));
+      const file = String(body.file || "");
+      const out = deleteNote(KNOWLEDGE_ROOT, agent, file, { by: { kind: "owner" } });
+      if (!out.error) chatTrust.forgetNote(agent, file);
+      return knowledgeResult(c, agent, out, { trashId: out.trashId });
+    });
+    api.get("/api/knowledge/trash", (c) => c.json({ trash: listTrash(KNOWLEDGE_ROOT), audit: readAudit(KNOWLEDGE_ROOT, { limit: 50 }) }));
+    api.post("/api/knowledge/:agent/restore", async (c) => {
+      const agent = c.req.param("agent");
+      if (!store.getAgentProfile(agent)) return c.json({ error: "unknown agent" }, 404);
+      const body = await c.req.json().catch(() => ({}));
+      const out = restoreNote(KNOWLEDGE_ROOT, agent, String(body.id || ""), { by: { kind: "owner" } });
+      return knowledgeResult(c, agent, out, { file: out.file });
+    });
+    api.delete("/api/knowledge/:agent/trash", async (c) => {
+      const agent = c.req.param("agent");
+      if (!store.getAgentProfile(agent)) return c.json({ error: "unknown agent" }, 404);
+      const body = await c.req.json().catch(() => ({}));
+      const out = purgeNote(KNOWLEDGE_ROOT, agent, String(body.id || ""), { by: { kind: "owner" } });
+      return knowledgeResult(c, agent, out);
     });
     // External agents authenticate with their own Bearer token (not the owner cookie).
     api.get("/peer/v1/whoami", peerAuth.middleware(), (c) => {
@@ -2381,10 +2800,13 @@ const app = createApp({
       const body = await c.req.json().catch(() => ({}));
       // Another session wrote to a colleague: the owner is in that conversation now (desk.mjs).
       const tool = createAccountTools({ getClient: () => integrations.accountClient(), markSent: (id) => integrations.markAccountSent(id), onSent: (peer, text) => integrations.ownerWrote(peer, text), record: ledgerAndInbox(null) }).telegram_send;
-      const result = await tool.execute({ chat: String(body.chat || ""), text: String(body.text || "") });
+      const replyTo = Number.isInteger(body.replyTo) && body.replyTo > 0 ? { replyTo: body.replyTo } : {};
+      const result = await tool.execute({ chat: String(body.chat || ""), text: String(body.text || ""), ...replyTo });
       const payload = JSON.parse(result.content?.[0]?.text || "{}");
       return c.json(payload, result.isError ? 400 : 200);
     });
+    // Owner-only: a colleague's conversation read live, with react / edit / delete / read / media (telegram-chat.mjs).
+    telegramChatRoutes(api, { integrations, store });
     // Owner-only: correct a message the owner's account sent (Telegram itself refuses anyone else's).
     api.post("/api/telegram/edit", async (c) => {
       const body = await c.req.json().catch(() => ({}));
@@ -2442,6 +2864,8 @@ const app = createApp({
         "telegram_media",
         "telegram_watch_list",
         "telegram_send",
+        "telegram_edit",
+        "telegram_delete",
       ]);
     // The agents page makes an agent here; the mother agent makes one with agent_create (and the owner's yes).
     api.post("/api/agents", async (c) => {
@@ -2547,12 +2971,15 @@ const app = createApp({
       const names = uniqueTools([
         ...(broker || []),
         ...APP_TOOL_NAMES,
+        ...modules.toolNames(),
         ...businessDocs.names,
         "telegram_dialogs",
         "telegram_read",
         "telegram_media",
         "telegram_watch_list",
         "telegram_send",
+        "telegram_edit",
+        "telegram_delete",
       ]);
       return c.json({ tools: names.map((name) => ({ name })) });
     });
@@ -2569,13 +2996,123 @@ const app = createApp({
       const ok = opsRoom.mode !== "off" && pollAge !== null && pollAge < 300 && okAge !== null && okAge < 300;
       return c.json({ ok, pollAgeSeconds: pollAge, readAgeSeconds: okAge }, ok ? 200 : 503);
     });
-    api.get("/api/incidents", (c) =>
-      c.json({
-        incidents: incidents.list({ status: c.req.query("status") || "open", limit: c.req.query("limit") || 100 }).map((row) => incidentView({ ...row, ack: incidents.isAcked(row) ? incidents.acksFor(row.key) : null })),
+    api.get("/api/incidents", (c) => {
+      settleIncidentSuggestions();
+      const at = new Date();
+      const rows = incidents.list({ status: c.req.query("status") || "open", limit: c.req.query("limit") || 100 }).map((row) => {
+        const view = incidentView({ ...row, ack: incidents.isAcked(row) ? incidents.acksFor(row.key) : null });
+        const chat = view.chatId ? store.getChat(view.chatId) : null;
+        const sug = view.suggestionId ? store.getSuggestion(view.suggestionId) : null;
+        return { ...view, bucket: incidentBucket(view, { now: at }), chatTitle: chat?.title || null, suggestion: sug ? { id: sug.id, status: sug.status } : null };
+      });
+      return c.json({
+        incidents: rows,
         intake: intake.status(),
         room: opsRoom.roomId(),
+        sources: incidentSources.list().map((s) => ({ id: s.id, kind: s.kind, name: s.name, enabled: s.enabled, status: incidentSources.status(s.id) })),
+      });
+    });
+    // ——— data sources (sources.mjs): the page's «منابع داده» tab ———
+    const sourceBase = (c) => genv("PUBLIC_URL", "").replace(/\/+$/, "") || new URL(c.req.url).origin;
+    const secretFor = (id, value) => {
+      const name = `incident-source:${id}`;
+      secrets.set(name, value, { note: `منبع حادثه ${id}` });
+      return name;
+    };
+    api.get("/api/incidents/sources", (c) =>
+      c.json({
+        sources: incidentSources.list().map((s) => sourceView(s, { status: incidentSources.status(s.id), baseUrl: sourceBase(c), withToken: true })),
+        kinds: Object.entries(SOURCE_KINDS).map(([id, k]) => ({ id, label: k.label, mode: k.mode, url: Boolean(k.url), builtin: Boolean(k.builtin), addable: ADDABLE_KINDS.includes(id) })),
       }),
     );
+    api.get("/api/incidents/telegram-chats", (c) => {
+      const q = String(c.req.query("q") || "").trim();
+      const rank = (p) => (p.meta?.chatType === "channel" ? 0 : p.meta?.chatType === "group" ? 1 : /bot$/i.test(p.username || "") ? 2 : 3);
+      const people = store.listPersonsLight({ source: "telegram" }).filter((p) => !q || `${p.display_name} ${p.username || ""} ${p.external_id}`.toLowerCase().includes(q.toLowerCase()));
+      return c.json({ chats: people.sort((a, b) => rank(a) - rank(b)).slice(0, 60).map((p) => ({ id: p.id, title: p.display_name, username: p.username || null, externalId: p.external_id, type: p.meta?.chatType || "user" })) });
+    });
+    api.post("/api/incidents/sources", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        const config = { ...(body.config || {}) };
+        delete config.secret;
+        let source = incidentSources.add({ id: body.id || undefined, kind: body.kind, name: body.name, config, by: "owner-ui" });
+        if (body.secretValue) source = incidentSources.update(source.id, { config: { secret: secretFor(source.id, body.secretValue) } });
+        const test = await testSource(source, { secrets, builtins: incidentBuiltins, sources: incidentSources });
+        pollSoon();
+        return c.json({ source: sourceView(source, { status: incidentSources.status(source.id), baseUrl: sourceBase(c), withToken: true }), test }, 201);
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+    });
+    api.patch("/api/incidents/sources/:id", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        const cur = incidentSources.get(c.req.param("id"));
+        if (!cur) return c.json({ error: "not found" }, 404);
+        const config = body.config ? { ...body.config } : {};
+        delete config.secret;
+        if (body.secretValue) config.secret = secretFor(cur.id, body.secretValue);
+        const source = incidentSources.update(cur.id, { name: body.name, enabled: typeof body.enabled === "boolean" ? body.enabled : undefined, config: Object.keys(config).length ? config : undefined });
+        pollSoon();
+        return c.json({ source: sourceView(source, { status: incidentSources.status(source.id), baseUrl: sourceBase(c), withToken: true }) });
+      } catch (error) {
+        return c.json({ error: error.message }, 400);
+      }
+    });
+    api.delete("/api/incidents/sources/:id", (c) => {
+      const cur = incidentSources.get(c.req.param("id"));
+      if (!cur) return c.json({ error: "not found" }, 404);
+      if (SOURCE_KINDS[cur.kind]?.builtin) return c.json({ error: "منبع داخلی حذف نمی‌شود؛ خاموشش کنید" }, 400);
+      incidentSources.remove(cur.id);
+      pollSoon();
+      return c.json({ ok: true });
+    });
+    api.post("/api/incidents/sources/:id/test", async (c) => {
+      const cur = incidentSources.get(c.req.param("id"));
+      if (!cur) return c.json({ error: "not found" }, 404);
+      return c.json(await testSource(cur, { secrets, builtins: incidentBuiltins, sources: incidentSources }));
+    });
+    // A webhook source's own URL (the token is the credential): Alertmanager/Grafana webhook JSON or {title, status, severity}.
+    api.post("/api/public/incidents/hook/:token", async (c) => {
+      const source = incidentSources.byToken(c.req.param("token"));
+      if (!source) return c.json({ error: "not found" }, 404);
+      const raw = await c.req.text();
+      if (raw.length > 512 * 1024) return c.json({ error: "too large" }, 413);
+      let body;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = { title: raw.slice(0, 300) };
+      }
+      const entries = webhookItems(body);
+      for (const st of ["firing", "resolved"]) {
+        const items = entries.filter((e) => e.status === st).map((e) => e.item);
+        if (items.length) incidentSources.push(source, { status: st, items });
+      }
+      pollSoon();
+      return c.json({ ok: true, received: entries.length });
+    });
+    // ——— workspace chats: assign an incident to a chat, or suggest a new chat for it ———
+    api.post("/api/incidents/:id/assign", async (c) => {
+      const row = incidents.get(c.req.param("id"));
+      if (!row) return c.json({ error: "not found" }, 404);
+      const body = await c.req.json().catch(() => ({}));
+      const chatId = body.chatId ? String(body.chatId) : null;
+      if (chatId && !store.getChat(chatId)) return c.json({ error: "چت پیدا نشد" }, 404);
+      incidents.assign(row.id, chatId);
+      incidents.log(row.id, chatId ? "assigned" : "unassigned", { chat: chatId, by: "owner-ui" });
+      return c.json({ ok: true, chatId, chatTitle: chatId ? store.getChat(chatId)?.title || null : null });
+    });
+    api.post("/api/incidents/:id/suggest", async (c) => {
+      const row = incidents.get(c.req.param("id"));
+      if (!row) return c.json({ error: "not found" }, 404);
+      const tool = createSourceTools({ store, incidents, sources: incidentSources, secrets, chatId: null, caller: "owner" })[INCIDENT_SUGGEST];
+      const result = await tool.execute({ id: row.id });
+      const text = result.content?.[0]?.text || "";
+      if (result.isError) return c.json({ error: text }, 400);
+      return c.json(JSON.parse(text));
+    });
     api.post("/api/incidents/:id/ack", async (c) => {
       const row = incidents.get(c.req.param("id"));
       if (!row) return c.json({ error: "not found" }, 404);
@@ -2668,7 +3205,7 @@ const notesTimer = setInterval(() => app.notes.runDue().catch((error) => console
 notesTimer.unref();
 
 const tls = loadTls(genv("TLS_DIR", path.join(DATA, "tls")));
-const server = createDualServer(getRequestListener(app.fetch), { tls, onUpgrade: (req, socket, head) => previews.handleUpgrade(req, socket, head) });
+const server = createDualServer(getRequestListener(app.fetch), { tls, onUpgrade: (req, socket, head) => phone.handleUpgrade(req, socket, head) || previews.handleUpgrade(req, socket, head) });
 server.listen(PORT, HOST, () =>
   console.log(`[griffin] listening on ${HOST}:${PORT} (http${server.tls ? " + https" : ""})`),
 );
@@ -2679,15 +3216,24 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[griffin] ${signal} — cancelling active runs…`);
+    // A hung step (a socket server.close waits on, a leave() that never answers) once kept the
+    // listener closed for 23 minutes (2026-10-24): whatever is left after 20 s, exit anyway.
+    setTimeout(() => {
+      console.error("[griffin] shutdown took over 20s — exiting anyway");
+      process.exit(0);
+    }, 20_000).unref();
     Promise.resolve()
       .then(async () => {
         jobs.stop();
         clearInterval(notesTimer);
         intake.stop();
         integrations.stopAll();
+        phone.close();
         // Give Cursor a chance to drop "active run" before the process dies; otherwise
         // the next message hits AgentBusyError on resume.
-        await runner.shutdown({ timeoutMs: 8_000 });
+        // The other agents hear «updating» first (network.mjs presence), so they queue instead of
+        // going to Telegram while this install restarts.
+        await Promise.all([network.leave().catch(() => {}), runner.shutdown({ timeoutMs: 8_000 })]);
         await new Promise((resolve) => server.close(resolve));
         store.close();
       })

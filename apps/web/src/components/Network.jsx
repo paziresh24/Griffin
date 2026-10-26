@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Plus, RefreshCw, Send, Share2 } from "lucide-react";
+import { AtSign, Loader2, Plus, RefreshCw, Send, Share2 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "../api.js";
+import { mentionHandle } from "@griffin/timeline";
+import { api, navigate } from "../api.js";
+import { saveDraft } from "../draft.js";
 import { clockLabel, exactTime } from "../elapsed.js";
 import { t } from "../i18n.js";
 
@@ -23,6 +25,12 @@ const save = (all) => {
     /* private mode */
   }
 };
+
+// «صدا زدن در گفتگو»: a new chat with «@<handle> » already in the box; the owner writes the rest.
+function callInChat(handle) {
+  saveDraft(window.localStorage, null, `@${handle} `);
+  navigate(null);
+}
 
 export function NetworkSection() {
   const [data, setData] = useState(null);
@@ -57,14 +65,11 @@ export function NetworkSection() {
     <section className="mb-8 space-y-3">
       <div className="flex items-center gap-2">
         <Share2 className="size-4 text-muted-foreground" />
-        <h2 className="font-semibold">{t("شبکهٔ ایجنت‌ها")}</h2>
+        <h2 className="font-semibold">{t("دستیارهای همکاران")}</h2>
         <button type="button" onClick={() => refresh(true)} className="press ms-auto flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted">
           <RefreshCw className="size-3.5" /> به‌روز کردن
         </button>
       </div>
-      <p className="text-sm leading-6 text-muted-foreground">
-        ایجنت‌های همکاران که این نصب پیدا کرده. هر ایجنتی که یکی از این‌ها را بشناسد، بقیه را هم خودکار می‌شناسد. با هر کدام می‌شود همین‌جا یا از داخل گفتگو («از ایجنت آقای … بپرس») حرف زد؛ آن ایجنت فقط در حدی جواب می‌دهد که صاحبش اجازه داده.
-      </p>
       {!data ? (
         <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : data.off ? (
@@ -76,15 +81,20 @@ export function NetworkSection() {
           {agents.length ? (
             <div className="divide-y rounded-xl border">
               {agents.map((a) => (
-                <div key={a.id}>
-                  <button type="button" onClick={() => setOpen(open === a.id ? null : a.id)} className="press flex w-full items-center gap-3 px-3 py-2.5 text-start hover:bg-muted/50">
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">{(a.name || "?").slice(0, 1)}</span>
+                <div key={a.id} style={a.color ? { borderInlineStart: `3px solid ${a.color}` } : undefined}>
+                  <div className="flex items-center">
+                  <button type="button" onClick={() => setOpen(open === a.id ? null : a.id)} className="press flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-start hover:bg-muted/50" title={a.url}>
+                    <AgentMark agent={a} className="size-8" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{a.name}{a.owner ? <span className="font-normal text-muted-foreground"> · {a.owner}</span> : null}</span>
-                      <span className="block truncate text-xs text-muted-foreground" dir="ltr">{a.url.replace(/^https:\/\//, "")}{a.product ? ` · ${a.product}` : ""}</span>
+                      <span className="block truncate text-sm font-medium">{a.name}{a.owner ? <span className="font-normal text-muted-foreground"> · دستیار {a.owner}</span> : null}</span>
+                      <span className="block truncate text-xs text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}{a.lastSeen ? <span title={exactTime(a.lastSeen)}> · آخرین تماس {clockLabel(a.lastSeen)}</span> : null}</span>
                     </span>
-                    {a.lastSeen ? <span className="shrink-0 text-xs text-muted-foreground" title={exactTime(a.lastSeen)}>{clockLabel(a.lastSeen)}</span> : null}
+                    <PresenceChip status={a.status} queued={a.queued} />
                   </button>
+                  <button type="button" onClick={() => callInChat(mentionHandle(a, agents))} className="press me-2 inline-flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted" title={t("گفتگوی تازه با این دستیار")}>
+                    <AtSign className="size-3.5" /> صدا زدن در گفتگو
+                  </button>
+                  </div>
                   {open === a.id ? <Conversation agent={a} /> : null}
                 </div>
               ))}
@@ -102,6 +112,34 @@ export function NetworkSection() {
         </>
       )}
     </section>
+  );
+}
+
+/** A member's own logo (its install's /icon.svg, kept by the server), else its colour with the name's first letter. */
+function AgentMark({ agent, className = "size-8" }) {
+  const [broken, setBroken] = useState(false);
+  if (agent.icon && !broken) return <img src={agent.icon} alt="" onError={() => setBroken(true)} className={`${className} shrink-0 rounded-lg object-cover`} />;
+  const tint = agent.color ? { background: `color-mix(in srgb, ${agent.color} 16%, transparent)`, color: agent.color } : undefined;
+  return <span style={tint} className={`${className} flex shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary`}>{(agent.name || "?").slice(0, 1)}</span>;
+}
+
+// Whether that agent can answer now (server network.mjs presence): ready, restarting for an update, or away.
+const PRESENCE = {
+  ready: { label: t("در دسترس"), dot: "bg-ok" },
+  updating: { label: t("در حال آپدیت"), dot: "bg-warn" },
+  unreachable: { label: t("پاسخ نمی‌دهد"), dot: "bg-warn" },
+  down: { label: t("قطع"), dot: "bg-bad" },
+};
+function PresenceChip({ status, queued = 0 }) {
+  const p = PRESENCE[status?.state];
+  if (!p) return null;
+  const tip = [status.since ? `از ${exactTime(status.since)}` : null, status.commit ? `نسخه ${String(status.commit).slice(0, 7)}` : null, status.canThink === false ? t("موتور فعلاً سقف خورده") : null].filter(Boolean).join(" · ");
+  return (
+    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground" title={tip}>
+      <span className={`size-2 rounded-full ${p.dot}`} />
+      {p.label}
+      {queued ? <span className="rounded bg-muted px-1">{queued} در صف</span> : null}
+    </span>
   );
 }
 
@@ -147,7 +185,7 @@ function Conversation({ agent }) {
     <div className="space-y-2 border-t bg-muted/20 px-3 py-3">
       <div className="max-h-80 space-y-2 overflow-y-auto">
         {msgs.map((m, i) => (
-          <div key={i} className={`w-fit max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-6 ${m.from === "me" ? "ms-auto bg-primary/10" : "bg-background border"}`} dir="auto">
+          <div key={i} style={m.from !== "me" && agent.color ? { borderColor: `color-mix(in srgb, ${agent.color} 45%, transparent)`, background: `color-mix(in srgb, ${agent.color} 8%, var(--background))` } : undefined} className={`w-fit max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-2 text-sm leading-6 ${m.from === "me" ? "ms-auto bg-primary/10" : "bg-background border"}`} dir="auto">
             {m.text}
           </div>
         ))}

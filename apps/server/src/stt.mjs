@@ -17,7 +17,19 @@ const INSTRUCTION = (language) =>
 export const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const EXTENSIONS = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/ogg": "ogg", "audio/mpeg": "mp3" };
 
-const fail = (message, status) => Object.assign(new Error(message), { status });
+const fail = (message, status, broken = false) => Object.assign(new Error(message), { status, broken });
+
+// What the person reads when the speech service refuses (a colleague 2026-10-24: 30 seconds of voice
+// came back as a bare «502»). `broken`: the key or the model is wrong, not a passing failure — kept
+// (GET /api/stt `broken`) so the microphone says so before the next recording, not after it.
+export function serviceFailure(status, model) {
+  if (status === 401 || status === 403) return fail("سرویس تبدیل صدا کلید را نپذیرفت؛ در تنظیمات ← «تبدیل صدا به متن» کلید درست را بگذارید.", 502, true);
+  if (status === 402) return fail("اعتبار سرویس تبدیل صدا کافی نیست (OpenRouter برای صدا دست‌کم ۰٫۵ دلار می‌خواهد).", 502, true);
+  if (status === 400 || status === 404 || status === 422) return fail(`مدل «${String(model || "").slice(0, 60)}» در سرویس تبدیل صدا نیست یا صدا نمی‌پذیرد؛ در تنظیمات ← «تبدیل صدا به متن» مدل را درست کنید.`, 502, true);
+  if (status === 413) return fail("صدا برای سرویس تبدیل بلند بود؛ کوتاه‌تر بگویید.", 502);
+  if (status === 429) return fail("سرویس تبدیل صدا فعلاً درخواست زیادی دارد؛ کمی بعد دوباره امتحان کنید.", 502);
+  return fail(`سرویس تبدیل صدا خطا داد (${status})؛ دوباره امتحان کنید.`, 502);
+}
 
 // Gemini models read the clip on /chat/completions as input_audio; every other model id goes to
 // the OpenAI-style /audio/transcriptions (whisper, *-transcribe…), as in Karsara stt.mjs.
@@ -79,11 +91,19 @@ export function chatTranscript(answer) {
 
 // getKey/setKey/removeKey: the key in Griffin's secret store; config: the live settings (an object
 // or a function, so a change in Settings applies without a restart); saveConfig stores new ones.
-export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULTS, saveConfig, fetchFn = fetch, remuxWebm = remuxWebmWithFfmpeg, log = console }) {
+// state: { get, set } for the last refusal that means the setup is wrong (a kv); none = kept in memory.
+export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULTS, saveConfig, fetchFn = fetch, remuxWebm = remuxWebmWithFfmpeg, state = null, log = console }) {
   const settings = () => ({ ...STT_DEFAULTS, ...(typeof config === "function" ? config() : config) });
+  let held = null;
+  const lastBroken = () => (state ? state.get() : held) || null;
+  const setBroken = (value) => (state ? state.set(value) : (held = value));
   const status = () => {
     const key = getKey();
-    return { configured: Boolean(key), ...settings(), key: key ? { set: true, last4: key.length > 8 ? key.slice(-4) : "" } : { set: false, last4: null } };
+    const cfg = settings();
+    // A refusal of another key or model says nothing about this one.
+    const last = lastBroken();
+    const broken = key && last && last.model === cfg.model && last.baseUrl === cfg.baseUrl && last.last4 === key.slice(-4) ? { error: last.error, at: last.at } : null;
+    return { configured: Boolean(key), ...cfg, broken, key: key ? { set: true, last4: key.length > 8 ? key.slice(-4) : "" } : { set: false, last4: null } };
   };
   api.get("/api/stt", (c) => c.json(status()));
 
@@ -93,6 +113,7 @@ export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULT
       const key = String(body?.key ?? "").trim();
       if (!key || key.length > 4096 || /\s/.test(key)) return c.json({ error: "کلید درست نیست؛ کلید سرویس را بدون فاصله دوباره بچسبان." }, 400);
       setKey(key);
+      setBroken(null);
       return c.json(status());
     });
     api.delete("/api/stt/key", (c) => {
@@ -105,6 +126,7 @@ export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULT
       const checked = checkSttConfig(await c.req.json().catch(() => ({})));
       if (checked.error) return c.json({ error: checked.error }, 400);
       saveConfig(checked.config);
+      setBroken(null);
       return c.json(status());
     });
   }
@@ -112,7 +134,7 @@ export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULT
   api.post("/api/transcribe", async (c) => {
     try {
       const key = getKey();
-      if (!key) throw fail("speech to text is not set up", 503);
+      if (!key) throw fail("تبدیل صدا به متن راه نیفتاده؛ در تنظیمات ← «تبدیل صدا به متن» کلیدش را بگذارید.", 503);
       const type = String(c.req.header("content-type") || "").split(";")[0].trim().toLowerCase();
       if (!Object.hasOwn(EXTENSIONS, type)) throw fail("not an audio recording", 415);
       if (Number(c.req.header("content-length")) > MAX_AUDIO_BYTES) throw fail("recording too long", 413);
@@ -173,15 +195,19 @@ export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULT
       } catch (error) {
         // Only the error class: its text can carry a host or a header.
         log.error?.(`[stt] request failed: ${error?.name || "error"}`);
-        throw fail("the speech service did not answer", 502);
+        throw fail(error?.name === "TimeoutError" ? "سرویس تبدیل صدا در ۹۰ ثانیه جواب نداد؛ دوباره امتحان کنید." : "به سرویس تبدیل صدا نرسیدیم (شبکه یا فیلتر)؛ دوباره امتحان کنید.", 502);
       }
       if (!res.ok) {
         log.error?.(`[stt] service answered ${res.status}`);
-        // OpenRouter wants at least $0.50 of credit before it takes audio.
-        throw fail(res.status === 402 ? "اعتبار OpenRouter کافی نیست (برای صدا دست‌کم ۰٫۵ دلار)" : `the speech service answered ${res.status}`, 502);
+        const failure = serviceFailure(res.status, cfg.model);
+        if (failure.broken) setBroken({ error: failure.message, model: cfg.model, baseUrl: cfg.baseUrl, last4: key.slice(-4), at: new Date().toISOString() });
+        throw failure;
       }
       const body = await res.json().catch(() => null);
-      if (whisper) return c.json({ text: String(body?.text || "").trim() });
+      if (whisper) {
+        setBroken(null);
+        return c.json({ text: String(body?.text || "").trim() });
+      }
       // Some gateways answer 200 with an error: on the body, on the choice (finish_reason "error"),
       // or with no choice at all. That is a failure, not "nothing was said". Its text can carry a
       // host, so only the fact is logged.
@@ -189,8 +215,9 @@ export function sttRoutes(api, { getKey, setKey, removeKey, config = STT_DEFAULT
       const finish = String(choice?.finish_reason ?? "").replace(/[^\w-]/g, "").slice(0, 30);
       if (!body || typeof body !== "object" || body.error || !choice || choice.error || finish === "error") {
         log.error?.("[stt] service answered 200 with an error");
-        throw fail("the speech service answered with an error", 502);
+        throw fail("سرویس تبدیل صدا به‌جای متن خطا برگرداند؛ دوباره امتحان کنید.", 502);
       }
+      setBroken(null);
       if (finish && finish !== "stop") log.warn?.(`[stt] transcript ended by ${finish}`);
       return c.json({ text: chatTranscript(body) });
     } catch (error) {

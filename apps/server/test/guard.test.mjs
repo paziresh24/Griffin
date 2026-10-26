@@ -21,8 +21,9 @@ test("classify depends on args, not only the tool name", () => {
   assert.ok(classify("debug_exec", { command: "rm -rf /" }).block);
   assert.ok(classify("debug_exec", { host: "ops-box", command: "uptime" }).approve, "a real host (not the sandbox) asks the owner");
   assert.equal(classify("debug_exec", { host: "sandbox", command: "uptime" }), null);
-  // ssh_exec: always owner-approval outside owner chats; destructive blocked.
-  assert.ok(classify("ssh_exec", { host: "203.0.113.57", command: "hostname" }).approve);
+  // ssh_exec as the read-only user griffin needs no approval; another user asks; destructive blocked.
+  assert.equal(classify("ssh_exec", { host: "203.0.113.57", command: "hostname" }), null);
+  assert.ok(classify("ssh_exec", { host: "203.0.113.57", user: "root", command: "hostname" }).approve);
   assert.ok(classify("ssh_exec", { host: "x", command: "rm -rf /" }).block);
 });
 
@@ -142,6 +143,29 @@ test("one owner answer covers identical calls: parallel ones share it, a no is n
   forgetDecisions();
 });
 
+// 2026-10-20: a shell step carries a `description` (its title in the chat). It is for the row only:
+// the tool never receives it, and the same command with another title is the same command to the
+// owner's remembered answer.
+test("a shell step's title is dropped before the tool runs and does not change the approval key", async () => {
+  forgetDecisions();
+  const asks = createAsks();
+  const store = recorder();
+  const seen = [];
+  const tools = { ssh_exec: { async execute(args) { seen.push(args); return { content: [] }; } }};
+  const guarded = guardTools(tools, { chatId: "m2", asks, store, caller: "peer:x" });
+
+  const first = guarded.ssh_exec.execute({ host: "10.0.0.5", user: "root", command: "hostname", description: "پیدا کردن نام سرور" });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asks.answer("m2", { answer: "بله", selected: ["بله"] }), true);
+  await first;
+  await guarded.ssh_exec.execute({ host: "10.0.0.5", user: "root", command: "hostname", description: "همان دستور با عنوان دیگر" });
+  assert.equal(asks.isWaiting("m2"), false, "another title did not open a second question");
+  assert.deepEqual(seen[0], { host: "10.0.0.5", user: "root", command: "hostname" });
+  assert.deepEqual(seen[1], { host: "10.0.0.5", user: "root", command: "hostname" });
+
+  forgetDecisions();
+});
+
 // Owner 2026-09-23: approving a router health check is noise. Reads are free; writes still ask.
 test("router console: reads (incl. GET-only fetch, ping) are free, writes still ask", () => {
   for (const command of [
@@ -204,6 +228,11 @@ test("an agent's plain sentence is the approval question; pleading or tool names
   assert.match(approvalQuestion(named, "r", "kube_exec", { cluster: "c1", namespace: "bob" }, "x", intent), /⚠️ این مالِ آقای باب است/);
   const team = approvalQuestion(store, "r", "telegram_send", { chat: "گروه آپدیت‌ها", text: "فعال شد" }, "فرستادن پیام", "");
   assert.match(team, /^فرستادن پیام — در «گروه آپدیت‌ها»: «فعال شد»/);
+  const withFile = approvalQuestion(store, "r", "telegram_send", { chat: "امیرحسین مرادی", text: "گزارش", file: "out/report.pdf" }, "فرستادن پیام", "");
+  assert.match(withFile, /^فرستادن پیام — در «امیرحسین مرادی»: فایل «report\.pdf» با «گزارش»/);
+  // a DNS cleanup is one question that names every record (2026-10-24: 23 records, one ask each)
+  const dns = approvalQuestion(store, "r", "arvan_dns_delete", { domain: "example.com", records: [{ name: "old1" }, { name: "old2", type: "CNAME" }] }, "حذف رکورد DNS آروان", "۲۳ رکورد مرده را پاک می‌کنم تا زون زیر سقف برود");
+  assert.match(dns, /2 رکورد در example\.com: old1، old2 \(CNAME\)/);
 });
 
 // The agent writes intent once, then the same secrets go to a new folder without it.
@@ -341,4 +370,42 @@ test("Infisical admin plane is fenced for every caller, owner included", async (
   assert.match(JSON.stringify(r), /infisical_machine_identity/);
   await tools.kube_secret.execute({ namespace: "x", name: "y" });
   assert.equal(ran, 1);
+});
+
+test("a yes is learned for that person and scope; another person still asks", async () => {
+  const { guardTools, forgetDecisions } = await import("../src/guard.mjs");
+  forgetDecisions();
+  const kv = new Map();
+  const chats = { a: { id: "a", caller: "peer:ali" }, b: { id: "b", caller: "peer:ali" }, c: { id: "c", caller: "peer:reza" } };
+  const store = { getChat: (id) => chats[id], rootChatId: (id) => id, getKv: (k) => kv.get(k), setKv: (k, v) => kv.set(k, v), recordApproval() {}, appendEvent() {} };
+  let asked = 0;
+  const asks = { confirm: async () => { asked++; return { answered: true, answer: "بله" }; } };
+  const tool = { kube_exec: { execute: async () => "ran" } };
+  const args = { cluster: "east", namespace: "other-ns", pod: "p", command: "ls" };
+  assert.equal(await guardTools(tool, { chatId: "a", asks, store }).kube_exec.execute(args), "ran");
+  forgetDecisions(); // a new day: in-memory decisions are gone, the grant is not
+  assert.equal(await guardTools(tool, { chatId: "b", asks, store }).kube_exec.execute({ ...args, command: "df" }), "ran");
+  assert.equal(asked, 1);
+  await guardTools(tool, { chatId: "c", asks, store }).kube_exec.execute(args);
+  assert.equal(asked, 2);
+});
+
+test("a network peer's own namespace (kv peer-owner) runs without asking; a typed question is not a no", async () => {
+  const { guardTools, forgetDecisions } = await import("../src/guard.mjs");
+  forgetDecisions();
+  const kv = new Map([["peer-owner", { "net-karsara-sharifi-example-org": ["sara-sharifi"] }]]);
+  const chats = { a: { id: "a", caller: "peer:net-karsara-sharifi-example-org" } };
+  const store = { getChat: (id) => chats[id], rootChatId: (id) => id, getKv: (k) => kv.get(k), setKv: (k, v) => kv.set(k, v), recordApproval() {}, appendEvent() {} };
+  const replies = ["کجا در جریانه که من نمیبینم؟", "بله"];
+  let asked = 0;
+  const asks = { confirm: async () => ({ answered: true, answer: replies[asked++] }) };
+  const tool = { kube_exec: { execute: async () => "ran" } };
+  const own = { cluster: "east", namespace: "sara-sharifi", pod: "p", command: "ls" };
+  assert.equal(await guardTools(tool, { chatId: "a", asks, store }).kube_exec.execute(own), "ran");
+  assert.equal(asked, 0);
+  const other = { ...own, namespace: "akazemi" };
+  const first = await guardTools(tool, { chatId: "a", asks, store }).kube_exec.execute(other);
+  assert.match(first.content[0].text, /به‌جای جواب سؤال پرسید/);
+  assert.equal(await guardTools(tool, { chatId: "a", asks, store }).kube_exec.execute(other), "ran");
+  assert.equal(asked, 2);
 });

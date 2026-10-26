@@ -1,0 +1,11 @@
+{
+  "id": "incidents",
+  "version": "1.0.0",
+  "title": "حادثه‌ها",
+  "category": "ops",
+  "settings": { "config": ["OPS_MODE"] },
+  "description": "هشدارها و حادثه‌ها، اتاق عملیات",
+  "builtin": true,
+  "presets": ["griffin", "karsara"],
+  "pages": [{ "id": "main", "title": "حادثه‌ها", "icon": "radar", "kind": "builtin", "route": "/incidents" }]
+}

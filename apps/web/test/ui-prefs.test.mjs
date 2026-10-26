@@ -18,7 +18,7 @@ test("presets: every flag has both values; the two presets differ only where the
   assert.equal(g.look, "griffin");
   assert.equal(k.flags.oneList, true);
   assert.equal(g.flags.homeBoard, true);
-  assert.deepEqual(g.flags.navHidden, ["telegram", "jobs", "incidents", "peers", "workbench"], "Griffin: only «جدید» and search, the rest under «بیشتر»");
+  assert.deepEqual(g.flags.navHidden, ["telegram", "jobs", "incidents", "workbench"], "Griffin: «ایجنت‌های همکاران» shows by default, the rest under «بیشتر»");
   assert.deepEqual(k.flags.navHidden, ["telegram", "incidents", "workbench"], "Karsara: «جاب» and «ایجنت‌های همکاران»");
   assert.equal(ui.presetOf("nope").look, "griffin");
 });
@@ -27,7 +27,7 @@ test("precedence: the user's choice > the migration snapshot > the install's pre
   // Nothing stored: the install's preset.
   assert.deepEqual(ui.resolvePrefs(null, "karsara"), ui.presetOf("karsara"));
   // A snapshot of a Griffin browser on a Karsara install stays Griffin.
-  const snap = ui.migrationSnapshot({ savedSkin: "griffin", installLook: "karsara" });
+  const snap = { ...ui.migrationSnapshot({ savedSkin: "griffin", installLook: "karsara" }), rev: ui.PREFS_REV };
   assert.deepEqual(ui.resolvePrefs(snap, "karsara"), ui.presetOf("griffin"));
   // The user's later switch wins over the snapshot.
   const mine = { ...snap, flags: { ...snap.flags, oneList: true } };
@@ -45,6 +45,17 @@ test("a preset change reaches copies saved before it once; a choice made after i
   assert.equal(ui.resolvePrefs(before, "griffin").flags.laterButton, true, "saved before rev 1: the new preset applies");
   const after = { ...before, rev: ui.PREFS_REV };
   assert.equal(ui.resolvePrefs(after, "griffin").flags.laterButton, false, "turned off after rev 1: his choice");
+});
+
+test("rev 2: Karsara's usage ring, run footer, model names, non-Claude hint and edit links reach Griffin's saved copies once", () => {
+  const keys = ["composerStats", "runFooterDetailed", "modelLabels", "nonClaudeHint", "editLinks"];
+  const g = ui.presetOf("griffin").flags;
+  for (const key of keys) assert.equal(g[key], true, key);
+  const off = Object.fromEntries(keys.map((k) => [k, false]));
+  const before = { look: "griffin", rev: 1, flags: { ...g, ...off } };
+  for (const key of keys) assert.equal(ui.resolvePrefs(before, "griffin").flags[key], true, `${key}: saved at rev 1, the new preset applies`);
+  const after = { ...before, rev: ui.PREFS_REV };
+  for (const key of keys) assert.equal(ui.resolvePrefs(after, "griffin").flags[key], false, `${key}: turned off after rev 2 stays off`);
 });
 
 test("migration: what this browser showed — its saved skin, else the install's — and its own sidebar sections", () => {
@@ -87,4 +98,12 @@ test("first load after the update: the snapshot paints at once and is saved once
   assert.deepEqual(calls.map((c) => c[0]), ["GET"], "nothing saved again");
   assert.equal(document.documentElement.dataset.look, "karsara");
   assert.equal(JSON.parse(store.get("griffin.ui")).look, "karsara", "cached for the next first paint");
+});
+
+test("repoChipsAlways: on in Griffin's preset, off in Karsara's; a copy saved before rev 4 follows the preset, a later choice stays", () => {
+  assert.equal(ui.presetOf("griffin").flags.repoChipsAlways, true);
+  assert.equal(ui.resolvePrefs({ rev: 3, flags: { repoChipsAlways: false } }, "griffin").flags.repoChipsAlways, true);
+  assert.equal(ui.resolvePrefs({ rev: ui.PREFS_REV, flags: { repoChipsAlways: false } }, "griffin").flags.repoChipsAlways, false);
+  assert.equal(ui.presetOf("karsara").flags.repoChipsAlways, false);
+  assert.equal(ui.resolvePrefs({ rev: ui.PREFS_REV, flags: { repoChipsAlways: true } }, "griffin").flags.repoChipsAlways, true);
 });

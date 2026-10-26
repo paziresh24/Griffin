@@ -10,6 +10,8 @@ import { agentSlug } from "./persona.mjs";
 
 export const KNOWLEDGE_WRITE = "knowledge_write";
 export const KNOWLEDGE_LIST = "knowledge_list";
+export const KNOWLEDGE_EDIT = "knowledge_edit";
+export const KNOWLEDGE_DELETE = "knowledge_delete";
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_BODY = 32_000;
@@ -39,6 +41,24 @@ const listSchema = {
     agent: { type: "string", description: "Agent id whose knowledge to list (default: this chat's agent)" },
     file: { type: "string", description: "Read one note in full: a file name from the list or from the Playbook index in your rules" },
   },
+  additionalProperties: false,
+};
+
+const editSchema = {
+  type: "object",
+  properties: {
+    file: { type: "string", description: "File name of one of this agent's own notes, from knowledge_list" },
+    title: { type: "string", description: "New title (omit to keep)" },
+    body: { type: "string", description: "New full Markdown body (omit to keep). No secrets, tokens, or passwords." },
+  },
+  required: ["file"],
+  additionalProperties: false,
+};
+
+const deleteSchema = {
+  type: "object",
+  properties: { file: { type: "string", description: "File name of one of this agent's own notes, from knowledge_list" } },
+  required: ["file"],
   additionalProperties: false,
 };
 
@@ -84,6 +104,35 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "note";
     return SLUG.test(base) ? base : `note-${Date.now().toString(36)}`;
+  }
+
+  const fail = (text) => ({ isError: true, content: [{ type: "text", text }] });
+
+  // Who is calling: the agent is always the chat's own (no cross-agent edits through the tools).
+  // ownerChat = the owner's own conversation chain (not a job, a colleague's, a sim, Telegram-linked).
+  function actorOf(chatId) {
+    const chat = store.getChat(chatId);
+    const agentId = chat?.agent || DEFAULT_AGENT;
+    const caller = chat?.caller || "owner";
+    const ownerChat = Boolean(chat) && (trust
+      ? trust.ownerRooted(chatId)
+      : caller === "owner" && !chat.job_id && !chat.person_id && !chat.sim);
+    return { chatId, agentId, ownerChat, by: { kind: "agent", agent: agentId, chat: String(chatId), caller } };
+  }
+
+  // null when the caller may change this note, else why not. A note that is live (owner-reviewed, or
+  // auto-trusted so it already reaches prompts) is the owner's: only his own chat may touch it, and an
+  // owner-reviewed one only from a chat that read nothing third-party. Everything else is this
+  // agent's unreviewed draft, open to any chat of that agent.
+  function mayTouch(ctx, file) {
+    const text = readAgentNote(root, ctx.agentId, file);
+    if (text == null) return `no such note: ${file}`;
+    const reviewed = frontmatter(text).get("reviewed") === "true";
+    const live = reviewed || Boolean(autoTrust && trust?.isTrustedNote(ctx.agentId, file, text));
+    if (!live) return null;
+    if (!ctx.ownerChat) return `note ${file} is reviewed by the owner (or already reaches prompts): only the owner's own chat may change it; ask the owner`;
+    if (reviewed && trust && !trust.isCleanChat(ctx.chatId)) return `note ${file} is reviewed by the owner and this chat read third-party content: change it from a fresh owner chat or in Settings → دانش`;
+    return null;
   }
 
   return {
@@ -213,6 +262,56 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
                   ...(autoTrust ? { unlisted, unlistedWhy: "notes from chats that read third-party content, waiting for the owner's review" } : {}),
                   source: "local-knowledge",
                 }),
+              }],
+            };
+          },
+        },
+        [KNOWLEDGE_EDIT]: {
+          description:
+            "Edit the title and/or body of one of this agent's own notes (file from knowledge_list). An edit by an agent puts the note back to «waiting for the owner's review» (in the owner's own clean chat it reaches later chats like a fresh knowledge_write). Notes the owner approved, or that already reach prompts, can only be edited from the owner's own chat; jobs and colleague chats may edit only this agent's unreviewed notes. No secrets. Every edit is logged.",
+          inputSchema: editSchema,
+          async execute(args) {
+            const ctx = actorOf(chatId);
+            const file = String(args?.file || "");
+            const denied = mayTouch(ctx, file);
+            if (denied) return fail(denied);
+            const out = editNote(root, ctx.agentId, file, { title: args?.title, body: args?.body }, { by: ctx.by, git });
+            if (out.error) return fail(out.error);
+            trust?.recordNote(ctx.agentId, file, chatId, out.text);
+            const live = out.reviewed || Boolean(autoTrust && trust?.isTrustedNote(ctx.agentId, file, out.text));
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({
+                  path: path.join("agents", ctx.agentId, "knowledge", file),
+                  agent: ctx.agentId,
+                  reviewed: out.reviewed,
+                  wasReviewed: out.wasReviewed,
+                  committed: out.committed,
+                  note: live
+                    ? "edited; it reaches later chats (owner-reviewed or from a clean owner chat)"
+                    : "edited; it waits for the owner's review before it reaches later chats",
+                }),
+              }],
+            };
+          },
+        },
+        [KNOWLEDGE_DELETE]: {
+          description:
+            "Delete one of this agent's own notes (file from knowledge_list). The note moves to the knowledge trash, so the owner can restore it from Settings → دانش. Notes the owner approved, or that already reach prompts, can only be deleted from the owner's own chat; jobs and colleague chats may delete only this agent's unreviewed notes. Every deletion is logged.",
+          inputSchema: deleteSchema,
+          async execute(args) {
+            const ctx = actorOf(chatId);
+            const file = String(args?.file || "");
+            const denied = mayTouch(ctx, file);
+            if (denied) return fail(denied);
+            const out = deleteNote(root, ctx.agentId, file, { by: ctx.by, git });
+            if (out.error) return fail(out.error);
+            trust?.forgetNote?.(ctx.agentId, file);
+            return {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ deleted: file, agent: ctx.agentId, trashId: out.trashId, committed: out.committed, note: "moved to the knowledge trash; the owner can restore it" }),
               }],
             };
           },
@@ -368,7 +467,7 @@ export function listAgentNotes(root, agentId) {
   });
 }
 
-export function setNoteReviewed(root, agentId, file, reviewed, { git = true } = {}) {
+export function setNoteReviewed(root, agentId, file, reviewed, { git = true, by = null } = {}) {
   if (!/^[a-z0-9][a-z0-9-]{0,63}\.md$/.test(String(file || ""))) return false;
   const full = path.join(root, "agents", agentId, "knowledge", file);
   if (!fs.existsSync(full)) return false;
@@ -385,8 +484,172 @@ export function setNoteReviewed(root, agentId, file, reviewed, { git = true } = 
     text = lines.join("\n");
   }
   fs.writeFileSync(full, text, "utf8");
+  if (by) appendAudit(root, { action: reviewed ? "review" : "unreview", agent: agentId, file, by });
   commit(root, git, `knowledge: ${reviewed ? "review" : "unreview"} ${agentId}/${file}`);
   return true;
+}
+
+// ---- Edit / delete / restore -------------------------------------------------------------------
+// Decision (owner 2026-10-19): an edit by the OWNER keeps the review state (he is the reviewer; his
+// edit of an approved note stays approved, a pending one stays pending). An edit by an AGENT always
+// sets `reviewed: false`: what the owner approved is no longer what is written, so it leaves the
+// prompts until he approves again (an owner-clean chat may still auto-trust it, like a new write).
+// A delete never destroys: the file moves to <root>/trash/<agent>/<stamp>__<file> (and git keeps
+// history), so the owner can restore it. Every change appends a line to <root>/audit/knowledge.jsonl.
+// `by` = { kind: "owner" } or { kind: "agent", agent, chat, caller }.
+
+const TRASH_ID = /^\d{8}T\d{9}Z__[a-z0-9][a-z0-9._-]{0,120}\.md$/i;
+const auditFile = (root) => path.join(root, "audit", "knowledge.jsonl");
+
+export function appendAudit(root, entry) {
+  try {
+    fs.mkdirSync(path.join(root, "audit"), { recursive: true });
+    fs.appendFileSync(auditFile(root), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, "utf8");
+  } catch {}
+}
+
+export function readAudit(root, { limit = 100 } = {}) {
+  let lines;
+  try {
+    lines = fs.readFileSync(auditFile(root), "utf8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+  return lines.slice(-limit).reverse().map((line) => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
+// Set (or with null, drop) keys in a note's frontmatter, creating the block when there is none.
+function setFront(text, updates) {
+  const lines = String(text).split("\n");
+  const end = lines[0] === "---" ? lines.indexOf("---", 1) : -1;
+  const head = end < 0 ? [] : lines.slice(1, end);
+  const rest = end < 0 ? lines : lines.slice(end + 1);
+  for (const [key, value] of Object.entries(updates)) {
+    const at = head.findIndex((line) => line.startsWith(`${key}:`));
+    if (value == null) {
+      if (at >= 0) head.splice(at, 1);
+    } else if (at >= 0) {
+      head[at] = `${key}: ${value}`;
+    } else {
+      head.push(`${key}: ${value}`);
+    }
+  }
+  return ["---", ...head, "---", ...rest].join("\n");
+}
+
+const whoLabel = (by) => (by?.kind === "agent" ? `agent:${by.agent || ""}${by.chat ? `@${by.chat}` : ""}` : "owner");
+const noteFileOk = (file) => NOTE_FILE.test(String(file || "")) && !String(file).startsWith(".");
+
+export function editNote(root, agentId, file, { title, body } = {}, { by = { kind: "owner" }, git = true } = {}) {
+  if (!noteFileOk(file)) return { error: `bad note file name: ${file}` };
+  const full = path.join(root, "agents", agentId, "knowledge", file);
+  let text;
+  try {
+    text = fs.readFileSync(full, "utf8");
+  } catch {
+    return { error: `no such note: ${file}` };
+  }
+  const wantTitle = title == null ? null : String(title).replace(LINE_BREAKS, " ").trim().slice(0, 120);
+  const wantBody = body == null ? null : String(body).trim();
+  if (wantTitle == null && wantBody == null) return { error: "title or body required" };
+  if (wantTitle === "") return { error: "title can not be empty" };
+  if (wantBody === "") return { error: "body can not be empty" };
+  if (wantBody != null && wantBody.length > MAX_BODY) return { error: "body too long" };
+  if (SECRET_RE.test(wantBody || "") || SECRET_RE.test(wantTitle || "")) return { error: "text looks like it contains a secret/token/JWT — refused" };
+
+  const wasReviewed = frontmatter(text).get("reviewed") === "true";
+  const updates = { edited_at: new Date().toISOString(), edited_by: whoLabel(by).replace(LINE_BREAKS, " ") };
+  if (wantTitle != null) updates.title = JSON.stringify(wantTitle);
+  if (by?.kind === "agent") updates.reviewed = "false";
+  let next = setFront(text, updates);
+  if (wantBody != null) next = next.replace(/^(---\n[\s\S]*?\n---\n)[\s\S]*$/, (_, head) => `${head}\n${wantBody}\n`);
+  fs.writeFileSync(full, next, "utf8");
+  const reviewed = frontmatter(next).get("reviewed") === "true";
+  appendAudit(root, { action: "edit", agent: agentId, file, by, wasReviewed, reviewed, title: wantTitle != null, body: wantBody != null });
+  const committed = commit(root, git, `knowledge: edit ${agentId}/${file} (${whoLabel(by)})`);
+  return { ok: true, text: next, wasReviewed, reviewed, committed };
+}
+
+export function deleteNote(root, agentId, file, { by = { kind: "owner" }, git = true } = {}) {
+  if (!noteFileOk(file)) return { error: `bad note file name: ${file}` };
+  const full = path.join(root, "agents", agentId, "knowledge", file);
+  if (!fs.existsSync(full)) return { error: `no such note: ${file}` };
+  const wasReviewed = frontmatter(fs.readFileSync(full, "utf8")).get("reviewed") === "true";
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(".", "");
+  const trashId = `${stamp}__${file}`;
+  const dir = path.join(root, "trash", agentId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.renameSync(full, path.join(dir, trashId));
+  appendAudit(root, { action: "delete", agent: agentId, file, by, wasReviewed, trashId });
+  const committed = commit(root, git, `knowledge: delete ${agentId}/${file} (${whoLabel(by)})`);
+  return { ok: true, trashId, wasReviewed, committed };
+}
+
+export function listTrash(root, agentId = null) {
+  const base = path.join(root, "trash");
+  let agents;
+  try {
+    agents = agentId ? [agentId] : fs.readdirSync(base);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const id of agents) {
+    let names;
+    try {
+      names = fs.readdirSync(path.join(base, id)).filter((n) => TRASH_ID.test(n));
+    } catch {
+      continue;
+    }
+    for (const name of names.sort().reverse()) {
+      const text = fs.readFileSync(path.join(base, id, name), "utf8");
+      const front = frontmatter(text);
+      const [stamp, ...file] = name.split("__");
+      const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/.exec(stamp);
+      out.push({
+        agent: id,
+        id: name,
+        file: file.join("__"),
+        title: noteTitle(front, file.join("__")),
+        reviewed: front.get("reviewed") === "true",
+        deletedAt: m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${m[7]}Z` : null,
+        body: noteBody(text),
+      });
+    }
+  }
+  return out;
+}
+
+// Put a trashed note back exactly as it was (the owner's undo). A name taken since is not
+// overwritten: the note returns as <name>-restored[-n].md.
+export function restoreNote(root, agentId, trashId, { by = { kind: "owner" }, git = true } = {}) {
+  if (!TRASH_ID.test(String(trashId || ""))) return { error: "bad trash id" };
+  const from = path.join(root, "trash", agentId, trashId);
+  if (!fs.existsSync(from)) return { error: "not in the trash" };
+  const original = trashId.split("__").slice(1).join("__");
+  const dir = path.join(root, "agents", agentId, "knowledge");
+  fs.mkdirSync(dir, { recursive: true });
+  let file = original;
+  for (let n = 1; fs.existsSync(path.join(dir, file)); n += 1) {
+    file = original.replace(/\.md$/i, n === 1 ? "-restored.md" : `-restored-${n}.md`);
+  }
+  fs.renameSync(from, path.join(dir, file));
+  appendAudit(root, { action: "restore", agent: agentId, file, by, trashId });
+  const committed = commit(root, git, `knowledge: restore ${agentId}/${file} (${whoLabel(by)})`);
+  return { ok: true, file, committed };
+}
+
+// Permanent removal of a note already in the trash (owner only; git keeps history).
+export function purgeNote(root, agentId, trashId, { by = { kind: "owner" }, git = true } = {}) {
+  if (!TRASH_ID.test(String(trashId || ""))) return { error: "bad trash id" };
+  const from = path.join(root, "trash", agentId, trashId);
+  if (!fs.existsSync(from)) return { error: "not in the trash" };
+  fs.rmSync(from);
+  appendAudit(root, { action: "purge", agent: agentId, file: trashId.split("__").slice(1).join("__"), by, trashId });
+  const committed = commit(root, git, `knowledge: purge ${agentId}/${trashId} (${whoLabel(by)})`);
+  return { ok: true, committed };
 }
 
 // Notes the prompt may carry when auto-trust is on: reviewed notes, plus notes isTrustedNote vouches

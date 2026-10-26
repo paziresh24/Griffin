@@ -69,6 +69,19 @@ const parse = (text, fallback) => {
   }
 };
 
+// Where an incident belongs on the page (owner 2026-10-25: «همهٔ مشکلاتی که آلرت‌ها اعلام می‌کنن رو
+// دی‌نویز شده و مرتب ببینم»). Deterministic, from what the row already knows.
+export const BUCKETS = ["attention", "tracking", "watch", "chronic", "noise", "people", "resolved"];
+const CHRONIC_MS = 3 * 86_400_000;
+export function incidentBucket(view, { now = new Date() } = {}) {
+  if (view.cluster === "human") return "people";
+  if (view.status !== "open") return "resolved";
+  if (view.ack || view.triage?.noise) return "noise";
+  if (view.chatId) return "tracking";
+  if (now.getTime() - new Date(view.firstSeen).getTime() > CHRONIC_MS) return "chronic";
+  return view.severity === "critical" ? "attention" : "watch";
+}
+
 export function incidentView(row) {
   if (!row) return null;
   return {
@@ -93,18 +106,30 @@ export function incidentView(row) {
     triage: parse(row.triage_json, null),
     ack: row.ack || null,
     triagedAt: row.triaged_at,
+    source: row.source_id || null,
+    chatId: row.chat_id || null,
+    suggestionId: row.suggestion_id || null,
   };
 }
 
 export function createIncidentStore(db, { now = () => new Date() } = {}) {
   db.exec(SCHEMA);
+  // Data sources (sources.mjs) and workspace chats (assign / suggest) came after the table.
+  const cols = new Set(db.prepare("PRAGMA table_info(incidents)").all().map((c) => c.name));
+  for (const col of ["source_id", "chat_id", "suggestion_id"]) if (!cols.has(col)) db.exec(`ALTER TABLE incidents ADD COLUMN ${col} TEXT`);
   const q = {
     open: db.prepare("SELECT * FROM incidents WHERE status = 'open'"),
     lastByKey: db.prepare("SELECT * FROM incidents WHERE key = ? ORDER BY first_seen DESC LIMIT 1"),
     get: db.prepare("SELECT * FROM incidents WHERE id = ?"),
+    // The digest shows 8-character ids; a scan of the first 500 rows missed resolved ones (6k+ rows).
+    byPrefix: db.prepare("SELECT * FROM incidents WHERE id LIKE ? || '%' LIMIT 2"),
     count: db.prepare("SELECT COUNT(*) AS n FROM incidents"),
-    insert: db.prepare(`INSERT INTO incidents (id, key, cluster, alertname, scope, severity, owner, summary, status, members_json, seen_from_json, member_peak, polls, baseline, starts_at, first_seen, last_seen, updated_at)
-      VALUES (@id, @key, @cluster, @alertname, @scope, @severity, @owner, @summary, 'open', @members, @seenFrom, @peak, 1, @baseline, @startsAt, @at, @at, @at)`),
+    insert: db.prepare(`INSERT INTO incidents (id, key, cluster, alertname, scope, severity, owner, summary, status, members_json, seen_from_json, member_peak, polls, baseline, starts_at, first_seen, last_seen, updated_at, source_id)
+      VALUES (@id, @key, @cluster, @alertname, @scope, @severity, @owner, @summary, 'open', @members, @seenFrom, @peak, 1, @baseline, @startsAt, @at, @at, @at, @source)`),
+    assign: db.prepare("UPDATE incidents SET chat_id = @chat, updated_at = @at WHERE id = @id"),
+    suggestion: db.prepare("UPDATE incidents SET suggestion_id = @suggestion, updated_at = @at WHERE id = @id"),
+    byChat: db.prepare("SELECT * FROM incidents WHERE chat_id = ? ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, last_seen DESC LIMIT 50"),
+    bySuggestion: db.prepare("SELECT * FROM incidents WHERE suggestion_id = ? AND chat_id IS NULL"),
     seen: db.prepare(`UPDATE incidents SET severity = @severity, owner = COALESCE(owner, @owner), summary = @summary, members_json = @members, seen_from_json = @seenFrom,
       member_peak = MAX(member_peak, @peak), polls = polls + 1, last_seen = @at, updated_at = @at WHERE id = @id`),
     reopen: db.prepare("UPDATE incidents SET status = 'open', resolved_at = NULL, flaps = flaps + 1, last_seen = @at, updated_at = @at WHERE id = @id"),
@@ -149,7 +174,13 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
     history: (key, limit = 10) => q.history.all(key, Math.min(Math.max(Number(limit) || 10, 1), 50)),
     open: () => q.open.all(),
     lastByKey: (key) => q.lastByKey.get(key) || null,
-    get: (id) => q.get.get(String(id)) || null,
+    get: (id) => {
+      const s = String(id || "");
+      const exact = q.get.get(s);
+      if (exact || s.length < 6) return exact || null;
+      const hits = q.byPrefix.all(s);
+      return hits.length === 1 ? hits[0] : null;
+    },
     insert(group, { baseline = false } = {}) {
       const id = randomUUID();
       q.insert.run({
@@ -166,9 +197,26 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
         peak: group.members.length,
         baseline: baseline ? 1 : 0,
         startsAt: group.startsAt || null,
+        source: group.sourceId || null,
         at: iso(),
       });
       return q.get.get(id);
+    },
+    /** Tie an incident to a workspace chat (null unties); that chat hears when it changes. */
+    assign(id, chatId) {
+      q.assign.run({ id: String(id), chat: chatId || null, at: iso() });
+      return q.get.get(String(id)) || null;
+    },
+    setSuggestion(id, suggestionId) {
+      q.suggestion.run({ id: String(id), suggestion: suggestionId || null, at: iso() });
+      return q.get.get(String(id)) || null;
+    },
+    byChat: (chatId) => q.byChat.all(String(chatId)),
+    /** A suggestion the owner started: its incidents now belong to the chat it opened. */
+    adoptSuggestion(suggestionId, chatId) {
+      const rows = q.bySuggestion.all(String(suggestionId));
+      for (const row of rows) q.assign.run({ id: row.id, chat: chatId, at: iso() });
+      return rows.length;
     },
     seen(id, group) {
       q.seen.run({
@@ -202,7 +250,7 @@ export function createIncidentStore(db, { now = () => new Date() } = {}) {
         return { kind: "reopened", incident: q.get.get(open.id), again: true };
       }
       const id = randomUUID();
-      q.insert.run({ id, key, cluster: "human", alertname: "TeamReport", scope: name || personId, severity: "warning", owner: null, summary: snippet, members: JSON.stringify([snippet]), seenFrom: JSON.stringify(["human"]), peak: 1, baseline: 0, startsAt: iso(), at: iso() });
+      q.insert.run({ id, key, cluster: "human", alertname: "TeamReport", scope: name || personId, severity: "warning", owner: null, summary: snippet, members: JSON.stringify([snippet]), seenFrom: JSON.stringify(["human"]), peak: 1, baseline: 0, startsAt: iso(), source: null, at: iso() });
       q.log.run(id, "opened", JSON.stringify({ personId }), iso());
       return { kind: "opened", incident: q.get.get(id) };
     },
@@ -340,8 +388,15 @@ export function createIntake({
           changes.push({ kind: "reopened", incident: incidents.get(last.id) });
           continue;
         }
-        const row = incidents.insert(group, { baseline: bootstrap });
+        let row = incidents.insert(group, { baseline: bootstrap });
         incidents.log(row.id, bootstrap ? "baseline" : "opened", { members: group.members.length });
+        // The same alert came back after it was called noise: it is noise again, without a new
+        // triage run (a third of a week's incidents were repeats of keys already marked noise).
+        const before = last ? parse(last.triage_json, null) : null;
+        if (before?.noise) {
+          row = incidents.setTriage(row.id, { ...before, inherited: last.id });
+          incidents.log(row.id, "triage", { inherited: last.id });
+        }
         changes.push({ kind: bootstrap ? "baseline" : "opened", incident: row });
       }
 

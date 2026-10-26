@@ -1,4 +1,6 @@
-import { guardTools } from "../guard.mjs";
+import { OWNER } from "../persona.mjs";
+import { classify, guardTools } from "../guard.mjs";
+import { teamWriteVerdict } from "../handoff.mjs";
 import { OWNER_NAME } from "../owner.mjs";
 
 // A colleague's Telegram chat (caller "team"): the /agent commands, the owner's web note, end_agent
@@ -48,19 +50,33 @@ export function createEndAgentTool({ onEnd }) {
     },
   };
 }
-// Teammate coverage talks to a colleague in their chat: on top of the general irreversible gate
-// (guard.mjs), these need the owner too. Replying in the same chat is free.
-export const TEAM_MUTATING = new Set(["arvan_cache_purge", "telegram_send", "knowledge_write"]);
+// Teammate coverage talks to a colleague in their chat. Talking to someone else or writing a note
+// still asks the owner; replying in the same chat is free. Every change (the general gate's list,
+// guard.mjs classify, plus handoff.mjs teamWriteVerdict) is refused outright: the chain only reads
+// and hands such work to the owner's own chats (owner 2026-10-21).
+export const TEAM_MUTATING = new Set(["telegram_send", "knowledge_write", "knowledge_edit", "knowledge_delete"]);
 
 export { isDestructiveShell, isDestructiveSql, isYes } from "../guard.mjs";
 
-export function guardTeamTools(tools, { chatId, asks, store = null, peerChat = null } = {}) {
-  return guardTools(tools, {
+// For every chat of a chain rooted in a colleague's Telegram chat (index.mjs): the coverage chat
+// itself passes peerChat, its subtasks do not. verdictOf: the install's (modules first, then classify).
+export function guardTeamTools(tools, { chatId, asks, store = null, peerChat = null, verdictOf = classify, allowPass = null } = {}) {
+  const writes = guardTools(tools, {
+    chatId,
+    asks,
+    store,
+    caller: COVERAGE_CALLER,
+    mode: "escalate",
+    allowPass,
+    verdictOf: (name, args) => verdictOf(name, args) ?? teamWriteVerdict(name, args),
+  });
+  return guardTools(writes, {
     chatId,
     asks,
     store,
     caller: COVERAGE_CALLER,
     extra: TEAM_MUTATING,
+    verdictOf: () => null,
     allowPass: (name, args) => {
       if (name !== "telegram_send" || !peerChat) return false;
       const target = String(args?.chat || "").trim();

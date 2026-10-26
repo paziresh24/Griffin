@@ -148,9 +148,12 @@ export function claudeCodeOptions({ fileAccess, claudeCodeOn, stateGuardOn, stat
  *  guardMode: null (no guard: the owner's attended chats), "ask" or "refuse".
  */
 // bypass: an owner job in «بدون پرسیدن» — no guard question, as in his own chat.
-export function runAccess({ rootCaller, unattended, ownerJob = false, bypass = false, coverage = false }) {
+// opsAsks: the ops room in critical mode reaches the owner on Telegram (ask_owner since 10-07), so a
+// gated step there asks him instead of being refused and handed back («the owner must do it himself in the CDN
+// panel» after he had approved, 2026-10-21).
+export function runAccess({ rootCaller, unattended, ownerJob = false, bypass = false, coverage = false, opsAsks = false }) {
   const attendedOwner = rootCaller === "owner" && !unattended;
   const asOwner = attendedOwner || Boolean(ownerJob);
-  const guardMode = rootCaller === "owner" || coverage || (ownerJob && bypass) ? null : unattended && !ownerJob ? "refuse" : "ask";
+  const guardMode = rootCaller === "owner" || coverage || (ownerJob && bypass) ? null : unattended && !ownerJob && !(opsAsks && rootCaller === "ops") ? "refuse" : "ask";
   return { asOwner, guardMode };
 }

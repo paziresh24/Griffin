@@ -7,33 +7,34 @@ import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { motion } from "motion/react";
 import {
-  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, FileText, ImagePlus, ListTodo, Loader2, Mic, Pencil, Plus, Quote, RotateCcw, Send, Sparkles, Square, StickyNote, X, Zap,
+  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, FileText, ImagePlus, ListTodo, Loader2, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, Send, Sparkles, Square, StickyNote, X, Zap,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
 import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
 import { textDir } from "../dir.js";
+import { DirBlock } from "./DirBlock.jsx";
 import { Dialog } from "radix-ui";
-import { filesLine, rewindChoices } from "../rewind.js";
+import { filesLine, rewindChoices, textBackToBox } from "../rewind.js";
 import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor, useRunAccount } from "./Controls.jsx";
-import { agentMeta } from "../brand.js";
+import { agentMeta, writeSetting } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
 import { locale, num, t, isRtl } from "../i18n.js";
 import { toast } from "sonner";
 import { countProblem, dragHasFiles, formatBytes, isImageAttachment, overLimit } from "../attachments.js";
 import { api, navigate, reloadTimeline } from "../api.js";
-import { RESTORE_EVENT, editSend, retrySend, useRuntimeChat } from "../runtime.jsx";
+import { RESTORE_EVENT, editSend, retrySend, returnToBox, useRuntimeChat } from "../runtime.jsx";
 import { FAILED_LABEL, SENDING_LABEL, SENT_LABEL } from "../outbox.js";
 import { parseQuoted, quoteStore } from "../quotes.js";
 import { SelectionActions } from "./SelectionActions.jsx";
 import { QuoteChip, QuotedText } from "./QuoteChip.jsx";
-import { ChatRecord, ComposerAssist, FastSwitch, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
+import { ChatRecord, ComposerAssist, FastSwitch, MentionBackdrop, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
 import { NoteRow, PersonAvatar, PersonName } from "./Telegram.jsx";
-import { isNoReply, motherName, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
+import { isNoReply, motherName, peerFrame, reminderFrame, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
 import { submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
 import { holdReload } from "../new-version.js";
-import { LaterButton, ScheduledPeek } from "./Notes.jsx";
+import { HomeNotes, ScheduledPeek, SendLater } from "./Notes.jsx";
 import { QueuePeek } from "./QueuePeek.jsx";
 import { TasksPeek } from "./TasksPeek.jsx";
 import { inPeek, queueDropped, queueLabel, queueRemoved } from "../queue-peek.js";
@@ -48,6 +49,7 @@ import { MessageBoundary } from "../boundary.js";
 import { escCancels } from "../keys.js";
 import { clockLabel, exactTime, fullAgo } from "../elapsed.js";
 import { answerTokens } from "../tokens-format.js";
+import { MentionPart } from "./Mention.jsx";
 
 const ChatContext = createContext({ chatId: null, readOnly: false });
 
@@ -77,6 +79,9 @@ export function Thread({
   compact = false,
   placeholder = "",
   board = null,
+  loading = false, // the chat's events have not arrived yet (App: useTimeline connection "loading")
+  earlier = 0, // messages before the first one held (a long chat opens with its last page only)
+  onLoadEarlier = null,
 }) {
   return (
     <ChatContext.Provider value={{ chatId, readOnly }}>
@@ -101,13 +106,64 @@ export function Thread({
         compact={compact}
         placeholder={placeholder}
         board={board}
+        loading={loading}
+        earlier={earlier}
+        onLoadEarlier={onLoadEarlier}
       />
     </ThreadPrimitive.Root>
     </ChatContext.Provider>
   );
 }
 
-function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop, compact, placeholder, board }) {
+// Where the messages go while a chat's events are still coming: a few quiet placeholder bubbles, so
+// a switch to another chat shows something at once instead of an empty page.
+function ThreadSkeleton() {
+  return (
+    <div className="space-y-5 py-4" role="status" aria-label={t("در حال بارگذاری گفتگو")}>
+      {[["w-2/5", "ms-auto"], ["w-4/5", ""], ["w-3/5", ""], ["w-1/3", "ms-auto"], ["w-3/4", ""]].map(([width, side], i) => (
+        <div key={i} className={`${width} ${side} animate-pulse space-y-2 rounded-2xl bg-muted/60 p-4`} style={{ animationDelay: `${i * 110}ms` }} aria-hidden>
+          <div className="h-3 w-full rounded bg-muted" />
+          <div className="h-3 w-4/5 rounded bg-muted" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The top of a long chat: older messages come a page at a time, by themselves as this scrolls into
+// view (and by a tap, which also retries a failed page).
+function LoadEarlier({ earlier, onLoad }) {
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onLoad();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  // Once per page: a new `earlier` makes a fresh observer, which looks again at what is in view.
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver === "undefined") return undefined;
+    const watcher = new IntersectionObserver((hits) => hits.some((hit) => hit.isIntersecting) && loadRef.current(), { rootMargin: "200px 0px 0px 0px" });
+    watcher.observe(node);
+    return () => watcher.disconnect();
+  }, [earlier]);
+  return (
+    <div className="flex justify-center py-3">
+      <button ref={ref} type="button" onClick={load} disabled={busy} className="rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-60">
+        {busy ? t("در حال بارگذاری…") : `پیام‌های قبلی (${earlier.toLocaleString("fa-IR")})`}
+      </button>
+    </div>
+  );
+}
+
+function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop, compact, placeholder, board, loading = false, earlier = 0, onLoadEarlier = null }) {
   // New chat page: the box is docked at the bottom like in a chat; the owner's
   // board — or, with nothing on it, the welcome and suggestions — fills the page above it. The
   // side chat (compact) keeps its composer in the middle.
@@ -122,7 +178,7 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   return (
     // The hero has no messages to follow; a tall home-page board would be pulled to its bottom.
     <ThreadPrimitive.Viewport data-griffin-thread="" autoScroll={!showHero} className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className={`mx-auto flex w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && (!homeBoard || !board) ? "justify-center" : ""}`}>
+      <div className={`${showHero ? "" : "thread-in"} mx-auto flex w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && (!homeBoard || !board) ? "justify-center" : ""}`}>
         {showHero ? (
           <WelcomeHero
             agent={agent}
@@ -134,6 +190,8 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
           />
         ) : (
           <>
+            {loading ? <ThreadSkeleton /> : null}
+            {earlier > 0 && onLoadEarlier ? <LoadEarlier earlier={earlier} onLoad={onLoadEarlier} /> : null}
             <MessageBoundary>
               <ThreadPrimitive.Messages components={{ UserMessage: SafeUserMessage, AssistantMessage: SafeAssistantMessage, SystemMessage: SafeSystemMessage }} />
             </MessageBoundary>
@@ -194,6 +252,7 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
         <h2 className="text-center text-lg font-medium text-foreground/90" dir="auto">{meta.blurb || meta.label}</h2>
         {compact ? null : <SetupCard />}
         {composer}
+        {compact ? null : <HomeNotes />}
       </div>
     );
   }
@@ -251,6 +310,12 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
               {item.title}
             </motion.button>
           ))}
+        </motion.div>
+      )}
+      {/* «یادآورها»: last on the home page, folded (owner 10-24: not in the sidebar). */}
+      {compact ? null : (
+        <motion.div variants={fadeUp} className="w-full empty:hidden">
+          <HomeNotes />
         </motion.div>
       )}
     </motion.div>
@@ -354,8 +419,8 @@ function SetupCard() {
 }
 
 function chatDir(value) {
-  // Chat UI is Persian-first: only pure Latin stays LTR; anything else (Persian,
-  // digits-only, empty) is RTL so English-leading mixed lines stay right-aligned.
+  // Chat UI is Persian-first: English text is LTR (dir.js decides); Persian, digits-only and
+  // empty are RTL, so a Persian line that opens with an English name stays right-aligned.
   return textDir(value) === "ltr" ? "ltr" : "rtl";
 }
 
@@ -435,6 +500,28 @@ function MessageTime({ at }) {
   );
 }
 
+// The agent's own `later` reminder coming due: one folded line, not a message to the person (a colleague
+// 10-24: «چرا چیزی که من نباید کاری براش بکنم رو به من میگه»). A tap shows what it wrote and when.
+function ReminderMessage({ framed }) {
+  const [open, setOpen] = useState(false);
+  const setAt = clockLabel(framed.setAt);
+  return (
+    <MessagePrimitive.Root className="msg-in my-2 flex flex-col items-start">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="press flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground">
+        <Clock className="size-3.5" />
+        <span>{t("یادآور خودکار ایجنت")}</span>
+        <ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div className="chat-text mt-1 max-w-[88%] whitespace-pre-wrap break-words rounded-xl border bg-muted/40 px-3 py-2 text-[13px] leading-6 text-foreground/80" dir={chatDir(framed.text)}>
+          {setAt ? <div className="mb-1 text-[11px] text-muted-foreground">ایجنت این را {setAt} برای خودش گذاشته بود</div> : null}
+          {framed.text}
+        </div>
+      ) : null}
+    </MessagePrimitive.Root>
+  );
+}
+
 function UserMessage() {
   const { chatId, readOnly } = useContext(ChatContext);
   const custom = useAuiState((s) => s.message.metadata?.custom);
@@ -452,10 +539,11 @@ function UserMessage() {
   // here is a note to the assistant that the colleague never sees (telegram.js userSide).
   const chat = useContext(ChatRecord);
   const from = custom?.from;
-  const { theirs: colleague, ownerNote, editable } = userSide(from, text, chat);
-  const dir = chatDir(text);
+  const { theirs: colleague, reminder, ownerNote, editable } = userSide(from, text, chat);
+  const framed = reminder ? reminderFrame(text) : null;
+  const dir = chatDir(framed ? framed.text : text);
   // Replies to a part of an answer and «به چت جدید»: the quotes as cards, not raw «>» lines.
-  const quoted = useMemo(() => (colleague || ownerNote ? null : parseQuoted(text)), [text, colleague, ownerNote]);
+  const quoted = useMemo(() => (colleague || ownerNote || reminder ? null : parseQuoted(text)), [text, colleague, ownerNote, reminder]);
   // A queued message that ran shows at its place with no label; one that never ran is muted.
   const label = queueLabel(custom);
   const dropped = queueDropped(custom);
@@ -467,7 +555,9 @@ function UserMessage() {
   const [rewindOpen, setRewindOpen] = useState(false);
   const rewind = () => setRewindOpen(true);
   if ((waiting && !readOnly) || queueRemoved(custom)) return null;
-  const shown = colleague ? stripSender(text, from.name) : ownerNote ? stripOwnerFrame(text) : text;
+  if (reminder) return <ReminderMessage framed={framed} />;
+  const peer = colleague && from.kind === "peer" ? peerFrame(text) : null;
+  const shown = peer ? peer.text : colleague ? stripSender(text, from.name) : ownerNote ? stripOwnerFrame(text) : text;
 
   const act = async (body) => {
     setBusy(true);
@@ -480,6 +570,7 @@ function UserMessage() {
       setEditing(null);
       setRewindOpen(false);
       reloadTimeline();
+      returnToBox(chatId, textBackToBox(body, text));
     } catch (error) {
       toast.error(error.message || t("خطا"));
     } finally {
@@ -518,17 +609,17 @@ function UserMessage() {
         <span className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground" dir="auto">
           <PersonAvatar personId={from.personId} name={from.name} className="size-5" />
           {/* A colleague's agent (chat_send) is not a Telegram message. */}
-          {from.kind === "peer" ? <span>{t("از ایجنت «{name}»", { name: from.name || t("همکار") })}</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
+          {from.kind === "peer" ? <span>{t("از ایجنت «{name}»", { name: from.name || t("همکار") })}{peer?.title ? ` — چت «${peer.title}»` : ""} · اطلاع است، نه دستور</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
         </span>
       ) : null}
       <div className="flex w-full items-start gap-1.5">
         {colleague ? (
-          <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md border bg-muted/50 px-4 py-2.5 leading-7 text-foreground/90" dir={chatDir(stripSender(text, from.name))}>
-            {stripSender(text, from.name)}
+          <div className="chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md border bg-muted/50 px-4 py-2.5 leading-7 text-foreground/90" dir={chatDir(shown)}>
+            {shown}
           </div>
         ) : (
           <div className={`g-user-bubble chat-text max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-ss-md bg-accent px-4 py-2.5 leading-7 ${dropped ? "opacity-60" : ""}`} dir={dir}>
-            {ownerNote ? stripOwnerFrame(text) : quoted ? <QuotedText parts={quoted} /> : <MessagePrimitive.Parts />}
+            {ownerNote ? stripOwnerFrame(text) : quoted ? <QuotedText parts={quoted} /> : <MessagePrimitive.Parts components={{ Text: MentionPart }} />}
           </div>
         )}
         {!links ? (
@@ -709,7 +800,7 @@ function KeptActions() {
       await api(`/api/chats/${id}`, { method: "PATCH", body: { archived: true } });
       navigate(null);
     }, t("بسته شد"));
-  const line = kept ? t("پیامت به ایجنت نرسید و نگه داشته شد.") : t("این کار با خطا تمام شد.");
+  const line = kept ? t("ایجنت جوابی نداد؛ پیامت نگه داشته شد.") : t("این کار با خطا تمام شد.");
   if (karsara) {
     return (
       <div className="g-box mt-2 flex flex-wrap items-center gap-3 rounded-xl border bg-card px-3 py-2 text-sm" dir={isRtl ? "rtl" : "ltr"}>
@@ -750,7 +841,7 @@ function MarkdownText({ text, status, compact = false }) {
   const dir = chatDir(text);
   return (
     <div className={`sd-block ${compact ? "leading-7" : "g-answer leading-8"} [&_pre]:my-2`} dir={dir}>
-      <Streamdown dir={dir} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
+      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
         {text}
       </Streamdown>
     </div>
@@ -919,9 +1010,30 @@ function browserStorage() {
 
 // Voice dictation: one tap records, the next stops; the clip goes to
 // /api/transcribe and the text joins what is in the box. It never sends the message. Hidden where
-// the browser cannot record (no microphone API, or a page not served over https).
-let sttConfigured = null; // null = not asked yet
+// the browser cannot record (no microphone API, or a page not served over https), and until the
+// install has speech to text set up (a colleague 2026-10-24: he spoke 30 seconds into an unset one
+// and got «502»). A setup the service refused (bad key or model) shows a crossed microphone that
+// says why instead of recording.
+const stt = { status: null, listeners: new Set(), asked: false };
+export const STT_EVENT = "griffin:stt";
+function loadStt() {
+  stt.asked = true;
+  return api("/api/stt").then(
+    (s) => {
+      stt.status = { configured: Boolean(s.configured), broken: s.broken || null };
+      for (const listener of stt.listeners) listener();
+    },
+    () => {},
+  );
+}
+function subscribeStt(onChange) {
+  stt.listeners.add(onChange);
+  if (!stt.asked) loadStt();
+  return () => stt.listeners.delete(onChange);
+}
+if (typeof window !== "undefined") window.addEventListener(STT_EVENT, () => loadStt());
 function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
+  const sttStatus = useSyncExternalStore(subscribeStt, () => stt.status, () => null);
   const [state, setState] = useState("idle"); // idle | recording | working
   // A recording or its transcription in progress holds a new version's reload off.
   const busy = state !== "idle";
@@ -934,7 +1046,6 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
   const mounted = useRef(true);
   const supported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder === "function";
   useEffect(() => {
-    if (sttConfigured == null) api("/api/stt").then((s) => (sttConfigured = Boolean(s.configured)), () => {});
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -950,7 +1061,7 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
       s.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
-  if (!supported) return null;
+  if (!supported || !sttStatus?.configured) return null;
 
   const finish = async (chunks, mime) => {
     if (!mounted.current) return;
@@ -962,6 +1073,7 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
       const res = await fetch("/api/transcribe", { method: "POST", credentials: "same-origin", headers: { "content-type": blob.type }, body: blob });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `http ${res.status}`);
+      if (!res.ok) loadStt(); // a refused key or model shows on the microphone from now on
       if (!mounted.current) return;
       if (body.text) setText(joinDictation(latest.current, body.text));
       else toast(t("چیزی شنیده نشد."));
@@ -982,11 +1094,14 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
       /* already stopped */
     }
   };
+  const openSttSettings = () => {
+    writeSetting("griffin.settings.section", "chat");
+    window.location.hash = "/settings";
+  };
   const start = async () => {
-    if (sttConfigured === false) {
-      sttConfigured = null; // asked again on the next tap
-      api("/api/stt").then((s) => (sttConfigured = Boolean(s.configured)), () => {});
-      return toast(t("تبدیل گفتار به متن هنوز راه نیفتاده (کلید OpenRouter در stt.api-key روی سرور نیست)."));
+    if (sttStatus.broken) {
+      loadStt(); // fixed meanwhile in Settings: the next tap records
+      return toast.error(sttStatus.broken.error, { action: { label: t("تنظیمات"), onClick: openSttSettings } });
     }
     // One recording at a time: a second tap while the browser asks for the microphone must not
     // open a second stream that nothing would ever close.
@@ -1032,6 +1147,13 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
     return (
       <button type="button" onClick={stop} className={`${className} flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 text-xs`} title={t("پایان ضبط و نوشتن متن")} aria-label={t("پایان ضبط")}>
         <span className="size-2 animate-pulse rounded-full bg-red-500" aria-hidden /> {recordClock(elapsed, locale)}
+      </button>
+    );
+  }
+  if (sttStatus.broken) {
+    return (
+      <button type="button" onClick={start} className={`${btn} text-warn`} title={sttStatus.broken.error} aria-label={t("تبدیل صدا به متن تنظیم درست ندارد")}>
+        <MicOff className={size} />
       </button>
     );
   }
@@ -1085,7 +1207,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   // A file the adapter refused (empty, over 10 MB, a type the server does not take): say why —
   // assistant-ui swallows the error from paste, drop and the add button.
   useAuiEvent("composer.attachmentAddError", (event) =>
-    toast.error(event?.reason === "not-accepted" ? t("فقط تصویر، PDF یا فایل متنی را می‌شود پیوست کرد.") : event?.message || t("این فایل افزوده نشد.")),
+    toast.error(event?.reason === "not-accepted" ? t("این فایل پیوست نمی‌شود.") : event?.message || t("این فایل افزوده نشد.")),
   );
   // More than a message may carry: the newest extras leave at once, with the reason, so a send
   // never fails on the count (and the composer never loses what it already had).
@@ -1233,13 +1355,15 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       ref={inputRef}
       data-reload-safe=""
       rows={1}
-      autoFocus
+      // A phone opens its keyboard on any focus: there the box waits for a tap (also on thread
+      // switch, run start and scroll-to-bottom, which the library ties to autoFocus).
+      autoFocus={!touch}
       dir={composerText.trim() ? chatDir(composerText) : isRtl ? "rtl" : "ltr"}
       submitMode={submitMode(touch)}
       onKeyDown={onInputKey}
       aria-label={t("پیام به {agent}", { agent: agentLabel })}
       placeholder={placeholder}
-      className={`scrollbar-thin min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
+      className={`scrollbar-thin relative z-[1] min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
         karsara
           ? `max-h-[70dvh] px-1.5 py-2 text-start text-[15px] leading-7 ${hero ? "min-h-16" : "min-h-10"}`
           : `max-h-[70dvh] min-h-10 flex-1 px-1 py-2 text-start ${hero ? "text-sm leading-6" : "leading-7"}`
@@ -1265,22 +1389,30 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       </button>
     </div>
   ) : null;
-  // «دکمهٔ «بعداً» در کادر»: keeps the text as a note for later (not in the side panel, not while running).
-  const later = flags.laterButton && !compact && !running ? (
-    <LaterButton
-      text={composerText}
-      chatId={chatId}
-      options={laterOptions}
-      disabled={hasAttached || quotes.length > 0}
-      disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ پیوست و نقل‌قول را بردارید")}
-      onSaved={() => {
-        setText("");
-        saveDraft(browserStorage(), chatId, "");
-      }}
-    />
-  ) : null;
+  // «بعداً» (flag laterButton): the send button's own menu — right-click, or hold on a phone — keeps the
+  // text as a note for later (not in the side panel, not while running).
+  const laterOn = flags.laterButton && !compact && !running;
+  const laterHint = laterOn ? (touch ? t(" · نگه دارید: بعداً") : t(" · راست‌کلیک: بعداً")) : "";
+  const withLater = (send) =>
+    laterOn ? (
+      <SendLater
+        text={composerText}
+        chatId={chatId}
+        options={laterOptions}
+        disabled={hasAttached || quotes.length > 0}
+        disabledTitle={t("یادداشت فقط متن نگه می‌دارد؛ پیوست و نقل‌قول را بردارید")}
+        onSaved={() => {
+          setText("");
+          saveDraft(browserStorage(), chatId, "");
+        }}
+      >
+        {send}
+      </SendLater>
+    ) : (
+      send
+    );
   // «هشدار موتور غیر Claude»: Karsara's line under the box when the chat runs on anything but its plain Claude login.
-  const nonClaude = flags.nonClaudeHint && runAccount && runAccount !== "claude" ? <div className="kc-note px-3 pb-2">{t("ابزارها و تصویر ممکن است کامل کار نکنند")}</div> : null;
+  const nonClaude = flags.nonClaudeHint && runAccount && runAccount.split("-")[0] !== "claude" ? <div className="kc-note px-3 pb-2">{t("ابزارها و تصویر ممکن است کامل کار نکنند")}</div> : null;
   // «حالت سریع کنار مدل» / «حلقهٔ مصرف»: readouts at the end of the bar under the box (the
   // server-resources gauge that sat here is gone: its alerts are at the bottom of the sidebar).
   const barEnd = (
@@ -1307,6 +1439,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
             </div>
           ) : null}
           <ComposerAssist inputRef={inputRef} next={next} />
+      <MentionBackdrop inputRef={inputRef} />
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
           <div className="flex items-end gap-1 px-2 py-1.5">
             {/* The input and the ghost suggestion share one grid cell. */}
@@ -1315,7 +1448,6 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               {ghost}
             </div>
             <DictateButton value={composerText} setText={setText} focus={focusInput} size="size-5" />
-            {later}
             {forceButton}
             {running ? (
               <ComposerPrimitive.Cancel className={KC_SEND} data-stop="" title={t("توقف")}>
@@ -1326,9 +1458,11 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
                 <CornerDownLeft className="size-4" />
               </button>
             ) : (
-              <ComposerPrimitive.Send className={KC_SEND} title={touch ? t("ارسال") : t("ارسال (Enter)")}>
-                <CornerDownLeft className="size-4" />
-              </ComposerPrimitive.Send>
+              withLater(
+                <ComposerPrimitive.Send className={KC_SEND} title={`${touch ? t("ارسال") : t("ارسال (Enter)")}${laterHint}`}>
+                  <CornerDownLeft className="size-4" />
+                </ComposerPrimitive.Send>,
+              )
             )}
           </div>
           {nonClaude}
@@ -1349,7 +1483,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
 
   return (
     <>
-    {top ? <div className={chatId && !hero ? "g-repo-top" : undefined}>{top}</div> : null}
+    {top ? <div className={chatId && !hero && !flags.repoChipsAlways ? "g-repo-top" : undefined}>{top}</div> : null}
     {flags.scheduledPeek ? <ScheduledPeek chatId={chatId} /> : null}
     <QueuePeek chatId={chatId} onEdit={takeBack} />
     <TasksPeek chatId={chatId} />
@@ -1362,6 +1496,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
         </div>
       ) : null}
       <ComposerAssist inputRef={inputRef} next={next} />
+          <MentionBackdrop inputRef={inputRef} />
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
       <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
         {flags.nextGhost ? (
@@ -1371,7 +1506,6 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           </div>
         ) : input}
         <div className="mb-0.5 flex shrink-0 items-center gap-1">
-          {later}
           {forceButton}
           {running ? (
             <ComposerPrimitive.Cancel data-stop="" className="g-send flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
@@ -1388,9 +1522,11 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           ) : (
             // Send is the one filled (accent) button while it can send; empty, it is plain like the
             // microphone.
-            <ComposerPrimitive.Send className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={t("ارسال")}>
-              <ArrowUp className="size-5" />
-            </ComposerPrimitive.Send>
+            withLater(
+              <ComposerPrimitive.Send className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={`${t("ارسال")}${laterHint}`}>
+                <ArrowUp className="size-5" />
+              </ComposerPrimitive.Send>,
+            )
           )}
         </div>
       </div>

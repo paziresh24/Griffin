@@ -136,3 +136,26 @@ test("key and config routes: the key is stored, never returned; config must be h
   assert.equal(ok.model, "whisper-1");
   assert.equal((await (await api.request("/api/stt/key", { method: "DELETE" })).json()).configured, false);
 });
+
+test("a refused key or model is said in plain Persian and kept, so the microphone says so before the next recording", async () => {
+  let status = 401;
+  const api = new Hono();
+  sttRoutes(api, { getKey: () => "k-12345678", config: { baseUrl: "https://stt.example/v1", model: "google/gemini-2.5-flash", language: "fa" }, fetchFn: async () => (status === 200 ? Response.json({ choices: [{ message: { content: "سلام" }, finish_reason: "stop" }] }) : new Response("no", { status })), log: {} });
+  const say = () => api.request("/api/transcribe", { method: "POST", headers: { "content-type": "audio/wav" }, body: new Uint8Array([1]) });
+  assert.equal((await (await api.request("/api/stt")).json()).broken, null);
+  const refused = await say();
+  assert.equal(refused.status, 502);
+  assert.match((await refused.json()).error, /کلید را نپذیرفت/);
+  assert.match((await (await api.request("/api/stt")).json()).broken.error, /کلید را نپذیرفت/);
+  status = 429;
+  assert.match((await (await say()).json()).error, /درخواست زیادی/);
+  status = 200;
+  assert.deepEqual(await (await say()).json(), { text: "سلام" });
+  assert.equal((await (await api.request("/api/stt")).json()).broken, null, "a transcript clears it");
+});
+
+test("no key: the answer says where to set it up", async () => {
+  const res = await app("", async () => assert.fail("must not call")).request("/api/transcribe", { method: "POST", headers: { "content-type": "audio/wav" }, body: new Uint8Array([1]) });
+  assert.equal(res.status, 503);
+  assert.match((await res.json()).error, /تنظیمات/);
+});
