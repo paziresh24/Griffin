@@ -224,7 +224,7 @@ footer .sp{margin-inline-start:auto}
         <a class="btn primary" href="https://github.com/paziresh24/Griffin"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Star on GitHub</a>
         <a class="btn" href="#start">Get started in 2 minutes</a>
       </div>
-      <div class="install"><span><i>$</i> git clone https://github.com/paziresh24/Griffin.git</span><button class="copy" data-copy="git clone https://github.com/paziresh24/Griffin.git">Copy</button></div>
+      <div class="install"><span><i>$</i> curl -fsSL https://griffin.paziresh24.com/install.sh | bash</span><button class="copy" data-copy="curl -fsSL https://griffin.paziresh24.com/install.sh | bash">Copy</button></div>
       <div class="models"><span>Claude</span><span>Cursor</span><span>OpenAI-compatible</span><span>Local models</span><span>MIT</span></div>
     </div>
 
@@ -314,26 +314,23 @@ footer .sp{margin-inline-start:auto}
 <section id="start" style="padding-top:20px"><div class="wrap qs">
   <div>
     <div class="eyebrow">Quick start</div>
-    <h2>From clone to first chat in two minutes.</h2>
+    <h2>From one command to first chat in two minutes.</h2>
     <p class="lede">A fresh install is one agent you can talk to. Everything else is something you add when you want it.</p>
     <ul class="checks"><li>No cluster, vault or YAML to start</li><li>Bring a Claude, Cursor or OpenAI-compatible key</li><li>Or try the scripted demo with no key at all</li></ul>
   </div>
   <div class="term">
-    <div class="bar"><div class="dots"><i></i><i></i><i></i></div>terminal<button class="copy" style="margin-inline-start:auto" data-copy="git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
-npm ci && npm run build
-mkdir -p data workspace
-echo &quot;sk-ant-…&quot; > data/anthropic.api-key && chmod 600 data/anthropic.api-key
-GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace PORT=3100 node apps/server/src/index.mjs">Copy</button></div>
-<pre><span class="p">$</span> git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
-<span class="p">$</span> npm ci && npm run build
-<span class="p">$</span> mkdir -p data workspace
-<span class="p">$</span> echo "sk-ant-…" > data/anthropic.api-key
-<span class="p">$</span> GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace \
-    PORT=3100 node apps/server/src/index.mjs
-<span class="c"># open http://127.0.0.1:3100 — token in data/owner.token</span>
+    <div class="bar"><div class="dots"><i></i><i></i><i></i></div>terminal<button class="copy" style="margin-inline-start:auto" data-copy="curl -fsSL https://griffin.paziresh24.com/install.sh | bash">Copy</button></div>
+<pre><span class="c"># a Linux server: checks it, installs Docker if missing, starts Griffin</span>
+<span class="p">$</span> curl -fsSL https://griffin.paziresh24.com/install.sh | bash
+<span class="c"># open the address it prints — the login token:</span>
+<span class="p">$</span> sudo docker exec griffin cat /data/owner.token
+<span class="c"># run the same line again to update</span>
 
-<span class="c"># or with Docker</span>
-<span class="p">$</span> docker compose -f deploy/compose.yaml up -d --build</pre>
+<span class="c"># or from source</span>
+<span class="p">$</span> git clone https://github.com/paziresh24/Griffin.git griffin && cd griffin
+<span class="p">$</span> npm ci && npm run build
+<span class="p">$</span> GRIFFIN_DATA=./data GRIFFIN_WORKSPACE=./workspace \
+    PORT=3100 node apps/server/src/index.mjs</pre>
   </div>
 </div></section>
 

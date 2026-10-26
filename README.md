@@ -25,10 +25,22 @@ to your own systems — on Claude, Cursor or any OpenAI-compatible model, includ
 
 ## Two minutes to your own
 
-**With Docker** — one line, no clone, no key needed up front:
+**On a Linux server** — one command checks the machine, installs Docker if it is missing, pulls the
+image and starts Griffin:
 
 ```bash
-docker run -d --name griffin --restart unless-stopped -p 3100:3100 -v griffin-data:/data \
+curl -fsSL https://griffin.paziresh24.com/install.sh | bash
+```
+
+It prints the address to open and how to read the login token. Run the same line again to update: the
+new version replaces the old one only once it is healthy, and your data stays in Docker volumes.
+Options go before `bash` (`curl … | GRIFFIN_PORT=3200 GRIFFIN_PROXY=http://host:port bash`); see the
+top of [`docs/install.sh`](docs/install.sh) for all of them.
+
+**With Docker you already have** — one line, no clone, no key needed up front:
+
+```bash
+docker run -d --name griffin --restart unless-stopped -p 3100:3100 -v griffin-data:/data -v griffin-workspace:/workspace \
   ghcr.io/paziresh24/griffin:latest
 docker exec griffin cat /data/owner.token   # the token you log in with
 ```
