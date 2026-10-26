@@ -285,7 +285,9 @@ export function stateGuard({ protect = [], except = [], match = null, matchText 
     roots.some((root) => {
       for (let at = text.indexOf(root); at >= 0; at = text.indexOf(root, at + 1)) {
         const prev = at > 0 ? text[at - 1] : undefined;
-        if (prev !== undefined && !/[\s'"`;|&<>()=:,{]/.test(prev)) continue;
+        // sed's w flag/command takes its file glued on: s/a/b/w/path, -nes/x/y/w/path.
+        const sedWrite = /[wW]/.test(prev || "") && (at < 2 || /[^A-Za-z0-9_]/.test(text[at - 2]));
+        if (prev !== undefined && !sedWrite && !/[\s'"`;|&<>()=:,{]/.test(prev)) continue;
         const next = text[at + root.length];
         if (next !== undefined && next !== "/" && !/[\s'"`;|&<>()=:,]/.test(next)) continue;
         const word = root + (/^[^\s'"`;|&<>()]*/.exec(text.slice(at + root.length))?.[0] || "");
@@ -537,11 +539,25 @@ export function stateGuard({ protect = [], except = [], match = null, matchText 
       if (cmd === "sed") {
         // No in-place editing, and no script command that writes (w, W, s///w) or runs (e).
         if (args.some((a) => /^-[A-Za-z]*i|^--in-place/.test(a))) return reason;
-        const scripts = args.map((a) => (a.startsWith("--expression=") ? a.slice(13) : /^-e./.test(a) ? a.slice(2) : a.startsWith("-") ? "" : a));
+        // The script is every -e/--expression, else the first operand; the rest are input files, whose
+        // names must not read as commands (`…/agents/griffin/knowledge/new.md` is not s///new).
+        const exprs = [];
+        let operand = null;
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          // -e in a short-option group takes the rest of the group (-nes/a/b/), else the next argument.
+          const group = /^-[A-Za-z]*?e(.*)$/.exec(a);
+          if (a === "--expression") exprs.push(args[++i] ?? "");
+          else if (a.startsWith("--expression=")) exprs.push(a.slice(13));
+          else if (group && !a.startsWith("--")) exprs.push(group[1] || (args[++i] ?? ""));
+          else if (a === "-l" || a === "--line-length") i++;
+          else if (!a.startsWith("-") && operand === null) operand = a;
+        }
+        const scripts = exprs.length ? exprs : operand === null ? [] : [operand];
         if (scripts.some((a) => /(?:^|[;{}!\d$\/\s])[wWe](?:\s|$|;)/.test(a))) return reason;
         // s commands: a w (write) or e (execute) among the flags, whatever comes before it (gw, pw, Iw).
         const sCommand = /s([^\w\s\\])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1([A-Za-z0-9]*)/g;
-        for (const m of seg.matchAll(sCommand)) if (/[wWe]/.test(m[2])) return reason;
+        for (const m of scripts.flatMap((a) => [...a.matchAll(sCommand)])) if (/[wWe]/.test(m[2])) return reason;
         // A script file the check never sees.
         if (args.some((a) => /^-[A-Za-z]*f|^--file/.test(a))) return reason;
       }

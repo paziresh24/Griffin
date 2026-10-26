@@ -294,6 +294,14 @@ test("sed: a w or e flag after other s-flags, and a script file, are refused", a
     `sed -f /tmp/s.sed ${notes}/good.md`,
     `sed --file=/tmp/s.sed ${notes}/good.md`,
     `sed -nf /tmp/s.sed ${notes}/good.md`,
+    // The script attached to -e inside an option group, or after other operands, is still the script.
+    `sed '-nes/a/b/w ${notes}/e.md' /tmp/x`,
+    `sed -ne 's/a/b/w ${notes}/e.md' /tmp/x`,
+    `sed /tmp/x -e 's/a/b/w ${notes}/e.md'`,
+    `sed -n -- 's/a/b/w ${notes}/e.md' /tmp/x`,
+    // The w file glued to the flag, no space between.
+    `sed 's/a/b/w${notes}/e.md' /tmp/x`,
+    `sed -nes/a/b/w${notes}/e.md /tmp/x`,
   ]);
 });
 
@@ -315,6 +323,10 @@ test("still allowed after the a4f3684 review: xargs into plain readers, awk and 
     `ls ${env.notes} | xargs grep -l x`,
     `sed -n 's/a/b/gp' ${env.notes}/good.md`,
     `sed 's/w/x/g' ${env.notes}/good.md`,
+    // A file name after «…/griffin/knowledge/» is not the flags of an s command (CI flaked on a temp
+    // folder ending in «s» before «/workspace/knowledge/…»).
+    `sed -n 's/a/b/gp' ${env.notes}/new.md`,
+    `sed -n -e p ${env.notes}/new.md ${env.notes}/we.md`,
     `tail -n 50 ${env.data}/run.log | awk '{print $1}' | sort | uniq -c | head`,
   ]) {
     assert.equal((await decide(options, "Bash", { command }, env.worktree)).decision, "allow", command);
