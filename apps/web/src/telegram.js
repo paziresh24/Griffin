@@ -60,7 +60,7 @@ export function messageAuthor(message, assistant = BRAND.name) {
   const by = message.data?.by;
   if (by === "chat") {
     const title = String(message.data?.fromTitle || "").trim();
-    return title ? `${assistant} از گفتگوی «${title.length > 30 ? `${title.slice(0, 30)}…` : title}»` : `${assistant} از یک گفتگو`;
+    return title ? t("{assistant} از گفتگوی «{v}»", { assistant, v: title.length > 30 ? `${title.slice(0, 30)}…` : title }) : t("{assistant} از یک گفتگو", { assistant });
   }
   return by === "owner" ? t("شما") : by === "session" ? t("جلسهٔ دیگر") : assistant;
 }
@@ -79,7 +79,7 @@ export function stripSender(text, name) {
 // واضح نیست»). Anything else comes back as it is.
 export function peerFrame(text) {
   const value = String(text ?? "");
-  const m = /^\s*📥 (?:[^\n]*?— چت «([^»\n]*)»)?[^\n]*\n(`{3,})\n([\s\S]*?)\n\2\n?(?:پایان [^\n]*)?\s*$/.exec(value);
+  const m = /^\s*📥 (?:[^\n]*?— چت «([^»\n]*)»)?[^\n]*\n(`{3,})\n([\s\S]*?)\n\2\n?(?:پایان [^\n]*)?\s*$/.exec(value); // i18n-ignore
   return m ? { text: m[3], title: m[1] || "" } : { text: value, title: "" };
 }
 
@@ -93,7 +93,7 @@ export function stripOwnerFrame(text) {
 // The frame is for the agent; the bubble says it in its own label, with the time it was set.
 export function reminderFrame(text) {
   const value = String(text ?? "");
-  const m = /^\s*\[یادآوری‌ای که خودت گذاشتی \(([^)]*)\)[^\]]*\]\s*\n?/.exec(value);
+  const m = /^\s*\[یادآوری‌ای که خودت گذاشتی \(([^)]*)\)[^\]]*\]\s*\n?/.exec(value); // i18n-ignore
   return m ? { text: value.slice(m[0].length), setAt: m[1] } : { text: value, setAt: null };
 }
 
@@ -119,7 +119,7 @@ export function noteLine(note, assistant = BRAND.name) {
     case "watch":
       return `👁 ${note.text || ""}`;
     case "proposal_done":
-      return `📥 پیام ${note.name || t("همکار")} به این گفتگو آورده شد`;
+      return t("📥 پیام {v} به این گفتگو آورده شد", { v: note.name || t("همکار") });
     default:
       return String(note?.text || "");
   }
@@ -166,7 +166,7 @@ export const threadState = (runStatus) =>
 export const initialOf = (name) => String(name ?? "").match(/\p{L}/u)?.[0] || t("؟");
 
 // What «پاسخ خودکار» (the watcher) means, one line for anyone who has never heard the word «واچر».
-export const watchHint = (assistant = BRAND.name) => `روشن یعنی ${assistant} از طرف شما به پیام‌های این شخص جواب می‌دهد؛ خاموش یعنی فقط پیام‌ها ثبت می‌شوند.`;
+export const watchHint = (assistant = BRAND.name) => t("روشن یعنی {assistant} از طرف شما به پیام‌های این شخص جواب می‌دهد؛ خاموش یعنی فقط پیام‌ها ثبت می‌شوند.", { assistant });
 
 // Why a draft was held (desk.mjs holdReason), in words.
 const HELD = { owner_replied: t("خودتان جواب داده بودید"), paused: t("پاسخ خودکار متوقف بود"), unwatched: t("پاسخ خودکار به او خاموش بود") };
@@ -292,7 +292,7 @@ export const TG_FOLDERS = [
   { id: "personal", label: t("شخصی"), test: (p) => !p.group },
   { id: "groups", label: t("گروه‌ها"), test: (p) => Boolean(p.group) },
   { id: "chats", label: t("از گفتگوهای من"), test: (p) => tgMode(p) === "chats" },
-  { id: "off", label: `بی ${BRAND.name}`, test: (p) => tgMode(p) === "off" },
+  { id: "off", label: t("بی {name}", { name: BRAND.name }), test: (p) => tgMode(p) === "off" },
 ];
 
 // One folder's people, newest first, narrowed by the search like peopleSections.

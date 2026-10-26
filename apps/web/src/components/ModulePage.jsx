@@ -23,7 +23,7 @@ export function ModulePage({ route, onBack }) {
   if (!page) {
     return (
       <div className="mx-auto w-full max-w-4xl p-6 text-sm text-muted-foreground">
-        <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1 hover:text-foreground"><ArrowRight className="size-4" />{t("بازگشت")}</button>
+        <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1 hover:text-foreground"><ArrowRight className="rtl-mirror size-4" />{t("بازگشت")}</button>
         {modules.length ? t("این بخش در این نصب روشن نیست.") : t("در حال بارگذاری…")}
       </div>
     );
@@ -43,7 +43,7 @@ export function ModulePage({ route, onBack }) {
 export function SectionOff({ onBack }) {
   return (
     <div className="mx-auto w-full max-w-4xl p-6 text-sm text-muted-foreground">
-      <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1 hover:text-foreground"><ArrowRight className="size-4" />{t("بازگشت")}</button>
+      <button type="button" onClick={onBack} className="mb-3 inline-flex items-center gap-1 hover:text-foreground"><ArrowRight className="rtl-mirror size-4" />{t("بازگشت")}</button>
       <p>{t("این بخش در این نصب روشن نیست.")}</p>
       <p className="mt-1 text-xs">{t("بخش‌ها ماژول‌اند؛ روشن و خاموششان از تنظیمات ← بازارچه است.")}</p>
     </div>
@@ -87,7 +87,7 @@ function ListPage({ mod, page, onBack }) {
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4 p-4 md:p-6">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={onBack} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden" aria-label={t("بازگشت")}><ArrowRight className="size-4" /></button>
+        <button type="button" onClick={onBack} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden" aria-label={t("بازگشت")}><ArrowRight className="rtl-mirror size-4" /></button>
         <div>
           <h1 className="text-lg font-semibold">{page.title}</h1>
           {mod.description ? <p className="text-xs text-muted-foreground">{mod.description}</p> : null}

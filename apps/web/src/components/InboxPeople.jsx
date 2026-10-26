@@ -53,7 +53,7 @@ function Header({ title, onBack, children }) {
   return (
     <div className="mb-4 flex items-center gap-2">
       <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-        <ArrowRight className="size-4" />
+        <ArrowRight className="rtl-mirror size-4" />
       </button>
       <h1 className="min-w-0 truncate text-lg font-semibold" dir="auto">{title}</h1>
       {children}

@@ -19,7 +19,7 @@ import { isPlainClick } from "../sidebar-width.js";
 import { navigate } from "../api.js";
 import { MODULE_ICONS } from "./ModulePage.jsx";
 import { useNavDrag } from "./SidebarDrag.jsx";
-import { t } from "../i18n.js";
+import { t, isRtl } from "../i18n.js";
 
 export const NAV_TARGETS = {
   telegram: { section: "telegram", icon: MessageCircle, path: "/telegram" },
@@ -104,7 +104,7 @@ export function PinnedRow({ item, active, onGo, onUnpin }) {
         className="g-sn-row-unpin"
         data-no-drag=""
         title={t("برداشتن سنجاق")}
-        aria-label={`برداشتن سنجاق ${item.label}`}
+        aria-label={t("برداشتن سنجاق {label}", { label: item.label })}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -135,9 +135,9 @@ export function NavLauncher({ go, activeSection }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content align="end" sideOffset={8} collisionPadding={12} dir="rtl" className="g-sn-launcher pop z-50 rounded-xl border bg-card shadow-xl" aria-label={t("بخش‌ها")}>
+        <Popover.Content align="end" sideOffset={8} collisionPadding={12} dir={isRtl ? "rtl" : "ltr"} className="g-sn-launcher pop z-50 rounded-xl border bg-card shadow-xl" aria-label={t("بخش‌ها")}>
           <div className="g-sn-pop-title">
-            بخش‌ها
+            {t("بخش‌ها")}
             <span className="hint"><Pin className="size-[11px]" /> {t("= همیشه زیر «جدید»")}</span>
           </div>
           <div className="g-sn-grid">
@@ -157,7 +157,7 @@ export function NavLauncher({ go, activeSection }) {
                       data-no-drag=""
                       aria-pressed={pinned}
                       title={pinned ? t("برداشتن از زیر «جدید»") : t("سنجاق زیر «جدید»")}
-                      aria-label={pinned ? `برداشتن ${item.label} از زیر «جدید»` : `سنجاق ${item.label} زیر «جدید»`}
+                      aria-label={pinned ? t("برداشتن {label} از زیر «جدید»", { label: item.label }) : t("سنجاق {label} زیر «جدید»", { label: item.label })}
                       onClick={() => setUiPrefs({ flags: { navHidden: pinned ? [...hidden, item.id] : hidden.filter((x) => x !== item.id) } })}
                     >
                       <Pin className="size-3" />
@@ -173,7 +173,7 @@ export function NavLauncher({ go, activeSection }) {
               </button>
             </div>
           </div>
-          <div className="g-sn-pop-foot">{pinnedCount ? `${pinnedCount.toLocaleString("fa-IR")} بخش سنجاق شده` : t("هیچ بخشی سنجاق نشده؛ بالای فهرست فقط «جدید» است.")}</div>
+          <div className="g-sn-pop-foot">{pinnedCount ? t("{toLocaleString} بخش سنجاق شده", { toLocaleString: pinnedCount.toLocaleString("fa-IR") }) : t("هیچ بخشی سنجاق نشده؛ بالای فهرست فقط «جدید» است.")}</div>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -370,7 +370,7 @@ export function SectionsPalette({ chats = [], onNewChat = null }) {
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="overlay fixed inset-0 z-40 bg-black/30" />
-        <Dialog.Content dir="rtl" className="g-sn-palette pop fixed left-1/2 top-[10vh] z-50 w-[min(35rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-[14px] border bg-card shadow-2xl">
+        <Dialog.Content dir={isRtl ? "rtl" : "ltr"} className="g-sn-palette pop fixed left-1/2 top-[10vh] z-50 w-[min(35rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-[14px] border bg-card shadow-2xl">
           <Dialog.Title className="sr-only">{t("رفتن به")}</Dialog.Title>
           <Command loop>
             <div className="g-sn-palette-input">
@@ -381,12 +381,12 @@ export function SectionsPalette({ chats = [], onNewChat = null }) {
             <Command.List className="scrollbar-thin max-h-[380px] overflow-y-auto p-1.5">
               <Command.Empty className="px-3 py-5 text-center text-sm text-muted-foreground">{t("چیزی پیدا نشد")}</Command.Empty>
               <Command.Group heading={t("بخش‌ها")}>
-                {items.map((s) => item(s.id, `بخش ${s.label}`, s.icon, s.label, t("بخش"), () => goTo(s.path)))}
+                {items.map((s) => item(s.id, t("بخش {label}", { label: s.label }), s.icon, s.label, t("بخش"), () => goTo(s.path)))}
                 {item("market", t("بخش بازارچه"), Store, t("بازارچه"), t("بخش"), openMarket)}
               </Command.Group>
               {found.length ? (
                 <Command.Group heading={t("گفتگوها")}>
-                  {found.map((c) => item(`c:${c.id}`, `گفتگو ${c.title} ${c.id}`, MessageSquare, c.title, t("گفتگو"), () => navigate(c.id)))}
+                  {found.map((c) => item(`c:${c.id}`, t("گفتگو {title} {id}", { title: c.title, id: c.id }), MessageSquare, c.title, t("گفتگو"), () => navigate(c.id)))}
                 </Command.Group>
               ) : null}
               <Command.Group heading={t("کارها")}>

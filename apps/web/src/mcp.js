@@ -12,7 +12,7 @@ export const mcpStatus = (status) => STATUS[status] || { label: String(status ||
 
 export function mcpSourceLine(view) {
   if (!view?.available) return view?.reason || t("هیچ جلسهٔ باز Claude Code نیست؛ در یک گفتگو پیامی بفرستید، بعد «تازه کردن» را بزنید.");
-  return view.chatTitle ? `فهرست از آخرین گفتگوی استفاده‌شده: «${view.chatTitle}»` : t("فهرست از آخرین گفتگوی استفاده‌شده");
+  return view.chatTitle ? t("فهرست از آخرین گفتگوی استفاده‌شده: «{chatTitle}»", { chatTitle: view.chatTitle }) : t("فهرست از آخرین گفتگوی استفاده‌شده");
 }
 
 // «بررسی اتصال» result of one configured server (POST /api/mcp-servers/:name/check) as one line.
@@ -28,10 +28,10 @@ export function mcpCheckLine(result) {
   if (!result?.checked) return null;
   if (result.ok) {
     const ms = Number(result.ms).toLocaleString("fa-IR");
-    const tools = result.tools != null ? ` · ${Number(result.tools).toLocaleString("fa-IR")} ابزار` : "";
-    return { tone: "ok", text: `وصل است · ${ms} میلی‌ثانیه${tools}` };
+    const tools = result.tools != null ? t(" · {toLocaleString} ابزار", { toLocaleString: Number(result.tools).toLocaleString("fa-IR") }) : "";
+    return { tone: "ok", text: t("وصل است · {ms} میلی‌ثانیه{tools}", { ms, tools }) };
   }
-  return { tone: "bad", text: `وصل نیست: ${REASON[result.reason] || result.reason || t("نامشخص")}` };
+  return { tone: "bad", text: t("وصل نیست: {v}", { v: REASON[result.reason] || result.reason || t("نامشخص") }) };
 }
 
 // Ready-made servers offered on Settings → MCP servers: one click fills the form and the person types

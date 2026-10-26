@@ -264,7 +264,7 @@ export function SttSection() {
         <h3 className="flex-1 font-medium">{t("تبدیل صدا به متن")}</h3>
         <span className="text-xs text-muted-foreground">{stt.key?.set ? (stt.key.last4 ? t("کلید ذخیره شده (…{last4})", { last4: stt.key.last4 }) : t("کلید ذخیره شده")) : t("کلید ندارد؛ میکروفون کادر پیام پنهان است")}</span>
       </div>
-      {stt.broken ? <p className="mb-3 rounded-lg bg-warn/10 px-3 py-2 text-xs leading-5 text-warn">آخرین بار: {stt.broken.error}</p> : null}
+      {stt.broken ? <p className="mb-3 rounded-lg bg-warn/10 px-3 py-2 text-xs leading-5 text-warn">{t("آخرین بار: {error}", { error: stt.broken.error })}</p> : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <input className={field} dir="ltr" value={form.baseUrl} onChange={set("baseUrl")} placeholder="https://openrouter.ai/api/v1" aria-label={t("آدرس سرویس")} />
         <input className={field} dir="ltr" value={form.model} onChange={set("model")} placeholder="google/gemini-2.5-flash" aria-label={t("مدل")} />

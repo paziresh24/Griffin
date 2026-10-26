@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api.js";
-import { filterQuery, parseModuleRoute } from "./modules.js";
+import { filterQuery, parseModuleRoute, translateManifest } from "./modules.js";
 
 // The module hooks: what is on (fetched on page load, after a switch in the marketplace, and when the
 // owner returns to the tab), the open module page, and a page's rows.
@@ -14,7 +14,7 @@ function load() {
     .then((data) => {
       // No module installed at all (the folder is missing in this build): there is no module system
       // to follow, so every section shows exactly as before.
-      cache = data.installed === 0 ? null : data.modules || [];
+      cache = data.installed === 0 ? null : translateManifest(data.modules || []);
       for (const l of listeners) l();
     })
     .catch(() => {

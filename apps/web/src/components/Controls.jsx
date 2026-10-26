@@ -249,7 +249,7 @@ export function AgentPicker({ agent, onChange, onAdd = null, locked = false, cla
                 className="press flex items-center gap-2.5 border-t px-3 py-2.5 text-start text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-dashed"><Plus className="size-4" /></span>
-                افزودن ایجنت
+                {t("افزودن ایجنت")}
               </button>
             ) : null}
           </Command>

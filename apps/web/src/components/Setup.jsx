@@ -147,7 +147,7 @@ export function SetupPage({ flow = "first", onClose }) {
           <div className="mt-8 flex items-center gap-3 border-t pt-4 text-sm">
             {index > 0 ? (
               <button type="button" onClick={() => setIndex((i) => i - 1)} className="press inline-flex items-center gap-1 text-muted-foreground">
-                <ArrowRight className="size-4 rtl:rotate-0 ltr:rotate-180" /> قبلی
+                <ArrowRight className="size-4 rtl:rotate-0 ltr:rotate-180" /> {t("قبلی")}
               </button>
             ) : null}
             <button type="button" onClick={next} className="press ms-auto inline-flex items-center gap-1 text-muted-foreground">
@@ -260,9 +260,7 @@ function AgentStep({ onNext }) {
         <Bot className="g-deco size-8 text-primary" />
         <h2 className="text-xl font-semibold">{t("راه‌اندازی را به ایجنت خودت بسپار")}</h2>
         <p className="text-sm leading-7 text-muted-foreground">
-          اگر این صفحه را می‌بینی، بخشی از راه‌اندازی هنوز کامل نشده. چند سؤال کوتاه را جواب بده تا یک متن آماده برای
-          ایجنتی که با آن کار می‌کنی ساخته شود. ایجنت بقیه را خودش انجام و تست می‌کند و فقط چیزی را می‌پرسد که فقط تو
-          داری. ایجنت باید به ترمینال همین سرور دسترسی داشته باشد. هیچ رمزی داخل متن نیست.
+          {t("اگر این صفحه را می‌بینی، بخشی از راه‌اندازی هنوز کامل نشده. چند سؤال کوتاه را جواب بده تا یک متن آماده برای ایجنتی که با آن کار می‌کنی ساخته شود. ایجنت بقیه را خودش انجام و تست می‌کند و فقط چیزی را می‌پرسد که فقط تو داری. ایجنت باید به ترمینال همین سرور دسترسی داشته باشد. هیچ رمزی داخل متن نیست.")}
         </p>
       </div>
 
@@ -305,7 +303,7 @@ function AgentStep({ onNext }) {
         <div className="grid gap-2 sm:grid-cols-2">
           {usable.map((t) => <Choice key={t.id} multi on={transfer.includes(t.id)} onClick={() => toggle(t.id)} label={t.label} blurb={t.blurb} />)}
         </div>
-        {agent !== "claude" ? <p className="text-xs text-muted-foreground">مهارت‌ها فقط از Claude Code منتقل می‌شوند؛ تاریخچهٔ خود {AGENT_CHOICES.find((a) => a.id === agent)?.label} منتقل نمی‌شود.</p> : null}
+        {agent !== "claude" ? <p className="text-xs text-muted-foreground">{t("مهارت‌ها فقط از Claude Code منتقل می‌شوند؛ تاریخچهٔ خود {label} منتقل نمی‌شود.", { label: AGENT_CHOICES.find((a) => a.id === agent)?.label })}</p> : null}
       </Question>
 
       <Question n={t("۷")} title={t("پیام‌رسان")}>
@@ -317,10 +315,10 @@ function AgentStep({ onNext }) {
           <div className="relative">
             <pre dir="ltr" className="max-h-80 overflow-auto whitespace-pre-wrap g-card rounded-xl border bg-muted/50 p-3 pt-10 text-start font-mono text-xs leading-5">{prompt}</pre>
             <button type="button" onClick={copy} className="press absolute end-2 top-2 inline-flex items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs">
-              <Copy className="size-3.5" /> کپی
+              <Copy className="size-3.5" /> {t("کپی")}
             </button>
           </div>
-          <p className="text-xs leading-6 text-muted-foreground">این متن را در {AGENT_CHOICES.find((a) => a.id === agent)?.label} بچسبان. وقتی کارش تمام شد، این صفحه را تازه کن.</p>
+          <p className="text-xs leading-6 text-muted-foreground">{t("این متن را در {label} بچسبان. وقتی کارش تمام شد، این صفحه را تازه کن.", { label: AGENT_CHOICES.find((a) => a.id === agent)?.label })}</p>
         </div>
       ) : null}
 
@@ -328,10 +326,10 @@ function AgentStep({ onNext }) {
         {prompt ? (
           <button type="button" onClick={copy} className={primary}><Copy className="size-4" /> {t("کپی متن برای ایجنت")}</button>
         ) : (
-          <button type="button" onClick={build} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} ساختن متن برای ایجنت</button>
+          <button type="button" onClick={build} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("ساختن متن برای ایجنت")}</button>
         )}
         <button type="button" onClick={onNext} className="press inline-flex items-center gap-1 text-sm text-muted-foreground">
-          ایجنت ندارم، خودم قدم‌به‌قدم <ArrowLeft className="size-4 ltr:rotate-180" />
+          {t("ایجنت ندارم، خودم قدم‌به‌قدم")} <ArrowLeft className="size-4 ltr:rotate-180" />
         </button>
       </div>
     </div>
@@ -370,7 +368,7 @@ function AskMyAgent({ section }) {
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className="press mb-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
-        <Bot className="size-3.5" /> این قدم را به ایجنت خودت بسپار
+        <Bot className="size-3.5" /> {t("این قدم را به ایجنت خودت بسپار")}
       </button>
     );
   }
@@ -392,7 +390,7 @@ function AskMyAgent({ section }) {
         {prompt ? (
           <button type="button" onClick={copy} className={primary}><Copy className="size-4" /> {t("کپی متن")}</button>
         ) : (
-          <button type="button" onClick={build} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} ساختن متن این قدم</button>
+          <button type="button" onClick={build} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />} {t("ساختن متن این قدم")}</button>
         )}
         <button type="button" onClick={() => setOpen(false)} className="press rounded-lg border px-3 py-2 text-sm">{t("بستن")}</button>
       </div>
@@ -406,8 +404,7 @@ function Welcome({ onNext, steps, onPick }) {
       <Sparkles className="g-deco size-8 text-primary" />
       <h2 className="text-xl font-semibold">{t("خوش آمدی")}</h2>
       <p className="text-sm leading-7 text-muted-foreground">
-        چند قدم کوتاه تا دستیارت آماده شود. هر قدم همان لحظه واقعی تست می‌شود، هر کدام را می‌شود رد کرد و بعداً از
-        تنظیمات → سلامت دوباره باز کرد. آخر کار یک خلاصه می‌بینی که چه چیزی تنظیم شد و چه چیزی مانده.
+        {t("چند قدم کوتاه تا دستیارت آماده شود. هر قدم همان لحظه واقعی تست می‌شود، هر کدام را می‌شود رد کرد و بعداً از تنظیمات → سلامت دوباره باز کرد. آخر کار یک خلاصه می‌بینی که چه چیزی تنظیم شد و چه چیزی مانده.")}
       </p>
       <ol className="space-y-2">
         {steps.map((s, i) => (
@@ -466,7 +463,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
   const engine = ENGINES.find((e) => e.id === choice);
   // Checked in the browser before anything is sent: a subscription token pasted as an API key once
   // made every run of a colleague's install finish empty. A warning, not a block.
-  const keyWarning = engine && key.trim() && engine.keyRe && !engine.keyRe.test(key.trim()) ? `این شبیه کلید ${engine.label} نیست: ${engine.keyHint}.` : null;
+  const keyWarning = engine && key.trim() && engine.keyRe && !engine.keyRe.test(key.trim()) ? t("این شبیه کلید {label} نیست: {keyHint}.", { label: engine.label, keyHint: engine.keyHint }) : null;
 
   const pick = (e) => {
     setChoice(e.id);
@@ -566,7 +563,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
   const services = route?.services ? route.services.map((id) => ENGINES.find((e) => e.id === id)).filter(Boolean) : [];
   const backButton = stage === "route" || stage === "done" ? null : (
     <button type="button" onClick={back} className="press -mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-      <ArrowRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" /> برگشت
+      <ArrowRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" /> {t("برگشت")}
     </button>
   );
 
@@ -610,7 +607,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
 
       {stage === "connect" && engine ? (
         <>
-          <h2 className="text-lg font-semibold">{engine.id === "claude-sub" ? t("ورود با اشتراک Claude") : `اتصال ${engine.label}`}</h2>
+          <h2 className="text-lg font-semibold">{engine.id === "claude-sub" ? t("ورود با اشتراک Claude") : t("اتصال {label}", { label: engine.label })}</h2>
           {engine.id === "claude-sub" ? (
             <ClaudeSignin id={() => resolveAccount()} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} />
           ) : (
@@ -641,7 +638,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
                 </details>
               ) : null}
               <button type="button" onClick={test} disabled={busy || (!engine.noKey && !key.trim()) || (engine.custom && !baseUrl.trim())} className={primary}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} وصل کن و امتحان کن
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Stethoscope className="size-4" />} {t("وصل کن و امتحان کن")}
               </button>
             </div>
           )}
@@ -655,7 +652,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
           <p className="flex items-center gap-2 rounded-xl bg-ok/10 px-3 py-3 text-sm font-medium text-ok"><Check className="size-5" /> {t("وصل شد و جواب داد.")}</p>
           <label className="block space-y-1">
             <span className="text-sm font-medium">{t("این حساب را چه بنامیم؟")} <span className="text-xs font-normal text-muted-foreground">{t("(اختیاری)")}</span></span>
-            <input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={engine.provider === "claude" ? t("مثلاً: Claude آیدا") : `مثلاً: ${engine.label} شخصی`} />
+            <input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder={engine.provider === "claude" ? t("مثلاً: Claude آیدا") : t("مثلاً: {label} شخصی", { label: engine.label })} />
             <span className="block text-xs leading-6 text-muted-foreground">{t("این اسم را در فهرست موتورها، انتخاب مدل و بخش مصرف می‌بینید. خالی بگذارید تا خودکار نام‌گذاری شود. بعداً هم با مداد کنار اسم عوض می‌شود.")}</span>
           </label>
           {models.length > 1 ? (
@@ -669,10 +666,10 @@ function EngineStep({ onNext, moveDefault, goto }) {
           ) : null}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={useForMain} onChange={(e) => setUseForMain(e.target.checked)} className="size-4 accent-[var(--color-primary)]" />
-            ایجنت اصلی با این موتور کار کند
+            {t("ایجنت اصلی با این موتور کار کند")}
           </label>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => finish(onNext)} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} بعدی <ArrowLeft className="size-4 ltr:rotate-180" /></button>
+            <button type="button" onClick={() => finish(onNext)} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} {t("بعدی")} <ArrowLeft className="size-4 ltr:rotate-180" /></button>
             <button type="button" onClick={() => finish(again)} disabled={busy} className="press rounded-lg border px-3 py-2 text-sm">{t("یک موتور دیگر هم اضافه می‌کنم")}</button>
           </div>
         </div>
@@ -682,7 +679,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
 }
 
 export function ProbeResult({ result, engine = null, onProxy = null }) {
-  if (result.state === "limited") return <p className="rounded-lg bg-warn/10 p-3 text-sm text-warn">{CAUSE.limited}{result.until ? ` باز شدن سقف: ${new Date(result.until).toLocaleString("fa-IR", { weekday: "long", hour: "2-digit", minute: "2-digit" })}` : ""}</p>;
+  if (result.state === "limited") return <p className="rounded-lg bg-warn/10 p-3 text-sm text-warn">{CAUSE.limited}{result.until ? t(" باز شدن سقف: {toLocaleString}", { toLocaleString: new Date(result.until).toLocaleString("fa-IR", { weekday: "long", hour: "2-digit", minute: "2-digit" }) }) : ""}</p>;
   if (result.ok) return <p className="flex items-center gap-2 text-sm text-ok"><Check className="size-4" /> {result.busy ? t("کلید درست است (سرویس الان شلوغ است)") : t("جواب داد")}{result.ms ? ` (${result.ms}ms)` : ""}.</p>;
   const needsProxy = result.cause === "region" || result.cause === "network";
   return (
@@ -720,7 +717,7 @@ function Reach({ rows, via }) {
       <div className="flex items-start gap-2 g-card rounded-xl border bg-card px-3 py-2 text-sm">
         <CircleAlert className="mt-0.5 size-4 shrink-0 text-bad" />
         <span className="min-w-0">
-          <span className="block font-medium">هیچ‌کدام ({rows.map((r) => r.label).join(t("، "))})</span>
+          <span className="block font-medium">{t("هیچ‌کدام ({join})", { join: rows.map((r) => r.label).join(t("، ")) })}</span>
           <span className="block text-xs leading-6 text-muted-foreground">{REACH[via][rows[0].result] || rows[0].result}{rows[0].status || rows[0].error ? <span dir="ltr"> ({rows[0].status || rows[0].error})</span> : null}</span>
         </span>
       </div>
@@ -758,7 +755,7 @@ export function ProxyStep({ onSaved, inline = false, heading = true }) {
   const typed = url.trim();
   const formError = !typed ? null
     : /^socks/i.test(typed) ? t("SOCKS پشتیبانی نمی‌شود؛ پورت HTTP همان برنامه را بده (v2rayN و Xray معمولاً هر دو را دارند، مثلاً 10809 برای HTTP و 10808 برای SOCKS).")
-    : /^(vless|vmess|trojan|ss|hysteria2?|tuic):\/\//i.test(typed) ? "این لینک خود VPN است، نه آدرس پراکسی؛ آن را در کادر «لینک VPN» بالا بچسبان."
+    : /^(vless|vmess|trojan|ss|hysteria2?|tuic):\/\//i.test(typed) ? t("این لینک خود VPN است، نه آدرس پراکسی؛ آن را در کادر «لینک VPN» بالا بچسبان.")
     : !/^https?:\/\/([^\s/@]+@)?[^\s/@:]+:\d+\/?$/i.test(typed) ? t("شکلش باید این باشد: http://host:port (مثلاً http://127.0.0.1:10809)")
     : null;
   const save = async () => {
@@ -810,7 +807,7 @@ export function ProxyStep({ onSaved, inline = false, heading = true }) {
           <div className="space-y-1.5">
             <div className="flex gap-2">
               <input className={field} dir="ltr" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://127.0.0.1:10809" />
-              <button type="button" onClick={save} disabled={Boolean(formError) || busy} className={`${primary} shrink-0`}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} ذخیره و تست</button>
+              <button type="button" onClick={save} disabled={Boolean(formError) || busy} className={`${primary} shrink-0`}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} {t("ذخیره و تست")}</button>
             </div>
             {formError ? <p className="text-xs text-amber-600">{formError}</p> : null}
           </div>
@@ -860,12 +857,11 @@ function RoutingBox({ list, onSaved }) {
   return (
     <details className="rounded-lg border bg-background px-3 py-2 text-xs leading-6" open={count > 0}>
       <summary className="cursor-pointer text-sm font-medium">
-        مسیر ترافیک: چه چیزی مستقیم برود؟ {count ? <span className="text-xs font-normal text-muted-foreground">({count.toLocaleString("fa-IR")} مورد)</span> : null}
+        {t("مسیر ترافیک: چه چیزی مستقیم برود؟")} {count ? <span className="text-xs font-normal text-muted-foreground">{t("({toLocaleString} مورد)", { toLocaleString: count.toLocaleString("fa-IR") })}</span> : null}
       </summary>
       <div className="space-y-3 pt-2">
         <p className="text-muted-foreground">
-          بدون نوشتن چیزی، این‌ها همیشه مستقیم می‌روند: IPهای لوکال و شبکهٔ داخلی، دامنه‌های <span dir="ltr">.ir</span>، و هر چیزی که پروایدر یا تلگرام نیست.
-          اگر چیز دیگری را هم می‌خواهی مستقیم باشد (یا برعکس، حتماً از VPN برود)، این‌جا بنویس: دامنه (<span dir="ltr">example.com</span>{t(")، IP یا رنج (")}<span dir="ltr">10.20.0.0/16</span>{t(")؛ هر خط یکی. آدرس کامل (")}<span dir="ltr">https://…</span>) هم می‌شود.
+          {t("بدون نوشتن چیزی، این‌ها همیشه مستقیم می‌روند: IPهای لوکال و شبکهٔ داخلی، دامنه‌های")} <span dir="ltr">.ir</span>{t("، و هر چیزی که پروایدر یا تلگرام نیست. اگر چیز دیگری را هم می‌خواهی مستقیم باشد (یا برعکس، حتماً از VPN برود)، این‌جا بنویس: دامنه (")}<span dir="ltr">example.com</span>{t(")، IP یا رنج (")}<span dir="ltr">10.20.0.0/16</span>{t(")؛ هر خط یکی. آدرس کامل (")}<span dir="ltr">https://…</span>{t(") هم می‌شود.")}
         </p>
         <label className="block space-y-1">
           <span className="font-medium">{t("همیشه مستقیم (بدون VPN)")}</span>
@@ -878,7 +874,7 @@ function RoutingBox({ list, onSaved }) {
           <span className="block text-muted-foreground">{t("برای سرویس خارجی که پروایدر نیست و بدون VPN باز نمی‌شود. لوکال و")} <span dir="ltr">.ir</span> {t("هیچ‌وقت از VPN نمی‌روند.")}</span>
         </label>
         <button type="button" onClick={save} disabled={busy || !dirty} className={primary}>
-          {busy ? <Loader2 className="size-4 animate-spin" /> : null} ذخیره
+          {busy ? <Loader2 className="size-4 animate-spin" /> : null} {t("ذخیره")}
         </button>
       </div>
     </details>
@@ -916,7 +912,7 @@ function VpnBox({ onConnected }) {
     try {
       const r = await api("/api/setup/vpn/recheck", { method: "POST", body: { rewrite: !quiet } });
       setList(r.vpn);
-      if (!quiet) toast.success(`${faN(r.vpn.servers.filter((s) => s.state === "live").length)} سرور از ${faN(r.vpn.servers.length)} الان کار می‌کند`);
+      if (!quiet) toast.success(t("{faN} سرور از {faN2} الان کار می‌کند", { faN: faN(r.vpn.servers.filter((s) => s.state === "live").length), faN2: faN(r.vpn.servers.length) }));
     } catch (e) {
       if (!quiet) toast.error(e.message);
     } finally {
@@ -936,7 +932,7 @@ function VpnBox({ onConnected }) {
       setVpn(r.vpn);
       setText("");
       const v = r.vpn || {};
-      toast.success(v.added ? `${faN(v.addedLive)} سرور از ${faN(v.added)} سرور تازه کار می‌کند؛ ${faN(v.servers)} سرور در حال استفاده است` : t("این سرورها از قبل در فهرست بودند؛ دوباره امتحان شدند"));
+      toast.success(v.added ? t("{faN} سرور از {faN2} سرور تازه کار می‌کند؛ {faN3} سرور در حال استفاده است", { faN: faN(v.addedLive), faN2: faN(v.added), faN3: faN(v.servers) }) : t("این سرورها از قبل در فهرست بودند؛ دوباره امتحان شدند"));
       await load();
       await onConnected?.();
     } catch (e) {
@@ -963,7 +959,7 @@ function VpnBox({ onConnected }) {
       const r = await api("/api/setup/vpn/servers/enabled", { method: "PUT", body: { ids, enabled } });
       setList(r.vpn);
       setPicked(new Set());
-      if (ids.length > 1) toast.success(`${faN(ids.length)} سرور ${enabled ? t("فعال") : t("غیرفعال")} شد`);
+      if (ids.length > 1) toast.success(t("{faN} سرور {v} شد", { faN: faN(ids.length), v: enabled ? t("فعال") : t("غیرفعال") }));
       await onConnected?.();
     } catch (e) {
       toast.error(e.message);
@@ -1001,13 +997,12 @@ function VpnBox({ onConnected }) {
     <div className="space-y-3 g-card rounded-xl border p-3">
       <p className="text-sm font-medium">VPN (v2ray)</p>
       <p className="text-xs leading-6 text-muted-foreground">
-        از VPN فقط <b>{t("تلگرام")}</b> {t("و")} <b>{t("پروایدرها")}</b> (Claude، Cursor، OpenAI، OpenRouter{hosts.length ? <>{t("، و آدرس موتورهایی که تنظیم کرده‌ای:")} <bdi dir="ltr">{hosts.join(", ")}</bdi></> : null}) رد می‌شوند.
-        IPهای لوکال و شبکهٔ داخلی، دامنه‌ها و IPهای ایرانی و هر چیز دیگر مستقیم می‌مانند.
+        {t("از VPN فقط")} <b>{t("تلگرام")}</b> {t("و")} <b>{t("پروایدرها")}</b> {t("(Claude، Cursor، OpenAI، OpenRouter")}{hosts.length ? <>{t("، و آدرس موتورهایی که تنظیم کرده‌ای:")} <bdi dir="ltr">{hosts.join(", ")}</bdi></> : null}{t(") رد می‌شوند. IPهای لوکال و شبکهٔ داخلی، دامنه‌ها و IPهای ایرانی و هر چیز دیگر مستقیم می‌مانند.")}
       </p>
       {servers.length ? (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className={`font-medium ${liveCount ? "" : "text-amber-600"}`}>{faN(servers.length)} سرور اضافه شده · {faN(liveCount)} سالم{offCount ? ` · ${faN(offCount)} غیرفعال` : ""}</span>
+            <span className={`font-medium ${liveCount ? "" : "text-amber-600"}`}>{t("{faN} سرور اضافه شده · {faN2} سالم{v}", { faN: faN(servers.length), faN2: faN(liveCount), v: offCount ? t(" · {faN} غیرفعال", { faN: faN(offCount) }) : "" })}</span>
             <span className="flex items-center gap-1.5">
               <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label={t("ترتیب فهرست")} className="rounded-md border bg-background px-1.5 py-1">
                 <option value="delay">{t("به ترتیب تأخیر")}</option>
@@ -1022,7 +1017,7 @@ function VpnBox({ onConnected }) {
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="inline-flex cursor-pointer items-center gap-1.5">
               <input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(servers.map((s) => s.id)))} />
-              {chosen.length ? `${faN(chosen.length)} انتخاب شده` : t("انتخاب همه")}
+              {chosen.length ? t("{faN} انتخاب شده", { faN: faN(chosen.length) }) : t("انتخاب همه")}
             </label>
             {chosen.length ? (
               <>
@@ -1035,7 +1030,7 @@ function VpnBox({ onConnected }) {
           <ul className="divide-y rounded-lg border bg-background text-sm">
             {servers.map((s) => (
               <li key={s.id} className={`flex items-start gap-2 px-3 py-2 ${s.enabled === false ? "opacity-60" : ""}`}>
-                <input type="checkbox" className="mt-1 shrink-0" checked={picked.has(s.id)} onChange={() => pick(s.id)} aria-label={`انتخاب ${s.name}`} />
+                <input type="checkbox" className="mt-1 shrink-0" checked={picked.has(s.id)} onChange={() => pick(s.id)} aria-label={t("انتخاب {name}", { name: s.name })} />
                 {s.state === "live" ? <Check className="mt-0.5 size-4 shrink-0 text-ok" /> : s.state === "dead" ? <CircleAlert className="mt-0.5 size-4 shrink-0 text-bad" /> : <span className="mt-1.5 size-2.5 shrink-0 rounded-full bg-muted-foreground/40" />}
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -1050,7 +1045,7 @@ function VpnBox({ onConnected }) {
                   <span className="block truncate text-[11px] text-muted-foreground" dir="ltr">{s.protocol} · {s.address}{s.port ? `:${s.port}` : ""} · {s.network}{s.security !== "none" ? `/${s.security}` : ""}</span>
                   <span className="block text-[11px] leading-5 text-muted-foreground" title={s.checkedAt ? exactTime(s.checkedAt) : ""}>
                     {s.state === "live"
-                      ? `Claude ${s.claude ? "✓" : "✗"} · تلگرام ${s.telegram ? "✓" : "✗"}${s.ms ? ` · ${faN(s.ms)} میلی‌ثانیه` : ""}`
+                      ? t("Claude {v} · تلگرام {v2}{v3}", { v: s.claude ? "✓" : "✗", v2: s.telegram ? "✓" : "✗", v3: s.ms ? t(" · {faN} میلی‌ثانیه", { faN: faN(s.ms) }) : "" })
                       : s.state === "dead" ? t("به Claude و تلگرام نرسید") : t("هنوز امتحان نشده")}
                     {s.checkedAt ? ` · ${clockLabel(s.checkedAt)}` : ""}
                   </span>
@@ -1207,7 +1202,7 @@ function ImportStep({ onNext }) {
       </div>
       {source === "cursor" ? (
         <p className="rounded-xl bg-muted/60 p-3 text-xs leading-6 text-muted-foreground">
-          فعلاً نمی‌شود. Cursor گفتگوهایش را در پایگاه‌دادهٔ داخلی خودش با قالب بسته نگه می‌دارد و جلسه‌هایش بیرون از خود Cursor ادامه پیدا نمی‌کنند؛ هر انتقالی فقط متن خام بدون حافظه می‌شد. قواعد پروژه‌ات (پوشهٔ ‎.cursor/rules‎) داخل ریپو است و با خود ریپو می‌آید.
+          {t("فعلاً نمی‌شود. Cursor گفتگوهایش را در پایگاه‌دادهٔ داخلی خودش با قالب بسته نگه می‌دارد و جلسه‌هایش بیرون از خود Cursor ادامه پیدا نمی‌کنند؛ هر انتقالی فقط متن خام بدون حافظه می‌شد. قواعد پروژه‌ات (پوشهٔ ‎.cursor/rules‎) داخل ریپو است و با خود ریپو می‌آید.")}
         </p>
       ) : null}
       {source === "karsara" ? (
@@ -1234,21 +1229,21 @@ function ImportStep({ onNext }) {
               ))}
               <p>{t("بعد فایل ‎claude-history.tgz‎ را این‌جا بده (تا ۱ گیگابایت؛ zip نه):")}</p>
               <input type="file" accept=".tgz,.gz,.tar,application/gzip,application/x-tar" onChange={(e) => send(e.target.files?.[0])} className="block w-full text-sm" />
-              {sent !== null ? <p className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" /> فرستادن… {Math.round(sent * 100)}٪</p> : null}
+              {sent !== null ? <p className="flex items-center gap-2"><Loader2 className="size-4 animate-spin" /> {t("فرستادن… {round}٪", { round: Math.round(sent * 100) })}</p> : null}
             </div>
           ) : (
             <div className="space-y-2">
-              <p className="text-xs leading-6 text-muted-foreground">پوشهٔ ‎.claude‎ (یا ‎projects‎ داخل آن) روی همین سرور. {info?.found ? t("در پوشهٔ پیش‌فرض تاریخچه پیدا شد.") : t("در پوشهٔ پیش‌فرض چیزی نیست.")} فقط داخل: <span dir="ltr">{info?.roots?.join(", ")}</span></p>
+              <p className="text-xs leading-6 text-muted-foreground">{t("پوشهٔ ‎.claude‎ (یا ‎projects‎ داخل آن) روی همین سرور. {v} فقط داخل:", { v: info?.found ? t("در پوشهٔ پیش‌فرض تاریخچه پیدا شد.") : t("در پوشهٔ پیش‌فرض چیزی نیست.") })} <span dir="ltr">{info?.roots?.join(", ")}</span></p>
               <div className="flex gap-2">
                 <input className={field} dir="ltr" value={dir} onChange={(e) => setDir(e.target.value)} placeholder="~/.claude" />
-                <button type="button" onClick={() => look()} disabled={busy || !dir.trim()} className={`${primary} shrink-0`}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} بررسی</button>
+                <button type="button" onClick={() => look()} disabled={busy || !dir.trim()} className={`${primary} shrink-0`}>{busy ? <Loader2 className="size-4 animate-spin" /> : null} {t("بررسی")}</button>
               </div>
             </div>
           )}
           {busy && !preview && !done ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {t("دارم گفتگوها را می‌خوانم…")}</p> : null}
           {preview ? (
             <div className="space-y-2 g-card rounded-xl border p-3 text-sm">
-              <p>{preview.sessions} گفتگو در {preview.projects} پوشه پیدا شد: <b>{preview.toImport}</b> تازه{preview.already ? `، ${preview.already} قبلاً این‌جا هست` : ""}{preview.missing ? `، ${preview.missing} بدون فایل` : ""}.</p>
+              <p>{t("{sessions} گفتگو در {projects} پوشه پیدا شد:", { sessions: preview.sessions, projects: preview.projects })} <b>{preview.toImport}</b> {t("تازه{v}{v2}.", { v: preview.already ? t("، {already} قبلاً این‌جا هست", { already: preview.already }) : "", v2: preview.missing ? t("، {missing} بدون فایل", { missing: preview.missing }) : "" })}</p>
               {preview.titles?.length ? (
                 <ul className="list-inside list-disc text-xs text-muted-foreground">
                   {preview.titles.map((t, i) => <li key={i} dir="auto" className="truncate">{t}</li>)}
@@ -1256,11 +1251,11 @@ function ImportStep({ onNext }) {
                 </ul>
               ) : null}
               {preview.toImport ? (
-                <button type="button" onClick={run} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <History className="size-4" />} انتقال {preview.toImport} گفتگو</button>
+                <button type="button" onClick={run} disabled={busy} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <History className="size-4" />} {t("انتقال {toImport} گفتگو", { toImport: preview.toImport })}</button>
               ) : <p className="text-xs text-muted-foreground">{t("چیز تازه‌ای برای انتقال نیست.")}</p>}
             </div>
           ) : null}
-          {done ? <p className="flex items-center gap-2 text-sm text-ok"><Check className="size-4" /> {done.imported} گفتگو منتقل شد؛ در فهرست گفتگوها هستند و با همان حافظه ادامه می‌دهند.</p> : null}
+          {done ? <p className="flex items-center gap-2 text-sm text-ok"><Check className="size-4" /> {t("{imported} گفتگو منتقل شد؛ در فهرست گفتگوها هستند و با همان حافظه ادامه می‌دهند.", { imported: done.imported })}</p> : null}
         </div>
       ) : null}
       <button type="button" onClick={onNext} className="press rounded-lg border px-4 py-2 text-sm">{done ? t("بعدی") : t("فعلاً نه")}</button>
@@ -1290,7 +1285,7 @@ function TelegramStep({ onNext, optional }) {
       const r = await api("/api/integrations", { method: "POST", body: { kind, token: token.trim(), name: kind === "bale_bot" ? "Bale" : "Telegram" } });
       setBot(r.integration);
     } catch (e) {
-      toast.error(`${e.message} — توکن را دوباره از BotFather کپی کن؛ اگر درست است، احتمالاً سرور به ${kind === "bale_bot" ? t("بله") : t("تلگرام")} نمی‌رسد (قدم پراکسی).`);
+      toast.error(t("{message} — توکن را دوباره از BotFather کپی کن؛ اگر درست است، احتمالاً سرور به {v} نمی‌رسد (قدم پراکسی).", { message: e.message, v: kind === "bale_bot" ? t("بله") : t("تلگرام") }));
     }
     setBusy(false);
   };
@@ -1317,7 +1312,7 @@ function TelegramStep({ onNext, optional }) {
         </div>
       ) : (
         <div className="space-y-3">
-          <button type="button" onClick={() => { setKind(null); setBot(null); setToken(""); }} disabled={Boolean(bot) || account} className="press text-xs text-muted-foreground disabled:opacity-50">← {meta.label} (عوض کردن)</button>
+          <button type="button" onClick={() => { setKind(null); setBot(null); setToken(""); }} disabled={Boolean(bot) || account} className="press text-xs text-muted-foreground disabled:opacity-50">{t("← {label} (عوض کردن)", { label: meta.label })}</button>
           {kind === "telegram_account" ? (
             account ? (
               <p className="flex items-center gap-2 text-sm text-ok"><Check className="size-4" /> {t("اکانت تلگرام وصل شد. در Saved Messages به دستیار پیام بده.")}</p>
@@ -1326,9 +1321,9 @@ function TelegramStep({ onNext, optional }) {
             )
           ) : bot ? (
             <ol className="space-y-3 rounded-2xl border bg-card p-4 text-sm">
-              <li className="flex items-center gap-2 text-ok"><Check className="size-4" /> ربات وصل شد{bot.username ? ` (@${bot.username})` : ""}.</li>
+              <li className="flex items-center gap-2 text-ok"><Check className="size-4" /> {t("ربات وصل شد{v}.", { v: bot.username ? ` (@${bot.username})` : "" })}</li>
               {bot.paired?.length ? (
-                <li className="flex items-center gap-2 text-ok"><Check className="size-4" /> چت تو جفت شد ({bot.paired.map((p) => p.name).join(t("، "))}). یک پیام به ربات بده؛ جوابش همین‌جا هم دیده می‌شود.</li>
+                <li className="flex items-center gap-2 text-ok"><Check className="size-4" /> {t("چت تو جفت شد ({join}). یک پیام به ربات بده؛ جوابش همین‌جا هم دیده می‌شود.", { join: bot.paired.map((p) => p.name).join(t("، ")) })}</li>
               ) : (
                 <li className="space-y-1">
                   <p>{t("این لینک را باز کن و Start را بزن تا ربات فقط مال تو شود:")}</p>
@@ -1345,7 +1340,7 @@ function TelegramStep({ onNext, optional }) {
               <li className="list-none space-y-2">
                 <input className={field} dir="ltr" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="123456:ABC…" />
                 {tokenBad ? <p className="text-xs text-destructive">{t("این شبیه توکن ربات نیست؛ کل توکن را از پیام BotFather کپی کن (عدد، دونقطه، بعد حروف).")}</p> : null}
-                <button type="button" onClick={add} disabled={busy || !token.trim() || tokenBad} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Plug className="size-4" />} وصل کن و تست کن</button>
+                <button type="button" onClick={add} disabled={busy || !token.trim() || tokenBad} className={primary}>{busy ? <Loader2 className="size-4 animate-spin" /> : <Plug className="size-4" />} {t("وصل کن و تست کن")}</button>
               </li>
             </ol>
           )}

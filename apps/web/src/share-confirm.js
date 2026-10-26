@@ -18,4 +18,4 @@ export function afterRefusal(picked, error) {
 
 // Invites that went pending and then failed (GET …/private-shares failedInvites, told once).
 export const failedInviteNotes = (answer) =>
-  (Array.isArray(answer?.failedInvites) ? answer.failedInvites : []).map((f) => `دعوتِ ${f.grantee} در تلگرام نرسید و اشتراکش برداشته شد؛ دوباره دعوت کنید.`);
+  (Array.isArray(answer?.failedInvites) ? answer.failedInvites : []).map((f) => t("دعوتِ {grantee} در تلگرام نرسید و اشتراکش برداشته شد؛ دوباره دعوت کنید.", { grantee: f.grantee }));

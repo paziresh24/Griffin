@@ -20,7 +20,7 @@ export function offerState(update, pressedAt = 0, now = Date.now()) {
 }
 
 const fa = (n, opts) => Number(n).toLocaleString("fa-IR", opts);
-const minutes = (sec) => `${fa(Math.max(1, Math.ceil(sec / 60)))} دقیقه`;
+const minutes = (sec) => t("{fa} دقیقه", { fa: fa(Math.max(1, Math.ceil(sec / 60))) });
 
 /** When this install switches by itself, in one Persian sentence, from the host's policy and what is going on now. */
 export function autoLine(update) {
@@ -29,11 +29,11 @@ export function autoLine(update) {
   if (!policy) return t("با دکمهٔ «اعمال» همین حالا می‌توانید بگیرید.");
   if (!policy.auto) return t("اعمال خودکار برای این نصب خاموش است؛ با دکمهٔ «اعمال» بگیرید.");
   if (policy.autoFailed) return t("قبلاً خودکار نصب نشد و دوباره امتحان نمی‌شود؛ با دکمهٔ «اعمال» دوباره امتحان کنید.");
-  if (live?.active > 0) return `خودکار اعمال می‌شود، وقتی هیچ گفتگویی در حال کار نباشد (الان ${fa(live.active)} گفتگو باز است).`;
+  if (live?.active > 0) return t("خودکار اعمال می‌شود، وقتی هیچ گفتگویی در حال کار نباشد (الان {fa} گفتگو باز است).", { fa: fa(live.active) });
   if (live?.quietSec != null && policy.quietSec && live.quietSec < policy.quietSec) {
-    return `خودکار اعمال می‌شود، وقتی ${minutes(policy.quietSec)} هیچ فعالیتی نباشد (الان ${fa(Math.floor(live.quietSec / 60))} دقیقه بی‌فعالیت؛ ${minutes(policy.quietSec - live.quietSec)} دیگر).`;
+    return t("خودکار اعمال می‌شود، وقتی {minutes} هیچ فعالیتی نباشد (الان {fa} دقیقه بی‌فعالیت؛ {minutes2} دیگر).", { minutes: minutes(policy.quietSec), fa: fa(Math.floor(live.quietSec / 60)), minutes2: minutes(policy.quietSec - live.quietSec) });
   }
-  if (policy.gapLeftSec > 0) return `خودکار اعمال می‌شود؛ چون تازه یک آپدیت گرفته‌اید، ${minutes(policy.gapLeftSec)} دیگر.`;
+  if (policy.gapLeftSec > 0) return t("خودکار اعمال می‌شود؛ چون تازه یک آپدیت گرفته‌اید، {minutes} دیگر.", { minutes: minutes(policy.gapLeftSec) });
   return t("چند لحظهٔ دیگر خودکار اعمال می‌شود.");
 }
 
@@ -48,14 +48,14 @@ export function describeUpdate(update, state) {
     case "offered":
       return { label: t("آپدیت جدید"), sub: t("هنوز دانلود نشده؛ تا یک دقیقهٔ دیگر در پس‌زمینه شروع می‌شود.") };
     case "downloading":
-      return { label: t("در حال دانلود آپدیت…"), sub: `${size ? `${size}؛ ` : ""}${autoLine(update)}` };
+      return { label: t("در حال دانلود آپدیت…"), sub: `${size ? t("{size}؛ ", { size }) : ""}${autoLine(update)}` };
     case "download-failed":
       return { label: t("آپدیت جدید (دانلود نشد)"), sub: t("دانلود ناموفق بود؛ چند دقیقهٔ دیگر خودش دوباره امتحان می‌کند.") };
     case "ready":
       return { label: t("آپدیت دانلود شد"), sub: autoLine(update) };
     case "waiting": {
-      if (update?.status?.state === "downloading") return { label: t("ری‌استارت ثبت شد"), sub: `منتظر تمام شدن دانلود${size ? ` (${size})` : ""}؛ بعدش بلافاصله اعمال می‌شود.` };
-      if (live?.working > 0) return { label: t("ری‌استارت ثبت شد"), sub: `منتظر پایان ${fa(live.working)} گفتگوی در حال کار؛ به‌محض اینکه تمام شوند اعمال می‌شود.` };
+      if (update?.status?.state === "downloading") return { label: t("ری‌استارت ثبت شد"), sub: t("منتظر تمام شدن دانلود{v}؛ بعدش بلافاصله اعمال می‌شود.", { v: size ? ` (${size})` : "" }) };
+      if (live?.working > 0) return { label: t("ری‌استارت ثبت شد"), sub: t("منتظر پایان {fa} گفتگوی در حال کار؛ به‌محض اینکه تمام شوند اعمال می‌شود.", { fa: fa(live.working) }) };
       return { label: t("ری‌استارت ثبت شد"), sub: t("کسی در حال کار نیست؛ تا یک دقیقهٔ دیگر اعمال می‌شود.") };
     }
     case "installing":
@@ -71,9 +71,9 @@ export function describeUpdate(update, state) {
 export function formatSize(bytes) {
   const b = Number(bytes) || 0;
   if (!b) return "";
-  if (b >= 1024 ** 3) return `${fa(b / 1024 ** 3, { maximumFractionDigits: 1 })} گیگابایت`;
-  if (b >= 1024 ** 2) return `${fa(Math.round(b / 1024 ** 2))} مگابایت`;
-  return `${fa(Math.max(1, Math.round(b / 1024)))} کیلوبایت`;
+  if (b >= 1024 ** 3) return t("{fa} گیگابایت", { fa: fa(b / 1024 ** 3, { maximumFractionDigits: 1 }) });
+  if (b >= 1024 ** 2) return t("{fa} مگابایت", { fa: fa(Math.round(b / 1024 ** 2)) });
+  return t("{fa} کیلوبایت", { fa: fa(Math.max(1, Math.round(b / 1024))) });
 }
 
 /** A date in the owner's calendar, e.g. «۲۶ مهر، ۱۴:۰۵»; empty when unknown. */

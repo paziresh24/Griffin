@@ -205,5 +205,5 @@ export function ago(stamp, now = Date.now()) {
 // The sidebar's clock beside a chat with a reminder still to run (owner 10-24: «مثل علامت سوال»).
 export const reminderLabel = (at) => {
   const when = clockLabel(at);
-  return when ? `یادآور فعال · ${when}` : t("یادآور فعال");
+  return when ? t("یادآور فعال · {when}", { when }) : t("یادآور فعال");
 };

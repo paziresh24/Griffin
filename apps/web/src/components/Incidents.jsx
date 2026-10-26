@@ -59,15 +59,15 @@ export function IncidentsPage({ onBack }) {
       <div className="mx-auto w-full max-w-3xl px-4 pb-16 pt-4 sm:px-6">
         <div className="mb-4 flex items-center gap-2">
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-            <ArrowRight className="size-4" />
+            <ArrowRight className="rtl-mirror size-4" />
           </button>
           <h1 className="text-lg font-semibold">{t("حادثه‌ها")}</h1>
           <div className="ms-3 flex gap-1">
             <button type="button" onClick={() => setTab("incidents")} className={chip(tab === "incidents")}>
-              حادثه‌ها
+              {t("حادثه‌ها")}
             </button>
             <button type="button" onClick={() => setTab("sources")} className={chip(tab === "sources")}>
-              منابع داده
+              {t("منابع داده")}
             </button>
           </div>
         </div>
@@ -110,10 +110,10 @@ function IncidentsTab({ onSources }) {
         <Database className="mx-auto mb-3 size-6 text-muted-foreground" />
         <p className="mb-1 font-medium">{t("هنوز منبع داده‌ای وصل نیست")}</p>
         <p className="mb-4 text-sm leading-6 text-muted-foreground">
-          آلارم‌ها از منبع‌ها می‌آیند: کانال یا گروه آلارم تلگرام، Grafana، Alertmanager، Prometheus یا یک وبهوک. از همین‌جا اضافه کنید یا در چت به {BRAND.name} بگویید، مثلاً «کانال آلارم‌های ما را به منابع حادثه اضافه کن».
+          {t("آلارم‌ها از منبع‌ها می‌آیند: کانال یا گروه آلارم تلگرام، Grafana، Alertmanager، Prometheus یا یک وبهوک. از همین‌جا اضافه کنید یا در چت به {name} بگویید، مثلاً «کانال آلارم‌های ما را به منابع حادثه اضافه کن».", { name: BRAND.name })}
         </p>
         <button type="button" onClick={onSources} className="press inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground">
-          <Plus className="size-4" /> افزودن منبع
+          <Plus className="size-4" /> {t("افزودن منبع")}
         </button>
       </div>
     );
@@ -236,11 +236,11 @@ function AckButton({ incident: i, onDone }) {
     if (acked) {
       body = { remove: true, member: i.ack[0]?.member || "" };
     } else {
-      const member = i.members.length > 1 ? window.prompt(`کدام مورد عمدی است؟ خالی = کل حادثه\n${i.members.slice(0, 10).join("\n")}`, "") : "";
+      const member = i.members.length > 1 ? window.prompt(t("کدام مورد عمدی است؟ خالی = کل حادثه\n{join}", { join: i.members.slice(0, 10).join("\n") }), "") : "";
       if (member === null) return;
-      const reason = window.prompt(`چرا عمدی است؟ (${BRAND.name} دیگر برای این بیدار نمی‌شود)`, "");
+      const reason = window.prompt(t("چرا عمدی است؟ ({name} دیگر برای این بیدار نمی‌شود)", { name: BRAND.name }), "");
       if (!reason) return;
-      const days = window.prompt("تا چند روز؟ خالی = تا وقتی برش دارید", "");
+      const days = window.prompt(t("تا چند روز؟ خالی = تا وقتی برش دارید"), "");
       if (days === null) return;
       body = { member: member.trim(), reason, ...(Number(days) > 0 ? { days: Number(days) } : {}) };
     }
@@ -304,7 +304,7 @@ function AssignControls({ incident: i, onDone }) {
           <MessageSquare className="size-3.5" /> {i.chatTitle || t("چت")}
         </button>
         <button type="button" disabled={busy} onClick={() => assign(null)} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
-          جدا کردن از چت
+          {t("جدا کردن از چت")}
         </button>
       </>
     );
@@ -322,14 +322,14 @@ function AssignControls({ incident: i, onDone }) {
         </select>
       ) : (
         <button type="button" onClick={pick} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
-          اساین به چت
+          {t("اساین به چت")}
         </button>
       )}
       {i.suggestion?.status === "open" ? (
         <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">{t("کارتش روی فضای کار است")}</span>
       ) : (
         <button type="button" disabled={busy} onClick={suggest} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
-          پیشنهاد در فضای کار
+          {t("پیشنهاد در فضای کار")}
         </button>
       )}
     </>
@@ -354,9 +354,7 @@ function IncidentRow({ incident: i, open, onToggle, onChanged }) {
             </span>
           </span>
           <span className="mt-0.5 block text-xs text-muted-foreground">
-            {i.members.length > 1 ? `${i.members.length} مورد · ` : ""}از {time(i.startsAt || i.firstSeen)}
-            {i.flaps ? ` · ${i.flaps} بار قطع‌ووصل` : ""} · {state}
-            {i.chatId ? ` · چت: ${i.chatTitle || "…"}` : ""}
+            {t("{v}از {time}{v2} · {state}{v3}", { v: i.members.length > 1 ? t("{length} مورد · ", { length: i.members.length }) : "", time: time(i.startsAt || i.firstSeen), v2: i.flaps ? t(" · {flaps} بار قطع‌ووصل", { flaps: i.flaps }) : "", state, v3: i.chatId ? t(" · چت: {v}", { v: i.chatTitle || "…" }) : "" })}
           </span>
           {headline ? (
             <span dir="auto" className="mt-1 block text-sm leading-6">
@@ -399,7 +397,7 @@ function IncidentRow({ incident: i, open, onToggle, onChanged }) {
               {i.members.length > 30 ? " …" : ""}
             </p>
           ) : null}
-          {i.ack ? <p className="text-xs text-muted-foreground">عمدی: {i.ack.map((a) => `${a.member || t("کل حادثه")} — ${a.reason}${a.until ? ` (تا ${time(a.until)})` : ""}`).join(t("؛ "))}</p> : null}
+          {i.ack ? <p className="text-xs text-muted-foreground">{t("عمدی: {join}", { join: i.ack.map((a) => `${a.member || t("کل حادثه")} — ${a.reason}${a.until ? t(" (تا {time})", { time: time(a.until) }) : ""}`).join(t("؛ ")) })}</p> : null}
           {i.cluster !== "human" ? (
             <div className="flex flex-wrap gap-2">
               <AssignControls incident={i} onDone={onChanged} />
@@ -434,7 +432,7 @@ function SourcesTab() {
   return (
     <>
       <p className="mb-4 text-sm leading-6 text-muted-foreground">
-        هر منبع آلارم‌هایش را به این نصب می‌دهد و این‌جا به حادثه تجمیع می‌شود. از چت هم می‌شود: «گروه آلارم‌های فلان را به منابع حادثه اضافه کن» یا «Grafana ما را به‌عنوان منبع وصل کن».
+        {t("هر منبع آلارم‌هایش را به این نصب می‌دهد و این‌جا به حادثه تجمیع می‌شود. از چت هم می‌شود: «گروه آلارم‌های فلان را به منابع حادثه اضافه کن» یا «Grafana ما را به‌عنوان منبع وصل کن».")}
       </p>
       <ul className="mb-4 space-y-2">
         {data.sources.map((s) => (
@@ -445,7 +443,7 @@ function SourcesTab() {
         <SourceForm kinds={data.kinds.filter((k) => k.addable)} onDone={() => (setAdding(false), load())} onCancel={() => setAdding(false)} />
       ) : (
         <button type="button" onClick={() => setAdding(true)} className="press inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground">
-          <Plus className="size-4" /> افزودن منبع
+          <Plus className="size-4" /> {t("افزودن منبع")}
         </button>
       )}
     </>
@@ -480,13 +478,13 @@ function SourceCard({ source: s, onChanged }) {
         </span>
         <span className="ms-auto flex gap-1.5">
           <button type="button" disabled={busy} onClick={async () => setTest(await call(`/api/incidents/sources/${s.id}/test`, "POST"))} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
-            تست
+            {t("تست")}
           </button>
           <button type="button" disabled={busy} onClick={() => call(`/api/incidents/sources/${s.id}`, "PATCH", { enabled: !s.enabled })} className="press rounded-full border px-3 py-1 text-xs hover:bg-muted">
             {s.enabled ? t("خاموش") : t("روشن")}
           </button>
           {builtin ? null : (
-            <button type="button" disabled={busy} onClick={() => window.confirm(`منبع «${s.name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.`) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
+            <button type="button" disabled={busy} onClick={() => window.confirm(t("منبع «{name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.", { name: s.name })) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
               <Trash2 className="size-3.5" />
             </button>
           )}
@@ -494,7 +492,7 @@ function SourceCard({ source: s, onChanged }) {
       </div>
       <div className="mt-1 space-y-1 text-xs text-muted-foreground">
         {s.config?.url ? <div dir="ltr">{s.config.url}</div> : null}
-        {s.config?.chatTitle ? <div>چت تلگرام: {s.config.chatTitle}</div> : null}
+        {s.config?.chatTitle ? <div>{t("چت تلگرام: {chatTitle}", { chatTitle: s.config.chatTitle })}</div> : null}
         {s.webhookUrl ? (
           <div className="flex items-center gap-1.5">
             <code dir="ltr" className="truncate rounded bg-muted px-1.5 py-0.5">
@@ -507,14 +505,14 @@ function SourceCard({ source: s, onChanged }) {
         ) : null}
         {st ? (
           <div>
-            {st.ok === false ? <span className="text-bad">{st.error || t("خطا")}</span> : <span>{st.count ?? 0} آلارم فعال</span>}
-            {st.at ? <span title={exactTime(st.at)}> · خوانده‌شده {ago(st.at)}</span> : null}
-            {st.lastEventAt ? <span title={exactTime(st.lastEventAt)}> · آخرین پیام {ago(st.lastEventAt)}</span> : null}
+            {st.ok === false ? <span className="text-bad">{st.error || t("خطا")}</span> : <span>{t("{v} آلارم فعال", { v: st.count ?? 0 })}</span>}
+            {st.at ? <span title={exactTime(st.at)}> {t("· خوانده‌شده {ago}", { ago: ago(st.at) })}</span> : null}
+            {st.lastEventAt ? <span title={exactTime(st.lastEventAt)}> {t("· آخرین پیام {ago}", { ago: ago(st.lastEventAt) })}</span> : null}
           </div>
         ) : s.enabled ? (
           <div>{t("هنوز خوانده نشده")}</div>
         ) : null}
-        {test ? <div className={test.ok ? "" : "text-bad"}>تست: {test.ok ? `سالم، ${test.firing ?? 0} آلارم فعال${test.sample?.length ? ` (${test.sample.join(t("، "))})` : ""}${test.note ? ` — ${test.note}` : ""}` : test.error}</div> : null}
+        {test ? <div className={test.ok ? "" : "text-bad"}>{t("تست: {v}", { v: test.ok ? t("سالم، {v} آلارم فعال{v2}{v3}", { v: test.firing ?? 0, v2: test.sample?.length ? ` (${test.sample.join(t("، "))})` : "", v3: test.note ? ` — ${test.note}` : "" }) : test.error })}</div> : null}
       </div>
     </li>
   );
@@ -543,7 +541,7 @@ function SourceForm({ kinds, onDone, onCancel }) {
     setBusy(true);
     try {
       const out = await api("/api/incidents/sources", { method: "POST", body: { kind: form.kind, name: form.name || form.chatTitle, id: form.id || undefined, config, ...(form.secretValue ? { secretValue: form.secretValue } : {}) } });
-      toast[out.test?.ok === false ? "error" : "success"](out.test?.ok === false ? `اضافه شد ولی تست خطا داد: ${out.test.error}` : t("منبع اضافه شد"));
+      toast[out.test?.ok === false ? "error" : "success"](out.test?.ok === false ? t("اضافه شد ولی تست خطا داد: {error}", { error: out.test.error }) : t("منبع اضافه شد"));
       onDone();
     } catch (err) {
       toast.error(err.message);
@@ -603,7 +601,7 @@ function SourceForm({ kinds, onDone, onCancel }) {
           </label>
           {form.kind === "alertmanager" ? (
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={form.watchdog} onChange={(e) => set({ watchdog: e.target.checked })} /> آلارم Watchdog دارد (نبودنش یعنی مسیر آلارم کور شده)
+              <input type="checkbox" checked={form.watchdog} onChange={(e) => set({ watchdog: e.target.checked })} /> {t("آلارم Watchdog دارد (نبودنش یعنی مسیر آلارم کور شده)")}
             </label>
           ) : null}
         </>
@@ -626,7 +624,7 @@ function SourceForm({ kinds, onDone, onCancel }) {
             {!chats.length ? <li className="text-xs text-muted-foreground">{t("چتی پیدا نشد؛ یک گروه یا کانال وقتی این‌جا می‌آید که دست‌کم یک پیامش به این اکانت رسیده باشد.")}</li> : null}
           </ul>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.everyMessage} onChange={(e) => set({ everyMessage: e.target.checked })} /> هر پیام این چت آلارم است (حتی بدون 🔴 یا FIRING)
+            <input type="checkbox" checked={form.everyMessage} onChange={(e) => set({ everyMessage: e.target.checked })} /> {t("هر پیام این چت آلارم است (حتی بدون 🔴 یا FIRING)")}
           </label>
         </>
       ) : null}
@@ -644,7 +642,7 @@ function SourceForm({ kinds, onDone, onCancel }) {
           {busy ? t("در حال افزودن…") : t("افزودن و تست")}
         </button>
         <button type="button" onClick={onCancel} className="press rounded-full border px-4 py-2 text-sm hover:bg-muted">
-          انصراف
+          {t("انصراف")}
         </button>
       </div>
     </form>

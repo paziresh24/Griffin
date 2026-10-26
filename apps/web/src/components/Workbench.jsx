@@ -135,7 +135,7 @@ function Files() {
     <div className="flex h-full min-h-0">
       <div className="flex w-full min-w-0 flex-col sm:w-80 sm:border-e">
         <div className="flex items-center gap-1 border-b px-2 py-2">
-          <button type="button" onClick={() => list(parent)} disabled={path === "/"} className="press rounded-md p-1.5 hover:bg-muted disabled:opacity-40"><ChevronLeft className="size-4 rotate-180" /></button>
+          <button type="button" onClick={() => list(parent)} disabled={path === "/"} className="press rounded-md p-1.5 hover:bg-muted disabled:opacity-40"><ChevronLeft className="rtl-mirror size-4 rotate-180" /></button>
           <input value={path} onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => e.key === "Enter" && list(path)} dir="ltr" className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 font-mono text-xs" />
           <button type="button" onClick={() => list(path)} className="press rounded-md p-1.5 hover:bg-muted"><RefreshCw className="size-4" /></button>
         </div>

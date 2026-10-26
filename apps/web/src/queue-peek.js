@@ -60,9 +60,9 @@ export function waitingQueued(messages) {
 export function editLossWarning(item) {
   const lost = [];
   if (item?.images) lost.push(t("تصویرهای"));
-  if (item?.files?.length) lost.push(`فایل‌های پیوستِ (${item.files.map((f) => `«${f.name}»`).join(t("، "))})`);
+  if (item?.files?.length) lost.push(t("فایل‌های پیوستِ ({join})", { join: item.files.map((f) => `«${f.name}»`).join(t("، ")) }));
   if (!lost.length) return null;
-  return `${lost.join(t(" و "))} این پیام به جعبهٔ پیام برنمی‌گردند و باید دوباره پیوست شوند. ادامه؟`;
+  return t("{join} این پیام به جعبهٔ پیام برنمی‌گردند و باید دوباره پیوست شوند. ادامه؟", { join: lost.join(t(" و ")) });
 }
 
 // The failed run's bar has «دوباره» and «حل شد» (Thread.jsx KeptActions), no «حذف» of its own.

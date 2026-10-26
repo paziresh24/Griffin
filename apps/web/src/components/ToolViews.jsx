@@ -70,18 +70,18 @@ function OutputBox({ title, text, tone, limit = 14, fromEnd = false, empty = t("
     <div className="overflow-hidden rounded-md border">
       <div className="flex items-center gap-2 border-b bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground">
         <span className={tone === "bad" ? "font-medium text-bad" : "font-medium"}>{title}</span>
-        {body ? <span>· {fa(clip.total)} خط</span> : null}
+        {body ? <span>{t("· {fa} خط", { fa: fa(clip.total) })}</span> : null}
         <span className="ms-auto"><CopyButton text={body} /></span>
       </div>
       {body ? (
         <>
-          {clip.hidden && !all && fromEnd ? <p className="border-b bg-muted/30 px-2 py-0.5 text-[11px] text-muted-foreground">… {fa(clip.hidden)} خط قبل‌تر</p> : null}
+          {clip.hidden && !all && fromEnd ? <p className="border-b bg-muted/30 px-2 py-0.5 text-[11px] text-muted-foreground">{t("… {fa} خط قبل‌تر", { fa: fa(clip.hidden) })}</p> : null}
           <pre className={`ltr scrollbar-thin max-h-80 overflow-auto whitespace-pre-wrap break-words bg-muted/20 p-2 font-mono text-xs leading-5 ${tone === "bad" ? "text-bad" : ""}`}>
             {all ? body : clip.shown}
           </pre>
           {clip.hidden && !all ? (
             <button type="button" onClick={() => setAll(true)} className="w-full border-t py-1 text-[11px] text-muted-foreground hover:bg-muted">
-              نمایش {fa(clip.hidden)} خط {fromEnd ? t("قبل‌تر") : t("دیگر")}
+              {t("نمایش {fa} خط {v}", { fa: fa(clip.hidden), v: fromEnd ? t("قبل‌تر") : t("دیگر") })}
             </button>
           ) : null}
         </>
@@ -106,7 +106,7 @@ export function ShellCommand({ command }) {
       </div>
       {clip.hidden && !all ? (
         <button type="button" onClick={() => setAll(true)} className="w-full border-t py-0.5 text-[11px] text-muted-foreground hover:bg-muted">
-          نمایش {fa(clip.hidden)} خط دیگر از دستور
+          {t("نمایش {fa} خط دیگر از دستور", { fa: fa(clip.hidden) })}
         </button>
       ) : null}
     </div>
@@ -229,7 +229,7 @@ export function GitlabPipelineBody({ args = {}, result = {} }) {
     if (!result.pipelines.length) return <p className="text-sm text-muted-foreground">{t("پایپ‌لاینی نیست.")}</p>;
     return (
       <div className="space-y-1.5">
-        <p className="text-xs text-muted-foreground" dir="auto">پایپ‌لاین‌های اخیر {projectName(result.project || args.project)}</p>
+        <p className="text-xs text-muted-foreground" dir="auto">{t("پایپ‌لاین‌های اخیر {projectName}", { projectName: projectName(result.project || args.project) })}</p>
         <ul className="divide-y rounded-md border">
           {result.pipelines.map((p) => {
             const took = secondsBetween(p.createdAt, p.updatedAt);
@@ -252,7 +252,7 @@ export function GitlabPipelineBody({ args = {}, result = {} }) {
     return (
       <div className="space-y-1.5">
         <Banner tone={result.retried.length ? "ok" : "warn"}>
-          {result.retried.length ? `${fa(result.retried.length)} کار دوباره اجرا شد` : t("کار شکست‌خوردهٔ قابل تکرار نبود")}
+          {result.retried.length ? t("{fa} کار دوباره اجرا شد", { fa: fa(result.retried.length) }) : t("کار شکست‌خوردهٔ قابل تکرار نبود")}
         </Banner>
         {result.retried.length ? <ul className="ltr space-y-0.5 font-mono text-xs text-muted-foreground">{result.retried.map((name) => <li key={name}>{name}</li>)}</ul> : null}
       </div>
@@ -369,7 +369,7 @@ export function GitlabChangesBody({ args = {}, result = {} }) {
       {result.title ? <p className="text-sm font-medium leading-6" dir="auto">{result.title}</p> : null}
       <Branches source={result.sourceBranch || result.from} target={result.targetBranch || result.to} />
       <p className="text-xs text-muted-foreground" dir="auto">
-        {fa(result.fileCount ?? totals.files)} فایل ·{" "}
+        {t("{fa} فایل · ", { fa: fa(result.fileCount ?? totals.files) })}
         <span className="ltr font-mono text-ok">+{fa(totals.added)}</span>{" "}
         <span className="ltr font-mono text-bad">−{fa(totals.removed)}</span>
       </p>
@@ -440,7 +440,7 @@ export function GitlabMemberBody({ args = {}, result = {} }) {
     <Banner tone="ok">
       <span dir="auto">
         {result.changed === false ? t("از قبل دسترسی داشت: ") : t("دسترسی داده شد: ")}
-        <span className="ltr font-mono">{result.username || args.username}</span> ← {role} روی{" "}
+        <span className="ltr font-mono">{result.username || args.username}</span> {t("← {role} روی ", { role })}
         <span className="ltr font-mono">{result.project || args.project}</span>
       </span>
     </Banner>

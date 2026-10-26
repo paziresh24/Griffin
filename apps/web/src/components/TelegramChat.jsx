@@ -10,7 +10,7 @@ import {
   PICKUPS, TG_FOLDERS, clock, connectionLine, conversationRows, folderCount, folderPeople, lineSource, personChip, tgMode, waitingKind, waitingSend, watchHint,
 } from "../telegram.js";
 import { Chip, Dots, FEED_PATH, PEOPLE_PATH, PersonAvatar, PersonHeader, Toggle, openGlobal, patchAccess, refreshTelegram, useTelegram } from "./Telegram.jsx";
-import { t } from "../i18n.js";
+import { t, isRtl } from "../i18n.js";
 
 // «تلگرام مثل خود تلگرام» (flag telegramChat; owner 2026-10-24: «بخش چتا واقعا چت نیست»). A person's
 // whole Telegram conversation as Telegram draws it, inside Griffin: what the assistant did hangs under
@@ -20,9 +20,9 @@ import { t } from "../i18n.js";
 const failed = (error) => toast.error(error.message || t("انجام نشد"));
 const FOLDER_ICON = { all: MessageCircle, wait: Bell, run: Zap, personal: User, groups: Users, chats: Link2, off: Moon };
 const MODE = {
-  auto: { dot: "bg-ok", pill: "border-ok/40 bg-ok/10 text-ok", label: `${BRAND.name} جواب می‌دهد` },
+  auto: { dot: "bg-ok", pill: "border-ok/40 bg-ok/10 text-ok", label: t("{name} جواب می‌دهد", { name: BRAND.name }) },
   chats: { dot: "bg-signal", pill: "border-signal/40 bg-signal/10 text-signal", label: t("فقط از گفتگوهای شما") },
-  off: { dot: "border border-muted-foreground", pill: "text-muted-foreground", label: `${BRAND.name} کاری ندارد` },
+  off: { dot: "border border-muted-foreground", pill: "text-muted-foreground", label: t("{name} کاری ندارد", { name: BRAND.name }) },
 };
 const FOLDER_KEY = "griffin.telegram.folder";
 const PANEL_KEY = "griffin.telegram.chatPanel";
@@ -54,7 +54,7 @@ export function TelegramFolders({ query, activeId, activePersonId, onNavigate })
         className={`mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-start ${globalActive ? "bg-muted" : "hover:bg-muted/60"}`}
       >
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">🌐 {BRAND.name} — همه</span>
+          <span className="block truncate text-sm font-medium">{t("🌐 {name} — همه", { name: BRAND.name })}</span>
           {line ? <span className={`block truncate text-[11px] ${line.tone === "ok" ? "text-ok" : line.tone === "bad" ? "text-bad" : "text-muted-foreground"}`} title={line.title}>{line.text}</span> : null}
         </span>
         {waiting.length ? <span className="shrink-0 rounded-full bg-bad px-1.5 text-[11px] leading-5 tabular-nums text-white" title={t("منتظر شما")}>{waiting.length.toLocaleString("fa-IR")}</span> : null}
@@ -110,11 +110,11 @@ export function TelegramFolders({ query, activeId, activePersonId, onNavigate })
 function FolderRow({ person: p, waits, active, onOpen }) {
   const mode = tgMode(p);
   const sub = p.running ? (
-    <span className="flex items-center gap-1 text-signal">{BRAND.name} دارد کار می‌کند <Dots /></span>
+    <span className="flex items-center gap-1 text-signal">{t("{name} دارد کار می‌کند", { name: BRAND.name })} <Dots /></span>
   ) : waits ? (
     <span className="text-bad">{t("منتظر شما")}</span>
   ) : mode === "chats" ? (
-    <span dir="auto">از گفتگوی «{p.fromChats.at(-1)?.title || t("شما")}»</span>
+    <span dir="auto">{t("از گفتگوی «{v}»", { v: p.fromChats.at(-1)?.title || t("شما") })}</span>
   ) : (
     personChip(p)?.label || (p.username ? `@${p.username}` : "")
   );
@@ -252,7 +252,7 @@ export function TelegramChat({ personId, onMenu }) {
 
   const jump = (m) => {
     const el = document.getElementById(`tg-${m.id}`);
-    if (!el) return toast("آن پیام در این صفحه نیست؛ پیام‌های قبلی را بیاورید");
+    if (!el) return toast(t("آن پیام در این صفحه نیست؛ پیام‌های قبلی را بیاورید"));
     el.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     setFlash(m.id);
     setTimeout(() => setFlash(null), 1400);
@@ -283,7 +283,7 @@ export function TelegramChat({ personId, onMenu }) {
   const work = (
     <div className="mt-1 space-y-1">
       {person.running ? (
-        <WorkCard onClick={() => person.chatId && navigate(person.chatId)} title={`${BRAND.name} دارد روی این کار می‌کند`} badge={<span className="flex items-center gap-1 rounded-full bg-signal/12 px-2 text-[11px] leading-5 text-signal">{t("در حال کار")} <Dots /></span>} />
+        <WorkCard onClick={() => person.chatId && navigate(person.chatId)} title={t("{name} دارد روی این کار می‌کند", { name: BRAND.name })} badge={<span className="flex items-center gap-1 rounded-full bg-signal/12 px-2 text-[11px] leading-5 text-signal">{t("در حال کار")} <Dots /></span>} />
       ) : null}
       {running.map((th) => (
         <WorkCard key={th.id} onClick={() => navigate(th.id)} title={String(th.title || t("ترد")).replace(/^🧵\s*[^:]*:\s*/, "")} badge={<span className="flex items-center gap-1 rounded-full bg-signal/12 px-2 text-[11px] leading-5 text-signal">{t("در حال کار")} <Dots /></span>} />
@@ -302,7 +302,7 @@ export function TelegramChat({ personId, onMenu }) {
             <span className="min-w-0">
               <span className="block truncate text-sm font-medium" dir="auto">{person.name}</span>
               <span className="block truncate text-[11px] text-muted-foreground">
-                {person.running ? <span className="text-signal">{BRAND.name} دارد کار می‌کند…</span> : person.group ? t("گروه") : person.username ? <span dir="ltr">@{person.username}</span> : person.tgName}
+                {person.running ? <span className="text-signal">{t("{name} دارد کار می‌کند…", { name: BRAND.name })}</span> : person.group ? t("گروه") : person.username ? <span dir="ltr">@{person.username}</span> : person.tgName}
               </span>
             </span>
           </button>
@@ -320,14 +320,14 @@ export function TelegramChat({ personId, onMenu }) {
             <span className="w-0.5 self-stretch rounded bg-signal" />
             <span className="min-w-0 flex-1 leading-5">
               <b className="block font-medium text-signal">{t("چرا اینجاست؟")}</b>
-              گفتگوی «{person.fromChats.at(-1)?.title}» با {person.name} حرف زده. {BRAND.name} بقیهٔ پیام‌هایش را خودکار جواب نمی‌دهد.
+              {t("گفتگوی «{title}» با {name} حرف زده. {name2} بقیهٔ پیام‌هایش را خودکار جواب نمی‌دهد.", { title: person.fromChats.at(-1)?.title, name: person.name, name2: BRAND.name })}
             </span>
             <button type="button" onClick={() => patchAccess(person.id, { watch: true }).then(() => toast.success(t("پاسخ خودکار روشن شد")), failed)} className="press shrink-0 rounded-lg border bg-card px-2.5 py-1 hover:bg-muted">
-              خودکار هم جواب بده
+              {t("خودکار هم جواب بده")}
             </button>
           </div>
         ) : null}
-        {messages && !live ? <p className="border-b bg-warn/10 px-4 py-1.5 text-xs text-muted-foreground">اکانت تلگرام وصل نیست؛ آنچه {BRAND.name} ثبت کرده نشان داده می‌شود (بدون ری‌اکشن، ویرایش و حذف).</p> : null}
+        {messages && !live ? <p className="border-b bg-warn/10 px-4 py-1.5 text-xs text-muted-foreground">{t("اکانت تلگرام وصل نیست؛ آنچه {name} ثبت کرده نشان داده می‌شود (بدون ری‌اکشن، ویرایش و حذف).", { name: BRAND.name })}</p> : null}
 
         <div
           ref={scroller}
@@ -358,10 +358,10 @@ export function TelegramChat({ personId, onMenu }) {
             {!lastIn && (person.running || running.length || waiting.length) ? work : null}
             {notes.map((n) => (
               <div key={n.id} className="mt-2 max-w-[85%] self-end rounded-2xl rounded-ee-md border-[1.5px] border-dashed px-3 py-1.5 text-sm">
-                <span className="block text-[11px] text-muted-foreground">🔒 فقط {BRAND.name} می‌بیند</span>
+                <span className="block text-[11px] text-muted-foreground">{t("🔒 فقط {name} می‌بیند", { name: BRAND.name })}</span>
                 <span className="whitespace-pre-wrap break-words" dir="auto">{n.text}</span>
                 {person.chatId ? (
-                  <button type="button" onClick={() => navigate(person.chatId)} className="mt-0.5 block text-[11px] text-primary hover:underline">دیدن جوابش در گفتگوی {BRAND.name} ›</button>
+                  <button type="button" onClick={() => navigate(person.chatId)} className="mt-0.5 block text-[11px] text-primary hover:underline">{t("دیدن جوابش در گفتگوی {name} ›", { name: BRAND.name })}</button>
                 ) : null}
               </div>
             ))}
@@ -405,7 +405,7 @@ function WorkCard({ title, badge, onClick }) {
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[10px] font-medium text-primary">{BRAND.name.slice(0, 1)}</span>
       <span className="min-w-0 flex-1 truncate font-medium" dir="auto">{title}</span>
       {badge}
-      <ChevronLeft className="size-3.5 shrink-0 text-muted-foreground" />
+      <ChevronLeft className="rtl-mirror size-3.5 shrink-0 text-muted-foreground" />
     </button>
   );
 }
@@ -431,7 +431,7 @@ function WaitingCard({ item, onDone }) {
       </div>
       <div className="flex flex-wrap gap-1">
         {send ? <button type="button" onClick={() => act("send")} className="press flex-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">{send.label}</button> : null}
-        {item.chatId ? <button type="button" onClick={() => navigate(item.chatId)} className="press flex-1 rounded-lg border bg-card px-3 py-1.5 text-xs hover:bg-muted">باز کردن در {BRAND.name}</button> : null}
+        {item.chatId ? <button type="button" onClick={() => navigate(item.chatId)} className="press flex-1 rounded-lg border bg-card px-3 py-1.5 text-xs hover:bg-muted">{t("باز کردن در {name}", { name: BRAND.name })}</button> : null}
         <button type="button" onClick={() => act("dismiss")} className="press flex-1 rounded-lg border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted">{t("ولش کن")}</button>
       </div>
     </div>
@@ -439,7 +439,7 @@ function WaitingCard({ item, onDone }) {
 }
 
 const QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "👏"];
-const fileSize = (n) => (n == null ? "" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024)).toLocaleString("fa-IR")} کیلوبایت` : `${(n / 1024 / 1024).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت`);
+const fileSize = (n) => (n == null ? "" : n < 1024 * 1024 ? t("{toLocaleString} کیلوبایت", { toLocaleString: Math.max(1, Math.round(n / 1024)).toLocaleString("fa-IR") }) : t("{toLocaleString} مگابایت", { toLocaleString: (n / 1024 / 1024).toLocaleString("fa-IR", { maximumFractionDigits: 1 }) }));
 const seconds = (s) => (s == null ? "" : `${Math.floor(s / 60).toLocaleString("fa-IR")}:${String(Math.floor(s % 60)).padStart(2, "0").replace(/\d/g, (d) => t("۰۱۲۳۴۵۶۷۸۹")[d])}`);
 
 function Media({ m, personId, live }) {
@@ -481,12 +481,12 @@ function Bubble({ row, person, live, personId, flash, onJump, actions, children 
   const via =
     source?.kind === "auto" ? (
       <span className="text-[11px] font-normal text-muted-foreground">
-        با{" "}
-        <button type="button" onClick={() => source.chatId && navigate(source.chatId)} className="font-medium text-primary hover:underline">{BRAND.name}</button> · خودکار
+        {t("با ")}
+        <button type="button" onClick={() => source.chatId && navigate(source.chatId)} className="font-medium text-primary hover:underline">{BRAND.name}</button> {t("· خودکار")}
       </span>
     ) : source?.kind === "chat" ? (
       <span className="text-[11px] font-normal text-muted-foreground">
-        با {BRAND.name} · از{" "}
+        {t("با {name} · از ", { name: BRAND.name })}
         <button type="button" onClick={() => source.chatId && navigate(source.chatId)} className="font-medium text-primary hover:underline" dir="auto">«{source.title || t("یک گفتگو")}»</button>
       </span>
     ) : null;
@@ -557,7 +557,7 @@ function Bubble({ row, person, live, personId, flash, onJump, actions, children 
             </button>
           </Popover.Trigger>
           <Popover.Portal>
-            <Popover.Content side="top" align={out ? "end" : "start"} sideOffset={6} collisionPadding={12} className="g-menu pop z-50 w-56 rounded-xl border bg-card p-1 text-sm shadow-xl" dir="rtl">
+            <Popover.Content side="top" align={out ? "end" : "start"} sideOffset={6} collisionPadding={12} className="g-menu pop z-50 w-56 rounded-xl border bg-card p-1 text-sm shadow-xl" dir={isRtl ? "rtl" : "ltr"}>
               <div className="flex flex-wrap justify-between gap-0.5 border-b px-1 pb-1">
                 {QUICK.map((e) => (
                   <button
@@ -621,7 +621,7 @@ function DeleteRow({ onConfirm }) {
   ) : (
     <button type="button" onClick={() => setSure(true)} className="g-menu-row flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-start text-bad hover:bg-bad/10">
       <Trash2 className="size-4" />
-      حذف برای همه
+      {t("حذف برای همه")}
     </button>
   );
 }
@@ -651,10 +651,10 @@ function Composer({ person, mode, reply, editing, onClear, onSent, onNote }) {
         toast.success(t("ویرایش شد"));
         onSent();
       } else if (to === "assistant") {
-        const said = reply ? `دربارهٔ این پیام در تلگرام: «${snippet(preview(reply), 300)}»\n\n${value}` : value;
+        const said = reply ? t("دربارهٔ این پیام در تلگرام: «{snippet}»\n\n{value}", { snippet: snippet(preview(reply), 300), value }) : value;
         await api(`/api/chats/${person.chatId}/messages`, { method: "POST", body: { text: said, intent: "queue" } });
         onNote(value);
-        toast.success(`به ${BRAND.name} رسید؛ ${first} نمی‌بیند`);
+        toast.success(t("به {name} رسید؛ {first} نمی‌بیند", { name: BRAND.name, first }));
       } else {
         const replyTo = telegramId(reply);
         await api("/api/telegram/send", { method: "POST", body: { chat: person.key, text: value, ...(replyTo ? { replyTo } : {}) } });
@@ -676,7 +676,7 @@ function Composer({ person, mode, reply, editing, onClear, onSent, onNote }) {
           <div className="flex items-center gap-2 px-2 text-xs">
             {editing ? <Pencil className="size-4 shrink-0 text-primary" /> : <Reply className="size-4 shrink-0 text-primary" />}
             <span className="min-w-0 flex-1">
-              <b className="block font-medium text-primary">{editing ? t("ویرایش پیام") : to === "assistant" ? `به ${BRAND.name} دربارهٔ این پیام` : t("پاسخ به این پیام")}</b>
+              <b className="block font-medium text-primary">{editing ? t("ویرایش پیام") : to === "assistant" ? t("به {name} دربارهٔ این پیام", { name: BRAND.name }) : t("پاسخ به این پیام")}</b>
               <span className="block truncate text-muted-foreground" dir="auto">{preview(bar)}</span>
             </span>
             <button
@@ -701,15 +701,15 @@ function Composer({ person, mode, reply, editing, onClear, onSent, onNote }) {
                 disabled={!canAssistant}
                 onClick={() => setTo("assistant")}
                 aria-pressed={to === "assistant"}
-                title={canAssistant ? undefined : `پاسخ خودکار به ${first} خاموش است؛ ${BRAND.name} گفتگویی با او ندارد`}
+                title={canAssistant ? undefined : t("پاسخ خودکار به {first} خاموش است؛ {name} گفتگویی با او ندارد", { first, name: BRAND.name })}
                 className={`press rounded-full border px-2.5 py-0.5 disabled:opacity-40 ${to === "assistant" ? "border-primary bg-primary/12 text-foreground" : "text-muted-foreground"}`}
               >
                 {BRAND.name}
               </button>
               <button type="button" onClick={() => setTo("direct")} aria-pressed={to === "direct"} className={`press rounded-full border px-2.5 py-0.5 ${to === "direct" ? "border-primary bg-primary/12 text-foreground" : "text-muted-foreground"}`} dir="auto">
-                {first} در تلگرام
+                {t("{first} در تلگرام", { first })}
               </button>
-              <span className="ms-auto text-[11px] text-muted-foreground">{to === "assistant" ? `${first} این را نمی‌بیند` : t("مستقیم از حساب تلگرام شما")}</span>
+              <span className="ms-auto text-[11px] text-muted-foreground">{to === "assistant" ? t("{first} این را نمی‌بیند", { first }) : t("مستقیم از حساب تلگرام شما")}</span>
             </div>
           )}
           <div className="flex items-end gap-1.5">
@@ -729,7 +729,7 @@ function Composer({ person, mode, reply, editing, onClear, onSent, onNote }) {
               }}
               rows={1}
               dir="auto"
-              placeholder={editing ? t("متن تازه") : target === "assistant" ? `به ${BRAND.name} بگویید… مثلاً «کوتاه‌تر جواب بده»` : `پیام به ${person.name}`}
+              placeholder={editing ? t("متن تازه") : target === "assistant" ? t("به {name} بگویید… مثلاً «کوتاه‌تر جواب بده»", { name: BRAND.name }) : t("پیام به {name}", { name: person.name })}
               className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none [field-sizing:content] placeholder:text-muted-foreground"
             />
             <button type="button" onClick={send} disabled={busy || !text.trim()} className="press flex size-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40" aria-label={editing ? t("ذخیرهٔ ویرایش") : t("فرستادن")}>
@@ -737,7 +737,7 @@ function Composer({ person, mode, reply, editing, onClear, onSent, onNote }) {
             </button>
           </div>
         </div>
-        {mode === "off" && !canAssistant ? <p className="px-2 text-[11px] text-muted-foreground">{BRAND.name} با {first} کاری ندارد؛ برای اینکه از طرف شما جواب بدهد پاسخ خودکار را از پنل کنار روشن کنید.</p> : null}
+        {mode === "off" && !canAssistant ? <p className="px-2 text-[11px] text-muted-foreground">{t("{name} با {first} کاری ندارد؛ برای اینکه از طرف شما جواب بدهد پاسخ خودکار را از پنل کنار روشن کنید.", { name: BRAND.name, first })}</p> : null}
       </div>
     </div>
   );
@@ -753,13 +753,13 @@ function PersonPanel({ person, threads }) {
       <div className="space-y-3 rounded-xl border bg-card px-3 py-2.5">
         <label className="flex items-center justify-between gap-3">
           <span className="text-xs">
-            {BRAND.name} خودکار جواب بدهد
+            {t("{name} خودکار جواب بدهد", { name: BRAND.name })}
             <span className="mt-0.5 block text-[11px] leading-5 text-muted-foreground">{watchHint()}</span>
           </span>
           <Toggle checked={Boolean(person.watch)} onChange={(on) => setAccess({ watch: on }, on ? t("پاسخ خودکار روشن شد") : t("پاسخ خودکار خاموش شد"))} label={t("پاسخ خودکار")} />
         </label>
         <label className="block text-xs">
-          پیام‌ها را کی بردارد؟
+          {t("پیام‌ها را کی بردارد؟")}
           <select
             value={Number(person.pickupEvery) || 0}
             disabled={!person.watch}
@@ -775,10 +775,10 @@ function PersonPanel({ person, threads }) {
       {person.chatId ? (
         <button type="button" onClick={() => navigate(person.chatId)} className="flex w-full items-center gap-2 rounded-xl border bg-card px-3 py-2 text-start text-xs hover:border-primary/50">
           <span className="min-w-0 flex-1">
-            <b className="block font-medium">گفتگوی {BRAND.name} دربارهٔ {person.name}</b>
+            <b className="block font-medium">{t("گفتگوی {name} دربارهٔ {name2}", { name: BRAND.name, name2: person.name })}</b>
             <span className="text-[11px] text-muted-foreground">{t("هر کاری که برای پیام‌هایش کرده، قدم‌به‌قدم")}</span>
           </span>
-          <ChevronLeft className="size-3.5 text-muted-foreground" />
+          <ChevronLeft className="rtl-mirror size-3.5 text-muted-foreground" />
         </button>
       ) : null}
 
@@ -786,7 +786,7 @@ function PersonPanel({ person, threads }) {
         <div>
           <button type="button" onClick={() => setThreadsOpen(!threadsOpen)} className="mb-1 flex w-full items-center gap-1 px-1 text-xs font-medium text-muted-foreground">
             <ChevronDown className={`size-3 transition-transform ${threadsOpen ? "" : "-rotate-90 rtl:rotate-90"}`} />
-            کارهای باز ({open.length.toLocaleString("fa-IR")})
+            {t("کارهای باز ({toLocaleString})", { toLocaleString: open.length.toLocaleString("fa-IR") })}
           </button>
           {threadsOpen ? (
             <ul className="space-y-0.5">
@@ -805,7 +805,7 @@ function PersonPanel({ person, threads }) {
 
       {person.fromChats?.length ? (
         <div>
-          <p className="mb-1 px-1 text-xs font-medium text-muted-foreground">گفتگوهای شما که با {person.group ? t("این گروه") : t("او")} حرف زده‌اند</p>
+          <p className="mb-1 px-1 text-xs font-medium text-muted-foreground">{t("گفتگوهای شما که با {v} حرف زده‌اند", { v: person.group ? t("این گروه") : t("او") })}</p>
           <ul className="space-y-0.5">
             {[...person.fromChats].reverse().map((c) => (
               <li key={c.chatId}>

@@ -79,12 +79,12 @@ export function PeersPage({ onBack }) {
     <Page>
       <div className="mb-3 flex items-center gap-2">
         <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-          <ArrowRight className="size-4" />
+          <ArrowRight className="rtl-mirror size-4" />
         </button>
         <h1 className="text-lg font-semibold">{t("ایجنت‌های همکاران")}</h1>
         {tab === "people" ? (
           <button type="button" onClick={() => setAdding((v) => !v)} className="press ms-auto flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:shadow">
-            <Plus className="size-4" /> همکار جدید
+            <Plus className="size-4" /> {t("همکار جدید")}
           </button>
         ) : null}
       </div>
@@ -98,7 +98,7 @@ export function PeersPage({ onBack }) {
       </div>
       <p className="-mt-2 mb-4 text-sm leading-6 text-muted-foreground">
         {TABS.find((t) => t.id === tab)?.hint}
-        {tab === "people" ? ` هر دستیار فقط ابزارهایی را دارد که شما باز کرده‌اید و کار برگشت‌ناپذیر بدون تأیید شما در ${BRAND.name} انجام نمی‌شود.` : ""}
+        {tab === "people" ? t(" هر دستیار فقط ابزارهایی را دارد که شما باز کرده‌اید و کار برگشت‌ناپذیر بدون تأیید شما در {name} انجام نمی‌شود.", { name: BRAND.name }) : ""}
       </p>
 
       {tab === "network" ? <NetworkSection /> : tab === "audit" ? <Audit /> : (
@@ -115,7 +115,7 @@ export function PeersPage({ onBack }) {
               <PeerRows users={on} onOpen={setOpenId} />
               {off.length ? (
                 <details className="mt-4">
-                  <summary className="cursor-pointer text-sm text-muted-foreground">غیرفعال ({off.length.toLocaleString("fa-IR")})</summary>
+                  <summary className="cursor-pointer text-sm text-muted-foreground">{t("غیرفعال ({toLocaleString})", { toLocaleString: off.length.toLocaleString("fa-IR") })}</summary>
                   <div className="mt-2"><PeerRows users={off} onOpen={setOpenId} /></div>
                 </details>
               ) : null}
@@ -150,10 +150,10 @@ function PeerRows({ users, onOpen }) {
               <span className="block truncate text-xs text-muted-foreground">
                 {seen ? <>{t("آخرین فعالیت")} <span title={exactTime(seen)}>{ago(seen)}</span></> : t("هنوز وصل نشده")}
                 {" · "}
-                {devices ? `${devices.toLocaleString("fa-IR")} دستگاه` : t("بدون دستگاه فعال")}
+                {devices ? t("{toLocaleString} دستگاه", { toLocaleString: devices.toLocaleString("fa-IR") }) : t("بدون دستگاه فعال")}
               </span>
             </span>
-            <ChevronLeft className="size-4 shrink-0 text-muted-foreground" />
+            <ChevronLeft className="rtl-mirror size-4 shrink-0 text-muted-foreground" />
           </button>
         );
       })}
@@ -177,7 +177,7 @@ function Audit() {
               <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs last:border-b-0">
                 <span className="text-muted-foreground">{time(a.at)}</span>
                 <span className="ltr font-mono">{a.tool}</span>
-                <span className="text-muted-foreground">به درخواست {a.caller}</span>
+                <span className="text-muted-foreground">{t("به درخواست {caller}", { caller: a.caller })}</span>
                 <span className={`ms-auto font-medium ${color}`}>{label}</span>
                 {a.chat_id ? <button type="button" onClick={() => navigate(a.chat_id)} className="text-primary hover:underline">{t("گفتگو")}</button> : null}
               </div>
@@ -235,13 +235,13 @@ function PeerDetail({ user, defaults, onChange, onBack }) {
     <>
       <div className="mb-4 flex items-center gap-3">
         <button type="button" onClick={onBack} className="press flex size-8 shrink-0 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت به فهرست")}>
-          <ArrowRight className="size-4" />
+          <ArrowRight className="rtl-mirror size-4" />
         </button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold" dir="auto">{user.label}</h1>
           <p className="truncate text-xs text-muted-foreground">
             {seen ? <>{t("آخرین فعالیت")} <span title={exactTime(seen)}>{ago(seen)}</span></> : t("هنوز وصل نشده")}
-            {" · "}{devices.toLocaleString("fa-IR")} دستگاه · {agents.toLocaleString("fa-IR")} ایجنت باز
+            {t(" · {toLocaleString} دستگاه · {toLocaleString2} ایجنت باز", { toLocaleString: devices.toLocaleString("fa-IR"), toLocaleString2: agents.toLocaleString("fa-IR") })}
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -316,7 +316,7 @@ function PeerWork({ userId, label }) {
       )}
       {calls?.length ? (
         <details className="mt-4 text-xs">
-          <summary className="cursor-pointer text-muted-foreground">جزئیات فنی: آخرین تماس‌های MCP ({calls.length.toLocaleString("fa-IR")})</summary>
+          <summary className="cursor-pointer text-muted-foreground">{t("جزئیات فنی: آخرین تماس‌های MCP ({toLocaleString})", { toLocaleString: calls.length.toLocaleString("fa-IR") })}</summary>
           <div className="mt-2 space-y-1">
             {calls.slice(0, 15).map((c) => (
               <div key={c.id} className="flex items-start gap-2 rounded-lg px-2 py-1.5">
@@ -329,7 +329,7 @@ function PeerWork({ userId, label }) {
               </div>
             ))}
             {calls.every((c) => c.method !== "tools/call") ? (
-              <p className="rounded-lg bg-muted/60 px-2 py-1.5 text-muted-foreground">ایجنتش فقط وصل شده و فهرست ابزار گرفته و هیچ‌وقت ابزاری صدا نزده؛ یعنی مشکل سمت کلاینت اوست، نه {BRAND.name}.</p>
+              <p className="rounded-lg bg-muted/60 px-2 py-1.5 text-muted-foreground">{t("ایجنتش فقط وصل شده و فهرست ابزار گرفته و هیچ‌وقت ابزاری صدا نزده؛ یعنی مشکل سمت کلاینت اوست، نه {name}.", { name: BRAND.name })}</p>
             ) : null}
           </div>
         </details>

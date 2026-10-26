@@ -1002,7 +1002,7 @@ function ToolBody({ toolName, args, result, isError }) {
       return (
         <div className="space-y-1.5">
           <p className="text-sm" dir="auto">
-            {result?.replaced != null ? `${Number(result.replaced).toLocaleString("fa-IR")} جایگزینی در ` : t("ویرایش ")}
+            {result?.replaced != null ? t("{toLocaleString} جایگزینی در ", { toLocaleString: Number(result.replaced).toLocaleString("fa-IR") }) : t("ویرایش ")}
             <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
             {args.all ? t(" (همهٔ موارد)") : ""}
           </p>
@@ -1013,16 +1013,16 @@ function ToolBody({ toolName, args, result, isError }) {
       return (
         <div className="space-y-1.5">
           <p className="text-sm" dir="auto">
-            نوشته شد: <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
-            {result?.written != null ? ` · ${Number(result.written).toLocaleString("fa-IR")} بایت` : ""}
+            {t("نوشته شد:")} <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
+            {result?.written != null ? t(" · {toLocaleString} بایت", { toLocaleString: Number(result.written).toLocaleString("fa-IR") }) : ""}
           </p>
           <Diff text={buildEditDiff({ content: args.content })} />
         </div>
       );
     case "repo_read":
       return result?.binary
-        ? <p className="text-sm text-muted-foreground" dir="auto">فایل باینری است ({Number(result.bytes || 0).toLocaleString("fa-IR")} بایت)؛ متن ندارد.</p>
-        : <Code text={result?.text} footer={`${result?.path || args.path}${result?.shown ? ` · خط ${result.shown[0]} تا ${result.shown[1]} از ${result.lines}` : ""}${result?.cutAtBytes ? t(" · ادامهٔ فایل بریده شد") : ""}`} />;
+        ? <p className="text-sm text-muted-foreground" dir="auto">{t("فایل باینری است ({toLocaleString} بایت)؛ متن ندارد.", { toLocaleString: Number(result.bytes || 0).toLocaleString("fa-IR") })}</p>
+        : <Code text={result?.text} footer={`${result?.path || args.path}${result?.shown ? t(" · خط {v} تا {v2} از {lines}", { v: result.shown[0], v2: result.shown[1], lines: result.lines }) : ""}${result?.cutAtBytes ? t(" · ادامهٔ فایل بریده شد") : ""}`} />;
     case "repo_list":
       return <List items={result?.files} total={result?.total} />;
     case "repo_search":
@@ -1355,7 +1355,7 @@ function Facts({ data, depth = 0 }) {
 function FactValue({ value, depth }) {
   if (Array.isArray(value)) {
     if (!value.length) return <span className="text-muted-foreground">{t("خالی")}</span>;
-    if (value.every(isRecord)) return <Table rows={value} footer={`${value.length.toLocaleString("fa-IR")} مورد`} />;
+    if (value.every(isRecord)) return <Table rows={value} footer={t("{toLocaleString} مورد", { toLocaleString: value.length.toLocaleString("fa-IR") })} />;
     return (
       <ul className="list-disc space-y-0.5 ps-5">
         {value.map((item, i) => <li key={i}><FactValue value={item} depth={depth + 1} /></li>)}

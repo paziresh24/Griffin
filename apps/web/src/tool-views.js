@@ -57,11 +57,11 @@ export function durationText(seconds) {
   if (seconds == null || seconds === "") return "";
   const total = Math.round(Number(seconds));
   if (!Number.isFinite(total) || total < 0) return "";
-  if (total < 60) return `${fa(total)} ثانیه`;
+  if (total < 60) return t("{fa} ثانیه", { fa: fa(total) });
   const minutes = Math.floor(total / 60);
-  if (minutes < 60) return total % 60 ? `${fa(minutes)} دقیقه و ${fa(total % 60)} ثانیه` : `${fa(minutes)} دقیقه`;
+  if (minutes < 60) return total % 60 ? t("{fa} دقیقه و {fa2} ثانیه", { fa: fa(minutes), fa2: fa(total % 60) }) : t("{fa} دقیقه", { fa: fa(minutes) });
   const hours = Math.floor(minutes / 60);
-  return minutes % 60 ? `${fa(hours)} ساعت و ${fa(minutes % 60)} دقیقه` : `${fa(hours)} ساعت`;
+  return minutes % 60 ? t("{fa} ساعت و {fa2} دقیقه", { fa: fa(hours), fa2: fa(minutes % 60) }) : t("{fa} ساعت", { fa: fa(hours) });
 }
 
 // Seconds between two ISO stamps, or null.
@@ -98,7 +98,7 @@ export function shellPlace(toolName, args = {}, result = {}) {
     case "debug_exec": return HOSTS[args.host || result?.host || "sandbox"] || String(args.host || result?.host);
     case "ssh_exec": return [args.user || result?.user, args.host || result?.host].filter(Boolean).join("@") || t("سرور");
     case "kube_exec": return [t("پاد"), args.pod, args.namespace && `(${args.namespace})`, args.cluster && `· ${args.cluster}`].filter(Boolean).join(" ");
-    case "mikrotik_exec": return `میکروتیک ${args.router || result?.router || ""}`.trim();
+    case "mikrotik_exec": return t("میکروتیک {v}", { v: args.router || result?.router || "" }).trim();
     default: return t("ترمینال");
   }
 }
@@ -150,7 +150,7 @@ export function jobsSummary(jobs = []) {
   const order = ["failed", "running", "pending", "manual", "success", "skipped", "canceled", "created"];
   const parts = order.filter((s) => counts[s]).map((s) => `${fa(counts[s])} ${statusInfo(s).label}`);
   for (const [s, n] of Object.entries(counts)) if (!order.includes(s)) parts.push(`${fa(n)} ${statusInfo(s).label}`);
-  return `${fa(jobs.length)} کار: ${parts.join(" · ")}`;
+  return t("{fa} کار: {join}", { fa: fa(jobs.length), join: parts.join(" · ") });
 }
 
 // The total change of a diff result: files, added and removed lines.

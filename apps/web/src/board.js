@@ -94,7 +94,7 @@ export function recentDone(chats, { isUnread = () => false, now = Date.now(), li
 export function stepLine(row) {
   const todo = row?.todo;
   if (todo?.total) return todo.current ? `${fa(todo.done)}/${fa(todo.total)} — ${todo.current}` : `${fa(todo.done)}/${fa(todo.total)}`;
-  if (row?.background) return `منتظر ${fa(row.background)} کار پس‌زمینه؛ با تمام شدنش خودش ادامه می‌دهد`;
+  if (row?.background) return t("منتظر {fa} کار پس‌زمینه؛ با تمام شدنش خودش ادامه می‌دهد", { fa: fa(row.background) });
   if (row?.resumeAt) {
     const clock = new Date(row.resumeAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
     return t("ساعت {time} خودش ادامه می‌دهد", { time: clock });

@@ -6,7 +6,7 @@ import { api } from "../api.js";
 import { BRAND } from "../brand.js";
 import { byDay, describeUpdate, formatSize, formatWhen, offerState } from "../update.js";
 import { onNewVersion, reloadNow } from "../new-version.js";
-import { t } from "../i18n.js";
+import { t, isRtl } from "../i18n.js";
 import { useFlag } from "../ui-prefs.js";
 
 const GLOWED = "griffin.updateGlowed"; // the release whose arrival the sidebar item already lit up
@@ -100,7 +100,7 @@ function UpdateLine({ place }) {
       <button type="button" onClick={reloadNow} className={`press w-[calc(100%-1rem)] text-start text-muted-foreground hover:text-foreground ${lineClass}`} title={t("بارگذاری دوباره؛ پیش‌نویس پیام‌ها می‌ماند")}>
         <RotateCw className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{t("صفحهٔ تازه آماده است")}</span>
-        <ChevronLeft className="size-3.5 shrink-0 opacity-70" />
+        <ChevronLeft className="rtl-mirror size-3.5 shrink-0 opacity-70" />
       </button>
     );
   }
@@ -114,7 +114,7 @@ function UpdateLine({ place }) {
       const out = await api("/api/update", { method: "POST", body: { commit: update.available.commit } });
       startedOn.current = update.current;
       setPressedAt(Date.now());
-      toast("ری‌استارت ثبت شد", { description: describeUpdate(update, "waiting").sub });
+      toast(t("ری‌استارت ثبت شد"), { description: describeUpdate(update, "waiting").sub });
     } catch (error) {
       toast.error(t("آپدیت شروع نشد"), { description: String(error?.message || error) });
     } finally {
@@ -147,22 +147,22 @@ function UpdateLine({ place }) {
         onAnimationEnd={() => setGlow(false)}
       >
         <Dialog.Trigger asChild>
-          <button type="button" className="press flex h-full min-w-0 flex-1 items-center gap-2 text-start hover:text-foreground" title={sub ? `${sub}\nجزئیات و تغییرها` : t("جزئیات و تغییرهای نسخهٔ تازه")}>
+          <button type="button" className="press flex h-full min-w-0 flex-1 items-center gap-2 text-start hover:text-foreground" title={sub ? t("{sub}\nجزئیات و تغییرها", { sub }) : t("جزئیات و تغییرهای نسخهٔ تازه")}>
             {working || state === "downloading" ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : state === "ready" ? <RotateCw className="size-3.5 shrink-0" /> : <Download className="size-3.5 shrink-0" />}
-            <span className="min-w-0 flex-1 truncate">{label}{!working && changes.length ? <span className="opacity-70"> · {changes.length.toLocaleString("fa-IR")} تغییر</span> : null}</span>
+            <span className="min-w-0 flex-1 truncate">{label}{!working && changes.length ? <span className="opacity-70"> {t("· {toLocaleString} تغییر", { toLocaleString: changes.length.toLocaleString("fa-IR") })}</span> : null}</span>
           </button>
         </Dialog.Trigger>
         {working ? null : (
           <button type="button" onClick={press} disabled={busy} className="press flex shrink-0 items-center gap-0.5 font-medium text-foreground/80 hover:text-foreground disabled:opacity-60" title={t("ری‌استارت و اعمال نسخهٔ تازه")}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <>{t("اعمال")}<ChevronLeft className="size-3.5" /></>}
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <>{t("اعمال")}<ChevronLeft className="rtl-mirror size-3.5" /></>}
           </button>
         )}
       </div>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] overlay" />
-        <Dialog.Content dir="rtl" className="pop fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border bg-card p-5 shadow-2xl">
+        <Dialog.Content dir={isRtl ? "rtl" : "ltr"} className="pop fixed left-1/2 top-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border bg-card p-5 shadow-2xl">
           <div className="mb-3 flex items-center">
-            <Dialog.Title className="font-semibold">نسخهٔ تازهٔ {BRAND.name}{changes.length ? <span className="font-normal text-muted-foreground"> · {changes.length.toLocaleString("fa-IR")} تغییر</span> : null}</Dialog.Title>
+            <Dialog.Title className="font-semibold">{t("نسخهٔ تازهٔ {name}", { name: BRAND.name })}{changes.length ? <span className="font-normal text-muted-foreground"> {t("· {toLocaleString} تغییر", { toLocaleString: changes.length.toLocaleString("fa-IR") })}</span> : null}</Dialog.Title>
             <Dialog.Close className="press ms-auto rounded-full p-1.5 hover:bg-muted" aria-label={t("بستن")}><X className="size-4" /></Dialog.Close>
           </div>
           {/* What changes comes first, in plain lines by day; versions and sizes are folded away at the
@@ -200,7 +200,7 @@ function UpdateLine({ place }) {
               <dd dir="ltr" className="text-end font-mono">{update.available.commit}</dd>
               {update.available.at ? (<><dt>{t("منتشر شده")}</dt><dd className="text-end">{formatWhen(update.available.at)}</dd></>) : null}
               {size ? (<><dt>{t("حجم دانلود")}</dt><dd className="text-end">{size}</dd></>) : null}
-              {update.live ? (<><dt>{t("همین الان")}</dt><dd className="text-end">{update.live.working ? `${update.live.working.toLocaleString("fa-IR")} گفتگو در حال کار` : update.live.active ? `${update.live.active.toLocaleString("fa-IR")} گفتگو باز (منتظر پاسخ)` : t("هیچ گفتگویی کار نمی‌کند")}</dd></>) : null}
+              {update.live ? (<><dt>{t("همین الان")}</dt><dd className="text-end">{update.live.working ? t("{toLocaleString} گفتگو در حال کار", { toLocaleString: update.live.working.toLocaleString("fa-IR") }) : update.live.active ? t("{toLocaleString} گفتگو باز (منتظر پاسخ)", { toLocaleString: update.live.active.toLocaleString("fa-IR") }) : t("هیچ گفتگویی کار نمی‌کند")}</dd></>) : null}
               {update.checkedAt ? (<><dt>{t("آخرین بررسی")}</dt><dd className="text-end">{formatWhen(update.checkedAt)}</dd></>) : null}
             </dl>
           </details>

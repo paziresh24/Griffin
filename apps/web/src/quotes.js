@@ -106,7 +106,7 @@ function pageStorage() {
 export const quoteStore = createQuoteStore(pageStorage());
 
 // «به چت جدید»: the line naming the chat the quote came from (App.jsx newChatContextNote).
-const ORIGIN_LINE = /^این بخش از گفتگوی (?:«([^»\n]*)» )?\(شناسهٔ ([\w-]+)\) است؛[^\n]*$/;
+const ORIGIN_LINE = /^این بخش از گفتگوی (?:«([^»\n]*)» )?\(شناسهٔ ([\w-]+)\) است؛[^\n]*$/; // i18n-ignore
 
 /** A sent message read back for its bubble: [{ type: "quote", text } | { type: "text", text } |
  *  { type: "origin", chatId, title }] in order — what withQuotes (and a pasted «> » blockquote, a

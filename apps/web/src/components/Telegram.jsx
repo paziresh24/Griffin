@@ -287,7 +287,7 @@ function OffRow({ person: p, onNavigate }) {
                 {p.username ? <p className="ltr truncate text-xs text-muted-foreground">@{p.username}</p> : null}
               </div>
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{BRAND.name} خودش جوابشان را نمی‌دهد؛ گفتگوهای شما هنوز می‌توانند برایشان پیام بفرستند.</p>
+            <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{t("{name} خودش جوابشان را نمی‌دهد؛ گفتگوهای شما هنوز می‌توانند برایشان پیام بفرستند.", { name: BRAND.name })}</p>
             <ul className="scrollbar-thin my-2 max-h-72 space-y-1.5 overflow-y-auto">
               {messages == null ? <li className="text-xs text-muted-foreground">{t("در حال خواندن…")}</li> : null}
               {messages?.length === 0 ? <li className="text-xs text-muted-foreground">{t("پیامی نیست.")}</li> : null}
@@ -307,7 +307,7 @@ function OffRow({ person: p, onNavigate }) {
                       }}
                       className="mt-0.5 inline-block text-primary hover:underline"
                     >
-                      باز کردن همان گفتگو
+                      {t("باز کردن همان گفتگو")}
                     </a>
                   ) : null}
                 </li>
@@ -727,7 +727,7 @@ export function NoteRow({ note }) {
   const switchedOn = note.kind === "unwatched" && person?.watch;
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 px-4 text-center text-xs leading-5 text-muted-foreground">
-      <span className="min-w-0 whitespace-pre-wrap break-words" dir="auto">{switchedOn ? `✅ ${named.name || t("کسی")} پیام داد — پاسخ خودکار به او روشن شد` : noteLine(named)}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words" dir="auto">{switchedOn ? t("✅ {v} پیام داد — پاسخ خودکار به او روشن شد", { v: named.name || t("کسی") }) : noteLine(named)}</span>
       {note.kind === "unwatched" && note.text ? <span className="w-full truncate opacity-80" dir="auto">«{note.text}»</span> : null}
       {note.kind === "unwatched" && !switchedOn ? <span className="w-full opacity-80">{watchHint()}</span> : null}
       {note.kind === "unwatched" && note.personId && !switchedOn ? (
@@ -754,7 +754,7 @@ function ProposalNote({ note }) {
     <div className="g-box rounded-xl border bg-card px-3 py-2 text-xs leading-5">
       <span className="flex items-start gap-2">
         <span className="min-w-0 flex-1 whitespace-pre-wrap break-words" dir="auto">
-          📥 پیام {note.name || t("همکار")} {note.mine ? t("دربارهٔ همین کار بود؛ چون اینجا مشغول بودید") : t("موضوع دیگری بود؛")} به «{note.title || t("انشعاب")}» رفت{note.text ? ` — ${note.text}` : ""}
+          {t("📥 پیام {v} {v2} به «{v3}» رفت{v4}", { v: note.name || t("همکار"), v2: note.mine ? t("دربارهٔ همین کار بود؛ چون اینجا مشغول بودید") : t("موضوع دیگری بود؛"), v3: note.title || t("انشعاب"), v4: note.text ? ` — ${note.text}` : "" })}
         </span>
         <span className="shrink-0 tabular-nums text-muted-foreground">{clock(note.at)}</span>
       </span>

@@ -31,7 +31,7 @@ import { useListChoice, useSectionOrder } from "../list-prefs.js";
 import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 import { NavLauncher, NavSlot, PaletteKey, PinnedRow, SectionMenuFoot, SectionMenuItems, navStyleOf, useSections } from "./SectionNav.jsx";
-import { t } from "../i18n.js";
+import { t, isRtl } from "../i18n.js";
 
 const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));
 
@@ -111,7 +111,7 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
               startChat(null);
             }}
             className="press shrink-0 rounded-xl"
-            title={`${BRAND.name} — فضای کار`}
+            title={t("{name} — فضای کار", { name: BRAND.name })}
             aria-label={t("فضای کار")}
           >
             <img src={iconUrl()} alt={BRAND.name} className="size-10 rounded-xl" />
@@ -408,7 +408,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
               className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
             >
               <Trash2 className="size-3.5" />
-              {`حذف دائم همه بایگانی (${archivedHere.length})`}
+              {t("حذف دائم همه بایگانی ({length})", { length: archivedHere.length })}
             </button>
           ) : null}
           {archivedHere.length > 0 || showArchived ? (
@@ -588,7 +588,7 @@ function UserBar({ onNavigate, k: karsara = false }) {
           </button>
         </Popover.Trigger>
         <Popover.Portal>
-          <Popover.Content side="top" align="start" sideOffset={8} collisionPadding={8} className="g-menu pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-lg" dir="rtl">
+          <Popover.Content side="top" align="start" sideOffset={8} collisionPadding={8} className="g-menu pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-lg" dir={isRtl ? "rtl" : "ltr"}>
             {/* «جای بخش‌ها: منوی کاربر»: the sections first (SectionNav.jsx); nothing otherwise. */}
             <SectionMenuItems onPick={() => { setMenu(false); onNavigate?.(); }} rowClass="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" />
             {PROFILE_ITEMS.map(({ id, icon: Icon, label, rule }) => (
@@ -705,7 +705,7 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
           {rest.length ? <div className="my-1 h-px bg-border" /> : null}
           <button type="button" onClick={openSettings} className="g-menu-row flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
             <Store className="size-3.5 shrink-0" />
-            بازارچه: بخش‌ها و منو…
+            {t("بازارچه: بخش‌ها و منو…")}
           </button>
         </Popover.Content>
       </Popover.Portal>
@@ -871,7 +871,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
           <li>
             <button type="button" onClick={onMore} className="flex w-full items-center gap-1.5 rounded-md px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
               <ChevronDown className={`size-3 transition-transform ${more ? "rotate-180" : ""}`} />
-              {more ? t("کمتر") : `بیشتر (${(chats.length - shown.length).toLocaleString("fa-IR")})`}
+              {more ? t("کمتر") : t("بیشتر ({toLocaleString})", { toLocaleString: (chats.length - shown.length).toLocaleString("fa-IR") })}
             </button>
           </li>
         ) : null}
@@ -1058,13 +1058,13 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
 const RUNS_ON = [["host", t("روی سرور، با دسترسی کامل شما"), Server], ["container", t("داخل کانتینر، بدون کلیدهای شما"), Box]];
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
 function deleteForGood(chat) {
-  if (!window.confirm(`گفتگوی «${chat.title}» برای همیشه حذف شود؟ برگشتی ندارد.`)) return;
+  if (!window.confirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(() => toast.success(t("حذف شد")), failed);
 }
 function deleteAllArchived(ids) {
-  if (!window.confirm(`همه ${ids.length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.`)) return;
+  if (!window.confirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } }).then(
-    (r) => toast.success(r.skipped?.length ? `${r.deleted.length} حذف شد؛ ${r.skipped.length} در حال کار بود` : `${r.deleted.length} حذف شد`),
+    (r) => toast.success(r.skipped?.length ? t("{length} حذف شد؛ {length2} در حال کار بود", { length: r.deleted.length, length2: r.skipped.length }) : t("{length} حذف شد", { length: r.deleted.length })),
     failed,
   );
 }
@@ -1087,7 +1087,7 @@ function InboxRow({ row, active, onOpen }) {
     >
       <Inbox className="size-4 shrink-0 text-sky-500" />
       <span className="ltr min-w-0 flex-1 truncate text-start">{row.title}</span>
-      {row.badge ? <span className="shrink-0 rounded-full bg-signal px-1.5 py-0.5 text-[11px] font-medium leading-none text-signal-foreground" aria-label={`${row.badge} در صف`}>{row.badge}</span> : null}
+      {row.badge ? <span className="shrink-0 rounded-full bg-signal px-1.5 py-0.5 text-[11px] font-medium leading-none text-signal-foreground" aria-label={t("{badge} در صف", { badge: row.badge })}>{row.badge}</span> : null}
     </a>
       {/* The same inbox by sender, as Telegram lists it (InboxPeople.jsx). */}
       <a href={peoplePath()} title={t("به تفکیک فرستنده")} aria-label={t("به تفکیک فرستنده")} className="press flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground">

@@ -61,7 +61,7 @@ export function chatState(chat, isUnread) {
   else if (unread) id = "unread";
   const label =
     id === "background"
-      ? `${unread ? t("پیام تازه دارد و ") : ""}منتظر ${background > 1 ? `${background.toLocaleString("fa-IR")} کار پس‌زمینه` : t("یک کار پس‌زمینه")} است`
+      ? t("{v}منتظر {v2} است", { v: unread ? t("پیام تازه دارد و ") : "", v2: background > 1 ? t("{toLocaleString} کار پس‌زمینه", { toLocaleString: background.toLocaleString("fa-IR") }) : t("یک کار پس‌زمینه") })
       : STATES[id];
   return { id, label, unread, background };
 }
@@ -154,7 +154,7 @@ export function groupChats(list, groupBy, { isUnread, now = new Date(), timeZone
     for (const c of list) if (c.jobId) names.set(`job:${c.jobId}`, c.jobName || t("بی‌نام"));
     return bucket(list, (c) => (c.jobId ? `job:${c.jobId}` : "owner"))
       .sort((a, b) => Number(a.key !== "owner") - Number(b.key !== "owner"))
-      .map((s) => ({ key: `origin:${s.key}`, title: s.key === "owner" ? t("گفتگوهای خودم") : `جاب: ${names.get(s.key)}`, chats: s.chats }));
+      .map((s) => ({ key: `origin:${s.key}`, title: s.key === "owner" ? t("گفتگوهای خودم") : t("جاب: {get}", { get: names.get(s.key) }), chats: s.chats }));
   }
   return null; // "none": the rest stays one list
 }
@@ -174,7 +174,7 @@ export function layoutChats(list, groupBy, { isUnread, groups = [], agentLabel, 
   // background must be impossible to miss.
   const lead = !groupBy || groupBy === "none" ? list.filter((c) => c.runStatus === "running") : [];
   const others = lead.length ? list.filter((c) => c.runStatus !== "running") : list;
-  if (lead.length) sections.push({ key: "running", title: lead.length > 1 ? `در حال اجرا (${lead.length.toLocaleString("fa-IR")})` : t("در حال اجرا"), chats: lead, counted: true });
+  if (lead.length) sections.push({ key: "running", title: lead.length > 1 ? t("در حال اجرا ({toLocaleString})", { toLocaleString: lead.length.toLocaleString("fa-IR") }) : t("در حال اجرا"), chats: lead, counted: true });
   const pinned = others.filter((c) => c.pinned);
   const unpinned = others.filter((c) => !c.pinned);
   const rest = unpinned.filter((c) => !known.has(c.groupId));

@@ -3,13 +3,13 @@ import { Dialog, Switch } from "radix-ui";
 import { AlertTriangle, ArrowLeftRight, Check, ChevronDown, Loader2, Power, PowerOff, Search, SlidersHorizontal, Wrench, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
-import { marketView, moduleSettings, moduleTags, planLines, settingsCount } from "../modules.js";
+import { marketView, moduleSettings, moduleTags, planLines, settingsCount, translateManifest } from "../modules.js";
 import { reloadModules } from "../module-hooks.js";
 import { readSetting, writeSetting } from "../brand.js";
 import { FLAGS, NAV_ITEMS, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
 import { MODULE_ICONS } from "./ModulePage.jsx";
 import { ConfigFields, useConfigData } from "./Config.jsx";
-import { t } from "../i18n.js";
+import { t, isRtl } from "../i18n.js";
 
 // Settings → «بازارچه» (owner 2026-10-20: «طراحی و دسته‌بندی خوبی نداره» → «اسمش بشه بازارچه؛
 // تنظیماتش یکپارچه بشه»): the modules on shelves by what they are for, a card each, and modules that
@@ -43,7 +43,7 @@ export function ModulesSection() {
 
   const load = useCallback(async () => {
     try {
-      setModules((await api("/api/modules/market")).modules);
+      setModules(translateManifest((await api("/api/modules/market")).modules));
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -64,7 +64,7 @@ export function ModulesSection() {
     try {
       const { plan } = await api(`/api/modules/${mod.id}/plan`, { method: "POST", body: { enable } });
       if (plan.blocked) toast.error(plan.blocked);
-      else if (plan.empty) toast("چیزی عوض نمی‌شود");
+      else if (plan.empty) toast(t("چیزی عوض نمی‌شود"));
       else setPending({ mod, enable, plan });
     } catch (e) {
       toast.error(e.message);
@@ -79,7 +79,7 @@ export function ModulesSection() {
     try {
       const out = await api(`/api/modules/${mod.id}/switch`, { method: "POST", body: { enable, confirm: plan.risky } });
       const failed = Object.entries(out.failed || {});
-      if (failed.length) toast.error(`روشن نشد: ${failed.map(([id, why]) => `${title(id)} (${why})`).join(t("؛ "))}`);
+      if (failed.length) toast.error(t("روشن نشد: {join}", { join: failed.map(([id, why]) => `${title(id)} (${why})`).join(t("؛ ")) }));
       else toast.success(t("انجام شد"));
       setPending(null);
       await load();
@@ -163,7 +163,7 @@ function Problems({ mod, onFix }) {
       {mod.error ? <p className="flex items-start gap-1.5 text-xs text-bad"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{mod.error}</p> : null}
       {mod.drift ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-warn">
-          <AlertTriangle className="size-3.5" />تنظیم با این ماژول نمی‌خواند: {mod.drift}
+          <AlertTriangle className="size-3.5" />{t("تنظیم با این ماژول نمی‌خواند: {drift}", { drift: mod.drift })}
           <button type="button" onClick={onFix} className="rounded-md border px-2 py-0.5 text-foreground hover:bg-muted">{t("درست کن")}</button>
         </div>
       ) : null}
@@ -176,11 +176,11 @@ function ModuleCard({ mod, busy, title, onSwitch, onFix, settingsOf, config, onO
   const settings = settingsOf(mod);
   const tags = moduleTags(mod);
   const details = [
-    mod.requires.length ? `نیاز دارد به: ${mod.requires.map(title).join(t("، "))}` : "",
-    mod.requiredBy?.length ? `این‌ها به آن نیاز دارند: ${mod.requiredBy.map(title).join(t("، "))}` : "",
-    mod.conflicts.length ? `با این‌ها جور نیست: ${mod.conflicts.map(title).join(t("، "))}` : "",
+    mod.requires.length ? t("نیاز دارد به: {join}", { join: mod.requires.map(title).join(t("، ")) }) : "",
+    mod.requiredBy?.length ? t("این‌ها به آن نیاز دارند: {join}", { join: mod.requiredBy.map(title).join(t("، ")) }) : "",
+    mod.conflicts.length ? t("با این‌ها جور نیست: {join}", { join: mod.conflicts.map(title).join(t("، ")) }) : "",
     mod.preset ? t("در این نصب پیش‌فرض روشن است") : "",
-    mod.version ? `نسخهٔ ${mod.version}` : "",
+    mod.version ? t("نسخهٔ {version}", { version: mod.version }) : "",
   ].filter(Boolean);
   return (
     <div className={`rounded-xl border bg-card p-3.5 ${mod.error ? "border-bad/40" : mod.drift ? "border-warn/40" : ""}`}>
@@ -193,7 +193,7 @@ function ModuleCard({ mod, busy, title, onSwitch, onFix, settingsOf, config, onO
             {!mod.builtin ? <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{t("افزونه")}</span> : null}
           </div>
           {mod.description ? <p className="text-xs leading-5 text-muted-foreground">{mod.description}</p> : null}
-          {mod.maintainer ? <p className="text-[11px] leading-5 text-muted-foreground">ساخته و پشتیبانی: {mod.maintainer}</p> : null}
+          {mod.maintainer ? <p className="text-[11px] leading-5 text-muted-foreground">{t("ساخته و پشتیبانی: {maintainer}", { maintainer: mod.maintainer })}</p> : null}
         </div>
         <Toggle checked={mod.enabled} disabled={busy || (!mod.version && Boolean(mod.error))} busy={busy} label={mod.title} onChange={onSwitch} />
       </div>
@@ -207,7 +207,7 @@ function ModuleCard({ mod, busy, title, onSwitch, onFix, settingsOf, config, onO
           onOwnSaved={onOwnSaved}
           head={details.length ? (
             <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-              جزئیات<ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
+              {t("جزئیات")}<ChevronDown className={`size-3 transition-transform ${open ? "rotate-180" : ""}`} />
             </button>
           ) : null}
           under={open ? <ul className="space-y-0.5 text-[11px] text-muted-foreground">{details.map((d) => <li key={d}>{d}</li>)}</ul> : null}
@@ -254,7 +254,7 @@ function ModuleSettings({ mod, settings, config, onOwnSaved, head = null, under 
           {settings.nav.length || settings.flags.length ? (
             <div className="space-y-2">
               {settings.nav.map((p) => (
-                <SettingSwitch key={p.id} label={`«${p.title}» در منوی کناری`} hint={hidden.includes(p.id) ? (flags.navMore ? t("زیر «بیشتر»") : t("پنهان")) : t("در منو")} on={!hidden.includes(p.id)} onChange={(v) => toggleNav(p.id, v)} />
+                <SettingSwitch key={p.id} label={t("«{title}» در منوی کناری", { title: p.title })} hint={hidden.includes(p.id) ? (flags.navMore ? t("زیر «بیشتر»") : t("پنهان")) : t("در منو")} on={!hidden.includes(p.id)} onChange={(v) => toggleNav(p.id, v)} />
               ))}
               {settings.flags.map((f) => (
                 <SettingSwitch key={f.key} label={f.label} hint={f.hint} on={Boolean(flags[f.key])} onChange={(v) => setUiPrefs({ flags: { [f.key]: v } })} />
@@ -360,7 +360,7 @@ function PlanDialog({ pending, busy, onCancel, onConfirm }) {
     <Dialog.Root open={Boolean(pending)} onOpenChange={(open) => !open && !busy && onCancel()}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] overlay" />
-        <Dialog.Content dir="rtl" className="pop fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-card p-5 shadow-2xl">
+        <Dialog.Content dir={isRtl ? "rtl" : "ltr"} className="pop fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-card p-5 shadow-2xl">
           {pending ? (
             <>
               <div className="mb-3 flex items-start gap-2">
@@ -382,7 +382,7 @@ function PlanDialog({ pending, busy, onCancel, onConfirm }) {
               {pending.plan.risky ? <p className="mt-3 flex items-start gap-1.5 rounded-lg bg-warn/10 p-2 text-xs text-warn"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />{t("این تغییر به چیزی زنده دست می‌زند؛ با «انجام بده» تأیید می‌کنید.")}</p> : null}
               <div className="mt-4 flex gap-2">
                 <button type="button" disabled={busy} onClick={onConfirm} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-60">
-                  {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}انجام بده
+                  {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}{t("انجام بده")}
                 </button>
                 <button type="button" disabled={busy} onClick={onCancel} className="rounded-lg border px-3 py-1.5 text-sm hover:bg-muted">{t("بیخیال")}</button>
               </div>

@@ -42,7 +42,7 @@ export function McpServersSection() {
   useEffect(() => { for (const s of data?.servers || []) if (s.type !== "stdio") check(s.name); }, [data]);
 
   const remove = async (name) => {
-    if (!window.confirm(`سرور «${name}» پاک شود؟`)) return;
+    if (!window.confirm(t("سرور «{name}» پاک شود؟", { name }))) return;
     try {
       await api(`/api/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" });
       load();
@@ -66,8 +66,7 @@ export function McpServersSection() {
   return (
     <div className="space-y-6">
       <p className={`rounded-xl border px-3 py-2 text-xs leading-6 ${data.claudeCode ? "text-muted-foreground" : "border-warn/40 bg-warn/10"}`}>
-        این سرورها فقط وقتی «Claude Code کامل» (CLAUDE_CODE) در پیکربندی روشن است، در گفتگوهای خود شما با موتور Claude بار می‌شوند؛ گفتگوی همکاران و جاب‌ها هرگز.
-        {data.claudeCode ? "" : t(" الان خاموش است.")} تغییر از گفتگوی بعدی اثر می‌کند.
+        {t("این سرورها فقط وقتی «Claude Code کامل» (CLAUDE_CODE) در پیکربندی روشن است، در گفتگوهای خود شما با موتور Claude بار می‌شوند؛ گفتگوی همکاران و جاب‌ها هرگز.{v} تغییر از گفتگوی بعدی اثر می‌کند.", { v: data.claudeCode ? "" : t(" الان خاموش است.") })}
       </p>
       {form ? <McpForm initial={form} onDone={() => { setForm(null); load(); }} /> : null}
       <McpLive />
@@ -143,7 +142,7 @@ function McpForm({ initial, onDone }) {
   };
   return (
     <div className="space-y-3 rounded-2xl border bg-card p-4">
-      <p className="text-sm font-medium">{initial.previous ? `ویرایش «${initial.previous}»` : t("سرور MCP تازه")}</p>
+      <p className="text-sm font-medium">{initial.previous ? t("ویرایش «{previous}»", { previous: initial.previous }) : t("سرور MCP تازه")}</p>
       <input className={field} dir="ltr" value={name} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. github)" />
       <div className="flex gap-1.5">
         {["stdio", "http", "sse"].map((t) => (
@@ -160,10 +159,10 @@ function McpForm({ initial, onDone }) {
       )}
       <textarea className={`${field} min-h-16 font-mono`} dir="ltr" value={pairs} onChange={(e) => setPairs(e.target.value)} placeholder={stdio ? "env, one per line: KEY=value" : "headers, one per line: Authorization=Bearer …"} autoComplete="off" spellCheck={false} />
       {initial.hint ? <p className="text-xs leading-6 text-muted-foreground">{initial.hint}</p> : null}
-      <p className="text-xs text-muted-foreground">مقدارهای {stdio ? "env" : t("هدر")} پنهان نشان داده می‌شوند؛ اگر دست نخورند همان مقدار قبلی می‌ماند.</p>
+      <p className="text-xs text-muted-foreground">{t("مقدارهای {v} پنهان نشان داده می‌شوند؛ اگر دست نخورند همان مقدار قبلی می‌ماند.", { v: stdio ? "env" : t("هدر") })}</p>
       <div className="flex gap-2">
         <button type="button" onClick={save} disabled={busy || keyMissing || !name.trim() || !(stdio ? command.trim() : url.trim())} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
-          {busy ? <Loader2 className="size-4 animate-spin" /> : null} ذخیره
+          {busy ? <Loader2 className="size-4 animate-spin" /> : null} {t("ذخیره")}
         </button>
         <button type="button" onClick={onDone} className="press rounded-lg border px-3 py-2 text-sm">{t("انصراف")}</button>
       </div>
@@ -214,7 +213,7 @@ function McpLive() {
             subtitle={
               <>
                 <span className={TONE[status.tone]}>{status.label}</span>
-                {server.tools != null ? ` · ${Number(server.tools).toLocaleString("fa-IR")} ابزار` : ""}
+                {server.tools != null ? t(" · {toLocaleString} ابزار", { toLocaleString: Number(server.tools).toLocaleString("fa-IR") }) : ""}
                 {server.error ? <span className="block break-words text-bad" dir="ltr">{server.error}</span> : null}
               </>
             }
@@ -231,7 +230,7 @@ function McpLive() {
                   onCheckedChange={(value) => act(server.name, { action: "toggle", enabled: value })}
                   dir="ltr"
                   className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-                  aria-label={`روشن یا خاموش کردن ${server.name}`}
+                  aria-label={t("روشن یا خاموش کردن {name}", { name: server.name })}
                 >
                   <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
                 </Switch.Root>

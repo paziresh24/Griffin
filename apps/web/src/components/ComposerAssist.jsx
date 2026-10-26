@@ -281,7 +281,7 @@ export function ComposerAssist({ inputRef, next = null }) {
                     </span>
                     <span className="min-w-0 flex-1 truncate" dir="auto">
                       <span className="font-medium text-foreground">{a.name}</span>
-                      {kind === "network" && a.owner ? <span className="text-muted-foreground"> · ایجنتِ {a.owner}</span> : null}
+                      {kind === "network" && a.owner ? <span className="text-muted-foreground"> {t("· ایجنتِ {owner}", { owner: a.owner })}</span> : null}
                       {kind === "agent" && a.domain ? <span className="text-muted-foreground"> · {a.domain}</span> : null}
                       {kind === "chat" && a.runStatus === "running" ? <span className="text-muted-foreground"> {t("· در حال کار")}</span> : null}
                     </span>

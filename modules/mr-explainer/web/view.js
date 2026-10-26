@@ -1,3 +1,4 @@
+import { t } from "../../../apps/web/src/i18n.js";
 // The MR board's words and order, kept apart from React so they are tested on their own (board.jsx
 // draws what this returns). The rows come from server.mjs (categorize.mjs put each on a shelf).
 
@@ -6,20 +7,20 @@ const fa = (n) => Number(n).toLocaleString("fa-IR");
 // The shelves the board shows for open MRs, in the order the eye should go: what needs a hand first,
 // then what can be merged, then what is only waiting.
 export const SHELVES = [
-  { key: "attention", label: "نیاز به رسیدگی", tone: "bad", hint: "پایپ‌لاین قرمز، تداخل یا عقب‌ماندن از شاخهٔ مقصد" },
-  { key: "ready", label: "آمادهٔ مرج", tone: "ok", hint: "مانعی ندارد؛ فقط تصمیم مرج مانده" },
-  { key: "running", label: "در حال بررسی", tone: "info", hint: "پایپ‌لاین هنوز تمام نشده" },
-  { key: "waiting", label: "منتظر بازبینی", tone: "warn", hint: "تأیید یا بحثی مانده" },
-  { key: "draft", label: "پیش‌نویس", tone: "muted", hint: "نویسنده هنوز تمامش نکرده" },
-  { key: "merged", label: "مرج‌شده", tone: "muted", hint: "" },
-  { key: "closed", label: "بسته‌شده", tone: "muted", hint: "" },
+  { key: "attention", label: t("نیاز به رسیدگی"), tone: "bad", hint: t("پایپ‌لاین قرمز، تداخل یا عقب‌ماندن از شاخهٔ مقصد") },
+  { key: "ready", label: t("آمادهٔ مرج"), tone: "ok", hint: t("مانعی ندارد؛ فقط تصمیم مرج مانده") },
+  { key: "running", label: t("در حال بررسی"), tone: "info", hint: t("پایپ‌لاین هنوز تمام نشده") },
+  { key: "waiting", label: t("منتظر بازبینی"), tone: "warn", hint: t("تأیید یا بحثی مانده") },
+  { key: "draft", label: t("پیش‌نویس"), tone: "muted", hint: t("نویسنده هنوز تمامش نکرده") },
+  { key: "merged", label: t("مرج‌شده"), tone: "muted", hint: "" },
+  { key: "closed", label: t("بسته‌شده"), tone: "muted", hint: "" },
 ];
 const KNOWN = new Set(SHELVES.map((s) => s.key));
 
 export const STATES = [
-  { value: "opened", label: "باز" },
-  { value: "merged", label: "مرج‌شده" },
-  { value: "closed", label: "بسته‌شده" },
+  { value: "opened", label: t("باز") },
+  { value: "merged", label: t("مرج‌شده") },
+  { value: "closed", label: t("بسته‌شده") },
 ];
 
 /** A project path's short name (the last part), the full path stays in the tooltip. */
@@ -32,11 +33,11 @@ export function pipelineSign(status, label = "") {
   return { tone, text: label || status };
 }
 
-const list = (value) => (Array.isArray(value) ? value : String(value || "").split("،")).map((s) => String(s).trim()).filter(Boolean);
+const list = (value) => (Array.isArray(value) ? value : String(value || "").split("،")).map((s) => String(s).trim()).filter(Boolean); // i18n-ignore
 
 // A conventional-commit title («feat(scope): …») says what kind of change it is; the board says that
 // in words and keeps the rest as the title.
-const KINDS = { feat: "قابلیت تازه", fix: "رفع اشکال", perf: "سرعت", refactor: "بازنویسی", docs: "متن راهنما", chore: "نگهداری", ci: "CI", test: "تست", build: "ساخت", style: "ظاهر", revert: "برگرداندن" };
+const KINDS = { feat: t("قابلیت تازه"), fix: t("رفع اشکال"), perf: t("سرعت"), refactor: t("بازنویسی"), docs: t("متن راهنما"), chore: t("نگهداری"), ci: "CI", test: t("تست"), build: t("ساخت"), style: t("ظاهر"), revert: t("برگرداندن") };
 
 /** «Draft: feat(ui)!: x» -> { kind: "قابلیت تازه", scope: "ui", text: "x" }; a plain title stays as it is. */
 export function splitTitle(title) {
@@ -51,18 +52,18 @@ export function card(row) {
   const shelf = KNOWN.has(row?.category) ? row.category : "waiting";
   const facts = [];
   const files = Number(row?.changesCount);
-  if (Number.isFinite(files) && files > 0) facts.push(`${fa(files)} فایل`);
-  if (row?.comments > 0) facts.push(`${fa(row.comments)} نظر`);
+  if (Number.isFinite(files) && files > 0) facts.push(t("{fa} فایل", { fa: fa(files) }));
+  if (row?.comments > 0) facts.push(t("{fa} نظر", { fa: fa(row.comments) }));
   const reviewers = list(row?.reviewers);
-  if (reviewers.length) facts.push(`بازبین: ${reviewers.join("، ")}`);
-  const t = splitTitle(row?.title);
+  if (reviewers.length) facts.push(t("بازبین: {join}", { join: reviewers.join(t("، ")) }));
+  const tk = splitTitle(row?.title);
   return {
     id: row.id,
-    kind: t.kind,
-    scope: t.scope,
+    kind: tk.kind,
+    scope: tk.scope,
     shelf,
     tone: SHELVES.find((s) => s.key === shelf).tone,
-    title: t.text,
+    title: tk.text,
     ref: `!${row.iid}`,
     project: projectName(row.project),
     projectPath: row.project || "",
@@ -109,8 +110,8 @@ export function board(rows, { search = "", author = "", shelf = "" } = {}) {
 export function headline(counts, total) {
   if (!total) return "";
   const parts = [];
-  if (counts.attention) parts.push(`${fa(counts.attention)} مورد به رسیدگی نیاز دارد`);
-  if (counts.ready) parts.push(`${fa(counts.ready)} مورد آمادهٔ مرج است`);
-  if (!parts.length) return `${fa(total)} MR؛ چیزی منتظر شما نیست.`;
-  return `${parts.join(" و ")}.`;
+  if (counts.attention) parts.push(t("{fa} مورد به رسیدگی نیاز دارد", { fa: fa(counts.attention) }));
+  if (counts.ready) parts.push(t("{fa} مورد آمادهٔ مرج است", { fa: fa(counts.ready) }));
+  if (!parts.length) return t("{fa} MR؛ چیزی منتظر شما نیست.", { fa: fa(total) });
+  return `${parts.join(t(" و "))}.`;
 }

@@ -9,20 +9,20 @@ export function peopleRoute(hash) {
   return match ? { peerId: match[1] || null } : null;
 }
 // A suggestion made from the inbox is titled «تلگرام: …»; under a Telegram message that is noise.
-const bare = (title) => String(title || "").replace(/^تلگرام:\s*/, "");
+const bare = (title) => String(title || "").replace(/^تلگرام:\s*/, ""); // i18n-ignore
 /** The first letter of a name for its avatar: a whole character, an emoji included. */
 export const initial = (name) => Array.from(String(name || "").trim())[0] || "?";
 
 const SUGGESTED = {
-  open: (title) => `پیشنهاد گفتگوی «${title}» (منتظر شما)`,
-  started: (title) => `گفتگوی «${title}» شروع شد`,
-  dismissed: (title) => `پیشنهاد «${title}» رد شد`,
+  open: (title) => t("پیشنهاد گفتگوی «{title}» (منتظر شما)", { title }),
+  started: (title) => t("گفتگوی «{title}» شروع شد", { title }),
+  dismissed: (title) => t("پیشنهاد «{title}» رد شد", { title }),
 };
 
 /** item: one entry of GET /api/inbox/people/:peerId. Returns [{kind, label, chatId?}] to show under it. */
 export function itemOutcome(item) {
   const out = [
-    ...(item.routed || []).map((r) => ({ kind: "routed", label: r.title ? `رفت به گفتگوی «${r.title}»` : t("رفت به یک گفتگوی حذف‌شده"), chatId: r.title ? r.chatId : null })),
+    ...(item.routed || []).map((r) => ({ kind: "routed", label: r.title ? t("رفت به گفتگوی «{title}»", { title: r.title }) : t("رفت به یک گفتگوی حذف‌شده"), chatId: r.title ? r.chatId : null })),
     ...(item.suggested || []).map((s) => ({ kind: "suggested", label: (SUGGESTED[s.status] || SUGGESTED.open)(bare(s.title)), chatId: s.chatId || null })),
   ];
   if (out.length) return out;

@@ -49,7 +49,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
     } catch (e) {
       // The QR waited more than ten minutes: a fresh one, scanned again.
       if (e.message === "setup expired") {
-        toast("کد QR منقضی شد؛ کد تازه را دوباره اسکن کنید");
+        toast(t("کد QR منقضی شد؛ کد تازه را دوباره اسکن کنید"));
         return start();
       }
       toast.error(e.message === "invalid code" ? t("کد درست نیست یا قبلاً استفاده شده") : e.message);
@@ -80,7 +80,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
     run(async () => {
       if (step === "off") {
         await api("/api/auth/2fa/disable", { method: "POST", body: { code: code.trim() } });
-        toast("ورود دومرحله‌ای خاموش شد");
+        toast(t("ورود دومرحله‌ای خاموش شد"));
         setStep(null);
       } else {
         const r = await api("/api/auth/2fa/recovery", { method: "POST", body: { code: code.trim() } });
@@ -114,7 +114,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
         title={on ? t("روشن است") : t("خاموش است — فقط توکن کافی است")}
         subtitle={
           on
-            ? `ورود از شبکه: توکن + کد اپ Authenticator · ${Number(state.recoveryLeft || 0).toLocaleString("fa-IR")} کد بازیابی مانده`
+            ? t("ورود از شبکه: توکن + کد اپ Authenticator · {toLocaleString} کد بازیابی مانده", { toLocaleString: Number(state.recoveryLeft || 0).toLocaleString("fa-IR") })
             : t("اگر توکن لو برود هر کسی وارد می‌شود؛ روشنش کنید")
         }
         onClick={on || step ? undefined : start}
@@ -122,7 +122,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
         {step === "setup" && setup ? (
           <div className="mx-4 mb-3 space-y-3 rounded-xl border bg-muted/40 p-3">
             <p className="text-xs leading-5 text-muted-foreground">
-              با اپ Authenticator گوشی (Google Authenticator، Microsoft Authenticator، 1Password، Bitwarden…) این کد QR را اسکن کنید، بعد کد ۶ رقمی‌ای را که اپ نشان می‌دهد بزنید.
+              {t("با اپ Authenticator گوشی (Google Authenticator، Microsoft Authenticator، 1Password، Bitwarden…) این کد QR را اسکن کنید، بعد کد ۶ رقمی‌ای را که اپ نشان می‌دهد بزنید.")}
             </p>
             <div className="mx-auto w-44 overflow-hidden rounded-lg bg-white p-1" dangerouslySetInnerHTML={{ __html: setup.svg }} />
             <div className="flex items-center gap-2">
@@ -136,7 +136,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
         {step === "codes" && codes.length ? (
           <div className="mx-4 mb-3 space-y-2 rounded-xl border bg-muted/40 p-3">
             <p className="text-xs leading-5 text-muted-foreground">
-              کدهای بازیابی فقط همین یک بار نشان داده می‌شوند. هر کدام یک بار به‌جای کد اپ کار می‌کند (اگر گوشی گم شد). جای امن نگهشان دارید، مثلاً Infisical — نه در چت.
+              {t("کدهای بازیابی فقط همین یک بار نشان داده می‌شوند. هر کدام یک بار به‌جای کد اپ کار می‌کند (اگر گوشی گم شد). جای امن نگهشان دارید، مثلاً Infisical — نه در چت.")}
             </p>
             <div className="grid grid-cols-2 gap-1 font-mono text-xs" dir="ltr">
               {codes.map((c) => (
@@ -146,7 +146,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
             <div className="flex items-center justify-between">
               <CopyButton text={codes.join("\n")} />
               <button type="button" onClick={() => (required ? onDone?.() : setStep(null))} className="press rounded-full border px-3 py-1 text-xs">
-                ذخیره کردم
+                {t("ذخیره کردم")}
               </button>
             </div>
           </div>
@@ -205,7 +205,7 @@ function PasskeysSection({ twoStep, onChange }) {
       load();
       onChange?.();
     } catch (e) {
-      if (e?.name === "NotAllowedError" || e?.name === "AbortError") toast("لغو شد");
+      if (e?.name === "NotAllowedError" || e?.name === "AbortError") toast(t("لغو شد"));
       else if (e?.name === "InvalidStateError") toast.error(t("این دستگاه قبلاً passkey دارد"));
       else toast.error(e.message === "invalid code" ? t("کد درست نیست یا قبلاً استفاده شده") : e.message === "invalid token" ? t("توکن درست نیست") : e.message);
     } finally {
@@ -213,7 +213,7 @@ function PasskeysSection({ twoStep, onChange }) {
     }
   };
   const remove = async (item) => {
-    if (!window.confirm(`passkey «${item.name}» پاک شود؟ آن دستگاه دیگر بدون توکن وارد نمی‌شود.`)) return;
+    if (!window.confirm(t("passkey «{name}» پاک شود؟ آن دستگاه دیگر بدون توکن وارد نمی‌شود.", { name: item.name }))) return;
     try {
       await api(`/api/auth/passkeys/${encodeURIComponent(item.id)}`, { method: "DELETE" });
       load();
@@ -232,7 +232,7 @@ function PasskeysSection({ twoStep, onChange }) {
           icon={Fingerprint}
           tint="bg-primary/10 text-primary"
           title={item.name}
-          subtitle={`${item.rpID} · ${item.lastUsedAt ? `آخرین ورود ${new Date(item.lastUsedAt).toLocaleDateString("fa-IR")}` : t("هنوز استفاده نشده")}`}
+          subtitle={`${item.rpID} · ${item.lastUsedAt ? t("آخرین ورود {toLocaleDateString}", { toLocaleDateString: new Date(item.lastUsedAt).toLocaleDateString("fa-IR") }) : t("هنوز استفاده نشده")}`}
           trailing={
             <button type="button" onClick={() => remove(item)} className="press flex size-8 items-center justify-center rounded-md text-bad hover:bg-bad/10" aria-label={t("پاک کردن")}>
               <Trash2 className="size-4" />

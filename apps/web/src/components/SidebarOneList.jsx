@@ -252,7 +252,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
         {!showArchived ? (
           <button type="button" onClick={() => newGroup()} className="kc-list-row mt-1 w-full text-xs !text-[var(--kc-muted)]">
             <FolderPlus className="size-3.5" />
-            گروه جدید
+            {t("گروه جدید")}
           </button>
         ) : null}
         <ListStatus loading={loading && !chats.length} failed={failed} onRetry={onRetry} empty={!prepared.own.length} k>
@@ -261,7 +261,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
         {showArchived && list.length > 0 ? (
           <button type="button" onClick={() => deleteAllArchived(list.map((c) => c.id))} className="kc-list-row mt-2 w-full text-xs !text-[var(--kc-muted)]">
             <Trash2 className="size-3.5" />
-            {`حذف دائم همه بایگانی (${list.length})`}
+            {t("حذف دائم همه بایگانی ({length})", { length: list.length })}
           </button>
         ) : null}
         {archived.length > 0 || showArchived ? (
@@ -271,7 +271,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
             className="kc-list-row mt-2 w-full text-xs !text-[var(--kc-muted)]"
           >
             <Archive className="size-3.5" />
-            {showArchived ? t("بازگشت به گفتگوها") : `بایگانی (${archived.length})`}
+            {showArchived ? t("بازگشت به گفتگوها") : t("بایگانی ({length})", { length: archived.length })}
           </button>
         ) : null}
       </nav>
@@ -303,7 +303,7 @@ function SortMenu({ sort, groupBy, reverse, onSort, onGroupBy, onReverse }) {
           <MenuPick label={t("ترتیب معکوس")} selected={reverse} onClick={() => onReverse(!reverse)} />
           <div className="my-1 border-t" />
           <p className="flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">
-            <FolderTree className="size-3" /> گروه‌بندی
+            <FolderTree className="size-3" /> {t("گروه‌بندی")}
           </p>
           {GROUPS.map((item) => (
             <MenuPick key={item.id} label={item.label} selected={groupBy === item.id} onClick={() => { onGroupBy(item.id); setOpen(false); }} />
@@ -503,7 +503,7 @@ function PeerChats({ chats, activeId, onOpen, filtered = false }) {
         className="kc-list-row w-full justify-start ps-8 text-xs !text-[var(--kc-muted)]"
       >
         <ChevronDown className={`size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
-        <span>{`گفتگوهای ایجنت‌های همکاران (${chats.length.toLocaleString("fa-IR")})`}</span>
+        <span>{t("گفتگوهای ایجنت‌های همکاران ({toLocaleString})", { toLocaleString: chats.length.toLocaleString("fa-IR") })}</span>
         {pending && !open ? <span className="kc-unread" title={t("گفتگویی منتظر دیدن است")} /> : null}
       </button>
       {/* A filter forces the group open, so only then it keeps its own short scroll: own chats stay in reach.
@@ -540,7 +540,7 @@ function InboxRow({ row, active, onOpen }) {
         <Inbox className="size-4 shrink-0 text-sky-500" />
         <span className="ltr min-w-0 flex-1 truncate text-start">{row.title}</span>
         {row.badge ? (
-          <span className="ltr shrink-0 rounded-full bg-signal px-1.5 py-0.5 text-[11px] font-medium leading-none text-signal-foreground" aria-label={`${row.badge} در صف`}>
+          <span className="ltr shrink-0 rounded-full bg-signal px-1.5 py-0.5 text-[11px] font-medium leading-none text-signal-foreground" aria-label={t("{badge} در صف", { badge: row.badge })}>
             {row.badge}
           </span>
         ) : null}
@@ -556,7 +556,7 @@ function InboxRow({ row, active, onOpen }) {
 // The owner's groups: created from the list or from a chat's «انتقال به گروه», renamed and deleted
 // from the group's heading. Deleting a group never touches its chats; they become ungrouped.
 async function newGroup() {
-  const name = window.prompt("نام گروه جدید")?.trim();
+  const name = window.prompt(t("نام گروه جدید"))?.trim();
   if (!name) return null;
   const { group } = await api("/api/groups", { method: "POST", body: { name } }).catch(groupFailed);
   return group || null;
@@ -564,17 +564,17 @@ async function newGroup() {
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
 const deleteFailed = (error) => window.alert(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("حذف انجام نشد"));
 function deleteForGood(chat) {
-  if (!window.confirm(`گفتگوی «${chat.title}» برای همیشه حذف شود؟ برگشتی ندارد.`)) return;
+  if (!window.confirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).catch(deleteFailed);
 }
 function deleteAllArchived(ids) {
-  if (!window.confirm(`همه ${ids.length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.`)) return;
+  if (!window.confirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } })
-    .then((r) => { if (r.skipped?.length) window.alert(`${r.skipped.length} گفتگو در حال کار بود و حذف نشد.`); })
+    .then((r) => { if (r.skipped?.length) window.alert(t("{length} گفتگو در حال کار بود و حذف نشد.", { length: r.skipped.length })); })
     .catch(deleteFailed);
 }
 const groupFailed = () => {
-  window.alert("کار روی گروه انجام نشد؛ دوباره امتحان کنید.");
+  window.alert(t("کار روی گروه انجام نشد؛ دوباره امتحان کنید."));
   return {};
 }
 
@@ -614,12 +614,12 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   const shown = folded ? chats.filter((c) => c.id === activeId) : chats;
   const rename = () => {
     setMenu(false);
-    const name = window.prompt("نام گروه", group.name)?.trim();
+    const name = window.prompt(t("نام گروه"), group.name)?.trim();
     if (name && name !== group.name) api(`/api/groups/${group.id}`, { method: "PATCH", body: { name } }).catch(groupFailed);
   };
   const remove = () => {
     setMenu(false);
-    if (window.confirm(`گروه «${group.name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.`)) {
+    if (window.confirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name }))) {
       api(`/api/groups/${group.id}`, { method: "DELETE" }).catch(groupFailed);
     }
   };
@@ -642,8 +642,8 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
               onClick={() => onNewChat(group.id)}
               data-no-drag=""
               className="kc-icon-btn !h-7 !w-7 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
-              title={`گفتگوی جدید در «${group.name}»`}
-              aria-label={`گفتگوی جدید در گروه ${group.name}`}
+              title={t("گفتگوی جدید در «{name}»", { name: group.name })}
+              aria-label={t("گفتگوی جدید در گروه {name}", { name: group.name })}
             >
               <Plus className="!size-3.5" />
             </button>
@@ -653,7 +653,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             onClick={() => setMenu(!menu)}
           data-no-drag=""
             className="kc-icon-btn !h-7 !w-7 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
-            aria-label={`گزینه‌های گروه ${group.name}`}
+            aria-label={t("گزینه‌های گروه {name}", { name: group.name })}
           >
             <MoreHorizontal className="!size-3.5" />
           </button>
@@ -690,7 +690,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
 // (owner 2026-10-18). Always visible, small: a hover-only button is lost on a phone.
 export function RepoNewChat({ repo, onNewChat, className }) {
   return (
-    <button type="button" onClick={() => onNewChat(null, { repo })} data-no-drag="" className={className} title={`گفتگوی جدید در مخزن ${repo}`} aria-label={`گفتگوی جدید در مخزن ${repo}`}>
+    <button type="button" onClick={() => onNewChat(null, { repo })} data-no-drag="" className={className} title={t("گفتگوی جدید در مخزن {repo}", { repo })} aria-label={t("گفتگوی جدید در مخزن {repo}", { repo })}>
       <Plus className="!size-3.5" />
     </button>
   );
@@ -722,7 +722,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
   const patch = (body) => api(`/api/chats/${chat.id}`, { method: "PATCH", body }).catch(() => {});
   const rename = () => {
     setMenu(false);
-    const title = window.prompt("عنوان جدید", chat.title);
+    const title = window.prompt(t("عنوان جدید"), chat.title);
     if (title?.trim()) patch({ title });
   };
   return (
@@ -760,8 +760,8 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
             <span className="kc-state-wrap" title={reminderLabel(chat.reminderAt)}><BellRing className="kc-state" aria-label={reminderLabel(chat.reminderAt)} /></span>
           ) : null}
           {chat.jobId ? (
-            <span className="kc-state-wrap kc-origin" title={`از جاب: ${chat.jobName || t("بی‌نام")}`}>
-              <AlarmClock className="kc-state" aria-label={`از جاب ${chat.jobName || ""}`} />
+            <span className="kc-state-wrap kc-origin" title={t("از جاب: {v}", { v: chat.jobName || t("بی‌نام") })}>
+              <AlarmClock className="kc-state" aria-label={t("از جاب {v}", { v: chat.jobName || "" })} />
             </span>
           ) : null}
           <span
@@ -868,7 +868,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
                 window.open(`#/c/${chat.id}`, "_blank", "noopener");
               }}
             >
-              باز کردن در تب جدید
+              {t("باز کردن در تب جدید")}
             </ChatMenuItem>
             {isPeerChat(chat) ? null : (
               <ChatMenuItem icon={FolderInput} onClick={() => setMoving(true)}>{t("انتقال به گروه")}</ChatMenuItem>
@@ -888,12 +888,12 @@ function ago(stamp) {
   const minutes = Math.max(0, Math.round((Date.now() - ms) / 60000));
   const fa = (n) => n.toLocaleString("fa-IR");
   if (minutes < 1) return t("الان");
-  if (minutes < 60) return `${fa(minutes)} دقیقه`;
+  if (minutes < 60) return t("{fa} دقیقه", { fa: fa(minutes) });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${fa(hours)} ساعت`;
+  if (hours < 24) return t("{fa} ساعت", { fa: fa(hours) });
   const days = Math.round(hours / 24);
-  if (days < 30) return `${fa(days)} روز`;
-  return `${fa(Math.round(days / 30))} ماه`;
+  if (days < 30) return t("{fa} روز", { fa: fa(days) });
+  return t("{fa} ماه", { fa: fa(Math.round(days / 30)) });
 }
 
 function chatAgents(chat) {

@@ -10,7 +10,7 @@ export function ListStatus({ loading = false, failed = false, onRetry = null, em
       <div className="px-2 py-3" role="status" aria-live="polite">
         <p className="mb-3 flex items-center justify-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
-          در حال بارگذاری گفتگوها…
+          {t("در حال بارگذاری گفتگوها…")}
         </p>
         <div className="space-y-2" aria-hidden>
           {[78, 56, 68, 44, 62].map((width, i) => (
@@ -31,7 +31,7 @@ export function ListStatus({ loading = false, failed = false, onRetry = null, em
         {onRetry ? (
           <button type="button" onClick={onRetry} className="mt-2 inline-flex items-center gap-1 rounded-lg px-3 py-1 text-xs text-primary hover:bg-muted">
             <RotateCcw className="size-3" />
-            تلاش دوباره
+            {t("تلاش دوباره")}
           </button>
         ) : null}
       </div>

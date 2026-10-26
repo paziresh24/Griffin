@@ -67,7 +67,7 @@ export function NetworkSection() {
         <Share2 className="size-4 text-muted-foreground" />
         <h2 className="font-semibold">{t("دستیارهای همکاران")}</h2>
         <button type="button" onClick={() => refresh(true)} className="press ms-auto flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted">
-          <RefreshCw className="size-3.5" /> به‌روز کردن
+          <RefreshCw className="size-3.5" /> {t("به‌روز کردن")}
         </button>
       </div>
       {!data ? (
@@ -86,13 +86,13 @@ export function NetworkSection() {
                   <button type="button" onClick={() => setOpen(open === a.id ? null : a.id)} className="press flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-start hover:bg-muted/50" title={a.url}>
                     <AgentMark agent={a} className="size-8" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{a.name}{a.owner ? <span className="font-normal text-muted-foreground"> · دستیار {a.owner}</span> : null}</span>
-                      <span className="block truncate text-xs text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}{a.lastSeen ? <span title={exactTime(a.lastSeen)}> · آخرین تماس {clockLabel(a.lastSeen)}</span> : null}</span>
+                      <span className="block truncate text-sm font-medium">{a.name}{a.owner ? <span className="font-normal text-muted-foreground"> {t("· دستیار {owner}", { owner: a.owner })}</span> : null}</span>
+                      <span className="block truncate text-xs text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}{a.lastSeen ? <span title={exactTime(a.lastSeen)}> {t("· آخرین تماس {clockLabel}", { clockLabel: clockLabel(a.lastSeen) })}</span> : null}</span>
                     </span>
                     <PresenceChip status={a.status} queued={a.queued} />
                   </button>
                   <button type="button" onClick={() => callInChat(mentionHandle(a, agents))} className="press me-2 inline-flex shrink-0 items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted" title={t("گفتگوی تازه با این دستیار")}>
-                    <AtSign className="size-3.5" /> صدا زدن در گفتگو
+                    <AtSign className="size-3.5" /> {t("صدا زدن در گفتگو")}
                   </button>
                   </div>
                   {open === a.id ? <Conversation agent={a} /> : null}
@@ -102,11 +102,11 @@ export function NetworkSection() {
           ) : (
             <p className="rounded-xl border px-3 py-2 text-sm text-muted-foreground">{t("هنوز ایجنتی پیدا نشده. آدرس یکی از همکاران را بده؛ بقیه از راه او پیدا می‌شوند.")}</p>
           )}
-          {waiting.length ? <p className="text-xs text-muted-foreground">در انتظار وصل شدن: {waiting.map((a) => a.url.replace(/^https:\/\//, "")).join(t("، "))}</p> : null}
+          {waiting.length ? <p className="text-xs text-muted-foreground">{t("در انتظار وصل شدن: {join}", { join: waiting.map((a) => a.url.replace(/^https:\/\//, "")).join(t("، ")) })}</p> : null}
           <div className="flex gap-2">
             <input className="w-full rounded-lg border bg-background px-3 py-2 text-sm" dir="ltr" value={adding} onChange={(e) => setAdding(e.target.value)} placeholder="https://agent.example.com" />
             <button type="button" onClick={connect} disabled={busy || !adding.trim()} className="press inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm disabled:opacity-60">
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} افزودن
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} {t("افزودن")}
             </button>
           </div>
         </>
@@ -133,12 +133,12 @@ const PRESENCE = {
 function PresenceChip({ status, queued = 0 }) {
   const p = PRESENCE[status?.state];
   if (!p) return null;
-  const tip = [status.since ? `از ${exactTime(status.since)}` : null, status.commit ? `نسخه ${String(status.commit).slice(0, 7)}` : null, status.canThink === false ? t("موتور فعلاً سقف خورده") : null].filter(Boolean).join(" · ");
+  const tip = [status.since ? t("از {exactTime}", { exactTime: exactTime(status.since) }) : null, status.commit ? t("نسخه {slice}", { slice: String(status.commit).slice(0, 7) }) : null, status.canThink === false ? t("موتور فعلاً سقف خورده") : null].filter(Boolean).join(" · ");
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground" title={tip}>
       <span className={`size-2 rounded-full ${p.dot}`} />
       {p.label}
-      {queued ? <span className="rounded bg-muted px-1">{queued} در صف</span> : null}
+      {queued ? <span className="rounded bg-muted px-1">{t("{queued} در صف", { queued })}</span> : null}
     </span>
   );
 }
@@ -189,11 +189,11 @@ function Conversation({ agent }) {
             {m.text}
           </div>
         ))}
-        {busy ? <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" /> {agent.name} دارد جواب می‌دهد…</p> : null}
+        {busy ? <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" /> {t("{name} دارد جواب می‌دهد…", { name: agent.name })}</p> : null}
       </div>
       <div className="flex gap-2">
         <textarea className="min-h-10 w-full resize-y rounded-lg border bg-background px-3 py-2 text-sm" dir="auto" rows={1} value={text} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={`پیام به ${agent.name}…`} />
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={t("پیام به {name}…", { name: agent.name })} />
         {pending.current && ["working", "submitted", "auth-required"].includes(pending.current.state) ? (
           <button type="button" disabled={busy} onClick={() => run({ taskId: pending.current.taskId, answer: "" }, msgs)} className="press shrink-0 rounded-lg border px-3 text-sm">{t("ادامه")}</button>
         ) : null}

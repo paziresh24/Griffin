@@ -499,7 +499,7 @@ export default function App() {
                     <button type="button" onClick={() => setDrawer(true)} className={karsara ? "kc-icon-btn relative md:hidden" : "relative rounded-lg p-2 hover:bg-muted md:hidden"} aria-label={t("منو")}>
                       <Menu className={karsara ? undefined : "size-5"} />
                       {badgeText(menuBadge) ? (
-                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-signal px-1 text-[10px] leading-4 text-signal-foreground" aria-label={`${menuBadge} مورد منتظر شما`}>{badgeText(menuBadge)}</span>
+                        <span className="g-badge absolute end-0.5 top-0.5 rounded-full bg-signal px-1 text-[10px] leading-4 text-signal-foreground" aria-label={t("{menuBadge} مورد منتظر شما", { menuBadge })}>{badgeText(menuBadge)}</span>
                       ) : null}
                     </button>
                     {listHidden ? (
@@ -529,7 +529,7 @@ export default function App() {
                     <h1 className="min-w-0 flex-1 truncate text-sm font-medium" dir={textDir(chat?.title || t("گفتگوی جدید"))}>{chat?.title || t("گفتگوی جدید")}</h1>
                     {chat?.mother && chat.personId && telegramView ? (
                       <button type="button" onClick={() => { window.location.hash = `/telegram/${chat.personId}`; }} className="press shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
-                        گفتگوی تلگرام
+                        {t("گفتگوی تلگرام")}
                       </button>
                     ) : null}
                     {chat?.mother && chat.personId ? <WatchPill personId={chat.personId} /> : null}
@@ -640,7 +640,7 @@ export default function App() {
       )}
 
       <SectionsPalette chats={chats} onNewChat={() => newChatIn(null)} />
-      <Toaster position="top-center" theme={theme} dir="rtl" closeButton toastOptions={{ className: "font-sans" }} />
+      <Toaster position="top-center" theme={theme} dir={isRtl ? "rtl" : "ltr"} closeButton toastOptions={{ className: "font-sans" }} />
       <ServerDown />
       <FeedbackDialogs />
       {/* The sidebar foot has «ارسال بازخورد»; this corner one only while the list is hidden. */}
@@ -705,8 +705,8 @@ function SubagentsBar({ chat }) {
       <Popover.Trigger asChild>
         <button type="button" className="g-box press mb-2 flex items-center gap-2 rounded-xl border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground data-[state=open]:text-foreground">
           <Network className="size-3.5 text-primary" />
-          <span>{count} زیرایجنت</span>
-          {running ? <span className="flex items-center gap-1 text-signal"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{running} در حال کار</span> : null}
+          <span>{t("{count} زیرایجنت", { count })}</span>
+          {running ? <span className="flex items-center gap-1 text-signal"><span className="agent-dots" aria-hidden><i /><i /><i /></span>{t("{running} در حال کار", { running })}</span> : null}
           <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
       </Popover.Trigger>

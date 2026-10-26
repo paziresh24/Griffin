@@ -31,17 +31,17 @@ export function cleanLabel({ track = "", aria = "", title = "", text = "", place
   const cut = (v) =>
     String(v || "")
       .split(/[:«(\n—]|\s-\s/)[0]
-      .replace(/[0-9۰-۹٠-٩]+/g, "#")
+      .replace(/[0-9۰-۹٠-٩]+/g, "#") // i18n-ignore
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 40);
-  if (/^#\/c\//.test(href)) return "گفتگو در فهرست";
+  if (/^#\/c\//.test(href)) return t("گفتگو در فهرست");
   const named = cut(aria) || cut(title);
   if (named) return named;
   if (tag === "input" || tag === "textarea" || tag === "select") return `${tag}${type ? `:${type}` : ""}${placeholder ? ` ${cut(placeholder)}` : ""}`;
   const word = String(text || "").replace(/\s+/g, " ").trim();
   if (word && word.length <= MAX_TEXT) return cut(word);
-  if (href) return `لینک ${routeOf(href.startsWith("#") ? href : "")}`;
+  if (href) return t("لینک {routeOf}", { routeOf: routeOf(href.startsWith("#") ? href : "") });
   return "";
 }
 

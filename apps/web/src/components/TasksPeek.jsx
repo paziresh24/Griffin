@@ -79,26 +79,26 @@ export function TasksPeek({ chatId }) {
   };
 
   const stop = async (task) => {
-    if (!window.confirm(`«${taskTitle(task)}» متوقف شود؟`)) return;
+    if (!window.confirm(t("«{taskTitle}» متوقف شود؟", { taskTitle: taskTitle(task) }))) return;
     setBusy(task.id);
     try {
       await api(`/api/chats/${chatId}/tasks/${encodeURIComponent(task.id)}/stop`, { method: "POST" });
       setGone((prev) => new Set(prev).add(task.id));
     } catch (error) {
-      toast.error(`متوقف نشد: ${error?.message || error}`);
+      toast.error(t("متوقف نشد: {v}", { v: error?.message || error }));
     } finally {
       setBusy(null);
     }
   };
 
   const stopAgent = async (child) => {
-    if (!window.confirm(`«${child.title}» متوقف شود؟`)) return;
+    if (!window.confirm(t("«{title}» متوقف شود؟", { title: child.title }))) return;
     setBusy(child.id);
     try {
       await api(`/api/chats/${child.id}/cancel`, { method: "POST" });
       setGone((prev) => new Set(prev).add(child.id));
     } catch (error) {
-      toast.error(`متوقف نشد: ${error?.message || error}`);
+      toast.error(t("متوقف نشد: {v}", { v: error?.message || error }));
     } finally {
       setBusy(null);
     }
@@ -149,7 +149,7 @@ export function TasksPeek({ chatId }) {
                           <ChevronDown className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${opened ? "rotate-180" : ""}`} />
                         </button>
                         <button type="button" className={`g-text-btn ${plainBtn} flex shrink-0 items-center gap-1`} disabled={busy != null} onClick={() => stop(task)}>
-                          <Square className="size-3" /> توقف
+                          <Square className="size-3" /> {t("توقف")}
                         </button>
                       </div>
                       {opened ? (
@@ -157,8 +157,7 @@ export function TasksPeek({ chatId }) {
                           {task.detail ? <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 font-mono text-[11px] leading-5 text-foreground" dir="ltr">{task.detail}</pre> : null}
                           <p>
                             <span dir="ltr" className="font-mono">{task.id}</span>
-                            {task.subagentType ? ` · ${task.subagentType}` : ""}
-                            {" — "}خروجی بعد از پایان کار خوانده می‌شود (Claude Code تا آن موقع فایل خروجی را اعلام نمی‌کند).
+                            {t("{v} — خروجی بعد از پایان کار خوانده می‌شود (Claude Code تا آن موقع فایل خروجی را اعلام نمی‌کند).", { v: task.subagentType ? ` · ${task.subagentType}` : "" })}
                           </p>
                         </div>
                       ) : null}
@@ -173,10 +172,10 @@ export function TasksPeek({ chatId }) {
                       <p className="text-muted-foreground">{t("زیرایجنت گریفین · در حال کار")}</p>
                     </div>
                     <button type="button" className={`g-text-btn ${plainBtn} flex shrink-0 items-center gap-1`} onClick={() => navigate(child.id)}>
-                      <ExternalLink className="size-3" /> دیدن چت
+                      <ExternalLink className="size-3" /> {t("دیدن چت")}
                     </button>
                     <button type="button" className={`g-text-btn ${plainBtn} flex shrink-0 items-center gap-1`} disabled={busy != null} onClick={() => stopAgent(child)}>
-                      <Square className="size-3" /> توقف
+                      <Square className="size-3" /> {t("توقف")}
                     </button>
                   </li>
                 ))}
@@ -189,7 +188,7 @@ export function TasksPeek({ chatId }) {
                         <p className="text-muted-foreground">{taskKind(task.type)} · {endedLabel(task.status)}</p>
                       </div>
                       <button type="button" className={`g-text-btn ${plainBtn} flex shrink-0 items-center gap-1`} aria-expanded={output?.id === task.id} onClick={() => showOutput(task)}>
-                        <FileText className="size-3" /> خروجی
+                        <FileText className="size-3" /> {t("خروجی")}
                       </button>
                     </div>
                     {output?.id === task.id ? (

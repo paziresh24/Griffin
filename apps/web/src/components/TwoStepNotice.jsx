@@ -42,7 +42,7 @@ export function TwoStepNotice() {
         </span>
       </button>
       <button type="button" onClick={later} className="press m-1.5 shrink-0 self-end rounded-lg border px-2 py-1 text-xs text-muted-foreground hover:bg-muted" title={t("یک هفتهٔ دیگر دوباره یادآوری می‌شود")}>
-        بعداً
+        {t("بعداً")}
       </button>
     </div>
   );

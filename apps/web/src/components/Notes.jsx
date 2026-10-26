@@ -152,7 +152,7 @@ export function SendLater({ text, chatId = null, options = {}, disabled = false,
       await notesStore.create(noteBody({ text, chatId, atMs, options }));
       setOpen(false);
       onSaved?.();
-      toast.success(atMs ? `یادداشت ذخیره شد؛ ${clockLabel(atMs)} اجرا می‌شود` : t("یادداشت ذخیره شد؛ در «یادآورها» منتظر می‌ماند"));
+      toast.success(atMs ? t("یادداشت ذخیره شد؛ {clockLabel} اجرا می‌شود", { clockLabel: clockLabel(atMs) }) : t("یادداشت ذخیره شد؛ در «یادآورها» منتظر می‌ماند"));
     } catch (error) {
       toast.error(noteError(error));
     } finally {

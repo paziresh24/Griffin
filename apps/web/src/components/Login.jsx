@@ -197,7 +197,7 @@ function Login({ onDone }) {
             disabled={busy}
             className="press flex w-full items-center justify-center gap-2 rounded-lg border py-2 text-sm font-medium hover:bg-muted/50 disabled:opacity-40"
           >
-            <Fingerprint className="size-4" /> ورود با passkey (Windows Hello، اثر انگشت…)
+            <Fingerprint className="size-4" /> {t("ورود با passkey (Windows Hello، اثر انگشت…)")}
           </button>
         ) : null}
       </form>

@@ -7,8 +7,8 @@ export function filesLine(files) {
   if (!files) return t("در حال بررسی فایل‌ها…");
   if (!files.canRewind) return t("فایلی برای برگرداندن ثبت نشده است.");
   if (!files.changed) return t("از این پیام به بعد فایلی با ابزار ویرایش عوض نشده است.");
-  const lines = [files.insertions ? `${fa(files.insertions)} خط اضافه` : "", files.deletions ? `${fa(files.deletions)} خط کم` : ""].filter(Boolean).join(t("، "));
-  return `${fa(files.changed)} فایل به حالت قبل از این پیام برمی‌گردد${lines ? ` (${lines})` : ""}.`;
+  const lines = [files.insertions ? t("{fa} خط اضافه", { fa: fa(files.insertions) }) : "", files.deletions ? t("{fa} خط کم", { fa: fa(files.deletions) }) : ""].filter(Boolean).join(t("، "));
+  return t("{fa} فایل به حالت قبل از این پیام برمی‌گردد{v}.", { fa: fa(files.changed), v: lines ? ` (${lines})` : "" });
 }
 
 // Which of the three choices make sense for this preview.

@@ -184,7 +184,7 @@ export function UsageRing({ chatId, running }) {
   const windows = planWindows(usage);
   const worst = worstWindow(windows);
   const engines = [...new Set(windows.map((w) => w.engine))];
-  const title = [hasContext ? `پنجرهٔ زمینه ${fa(percent)}٪` : t("پنجرهٔ زمینه"), worst ? `${worst.label} ${fa(worst.pct)}٪` : null].filter(Boolean).join(" · ");
+  const title = [hasContext ? t("پنجرهٔ زمینه {fa}٪", { fa: fa(percent) }) : t("پنجرهٔ زمینه"), worst ? t("{label} {fa}٪", { label: worst.label, fa: fa(worst.pct) }) : null].filter(Boolean).join(" · ");
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange}>
       <Popover.Trigger asChild>
@@ -193,7 +193,7 @@ export function UsageRing({ chatId, running }) {
             <circle cx="8" cy="8" r="6" />
             <circle cx="8" cy="8" r="6" data-fill="" strokeDasharray={`${(percent / 100) * circumference} ${circumference}`} />
           </svg>
-          {hasContext ? <span className="text-[11px] tabular-nums">{fa(percent)}٪</span> : null}
+          {hasContext ? <span className="text-[11px] tabular-nums">{t("{fa}٪", { fa: fa(percent) })}</span> : null}
           {worst && level(worst.pct) !== "ok" ? <span className="kc-usage-dot" data-level={level(worst.pct)} aria-hidden /> : null}
         </button>
       </Popover.Trigger>
@@ -210,7 +210,7 @@ export function UsageRing({ chatId, running }) {
           <section>
             <div className="kc-usage-head">
               <span className="kc-usage-title">{t("پنجرهٔ زمینه")}</span>
-              {hasContext ? <span className="kc-usage-big ltr">{fa(context.percent)}٪</span> : null}
+              {hasContext ? <span className="kc-usage-big ltr">{t("{fa}٪", { fa: fa(context.percent) })}</span> : null}
             </div>
             {!chatId ? (
               <div className="kc-note">{t("پس از اولین پیام نمایش داده می‌شود")}</div>
@@ -242,7 +242,7 @@ export function UsageRing({ chatId, running }) {
                       <div key={i} className="kc-usage-limit">
                         <div className="kc-usage-head">
                           <span>{w.label}</span>
-                          <span className="ltr kc-usage-num">{w.pct == null ? "—" : `${fa(w.pct)}٪`}</span>
+                          <span className="ltr kc-usage-num">{w.pct == null ? "—" : t("{fa}٪", { fa: fa(w.pct) })}</span>
                         </div>
                         <Bar percent={w.pct} />
                         {resetIn(w.resetAt) ? <div className="kc-note">{t("تازه می‌شود تا {time}", { time: resetIn(w.resetAt) })}</div> : null}

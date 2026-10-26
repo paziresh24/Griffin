@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowRight, CheckCircle2, CircleDashed, Clock, ExternalLink, GitMerge, Loader2, MessageSquareText, PencilLine, RefreshCw, Search, Sparkles, X, XCircle } from "lucide-react";
 import { chatExists, clockLabel, exactTime, memory, navigate, runAction, textDir, toast, useRows } from "@griffin/module-kit";
 import { STATES, SHELVES, board, headline, projectName } from "./view.js";
+import { t } from "../../../apps/web/src/i18n.js";
 
 // The merge requests as a board (owner 2026-10-19: «فرمش خوب نیست… قابل درک نیست»): what wants a
 // hand first, a card per MR that says in words where it stands, one button that explains it. The
@@ -80,18 +81,17 @@ export default function MrBoard({ mod, page, onBack }) {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 p-4 md:p-6">
       <header className="flex items-start gap-2">
-        <button type="button" onClick={onBack} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden" aria-label="بازگشت"><ArrowRight className="size-4" /></button>
+        <button type="button" onClick={onBack} className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:hidden" aria-label={t("بازگشت")}><ArrowRight className="rtl-mirror size-4" /></button>
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold">مرج ریکوئست‌ها</h1>
+          <h1 className="text-lg font-semibold">{t("مرج ریکوئست‌ها")}</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {state === "opened" && rows?.length ? headline(view.counts, view.all) + " " : ""}
-            روی «توضیح بده» بزنید تا به زبان ساده بگوید چه چیزی عوض می‌شود و آمادهٔ مرج هست یا نه.
+            {t("{v}روی «توضیح بده» بزنید تا به زبان ساده بگوید چه چیزی عوض می‌شود و آمادهٔ مرج هست یا نه.", { v: state === "opened" && rows?.length ? headline(view.counts, view.all) + " " : "" })}
           </p>
         </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border bg-card p-0.5" role="tablist" aria-label="وضعیت">
+        <div className="inline-flex rounded-lg border bg-card p-0.5" role="tablist" aria-label={t("وضعیت")}>
           {STATES.map((s) => (
             <button key={s.value} type="button" role="tab" aria-selected={state === s.value} onClick={() => setState(s.value)} className={`rounded-md px-3 py-1 text-sm ${state === s.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{s.label}</button>
           ))}
@@ -99,9 +99,9 @@ export default function MrBoard({ mod, page, onBack }) {
         <ProjectPicker value={project} defaultProject={defaultProject} recent={recent} onChange={chooseProject} />
         <label className="relative ms-auto min-w-0 flex-1 sm:max-w-64">
           <Search className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="جستجو: عنوان، شماره، شاخه…" aria-label="جستجو" className="w-full rounded-lg border bg-background py-1.5 pe-2 ps-8 text-sm" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("جستجو: عنوان، شماره، شاخه…")} aria-label={t("جستجو")} className="w-full rounded-lg border bg-background py-1.5 pe-2 ps-8 text-sm" />
         </label>
-        <button type="button" onClick={() => setNonce((n) => n + 1)} disabled={loading} title="خواندن دوباره از GitLab" aria-label="تازه‌سازی" className="rounded-lg border p-2 text-muted-foreground hover:bg-muted disabled:opacity-60"><RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /></button>
+        <button type="button" onClick={() => setNonce((n) => n + 1)} disabled={loading} title={t("خواندن دوباره از GitLab")} aria-label={t("تازه‌سازی")} className="rounded-lg border p-2 text-muted-foreground hover:bg-muted disabled:opacity-60"><RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /></button>
       </div>
 
       {state === "opened" && rows?.length ? (
@@ -123,16 +123,16 @@ export default function MrBoard({ mod, page, onBack }) {
       {view.authors.length > 6 ? (
         // Many authors (every project): a short list of chips would be a wall; one picker instead.
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          نویسنده:
+          {t("نویسنده:")}
           <select value={author} onChange={(e) => setAuthor(e.target.value)} className="rounded-lg border bg-card px-2 py-1 text-sm text-foreground">
-            <option value="">همه ({view.authors.length.toLocaleString("fa-IR")} نفر)</option>
+            <option value="">{t("همه ({toLocaleString} نفر)", { toLocaleString: view.authors.length.toLocaleString("fa-IR") })}</option>
             {view.authors.map((a) => <option key={a.name} value={a.name}>{a.name} — {a.n.toLocaleString("fa-IR")}</option>)}
           </select>
         </label>
       ) : view.authors.length > 1 ? (
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="text-muted-foreground">نویسنده:</span>
-          <Chip on={!author} onClick={() => setAuthor("")}>همه</Chip>
+          <span className="text-muted-foreground">{t("نویسنده:")}</span>
+          <Chip on={!author} onClick={() => setAuthor("")}>{t("همه")}</Chip>
           {view.authors.map((a) => (
             <Chip key={a.name} on={author === a.name} onClick={() => setAuthor(author === a.name ? "" : a.name)}><span dir="ltr">{a.name}</span> <span className="tabular-nums opacity-70">{a.n.toLocaleString("fa-IR")}</span></Chip>
           ))}
@@ -141,31 +141,31 @@ export default function MrBoard({ mod, page, onBack }) {
 
       {filtered && rows?.length ? (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          {view.total.toLocaleString("fa-IR")} از {view.all.toLocaleString("fa-IR")} مورد
-          <button type="button" onClick={clear} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 hover:bg-muted"><X className="size-3" />پاک کردن فیلترها</button>
+          {t("{toLocaleString} از {toLocaleString2} مورد", { toLocaleString: view.total.toLocaleString("fa-IR"), toLocaleString2: view.all.toLocaleString("fa-IR") })}
+          <button type="button" onClick={clear} className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 hover:bg-muted"><X className="size-3" />{t("پاک کردن فیلترها")}</button>
         </p>
       ) : null}
 
       {error ? (
         <div className="rounded-xl border border-bad/40 bg-bad/5 p-4 text-sm">
           <p className="text-bad">{error}</p>
-          <button type="button" onClick={() => setNonce((n) => n + 1)} className="mt-2 rounded-lg border px-3 py-1 text-xs hover:bg-muted">دوباره</button>
+          <button type="button" onClick={() => setNonce((n) => n + 1)} className="mt-2 rounded-lg border px-3 py-1 text-xs hover:bg-muted">{t("دوباره")}</button>
         </div>
       ) : null}
 
       {loading && !rows ? (
-        <div className="space-y-2" aria-label="در حال خواندن">
+        <div className="space-y-2" aria-label={t("در حال خواندن")}>
           {[0, 1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-xl border bg-muted/40" />)}
         </div>
       ) : null}
 
       {rows && !rows.length && !error ? (
         <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-          <p>{project === ALL ? "در هیچ پروژه‌ای" : `در ${projectName(project)}`} MR {STATES.find((s) => s.value === state).label} نیست.</p>
-          {project !== ALL ? <button type="button" onClick={() => setProject(ALL)} className="mt-3 rounded-lg border px-3 py-1.5 text-xs hover:bg-muted">در همهٔ پروژه‌ها بگرد</button> : null}
+          <p>{t("{v} MR {label} نیست.", { v: project === ALL ? t("در هیچ پروژه‌ای") : t("در {projectName}", { projectName: projectName(project) }), label: STATES.find((s) => s.value === state).label })}</p>
+          {project !== ALL ? <button type="button" onClick={() => setProject(ALL)} className="mt-3 rounded-lg border px-3 py-1.5 text-xs hover:bg-muted">{t("در همهٔ پروژه‌ها بگرد")}</button> : null}
         </div>
       ) : null}
-      {rows?.length && !view.total ? <p className="text-sm text-muted-foreground">با این فیلترها چیزی نیست.</p> : null}
+      {rows?.length && !view.total ? <p className="text-sm text-muted-foreground">{t("با این فیلترها چیزی نیست.")}</p> : null}
 
       {view.shelves.map((s) => (
         <section key={s.key} className="space-y-2">
@@ -183,7 +183,7 @@ export default function MrBoard({ mod, page, onBack }) {
           </ul>
           {s.cards.length > limitOf(s.key) && shelf !== s.key && !filtered ? (
             <button type="button" onClick={() => setOpened({ ...opened, [s.key]: !opened[s.key] })} className="w-full rounded-lg border border-dashed py-1.5 text-xs text-muted-foreground hover:bg-muted">
-              {opened[s.key] ? "کمتر" : `${(s.cards.length - limitOf(s.key)).toLocaleString("fa-IR")} مورد دیگر در «${s.label}»`}
+              {opened[s.key] ? t("کمتر") : t("{toLocaleString} مورد دیگر در «{label}»", { toLocaleString: (s.cards.length - limitOf(s.key)).toLocaleString("fa-IR"), label: s.label })}
             </button>
           ) : null}
         </section>
@@ -198,14 +198,14 @@ function Card({ c, busy, explainedChat, onExplain, showProject }) {
   // On the draft, merged and closed shelves the reason only repeats the shelf's name; there the card
   // keeps quiet about it. The pipeline is said once: in the reason when the reason is about it.
   const showReason = ["attention", "waiting", "running"].includes(c.shelf) && c.reason;
-  const pipelineInReason = showReason && c.reason.includes("پایپ‌لاین");
+  const pipelineInReason = showReason && c.reason.includes("پایپ‌لاین"); // i18n-ignore
   return (
     <li className="flex flex-wrap gap-x-3 gap-y-2 rounded-xl sm:flex-nowrap border bg-card p-3.5">
       <Icon className={`mt-0.5 size-4 shrink-0 ${tone.text}`} aria-hidden />
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex items-baseline gap-2">
           <div className="min-w-0 flex-1 leading-snug">
-            {c.kind ? <span className="me-1.5 inline-block rounded bg-muted px-1.5 py-px align-[1px] text-[11px] text-muted-foreground" title={c.scope ? `بخش: ${c.scope}` : undefined}>{c.kind}{c.scope ? <span className="ltr"> · {c.scope}</span> : null}</span> : null}
+            {c.kind ? <span className="me-1.5 inline-block rounded bg-muted px-1.5 py-px align-[1px] text-[11px] text-muted-foreground" title={c.scope ? t("بخش: {scope}", { scope: c.scope }) : undefined}>{c.kind}{c.scope ? <span className="ltr"> · {c.scope}</span> : null}</span> : null}
             <span dir={textDir(c.title)} className="text-[15px] font-medium">{c.title}</span>
           </div>
           <span className="ltr shrink-0 text-xs tabular-nums text-muted-foreground">{c.ref}</span>
@@ -228,11 +228,11 @@ function Card({ c, busy, explainedChat, onExplain, showProject }) {
       <div className="flex w-full shrink-0 items-center justify-end gap-1.5 sm:w-auto sm:flex-col sm:items-end">
         <button type="button" disabled={busy} onClick={() => onExplain(false)} className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm disabled:opacity-60 ${explainedChat ? "bg-primary text-primary-foreground hover:opacity-90" : "bg-primary/10 text-primary hover:bg-primary/15"}`}>
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : explainedChat ? <MessageSquareText className="size-3.5" /> : <Sparkles className="size-3.5" />}
-          {explainedChat ? "دیدن توضیح" : "توضیح بده"}
+          {explainedChat ? t("دیدن توضیح") : t("توضیح بده")}
         </button>
         <div className="flex items-center gap-1">
-          {explainedChat ? <button type="button" disabled={busy} onClick={() => onExplain(true)} title="یک توضیح تازه در گفتگوی جدید" className="rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">توضیح تازه</button> : null}
-          {c.url ? <a href={c.url} target="_blank" rel="noreferrer" title="باز کردن در GitLab" aria-label="باز کردن در GitLab" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"><ExternalLink className="size-3.5" /></a> : null}
+          {explainedChat ? <button type="button" disabled={busy} onClick={() => onExplain(true)} title={t("یک توضیح تازه در گفتگوی جدید")} className="rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">{t("توضیح تازه")}</button> : null}
+          {c.url ? <a href={c.url} target="_blank" rel="noreferrer" title={t("باز کردن در GitLab")} aria-label={t("باز کردن در GitLab")} className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"><ExternalLink className="size-3.5" /></a> : null}
         </div>
       </div>
     </li>
@@ -255,28 +255,28 @@ function ProjectPicker({ value, defaultProject, recent, onChange }) {
         className="flex items-center gap-1"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!/^[\w.-]+(\/[\w.-]+)+$/.test(text.trim())) return toast.error("پروژه را به شکل group/name بنویسید");
+          if (!/^[\w.-]+(\/[\w.-]+)+$/.test(text.trim())) return toast.error(t("پروژه را به شکل group/name بنویسید"));
           onChange(text);
           setOther(false);
           setText("");
         }}
       >
-        <input autoFocus dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder="group/name" aria-label="پروژه" className="w-44 rounded-lg border bg-background px-2 py-1.5 text-sm" />
-        <button type="submit" className="rounded-lg border px-2.5 py-1.5 text-sm hover:bg-muted">برو</button>
-        <button type="button" onClick={() => setOther(false)} aria-label="انصراف" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"><X className="size-3.5" /></button>
+        <input autoFocus dir="ltr" value={text} onChange={(e) => setText(e.target.value)} placeholder="group/name" aria-label={t("پروژه")} className="w-44 rounded-lg border bg-background px-2 py-1.5 text-sm" />
+        <button type="submit" className="rounded-lg border px-2.5 py-1.5 text-sm hover:bg-muted">{t("برو")}</button>
+        <button type="button" onClick={() => setOther(false)} aria-label={t("انصراف")} className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"><X className="size-3.5" /></button>
       </form>
     );
   }
   return (
     <select
       value={value}
-      aria-label="پروژه"
+      aria-label={t("پروژه")}
       onChange={(e) => (e.target.value === "_other" ? setOther(true) : onChange(e.target.value))}
       className="rounded-lg border bg-card px-2 py-1.5 text-sm"
     >
-      {options.map((p) => <option key={p} value={p}>{projectName(p)}{p === defaultProject ? " (پیش‌فرض)" : ""}</option>)}
-      <option value={ALL}>همهٔ پروژه‌ها</option>
-      <option value="_other">پروژهٔ دیگر…</option>
+      {options.map((p) => <option key={p} value={p}>{projectName(p)}{p === defaultProject ? t(" (پیش‌فرض)") : ""}</option>)}
+      <option value={ALL}>{t("همهٔ پروژه‌ها")}</option>
+      <option value="_other">{t("پروژهٔ دیگر…")}</option>
     </select>
   );
 }

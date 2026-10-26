@@ -25,7 +25,7 @@ export function peerList(users, query = "") {
 export const openAgents = (user) => (user?.quotas || []).filter((q) => q.tools?.length).length;
 
 /** The letter in a row's circle: «آقای رستمی» → «ر», not «آ» for every «آقای». */
-export const initial = (label) => String(label || "").replace(/^\s*(آقای|خانم|مهندس|دکتر|Mr\.?|Ms\.?)\s+/i, "").trim().charAt(0) || t("؟");
+export const initial = (label) => String(label || "").replace(/^\s*(آقای|خانم|مهندس|دکتر|Mr\.?|Ms\.?)\s+/i, "").trim().charAt(0) || t("؟"); // i18n-ignore
 
 /** A task title without the colleague's own name in front («نورا کریمی: سلام…» → «سلام…»). */
 export const taskTitle = (title, label) => {

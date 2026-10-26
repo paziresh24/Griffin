@@ -13,6 +13,25 @@ export function parseModuleRoute(hash) {
   return m ? { module: m[1], page: m[2] } : null;
 }
 
+// The words a module.json shows (titles, labels, hints) are Persian keys like any other UI text;
+// the agent's own prompt and profile fields stay as written.
+const SHOWN = new Set(["title", "description", "label", "hint", "choice", "switchNote", "blurb", "placeholder", "empty"]);
+const NAMES = new Set(["pages", "agents"]);
+
+/** A module manifest from the server with its shown words in the UI language. */
+export function translateManifest(value) {
+  if (Array.isArray(value)) return value.map(translateManifest);
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v === "string") out[key] = SHOWN.has(key) ? t(v) : v;
+    // adds.pages / adds.agents: the names the marketplace card lists
+    else if (NAMES.has(key) && Array.isArray(v)) out[key] = v.map((x) => (typeof x === "string" ? t(x) : translateManifest(x)));
+    else out[key] = translateManifest(v);
+  }
+  return out;
+}
+
 /** The sidebar entries: one per page of every enabled module. */
 export function moduleNavItems(modules) {
   const items = [];
@@ -79,16 +98,16 @@ export function planLines(plan) {
   const lines = [];
   for (const step of plan.steps || []) {
     if (step.kind === "disable") {
-      lines.push({ tone: "off", text: `«${step.title}» خاموش می‌شود — ${step.why}` });
-      if (step.chats) lines.push({ tone: "note", text: `${step.chats} گفتگوی آن به پوشهٔ «${step.folder}» در فهرست گفتگوها می‌رود (چیزی پاک نمی‌شود)` });
+      lines.push({ tone: "off", text: t("«{title}» خاموش می‌شود — {why}", { title: t(step.title), why: step.why }) });
+      if (step.chats) lines.push({ tone: "note", text: t("{chats} گفتگوی آن به پوشهٔ «{folder}» در فهرست گفتگوها می‌رود (چیزی پاک نمی‌شود)", { chats: step.chats, folder: step.folder }) });
     } else if (step.kind === "enable") {
-      lines.push({ tone: "on", text: `«${step.title}» روشن می‌شود${step.why ? ` — ${step.why}` : ""}` });
-      if (step.restores) lines.push({ tone: "note", text: `${step.restores} گفتگوی قبلی آن از پوشه به جای اولشان برمی‌گردد` });
+      lines.push({ tone: "on", text: t("«{title}» روشن می‌شود{v}", { title: t(step.title), v: step.why ? ` — ${step.why}` : "" }) });
+      if (step.restores) lines.push({ tone: "note", text: t("{restores} گفتگوی قبلی آن از پوشه به جای اولشان برمی‌گردد", { restores: step.restores }) });
     } else if (step.kind === "fix") {
-      lines.push({ tone: "fix", text: `تنظیم «${step.title}» با وضعیت واقعی نمی‌خواند — ${step.why}؛ درست می‌شود` });
+      lines.push({ tone: "fix", text: t("تنظیم «{title}» با وضعیت واقعی نمی‌خواند — {why}؛ درست می‌شود", { title: t(step.title), why: step.why }) });
     }
   }
-  for (const [key, value] of Object.entries(plan.config || {})) lines.push({ tone: "note", text: `تنظیم ${key} روی «${value}» می‌رود` });
+  for (const [key, value] of Object.entries(plan.config || {})) lines.push({ tone: "note", text: t("تنظیم {key} روی «{value}» می‌رود", { key, value }) });
   for (const note of plan.notes || []) lines.push({ tone: "note", text: note });
   return lines;
 }
@@ -97,10 +116,10 @@ export function planLines(plan) {
 export function moduleFacts(mod) {
   const facts = [];
   if (mod.builtin) facts.push(t("بخش خود گریفین"));
-  if (mod.adds?.agents?.length) facts.push(`ایجنت: ${mod.adds.agents.join(t("، "))}`);
-  if (mod.adds?.tools) facts.push(`${mod.adds.tools} ابزار`);
-  if (mod.adds?.pages?.length && !mod.builtin) facts.push(`صفحه: ${mod.adds.pages.join(t("، "))}`);
-  if (mod.chats) facts.push(`${mod.chats} گفتگو`);
+  if (mod.adds?.agents?.length) facts.push(t("ایجنت: {join}", { join: mod.adds.agents.join(t("، ")) }));
+  if (mod.adds?.tools) facts.push(t("{tools} ابزار", { tools: mod.adds.tools }));
+  if (mod.adds?.pages?.length && !mod.builtin) facts.push(t("صفحه: {join}", { join: mod.adds.pages.join(t("، ")) }));
+  if (mod.chats) facts.push(t("{chats} گفتگو", { chats: mod.chats }));
   if (mod.preset) facts.push(t("پیش‌فرض این محصول"));
   return facts;
 }
@@ -208,10 +227,10 @@ export function moduleTags(mod) {
   const tags = [];
   // A page named like the module itself (every builtin section) says nothing new.
   const pages = (mod.adds?.pages || []).filter((p) => p && !String(mod.title || "").startsWith(p));
-  if (pages.length) tags.push(`صفحهٔ «${pages.join(t("»، «"))}»`);
-  if (mod.adds?.agents?.length) tags.push(`ایجنت «${mod.adds.agents.join(t("»، «"))}»`);
-  if (mod.adds?.tools) tags.push(`${Number(mod.adds.tools).toLocaleString("fa-IR")} ابزار`);
-  if (mod.chats) tags.push(`${Number(mod.chats).toLocaleString("fa-IR")} گفتگو`);
+  if (pages.length) tags.push(t("صفحهٔ «{join}»", { join: pages.join(t("»، «")) }));
+  if (mod.adds?.agents?.length) tags.push(t("ایجنت «{join}»", { join: mod.adds.agents.join(t("»، «")) }));
+  if (mod.adds?.tools) tags.push(t("{toLocaleString} ابزار", { toLocaleString: Number(mod.adds.tools).toLocaleString("fa-IR") }));
+  if (mod.chats) tags.push(t("{toLocaleString} گفتگو", { toLocaleString: Number(mod.chats).toLocaleString("fa-IR") }));
   return tags;
 }
 

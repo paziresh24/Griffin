@@ -53,7 +53,7 @@ export function NeedsYou({ inbox }) {
             <li>
               <a href="#/telegram" className="g-list-row flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-start text-sm hover:bg-muted pointer-coarse:min-h-11">
                 <span className={tag}>{TAGS.telegram}</span>
-                <span className="min-w-0 flex-1 truncate">{`${fa(telegram.length)} پیام منتظر شما در تلگرام`}</span>
+                <span className="min-w-0 flex-1 truncate">{t("{fa} پیام منتظر شما در تلگرام", { fa: fa(telegram.length) })}</span>
                 <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
               </a>
             </li>

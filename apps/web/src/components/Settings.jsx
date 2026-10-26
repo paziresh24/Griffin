@@ -1040,7 +1040,7 @@ function KnowledgeSection() {
 
       {filter === "trash" ? (
         trash.length ? (
-          <Group title={`حذف‌شده · ${trash.length.toLocaleString("fa")}`}>
+          <Group title={t("حذف‌شده · {toLocaleString}", { toLocaleString: trash.length.toLocaleString("fa") })}>
             {trash.map((item) => (
               <Item
                 key={item.id}
@@ -1055,7 +1055,7 @@ function KnowledgeSection() {
                       className="press inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground"
                     >
                       {busy === `trash/${item.id}` ? <Loader2 className="size-3 animate-spin" /> : <Undo2 className="size-3" />}
-                      بازیابی
+                      {t("بازیابی")}
                     </button>
                     <button
                       type="button"
@@ -1064,7 +1064,7 @@ function KnowledgeSection() {
                       className="press inline-flex items-center gap-1 rounded-full bg-destructive px-2.5 py-1 text-[11px] font-medium text-white"
                     >
                       <Trash2 className="size-3" />
-                      حذف دائمی
+                      {t("حذف دائمی")}
                     </button>
                   </div>
                 }
@@ -1137,7 +1137,7 @@ function KnowledgeSection() {
                           <div className="flex gap-2">
                             <button type="button" disabled={busy === key || !editing.title.trim() || !editing.body.trim()} onClick={save} className="press inline-flex items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50">
                               {busy === key ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
-                              ذخیره
+                              {t("ذخیره")}
                             </button>
                             <button type="button" onClick={() => setEditing(null)} className="press rounded-full bg-muted px-3 py-1.5 text-xs">{t("انصراف")}</button>
                           </div>
@@ -1148,21 +1148,21 @@ function KnowledgeSection() {
                           <div className="mt-3 flex items-center gap-2">
                             <button type="button" onClick={() => { setConfirmDel(null); setEditing({ key, agent, file: note.file, title: note.title, body: note.body }); }} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs">
                               <Pencil className="size-3" />
-                              ویرایش
+                              {t("ویرایش")}
                             </button>
                             {confirmDel === key ? (
                               <>
                                 <span className="text-xs text-muted-foreground">{t("مطمئنی؟ بازیابی‌شدنی است.")}</span>
                                 <button type="button" disabled={busy === key} onClick={() => remove(agent, note.file, key)} className="press inline-flex items-center gap-1 rounded-full bg-bad px-3 py-1.5 text-xs font-medium text-white">
                                   {busy === key ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />}
-                                  بله، حذف
+                                  {t("بله، حذف")}
                                 </button>
                                 <button type="button" onClick={() => setConfirmDel(null)} className="press rounded-full bg-muted px-3 py-1.5 text-xs">{t("انصراف")}</button>
                               </>
                             ) : (
                               <button type="button" onClick={() => setConfirmDel(key)} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs text-bad">
                                 <Trash2 className="size-3" />
-                                حذف
+                                {t("حذف")}
                               </button>
                             )}
                           </div>

@@ -12,8 +12,8 @@ const AREAS = { sidebar: t("فهرست کنار"), composer: t("کادر پیا�
 const ROUTES = { home: t("صفحهٔ اصلی"), chat: t("گفتگو"), settings: t("تنظیمات"), telegram: t("تلگرام"), jobs: t("جاب‌ها"), agents: t("ایجنت‌ها"), peers: t("همکاران"), incidents: t("حادثه‌ها"), inbox: t("صندوق"), workbench: t("میز کار"), setup: t("راه‌اندازی") };
 const routeName = (r) => {
   const [head, tail] = String(r || "").split(":");
-  if (head === "settings" && tail) return `تنظیمات · ${tail}`;
-  if (head === "m") return `ماژول ${tail}`;
+  if (head === "settings" && tail) return t("تنظیمات · {tail}", { tail });
+  if (head === "m") return t("ماژول {tail}", { tail });
   return ROUTES[head] || r;
 };
 const KIND_TABS = [
@@ -43,7 +43,7 @@ export function ClickMapSection() {
       <div className="flex flex-wrap items-center gap-2">
         {data.hub ? (
           <select value={install} onChange={(e) => setInstall(e.target.value)} className="rounded-lg border bg-background px-2 py-1.5 text-sm" aria-label={t("نصب")}>
-            <option value="">همهٔ نصب‌ها ({fa(data.installs.length)})</option>
+            <option value="">{t("همهٔ نصب‌ها ({fa})", { fa: fa(data.installs.length) })}</option>
             {data.installs.map((i) => (
               <option key={i.install} value={i.install}>
                 {i.owner || i.install}
@@ -51,7 +51,7 @@ export function ClickMapSection() {
             ))}
           </select>
         ) : null}
-        <span className="text-xs text-muted-foreground">{fa(data.loads)} بار باز شدن صفحه در ۱۴ روز اخیر</span>
+        <span className="text-xs text-muted-foreground">{t("{fa} بار باز شدن صفحه در ۱۴ روز اخیر", { fa: fa(data.loads) })}</span>
         <button type="button" onClick={load} className="press ms-auto rounded-lg p-1.5 text-muted-foreground hover:bg-muted" title={t("خواندن دوباره")} aria-label={t("خواندن دوباره")}>
           <RotateCcw className="size-4" />
         </button>
@@ -92,7 +92,7 @@ function RowList({ rows, query, hub }) {
               <span className="block truncate text-[11px] text-muted-foreground">
                 {routeName(r.route)} · {AREAS[r.area] || r.area}
                 {KIND_NAMES[r.kind] ? ` · ${KIND_NAMES[r.kind]}` : ""}
-                {hub ? ` · ${fa(r.installs)} نصب` : ""}
+                {hub ? t(" · {fa} نصب", { fa: fa(r.installs) }) : ""}
               </span>
             </span>
             <span className="shrink-0 tabular-nums">{fa(r.n)}</span>
@@ -145,7 +145,7 @@ function ScreenMap({ positions }) {
           return (
             <div
               key={i}
-              title={n ? `${fa(n)} کلیک` : ""}
+              title={n ? t("{fa} کلیک", { fa: fa(n) }) : ""}
               className="border-[0.5px] border-border/30"
               style={{ background: n ? `color-mix(in srgb, var(--bad) ${Math.round(15 + heat * 75)}%, transparent)` : undefined }}
             />

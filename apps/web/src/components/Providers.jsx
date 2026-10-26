@@ -76,7 +76,7 @@ export function ProvidersSection() {
     try {
       await api(`/api/providers/${p.id}`, { method: "PATCH", body: { enabled } });
       if (!enabled) {
-        toast.success(`«${accountLabel(p)}» خاموش شد`, { description: t("زیر «خاموش‌ها» می‌ماند."), action: { label: t("برگردان"), onClick: () => toggle(p, true) } });
+        toast.success(t("«{accountLabel}» خاموش شد", { accountLabel: accountLabel(p) }), { description: t("زیر «خاموش‌ها» می‌ماند."), action: { label: t("برگردان"), onClick: () => toggle(p, true) } });
       }
       await load();
     } catch (e) {
@@ -459,7 +459,7 @@ export function ClaudeSignin({ id, onDone }) {
         
         setProblem(t("ورود قبلی تمام شده بود؛ لینک تازه ساخته شد. «باز کردن لینک» یا «کپی لینک» را بزنید و کد تازه را بگذارید."));
       } else {
-        setProblem(`کد پذیرفته نشد؛ «شروع دوباره» را بزنید و کد تازه بگیرید. پاسخ Claude: ${e.message}`);
+        setProblem(t("کد پذیرفته نشد؛ «شروع دوباره» را بزنید و کد تازه بگیرید. پاسخ Claude: {message}", { message: e.message }));
       }
     }
     setBusy(false);
@@ -479,7 +479,7 @@ export function ClaudeSignin({ id, onDone }) {
             </div>
           ) : (
             <button type="button" onClick={start} disabled={busy} className="press inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60">
-              {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} ورود با اکانت Claude
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />} {t("ورود با اکانت Claude")}
             </button>
           )}
         </SigninStep>
@@ -495,7 +495,7 @@ export function ClaudeSignin({ id, onDone }) {
       </ol>
       {problem ? <p className="rounded-lg bg-bad/10 px-3 py-2 text-xs leading-6 text-bad" role="alert">{problem}</p> : null}
       <p className="border-t pt-3 text-xs leading-6 text-muted-foreground">
-        اشتراک مال شخص دیگری است؟ «کپی لینک» را برای خودش بفرستید؛ او لینک را باز می‌کند، وارد می‌شود و کدِ آخر را برایتان می‌فرستد. این لینک و کد فقط چند دقیقه کار می‌کنند و فقط باید به صاحب اشتراک برسند.
+        {t("اشتراک مال شخص دیگری است؟ «کپی لینک» را برای خودش بفرستید؛ او لینک را باز می‌کند، وارد می‌شود و کدِ آخر را برایتان می‌فرستد. این لینک و کد فقط چند دقیقه کار می‌کنند و فقط باید به صاحب اشتراک برسند.")}
       </p>
     </div>
   );

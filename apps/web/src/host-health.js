@@ -27,12 +27,12 @@ export function hostAlerts(host, { cpuStreak = 0 } = {}) {
   if (host.available === false) return [{ key: "down", level: "warn", text: t("منابع سرور خوانده نمی‌شود"), detail: t("برنامه نتوانست مصرف پردازنده، حافظه و دیسک سرور را بخواند.") }];
   const out = [];
   const cpu = host.cpu?.percent;
-  if (Number(cpu) >= 90 && cpuStreak >= CPU_SUSTAIN) out.push({ key: "cpu", sig: "cpu", level: "warn", text: LOAD, detail: `پردازندهٔ سرور چند دقیقه است ${fa(cpu)}٪ درگیر است؛ پاسخ‌ها ممکن است کند شوند.` });
+  if (Number(cpu) >= 90 && cpuStreak >= CPU_SUSTAIN) out.push({ key: "cpu", sig: "cpu", level: "warn", text: LOAD, detail: t("پردازندهٔ سرور چند دقیقه است {fa}٪ درگیر است؛ پاسخ‌ها ممکن است کند شوند.", { fa: fa(cpu) }) });
   const mem = host.memory?.percent;
-  if (Number(mem) >= 90) out.push({ key: "memory", sig: `memory:${mem >= 97 ? "danger" : "warn"}`, level: mem >= 97 ? "danger" : "warn", text: LOAD, detail: `حافظهٔ سرور ${fa(mem)}٪ پر است؛ اگر پر شود برنامه‌ها بسته می‌شوند.` });
+  if (Number(mem) >= 90) out.push({ key: "memory", sig: `memory:${mem >= 97 ? "danger" : "warn"}`, level: mem >= 97 ? "danger" : "warn", text: LOAD, detail: t("حافظهٔ سرور {fa}٪ پر است؛ اگر پر شود برنامه‌ها بسته می‌شوند.", { fa: fa(mem) }) });
   const disk = host.disk?.percent;
   // From 85٪: a disk fills up quietly, and a full one stops the database.
-  if (Number(disk) >= 85) out.push({ key: "disk", sig: `disk:${disk >= 97 ? "danger" : "warn"}`, level: disk >= 97 ? "danger" : "warn", text: t("دیسک سرور در حال پر شدن است"), detail: `دیسک سرور ${fa(disk)}٪ پر است؛ وقتی پر شود گفتگوها و بکاپ‌ها ذخیره نمی‌شوند.` });
+  if (Number(disk) >= 85) out.push({ key: "disk", sig: `disk:${disk >= 97 ? "danger" : "warn"}`, level: disk >= 97 ? "danger" : "warn", text: t("دیسک سرور در حال پر شدن است"), detail: t("دیسک سرور {fa}٪ پر است؛ وقتی پر شود گفتگوها و بکاپ‌ها ذخیره نمی‌شوند.", { fa: fa(disk) }) });
   return out;
 }
 
@@ -44,15 +44,15 @@ const clock = (at, now) =>
 export function engineAlerts(data, now = Date.now()) {
   if (!data) return [];
   const out = [];
-  const meanwhile = data.meanwhile ? `تا آن موقع کارها با ${data.meanwhile} انجام می‌شود.` : t("فعلاً موتور آماده‌ای نیست و گفتگوها منتظر می‌مانند.");
+  const meanwhile = data.meanwhile ? t("تا آن موقع کارها با {meanwhile} انجام می‌شود.", { meanwhile: data.meanwhile }) : t("فعلاً موتور آماده‌ای نیست و گفتگوها منتظر می‌مانند.");
   if (data.usable === false) out.push({ key: "engines:none", level: "danger", text: t("هیچ موتوری آماده نیست"), detail: t("همهٔ حساب‌ها به سقف خورده‌اند، اعتبارشان تمام شده یا وصل نیستند؛ گفتگوها تا آماده شدن یکی منتظر می‌مانند.") });
   for (const e of data.engines || []) {
     if (e.state === "limited") {
       // The plan says only when it opens: within five hours it is the 5-hour window, else the weekly one.
       const window = e.until && e.until - now <= 5 * 60 * 60_000 ? t("۵ ساعته") : t("هفتگی");
-      out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:limited`, level: "warn", text: t("یکی از اکانت‌های شما به سقف مصرف رسیده است"), detail: `حساب ${e.name} به سقف مصرف ${window} رسیده و ${e.until ? `ساعت ${clock(e.until, now)}` : t("بعد از باز شدن سقف")} دوباره کار می‌کند. ${meanwhile}` });
+      out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:limited`, level: "warn", text: t("یکی از اکانت‌های شما به سقف مصرف رسیده است"), detail: t("حساب {name} به سقف مصرف {window} رسیده و {v} دوباره کار می‌کند. {meanwhile}", { name: e.name, window, v: e.until ? t("ساعت {clock}", { clock: clock(e.until, now) }) : t("بعد از باز شدن سقف"), meanwhile }) });
     } else if (e.state === "credit") {
-      out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:credit`, level: "warn", text: t("اعتبار یکی از اکانت‌های شما تمام شده است"), detail: `اعتبار (Credit) حساب ${e.name} تمام شده؛ تا شارژ نشود آخر صف می‌ماند. ${meanwhile.replace(t("تا آن موقع"), t("فعلاً"))}` });
+      out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:credit`, level: "warn", text: t("اعتبار یکی از اکانت‌های شما تمام شده است"), detail: t("اعتبار (Credit) حساب {name} تمام شده؛ تا شارژ نشود آخر صف می‌ماند. {replace}", { name: e.name, replace: meanwhile.replace(t("تا آن موقع"), t("فعلاً")) }) });
     }
   }
   return out;
@@ -60,7 +60,7 @@ export function engineAlerts(data, now = Date.now()) {
 
 /** What «برام توضیحش بده» sends as the first message of a new chat on this install. */
 export const explainPrompt = (a, product = "") =>
-  `در ${product || t("برنامه")} این هشدار را دیدم: «${a.text}».\nجزئیات: ${a.detail || a.text}\n\nبه زبان ساده توضیح بده یعنی چه و قدم‌به‌قدم کمکم کن حلش کنم (مثلاً موتور پیش‌فرض را عوض کنم، منتظر باز شدن سقف بمانم، حساب دیگری اضافه کنم یا دیسک را خالی کنم). اگر خودت می‌توانی بخشی را درست کنی، اول بگو چه می‌کنی.`;
+  t("در {v} این هشدار را دیدم: «{text}».\nجزئیات: {v2}\n\nبه زبان ساده توضیح بده یعنی چه و قدم‌به‌قدم کمکم کن حلش کنم (مثلاً موتور پیش‌فرض را عوض کنم، منتظر باز شدن سقف بمانم، حساب دیگری اضافه کنم یا دیسک را خالی کنم). اگر خودت می‌توانی بخشی را درست کنی، اول بگو چه می‌کنی.", { v: product || t("برنامه"), text: a.text, v2: a.detail || a.text });
 
 // «متوجه شدم» on the sidebar's alerts (owner 2026-10-18): an alert seen once stays away for as long as
 // the condition lasts. Its signature names the condition, never a moving number: the reset time of a

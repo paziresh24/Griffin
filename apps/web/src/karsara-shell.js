@@ -17,18 +17,18 @@ export function shortAgo(stamp, now = Date.now()) {
   if (!Number.isFinite(ms)) return "";
   const minutes = Math.max(0, Math.round((now - ms) / 60000));
   if (minutes < 1) return t("الان");
-  if (minutes < 60) return `${fa(minutes)} دقیقه`;
+  if (minutes < 60) return t("{fa} دقیقه", { fa: fa(minutes) });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${fa(hours)} ساعت`;
+  if (hours < 24) return t("{fa} ساعت", { fa: fa(hours) });
   const days = Math.round(hours / 24);
-  if (days < 30) return `${fa(days)} روز`;
-  return `${fa(Math.round(days / 30))} ماه`;
+  if (days < 30) return t("{fa} روز", { fa: fa(days) });
+  return t("{fa} ماه", { fa: fa(Math.round(days / 30)) });
 }
 
 /** The same with «پیش», for a stamp shown on its own (a knowledge note, a job's last run). */
 export function agoPhrase(stamp, now = Date.now()) {
   const short = shortAgo(stamp, now);
-  return !short || short === t("الان") ? short : `${short} پیش`;
+  return !short || short === t("الان") ? short : t("{short} پیش", { short });
 }
 
 /**
@@ -70,15 +70,15 @@ export function connectionRows({ setup = null, integrations = null, inbox = null
     const title = KIND_LABEL[i.kind] || i.kind;
     const name = i.name ? ` · ${i.name}` : "";
     const state = i.status?.state;
-    if (!i.enabled) rows.push({ id: `integration:${i.id}`, level: "off", title, subtitle: `خاموش${name}` });
-    else if (DOWN.has(state)) rows.push({ id: `integration:${i.id}`, level: "warn", title, subtitle: `وصل نیست${name}`, action: { label: t("اتصال‌ها"), section: "connections" } });
-    else rows.push({ id: `integration:${i.id}`, level: "ok", title, subtitle: `وصل است${name}` });
+    if (!i.enabled) rows.push({ id: `integration:${i.id}`, level: "off", title, subtitle: t("خاموش{name}", { name }) });
+    else if (DOWN.has(state)) rows.push({ id: `integration:${i.id}`, level: "warn", title, subtitle: t("وصل نیست{name}", { name }), action: { label: t("اتصال‌ها"), section: "connections" } });
+    else rows.push({ id: `integration:${i.id}`, level: "ok", title, subtitle: t("وصل است{name}", { name }) });
   }
   if (inbox?.mode === "inbox") {
     rows.push({ id: "inbox", level: "ok", title: t("صندوق تلگرام"), subtitle: t("روشن است؛ پیام‌های خصوصی تلگرامت در یک گفتگوی سنجاق‌شده جمع می‌شوند.") });
   }
   if (mcp?.servers?.length) {
-    rows.push({ id: "mcp", level: "ok", title: t("سرورهای MCP"), subtitle: `${fa(mcp.servers.length)} سرور ثبت شده`, action: { label: "MCP", section: "mcp" } });
+    rows.push({ id: "mcp", level: "ok", title: t("سرورهای MCP"), subtitle: t("{fa} سرور ثبت شده", { fa: fa(mcp.servers.length) }), action: { label: "MCP", section: "mcp" } });
   }
   return rows;
 }

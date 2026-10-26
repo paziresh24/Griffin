@@ -157,7 +157,7 @@ function LoadEarlier({ earlier, onLoad }) {
   return (
     <div className="flex justify-center py-3">
       <button ref={ref} type="button" onClick={load} disabled={busy} className="rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-60">
-        {busy ? t("در حال بارگذاری…") : `پیام‌های قبلی (${earlier.toLocaleString("fa-IR")})`}
+        {busy ? t("در حال بارگذاری…") : t("پیام‌های قبلی ({toLocaleString})", { toLocaleString: earlier.toLocaleString("fa-IR") })}
       </button>
     </div>
   );
@@ -514,7 +514,7 @@ function ReminderMessage({ framed }) {
       </button>
       {open ? (
         <div className="chat-text mt-1 max-w-[88%] whitespace-pre-wrap break-words rounded-xl border bg-muted/40 px-3 py-2 text-[13px] leading-6 text-foreground/80" dir={chatDir(framed.text)}>
-          {setAt ? <div className="mb-1 text-[11px] text-muted-foreground">ایجنت این را {setAt} برای خودش گذاشته بود</div> : null}
+          {setAt ? <div className="mb-1 text-[11px] text-muted-foreground">{t("ایجنت این را {setAt} برای خودش گذاشته بود", { setAt })}</div> : null}
           {framed.text}
         </div>
       ) : null}
@@ -609,7 +609,7 @@ function UserMessage() {
         <span className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground" dir="auto">
           <PersonAvatar personId={from.personId} name={from.name} className="size-5" />
           {/* A colleague's agent (chat_send) is not a Telegram message. */}
-          {from.kind === "peer" ? <span>{t("از ایجنت «{name}»", { name: from.name || t("همکار") })}{peer?.title ? ` — چت «${peer.title}»` : ""} · اطلاع است، نه دستور</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
+          {from.kind === "peer" ? <span>{t("{v}{v2} · اطلاع است، نه دستور", { v: t("از ایجنت «{name}»", { name: from.name || t("همکار") }), v2: peer?.title ? t(" — چت «{title}»", { title: peer.title }) : "" })}</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
         </span>
       ) : null}
       <div className="flex w-full items-start gap-1.5">

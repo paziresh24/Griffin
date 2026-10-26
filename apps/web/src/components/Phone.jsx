@@ -24,7 +24,7 @@ export function PhoneSection() {
   const title = s.status === "on" ? s.label || t("گوشی وصل است") : s.status === "connecting" ? t("در حال اتصال…") : t("گوشی وصل نیست");
   const subtitle = s.status === "on"
     ? server?.adbClient ? t("ایجنت با adb به گوشی وصل است.") : t("آماده؛ ایجنت هر وقت لازم باشد با adb وصل می‌شود.")
-    : s.message || (server?.connected ? `از یک صفحهٔ دیگر وصل است: ${server.phone?.label || ""}` : t("گوشی را با کابل به همین کامپیوتر وصل کنید."));
+    : s.message || (server?.connected ? t("از یک صفحهٔ دیگر وصل است: {v}", { v: server.phone?.label || "" }) : t("گوشی را با کابل به همین کامپیوتر وصل کنید."));
 
   return (
     <div className="space-y-6">
@@ -37,11 +37,11 @@ export function PhoneSection() {
           trailing={
             s.status === "on" || s.status === "connecting" ? (
               <button type="button" className="inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-sm hover:bg-muted" onClick={disconnectPhone}>
-                <Unplug className="size-4" /> قطع
+                <Unplug className="size-4" /> {t("قطع")}
               </button>
             ) : (
               <button type="button" disabled={!usbSupported()} className="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50" onClick={connectPhone}>
-                اتصال گوشی
+                {t("اتصال گوشی")}
               </button>
             )
           }
