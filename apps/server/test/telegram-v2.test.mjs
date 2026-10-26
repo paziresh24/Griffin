@@ -863,7 +863,8 @@ test("32: the supervisor notes a flood, a stuck conversation, old drafts and the
     await desk.colleague(acc.id, "1041", { person: a, text: "رانر گیت‌لب خطا میده پایپ‌لاین بیلد نمیشه" });
     await desk.colleague(acc.id, "1042", { person: b, text: "پایپ‌لاین بیلد گیت‌لب فیل میشه رانر خطا میده" });
     store.addPersonMessage({ personId: a.id, direction: "in", text: "رانر گیت‌لب خطا میده", data: {} });
-    await sleep(5);
+    // Well past that message: the sends below are stamped up to 5 ms before now.
+    await sleep(30);
     const t = Date.now();
     // Four visible messages after their last one (the fifth was taken back: not counted).
     store.setKv(`tgsent:${a.id}`, [1, 2, 3, 4, 5].map((id) => ({ id, at: t - id, text: `پیام ${id}`, chatId: "m", deleted: id === 5 })));
