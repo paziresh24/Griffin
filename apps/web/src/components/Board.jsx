@@ -120,7 +120,7 @@ function InboxCard({ item }) {
       {who ? <p className="mt-0.5 truncate text-xs text-muted-foreground" dir="auto">{who}</p> : null}
 
       {item.kind === "approval" || item.kind === "question" ? (
-        <AskCard args={{ question: item.question, options: item.options, multiSelect: item.multiSelect }} chatId={item.chatId} askId={item.askId} onDone={refreshInbox} />
+        <AskCard args={{ question: item.question, options: item.options, multiSelect: item.multiSelect, detail: item.detail }} chatId={item.chatId} askId={item.askId} onDone={refreshInbox} />
       ) : (
         <div className="mt-1.5 space-y-2">
           {item.kind === "telegram" ? (

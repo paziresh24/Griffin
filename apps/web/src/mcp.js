@@ -22,6 +22,10 @@ const REASON = {
   ECONNREFUSED: t("اتصال رد شد؛ سرور بالا نیست یا پورت اشتباه است"),
   ENOTFOUND: t("آدرس پیدا نشد"),
   ECONNRESET: t("اتصال قطع شد"),
+  ENOENT: t("دستور پیدا نشد؛ برنامه روی سرور نصب نیست یا مسیرش اشتباه است"),
+  spawn: t("پروسه اجرا نشد"),
+  exited: t("پروسه بلافاصله بسته شد"),
+  bad_initialize: t("سرور به initialize جواب درست نداد"),
   no_endpoint_event: t("سرور SSE نیست یا endpoint نمی‌دهد"),
 };
 export function mcpCheckLine(result) {
@@ -35,7 +39,8 @@ export function mcpCheckLine(result) {
 }
 
 // Ready-made servers offered on Settings → MCP servers: one click fills the form and the person types
-// only their own key. `headers` are the form's starting header lines (the value stays empty on purpose).
+// only their own key. A gateway MCP is deliberately NOT here: the user installs it
+// from a chat in the booking-knowledge repo with /centers-mcp (an agent registers it with mcp_server_add). `headers` are the form's starting header lines (the value stays empty on purpose).
 // Add your own (id, name, title, summary, type, url, headers, hint).
 export const MCP_PRESETS = [];
 
@@ -46,7 +51,10 @@ export const missingPresets = (servers = []) => {
 };
 
 /** The form's starting state for a preset. */
-export const presetForm = (preset) => ({ name: preset.name, type: preset.type, url: preset.url, headers: { ...preset.headers }, hint: preset.hint });
+export const presetForm = (preset) =>
+  preset.type === "stdio"
+    ? { name: preset.name, type: "stdio", command: preset.command, args: [...(preset.args || [])], env: { ...preset.env }, hint: preset.hint }
+    : { name: preset.name, type: preset.type, url: preset.url, headers: { ...preset.headers }, hint: preset.hint };
 
 /** A preset's key header still empty → the form must not save it yet. */
 export const presetKeyMissing = (preset, pairs) =>

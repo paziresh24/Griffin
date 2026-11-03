@@ -1,9 +1,10 @@
 import { setNextStepReturns } from "./assist.js";
+import { setEnterKey } from "./touch.js";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { emptyTimeline } from "@griffin/timeline";
 import { createTimelineMemo } from "./timeline-memo.js";
 import { keepOpen } from "./stream-keeper.js";
-import { catchUpTimeline, openTimeline } from "./timeline-stream.js";
+import { catchUpTimeline, openTimeline, PAGE } from "./timeline-stream.js";
 import { readChatsCache, writeChatsCache } from "./chats-cache.js";
 
 export class ApiError extends Error {
@@ -21,12 +22,21 @@ export async function api(path, { method = "GET", body } = {}) {
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401) window.dispatchEvent(new Event("griffin:unauthorized"));
+  return answered(response.status, await response.json().catch(() => ({})));
+}
+
+function answered(status, data) {
+  if (status === 401) window.dispatchEvent(new Event("griffin:unauthorized"));
   // The install requires two-step sign-in and it is not set up yet (auth.mjs): the setup screen shows.
-  if (response.status === 403 && data?.setupRequired) window.dispatchEvent(new Event("griffin:setup-2fa"));
-  if (!response.ok) throw new ApiError(response.status, data);
+  if (status === 403 && data?.setupRequired) window.dispatchEvent(new Event("griffin:setup-2fa"));
+  if (status < 200 || status >= 300) throw new ApiError(status, data);
   return data;
+}
+
+// One piece of an attached file (attachments.js): bytes, not JSON.
+export async function apiPiece(path, piece, signal) {
+  const response = await fetch(path, { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: piece, signal });
+  return answered(response.status, await response.json().catch(() => ({})));
 }
 
 // Told whenever the owner's inbox may have changed (inbox.js refetches): after each chat-list load
@@ -55,8 +65,10 @@ export function useChats() {
         const active = await activeRead;
         if (!alive) return;
         setNextStepReturns(active.nextStepReturns === true);
+        setEnterKey(active.enterKey);
         setState((s) => ({ ...s, chats: active.chats, sideChat: active.sideChat !== false, privateShare: active.privateShare === true, loading: false, failed: false }));
         window.dispatchEvent(new Event(INBOX_EVENT));
+        freshenRemembered(active.chats);
         const [archived, groups] = await Promise.all([archivedRead, groupsRead]);
         if (!alive) return;
         // A failed archive or groups read keeps the last list: an empty one would drop a chosen group silently.
@@ -72,11 +84,17 @@ export function useChats() {
     };
     setState((s) => ({ ...s, retry: () => { setState((v) => ({ ...v, loading: true })); load(); } }));
     load();
+    // A run starting, a title, a group change… often come as a burst of «chats» events: one reload
+    // for the burst, not three lists per event.
+    let soon = null;
+    const loadSoon = () => {
+      if (!soon) soon = setTimeout(() => { soon = null; load(); }, 400);
+    };
     // A stream the browser gave up on (a 502 during a deploy) is reopened (stream-keeper.js).
     const keeper = keepOpen({
       open: () => {
         const source = new EventSource("/api/stream");
-        source.addEventListener("chats", load);
+        source.addEventListener("chats", loadSoon);
         source.addEventListener("inbox", () => window.dispatchEvent(new Event(INBOX_EVENT)));
         return source;
       },
@@ -86,6 +104,7 @@ export function useChats() {
     return () => {
       alive = false;
       clearTimeout(retryTimer);
+      clearTimeout(soon);
       keeper.stop();
     };
   }, []);
@@ -99,6 +118,39 @@ export function reloadTimeline() {
 
 const EMPTY = emptyTimeline();
 const memo = createTimelineMemo();
+const shown = new Map(); // chatId -> how many views show it now (the thread, a side panel)
+
+// A chat opened earlier in this tab and changed since (it finished, a message came) used to open
+// on the copy from when it was left, one step behind, and then jump to the end (owner 2026-10-28).
+// When the list says such a chat changed, its copy is brought up to date in the background, so it
+// opens as it is now. Chats on screen stay current through their own stream.
+const listMarks = new Map(); // chatId -> what the list last said of it
+const freshening = new Set();
+async function freshenRemembered(chats) {
+  const stale = [];
+  for (const chat of chats) {
+    const mark = `${chat.updatedAt}|${chat.runStatus}`;
+    const before = listMarks.get(chat.id);
+    listMarks.set(chat.id, mark);
+    if (before !== undefined && before !== mark && memo.recall(chat.id) && !shown.get(chat.id) && !freshening.has(chat.id)) stale.push(chat.id);
+  }
+  stale.forEach((chatId) => freshening.add(chatId));
+  for (const chatId of stale) {
+    const held = memo.recall(chatId);
+    if (!held) {
+      freshening.delete(chatId);
+      continue;
+    }
+    try {
+      const answer = await api(`/api/chats/${chatId}/timeline?limit=${PAGE}&have=${held.timeline.lastEventId}&rev=${encodeURIComponent(held.rev)}`);
+      // Opened meanwhile (its own load and stream keep it), or the copy moved on: leave it.
+      if (answer?.timeline && !shown.get(chatId) && memo.recall(chatId) === held) memo.remember(chatId, answer.timeline, answer.rev || null);
+    } catch {
+      /* the open itself catches up */
+    }
+    freshening.delete(chatId);
+  }
+}
 
 export { catchUpTimeline };
 
@@ -128,6 +180,7 @@ export function useTimeline(chatId) {
       memo.forget(chatId);
     }
     let alive = true;
+    shown.set(chatId, (shown.get(chatId) || 0) + 1);
     openRef.current = openTimeline({
       chatId,
       remembered: memo.recall(chatId),
@@ -144,6 +197,8 @@ export function useTimeline(chatId) {
       alive = false;
       openRef.current?.stop();
       openRef.current = null;
+      if ((shown.get(chatId) || 0) <= 1) shown.delete(chatId);
+      else shown.set(chatId, shown.get(chatId) - 1);
     };
   }, [chatId, reloadKey]);
 
@@ -186,11 +241,18 @@ function subscribeHash(callback) {
   return () => window.removeEventListener("hashchange", callback);
 }
 
-// "#/settings" and "#/jobs" are pages that replace the thread.
+// "#/settings" and "#/jobs" are pages that replace the thread. "#/settings/<section>" opens Settings on
+// that section: a link to send someone (2026-10-27: «یه لینک بده اکانت جدید کلاد اضافه کنن» → /#/settings/providers).
 export function usePageRoute() {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
-  const match = /^#\/(settings|jobs|agents(?:\/new)?|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?|m\/[a-z0-9-]{2,32}\/[a-z0-9-]{1,40})$/.exec(hash);
+  const match = /^#\/(settings(?:\/[a-z-]{2,32})?|jobs|agents(?:\/new)?|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?|m\/[a-z0-9-]{2,32}\/[a-z0-9-]{1,40}(?:\/[A-Za-z0-9_.-]{1,80})?)$/.exec(hash); // a module page may take one argument, like modules.js ROUTE
   return match ? match[1].split("/")[0] : null;
+}
+
+// "#/browser/<chatId>": that chat's own browser on a page of its own (BrowserPanel.jsx).
+export function useBrowserRoute() {
+  const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
+  return /^#\/browser\/([0-9a-f-]{36})$/.exec(hash)?.[1] || null;
 }
 
 // "#/peers/<id>": that colleague's page on the colleagues' agents page (Peers.jsx).

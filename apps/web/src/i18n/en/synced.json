@@ -852,6 +852,7 @@
   "بررسی سلامت خود برنامه": "The app's own health check",
   "اعمال تعمیر پیشنهادی": "Apply the suggested fix",
   "ساختن آبجکت در کلاستر": "Create an object in the cluster",
+  "حذف آبجکت از کلاستر": "Delete an object from the cluster",
   "یادآوری برای بعد": "A reminder for later",
   "کپی Secret بین کلاسترها": "Copy a Secret between clusters",
   "تلاش دوباره برای ساخت دیتابیس": "Retry creating the database",
@@ -1015,5 +1016,12 @@
   "ویرایش یادداشت": "Edit a note",
   "حذف یادداشت": "Delete a note",
   "خبر به صاحب‌کار": "Tell the owner",
-  "📭 {name} پیام داد — پاسخ خودکار به او خاموش است": "📭 {name} wrote — auto-reply to them is off"
+  "📭 {name} پیام داد — پاسخ خودکار به او خاموش است": "📭 {name} wrote — auto-reply to them is off",
+  "ورود یکی از اکانت‌های شما منقضی شده است": "The sign-in of one of your accounts has expired",
+  "ورود یا کلید حساب {name} پذیرفته نشد و کاری به آن نمی‌رود؛ در تنظیمات ← موتورها دوباره وارد شوید. {replace}": "The sign-in or key of {name} was refused, so no work goes to it; sign in again in Settings → Engines. {replace}",
+  "دستور پیدا نشد؛ برنامه روی سرور نصب نیست یا مسیرش اشتباه است": "Command not found; the program is not installed on the server or the path is wrong",
+  "پروسه اجرا نشد": "The process could not be started",
+  "پروسه بلافاصله بسته شد": "The process exited immediately",
+  "سرور به initialize جواب درست نداد": "The server did not answer initialize correctly",
+  "{badge} مورد نیاز به توجه": "{badge} need attention"
 }

@@ -15,6 +15,11 @@ const PENDING_MS = 10 * 60_000;
 const SOON_MS = 10 * 60_000;
 const DEFAULT_LIFETIME_S = 3600;
 const key = (name) => `mcp-oauth/${name}`;
+// Where the provider sends the browser back. Under /api/public/ so it works without a Griffin session
+// cookie (the sign-in may finish in another browser, or the cookie is SameSite=Strict and a redirect
+// from the provider is cross-site): the one-time `state` binds the answer to a flow this install started.
+export const MCP_OAUTH_CALLBACK = "/api/public/mcp-oauth/callback";
+export const callbackUrl = (origin) => `${new URL(String(origin || "")).origin}${MCP_OAUTH_CALLBACK}`;
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 export function createMcpOauth({ mcp, secrets, fetchImpl = fetch, now = () => Date.now(), log = () => {} }) {
@@ -88,7 +93,7 @@ export function createMcpOauth({ mcp, secrets, fetchImpl = fetch, now = () => Da
     /** -> { url }: where the owner signs in. */
     async start({ name, redirectUri }) {
       const server = serverOf(name);
-      if (!/^https?:\/\/[^\s/]+\/api\/mcp-oauth\/callback$/.test(redirectUri)) throw new Error("bad redirect address");
+      if (!/^https?:\/\/[^\s/]+\/api\/public\/mcp-oauth\/callback$/.test(redirectUri)) throw new Error("bad redirect address");
       const meta = await discover(server.url);
       let clientId = load(name)?.redirectUri === redirectUri ? load(name)?.clientId : "";
       if (!clientId) {
@@ -158,4 +163,29 @@ export function createMcpOauth({ mcp, secrets, fetchImpl = fetch, now = () => Da
       secrets.delete(key(from));
     },
   };
+}
+
+/**
+ * GET MCP_OAUTH_CALLBACK: the provider's redirect with ?code&state (or ?error). Public on purpose (see
+ * MCP_OAUTH_CALLBACK); finish() only accepts a state it issued, once, within PENDING_MS. The old
+ * /api/mcp-oauth/callback (behind the session) stays for a browser that still has the cookie.
+ */
+export function registerMcpOauthCallback(app, oauth) {
+  const handler = async (c) => {
+    const esc = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+    const page = (title, text) => {
+      c.header("cache-control", "no-store");
+      c.header("referrer-policy", "no-referrer");
+      return c.html(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body dir="rtl" style="font-family:sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"><h3>${title}</h3><p>${text}</p><p><a href="/">بازگشت به Griffin</a></p>`);
+    };
+    if (c.req.query("error")) return page("ورود انجام نشد", esc(c.req.query("error_description") || c.req.query("error")));
+    try {
+      const { name } = await oauth.finish({ state: c.req.query("state"), code: c.req.query("code") });
+      return page("ورود انجام شد", `سرور «${esc(name)}» از گفتگوی بعدی با همین ورود کار می‌کند. می‌توانید این صفحه را ببندید.`);
+    } catch (error) {
+      return page("ورود انجام نشد", esc(error.message));
+    }
+  };
+  app.get(MCP_OAUTH_CALLBACK, handler);
+  app.get("/api/mcp-oauth/callback", handler);
 }

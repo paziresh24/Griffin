@@ -8,7 +8,7 @@
 //   new   — unrelated: a brand-new chat gets it.
 // While the owner is in that chat (a run is live, or he wrote there in the last OWNER_BUSY_MS) «mine»
 // becomes a fork too, with a card «بیار اینجا» in the chat: nothing joins his work without his click.
-// Where it landed is kept per colleague conversation, so its follow-ups go to the same place.
+// Where it landed is kept per colleague conversation and owner chat, so its follow-ups go to the same place.
 import { forkChat } from "./fork.mjs";
 import { isOwnersMessage } from "./owner-chat-tools.mjs";
 import { autoTitle } from "./titles.mjs";
@@ -17,7 +17,7 @@ export const OWNER_BUSY_MS = 15 * 60_000;
 const TURN_MAX = 600;
 const PROPOSAL_MAX = 2000;
 
-// kv: colleague conversation -> the chat its messages land in.
+// kv: colleague conversation -> { target, dest }: the chat its messages to `target` land in.
 export const routeKey = (peerChatId) => `peer-route:${peerChatId}`;
 // kv: a held proposal the owner may still bring into the chat.
 export const proposalKey = (id) => `proposal:${id}`;
@@ -58,7 +58,10 @@ export async function triage({ store, generate, target, text }) {
 
 // Where a colleague's message to `target` goes. Returns { dest, routed: "here" | "fork" | "new", reason, card }.
 export async function routeProposal({ store, runner, generate, target, text, peerChatId, label, reachable, now = Date.now() }) {
-  const mapped = store.getChat(store.getKv(routeKey(peerChatId)) || "");
+  // Only for the same owner chat: one colleague conversation tells many chats about many things
+  // (2026-10-30: a colleague's MR !365 went to the old «پنل شمال» fork his first message had picked).
+  const saved = store.getKv(routeKey(peerChatId));
+  const mapped = saved?.target === target.id ? store.getChat(saved.dest || "") : null;
   if (mapped && reachable(mapped)) return { dest: mapped, routed: mapped.id === target.id ? "here" : "same" };
   const { decision, reason } = await triage({ store, generate, target, text });
   let out;
@@ -70,6 +73,6 @@ export async function routeProposal({ store, runner, generate, target, text, pee
     const fork = await forkChat({ store, runner, parent: target, title: `📥 ${label}: ${target.title || ""}` });
     out = { dest: fork, routed: "fork", reason, card: true, mine: decision === "mine" };
   }
-  store.setKv(routeKey(peerChatId), out.dest.id);
+  store.setKv(routeKey(peerChatId), { target: target.id, dest: out.dest.id });
   return out;
 }

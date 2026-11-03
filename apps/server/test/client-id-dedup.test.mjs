@@ -40,6 +40,16 @@ test("a resend with the same client id is answered without storing the message a
   assert.equal((await post(app, `/api/chats/${chat.id}/messages`, { text: "x", clientId: "bad id!" })).status, 202, "a malformed id is ignored, not refused");
 });
 
+test("a new chat's first message keeps the page's client id, so its bubble gives way there too", async () => {
+  const { store, app } = setup();
+  const created = await post(app, "/api/chats", { text: "سلام", clientId: "first-1" });
+  assert.equal(created.status, 201);
+  const { chat } = await created.json();
+  assert.deepEqual(foldEvents(store.eventsAfter(chat.id)).messages.map((m) => m.clientId), ["first-1"]);
+  const bad = await (await post(app, "/api/chats", { text: "سلام", clientId: "bad id!" })).json();
+  assert.deepEqual(foldEvents(store.eventsAfter(bad.chat.id)).messages.map((m) => m.clientId ?? null), [null], "a malformed id is ignored, not refused");
+});
+
 test("a copy arriving while the first is in flight shares its answer", async () => {
   let release;
   const { store, app, calls } = setup(() => new Promise((resolve) => (release = () => resolve({ delivered: "run" }))));

@@ -1,11 +1,12 @@
-// What the composer can attach and how it is sent: pictures as `images`, any other
-// file as `files: [{ name, mimeType, data }]` (base64), as POST /api/chats/:id/messages takes them
-// (server attachments.mjs). A small PDF or text file reaches the model inline; anything else (a big
-// PDF, zip, xlsx, audio…) the server saves in the chat's folder for the agent's file tools. A picture
-// over Claude's 5 MB is shrunk here, or sent as a file when it cannot be. No React here: the adapter
-// classes only need FileReader (and a canvas for shrinking).
 import { num, t } from "./i18n.js";
-
+import { retryableError } from "./outbox.js";
+// What the composer can attach and how it is sent. A file goes to the server as soon
+// as it is picked, a piece at a time (server uploads.mjs), with the bar on its chip; the message then
+// names it by id: `images` for pictures, `files` for the rest, as POST /api/chats/:id/messages takes
+// them (server attachments.mjs). A small PDF or text file reaches the model inline; anything else (a
+// big PDF, zip, xlsx, audio…) the server saves in the chat's folder for the agent's file tools. A
+// picture over Claude's 5 MB is shrunk here first. No React here: the adapter classes only need a
+// canvas for shrinking.
 const BY_EXTENSION = {
   pdf: "application/pdf",
   md: "text/markdown",
@@ -31,10 +32,10 @@ const TEXT_TYPE = /^(?:text\/[a-z0-9.+-]+|application\/(?:json|yaml|x-yaml|xml))
 /** The types the model reads inline (the same rule as server attachments.mjs); others are kept as files. */
 export const isAttachableFile = (mimeType) => mimeType === "application/pdf" || TEXT_TYPE.test(String(mimeType || ""));
 
-// What the server takes: at most 4 files and 4 pictures, 50 MB a file, 80 MB a message. Inline caps
+// What the server takes: at most 4 files and 20 pictures, 50 MB a file, 80 MB a message. Inline caps
 // (5 MB a PDF, 10 MB a text file) only decide whether the server sends it inline or keeps it.
 export const MAX_FILES = 4;
-export const MAX_IMAGES = 4;
+export const MAX_IMAGES = 20;
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const MAX_MESSAGE_BYTES = 80 * 1024 * 1024;
 export const MAX_PDF_BYTES = 5 * 1024 * 1024;
@@ -53,7 +54,7 @@ export function fileProblem(file) {
 /** Null when one message may carry these, else why not. */
 export function countProblem({ images = [], files = [] } = {}) {
   if (files.length > MAX_FILES) return t("حداکثر {n} فایل در یک پیام", { n: fa(MAX_FILES) });
-  const bytes = files.reduce((sum, f) => sum + (Number(f?.file?.size) || Math.floor((String(f?.data || "").length * 3) / 4)), 0);
+  const bytes = files.reduce((sum, f) => sum + (Number(f?.file?.size) || Number(f?.bytes) || 0), 0);
   if (bytes > MAX_MESSAGE_BYTES) return t("فایل‌های یک پیام روی هم حداکثر {mb} مگابایت", { mb: fa(80) });
   if (images.length > MAX_IMAGES) return t("حداکثر {n} تصویر در یک پیام", { n: fa(MAX_IMAGES) });
   return null;
@@ -105,12 +106,7 @@ export function attachmentPayload(message) {
   const files = [];
   for (const attachment of message?.attachments || []) {
     for (const part of attachment.content || []) {
-      if (part.type === "image") {
-        const match = String(part.image).match(/^data:([^;]+);base64,(.*)$/);
-        if (match) images.push({ mimeType: match[1], data: match[2] });
-      } else if (part.type === "file" && part.data) {
-        files.push({ name: part.filename || attachment.name || "file", mimeType: part.mimeType || fileMime({ name: attachment.name }), data: part.data });
-      }
+      if (part.uploadId) (part.type === "image" ? images : files).push({ uploadId: part.uploadId, name: part.filename, mimeType: part.mimeType, bytes: part.bytes });
     }
   }
   const fallback = files.length ? t("این فایل را ببین.") : images.length ? t("این تصویر را ببین.") : "";
@@ -118,7 +114,7 @@ export function attachmentPayload(message) {
 }
 
 /** What the thread shows of a file before the server has it: its name and size, never its bytes. */
-export const filesShown = (files = []) => files.map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: Math.floor((String(file.data || "").length * 3) / 4) }));
+export const filesShown = (files = []) => files.map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.bytes }));
 
 export function formatBytes(n) {
   if (!Number.isFinite(n)) return "";
@@ -127,38 +123,131 @@ export function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// The adapter for any other file: read as base64 at send time, carried as a `file` part.
+// A piece small enough that the bar moves on a slow line, and big enough for a fast one.
+export const PIECE_BYTES = 512 * 1024;
+const RETRIES = 5;
+
+/**
+ * Sends a file a piece at a time, yielding the percent the server has confirmed, and returns the
+ * upload's id. A piece lost to the network goes again; the server's 409 says where it stands.
+ * talk: start({ name, mimeType, size }) -> { id }, put(id, offset, piece, signal) -> { received }.
+ */
+export async function* sendPieces(blob, { name, mimeType }, talk, signal, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+  const { id } = await talk.start({ name, mimeType, size: blob.size });
+  let sent = 0;
+  let tries = 0;
+  while (sent < blob.size) {
+    try {
+      ({ received: sent } = await talk.put(id, sent, blob.slice(sent, sent + PIECE_BYTES), signal));
+      tries = 0;
+      yield Math.floor((sent * 100) / blob.size);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error?.status === 409 && Number.isFinite(error.body?.received)) sent = error.body.received;
+      else if (!retryableError(error) || ++tries > RETRIES) throw error;
+      else await wait(tries * 1000);
+    }
+  }
+  return id;
+}
+
+/**
+ * This composer's uploads: `busy` until each is done, or removed when it failed, so a message never
+ * goes without a file the box shows. talk.remove(id) drops a stored one that was taken out.
+ */
+export function createUploads(talk) {
+  const live = new Map(); // attachment id -> { controller, uploadId, done }
+  const listeners = new Set();
+  let busy = false;
+  const changed = () => {
+    busy = [...live.values()].some((upload) => !upload.done);
+    for (const listener of listeners) listener();
+  };
+  // Pending first, so the chip shows at once; each step of the upload then updates it.
+  async function* run(pending, blob, mimeType) {
+    const upload = { controller: new AbortController(), uploadId: null, done: false };
+    live.set(pending.id, upload);
+    changed();
+    const running = (progress) => ({ ...pending, status: { type: "running", reason: "uploading", progress } });
+    yield running(0);
+    try {
+      const pieces = sendPieces(blob, { name: pending.name, mimeType }, talk, upload.controller.signal);
+      for (let step = await pieces.next(); ; step = await pieces.next()) {
+        if (step.done) {
+          upload.uploadId = step.value;
+          break;
+        }
+        yield running(step.value);
+      }
+    } catch (error) {
+      if (upload.controller.signal.aborted) return;
+      console.warn("[upload]", error);
+      throw new Error(t("«{name}» آپلود نشد؛ حذفش کنید و دوباره بگذارید", { name: pending.name }));
+    }
+    upload.done = true;
+    changed();
+    yield { ...pending, uploadId: upload.uploadId, status: { type: "requires-action", reason: "composer-send" } };
+  }
+  const uploads = {
+    run,
+    busy: () => busy,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    sent(id) {
+      live.delete(id);
+      changed();
+    },
+    remove(id) {
+      const upload = live.get(id);
+      if (!upload) return;
+      upload.controller.abort();
+      live.delete(id);
+      changed();
+      if (upload.uploadId) Promise.resolve(talk.remove(upload.uploadId)).catch(() => {});
+    },
+    // The box is gone (another chat): what it held went with it.
+    stop() {
+      for (const id of [...live.keys()]) uploads.remove(id);
+    },
+  };
+  return uploads;
+}
+
+// The adapter for any other file.
 export class FileAttachmentAdapter {
   accept = FILE_TYPES;
 
-  async add({ file }) {
+  constructor(uploads) {
+    this.uploads = uploads;
+  }
+
+  async *add({ file }) {
     const problem = fileProblem(file);
     if (problem) throw new Error(problem);
-    return {
-      id: `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      type: "document",
-      name: file.name,
-      contentType: fileMime(file),
-      file,
-      status: { type: "requires-action", reason: "composer-send" },
-    };
+    const contentType = fileMime(file);
+    const pending = { id: `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, type: "document", name: file.name, contentType, file };
+    yield* this.uploads.run(pending, file, contentType);
   }
 
   async send(attachment) {
-    const data = await readBase64(attachment.file);
+    this.uploads.sent(attachment.id);
     return {
       ...attachment,
       status: { type: "complete" },
-      content: [{ type: "file", filename: attachment.name, mimeType: attachment.contentType, data }],
+      content: [{ type: "file", filename: attachment.name, mimeType: attachment.contentType, uploadId: attachment.uploadId, bytes: attachment.file.size }],
     };
   }
 
-  async remove() {}
+  async remove(attachment) {
+    this.uploads.remove(attachment.id);
+  }
 }
 
 // Pictures: inline when Claude takes them (PNG, JPEG, WebP, GIF up to 5 MB). A bigger PNG/JPEG/WebP
 // is redrawn smaller as JPEG; one that still does not fit, an animated GIF or another type (HEIC,
-// TIFF…) goes as a file, which the server keeps for the agent.
+// TIFF…) goes as it is, and the server keeps it as a file for the agent.
 const INLINE_IMAGE = /^image\/(png|jpeg|webp|gif)$/;
 const SHRINKABLE_IMAGE = /^image\/(png|jpeg|webp)$/;
 
@@ -175,7 +264,7 @@ export function imageRoute({ type = "", size = 0 } = {}) {
   return "file";
 }
 
-// A JPEG data URL under the cap, or null (no canvas, an undecodable file, still too big).
+// A JPEG under the cap, or null (no canvas, an undecodable file, still too big).
 async function shrinkImage(file) {
   try {
     if (typeof createImageBitmap !== "function") return null;
@@ -190,7 +279,7 @@ async function shrinkImage(file) {
       const blob = canvas.convertToBlob ? await canvas.convertToBlob({ type: "image/jpeg", quality }) : await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
       if (blob && blob.size <= MAX_IMAGE_BYTES) {
         bitmap.close?.();
-        return await readDataUrl(blob);
+        return blob;
       }
     }
     bitmap.close?.();
@@ -203,45 +292,28 @@ async function shrinkImage(file) {
 export class ImageAttachmentAdapter {
   accept = "image/*";
 
-  async add({ file }) {
+  constructor(uploads) {
+    this.uploads = uploads;
+  }
+
+  async *add({ file }) {
     const problem = fileProblem(file);
     if (problem) throw new Error(problem);
-    return {
-      id: `i${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      type: "image",
-      name: file.name,
-      contentType: file.type,
-      file,
-      status: { type: "requires-action", reason: "composer-send" },
-    };
+    const pending = { id: `i${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, type: "image", name: file.name, contentType: file.type, file };
+    const blob = (imageRoute(file) === "shrink" && (await shrinkImage(file))) || file;
+    yield* this.uploads.run({ ...pending, contentType: blob.type, bytes: blob.size }, blob, blob.type);
   }
 
   async send(attachment) {
-    const { file } = attachment;
-    const route = imageRoute(file);
-    const image = route === "image" ? await readDataUrl(file) : route === "shrink" ? await shrinkImage(file) : null;
-    if (image) return { ...attachment, status: { type: "complete" }, content: [{ type: "image", image }] };
-    const data = await readBase64(file);
-    return { ...attachment, status: { type: "complete" }, content: [{ type: "file", filename: attachment.name, mimeType: file.type || fileMime(file), data }] };
+    this.uploads.sent(attachment.id);
+    return {
+      ...attachment,
+      status: { type: "complete" },
+      content: [{ type: "image", image: "", filename: attachment.name, mimeType: attachment.contentType, uploadId: attachment.uploadId, bytes: attachment.bytes }],
+    };
   }
 
-  async remove() {}
-}
-
-function readDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function readBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  async remove(attachment) {
+    this.uploads.remove(attachment.id);
+  }
 }

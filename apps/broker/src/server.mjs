@@ -14,6 +14,15 @@ import { loadSite } from "./site.mjs";
 //   POST /tools/:name   -> { ok: true, result } | { ok: false, error, attempts? }
 //   GET  /probe         -> every cluster path, API checked with a real authenticated read
 //   POST /data/metrics  -> full Prometheus series for charts (not exposed to the agent)
+// BROKER_TOOLS=<name,name>: this broker serves only those tools. A host install that moved into Docker
+// gets the broker for the sandbox (debug_exec: previews, the browser) without a list of platform tools
+// it has no credentials for — its chats saw none before (a colleague, 2026-10-29). Empty = all.
+export function onlyTools(tools, list) {
+  const names = String(list || "").split(",").map((name) => name.trim()).filter(Boolean);
+  if (!names.length) return tools;
+  return Object.fromEntries(Object.entries(tools).filter(([name]) => names.includes(name)));
+}
+
 export function createBrokerServer({ tools, probe, vault = null, log = console }) {
   return http.createServer(async (req, res) => {
     const send = (status, body) => {
@@ -124,7 +133,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const sshRun = createSsh({ vault, knownHosts: genv("SSH_KNOWN_HOSTS", site.sshKnownHosts || "/config/ssh_known_hosts") });
   const clusters = genv("CLUSTERS") ? JSON.parse(genv("CLUSTERS")) : site.clusters;
   const kube = createKube({ vault, sshRun, clusters });
-  const server = createBrokerServer({ tools: createTools({ kube, vault, sshRun, site: { ...site, clusters } }), probe: createProbe({ clusters, kube }), vault });
+  const server = createBrokerServer({ tools: onlyTools(createTools({ kube, vault, sshRun, site: { ...site, clusters } }), genv("BROKER_TOOLS")), probe: createProbe({ clusters, kube }), vault });
   fs.mkdirSync(path.dirname(socketPath), { recursive: true });
   fs.rmSync(socketPath, { force: true });
   server.listen(socketPath, () => {

@@ -238,6 +238,8 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
 
     const backup = backups?.health?.();
     if (backup) add({ id: "backup", ...backup, fix: { id: "backup", title: "بکاپ همین حالا" } });
+    const offsite = backups?.offsiteHealth?.();
+    if (offsite) add({ id: "backup-offsite", ...offsite, ...(offsite.level === "error" ? { fix: { id: "backup", title: "بکاپ همین حالا" } } : {}) });
 
     const level = checks.some((c) => c.level === "error") ? "error" : checks.some((c) => c.level === "warn") ? "warn" : "ok";
     const result = { at: new Date(now()).toISOString(), level, engines, checks, errors: recentErrors().slice(-15) };

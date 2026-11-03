@@ -43,6 +43,37 @@ test("plan: utilization is clamped to 0-100 and a missing reset stays null", () 
   assert.deepEqual(p.rows, [{ id: "five_hour", label: "session", model: null, percent: 100, resetsAt: null }]);
 });
 
+test("plan: Ultra has no 5-hour window, the weekly rows stand alone", () => {
+  const p = parsePlanUsage({ subscription_type: "ultra", rate_limits: { ...USAGE_SAMPLE.rate_limits, five_hour: null } });
+  assert.equal(p.available, true);
+  assert.equal(p.plan, "ultra");
+  assert.deepEqual(p.rows.map((r) => r.id), ["seven_day", "model:Fable"]);
+});
+
+test("plan: the limits list fills in what the named fields left out, without doubling a row", () => {
+  // Entries as recorded from the SDK (0.3.316) on a Max login, 2026-10-31.
+  const list = [
+    { kind: "session", group: "session", percent: 46, resets_at: "2026-10-31T10:59:59.763361+00:00", severity: "normal", is_active: false, scope: null },
+    { kind: "weekly_all", group: "weekly", percent: 60, resets_at: "2026-11-03T01:59:59.763388+00:00", severity: "normal", is_active: true, scope: null },
+    { kind: "weekly_scoped", group: "weekly", percent: 1, resets_at: "2026-11-03T01:59:59.763615+00:00", severity: "normal", is_active: false, scope: { model: { display_name: "Fable", id: null }, surface: null } },
+    { kind: "weekly_scoped", group: "weekly", percent: 7, resets_at: null, severity: "normal", is_active: false, scope: { model: null, surface: { display_name: "Cowork" } } },
+    { kind: "unheard_of", group: "x", percent: 9, resets_at: null, severity: "normal", is_active: false, scope: null },
+  ];
+  const onlyList = parsePlanUsage({ rate_limits: { five_hour: null, seven_day: null, limits: list } });
+  assert.deepEqual(
+    onlyList.rows.map((r) => [r.id, r.label, r.model, r.percent]),
+    [
+      ["five_hour", "session", null, 46],
+      ["seven_day", "weekly", null, 60],
+      ["model:Fable", "weekly_model", "Fable", 1],
+      ["model:Cowork", "weekly_model", "Cowork", 7],
+    ],
+  );
+  assert.equal(onlyList.rows[1].resetsAt, "2026-11-03T01:59:59.763Z");
+  const both = parsePlanUsage({ rate_limits: { ...USAGE_SAMPLE.rate_limits, limits: list } });
+  assert.deepEqual(both.rows.map((r) => [r.id, r.percent]), [["five_hour", 6], ["seven_day", 35], ["model:Fable", 5], ["model:Cowork", 7]]);
+});
+
 test("plan cache: one SDK call per 60 s, shared by concurrent callers; errors become unavailable", async () => {
   let t = 0;
   let calls = 0;

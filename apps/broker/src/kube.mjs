@@ -218,8 +218,10 @@ export function createKube({ vault, sshRun, clusters = DEFAULT_CLUSTERS, fetchIm
   }
 
   // A command inside a pod: emergency SSH first (as before), then the API exec.
-  function exec(cluster, { namespace, pod, container, command, timeoutMs, maxBytes }) {
-    const kubectlArgs = ["exec", "-n", namespace, pod, ...(container ? ["-c", container] : []), "--", ...command];
+  // asOwner: the owner's own work — exec as griffin-owner over SSH (see the header).
+  function exec(cluster, { namespace, pod, container, command, timeoutMs, maxBytes, asOwner = false }) {
+    const ownerKubeconfig = asOwner ? clusterConfig(cluster).emergency?.ownerKubeconfig : "";
+    const kubectlArgs = [...(ownerKubeconfig ? ["--kubeconfig", ownerKubeconfig] : []), "exec", "-n", namespace, pod, ...(container ? ["-c", container] : []), "--", ...command];
     return withFallback(cluster, {
       viaSsh: () => emergency(cluster, kubectlArgs, { ...(timeoutMs ? { timeoutMs } : {}), ...(maxBytes ? { maxBytes } : {}) }),
       viaApiExec: () => apiExec(cluster, { namespace, pod, container, command, timeoutMs, maxBytes }),

@@ -75,7 +75,7 @@ export function formatReset(iso, now = new Date()) {
   return t("بازنشانی {day} {clock} {half}", { day: DAYS[at.getDay()], clock: `${hh % 12 || 12}:${String(at.getMinutes()).padStart(2, "0")}`, half: hh < 12 ? t("صبح") : t("عصر") });
 }
 
-const PLANS = { max: "Max", pro: "Pro", team: "Team", enterprise: "Enterprise" };
+const PLANS = { ultra: "Ultra", max: "Max", pro: "Pro", team: "Team", enterprise: "Enterprise" };
 export const planName = (plan) => (plan ? PLANS[plan] || plan : "");
 
 export function limitLabel(row) {

@@ -130,3 +130,95 @@ test("the account id groups logins exactly: one id joins, two ids never join eve
   assert.equal(a.inferred, false);
   assert.ok(cleanReport(reports[0], NOW).accounts[0].org === A);
 });
+
+test("a fingerprint shared by logins of different accounts joins nothing; the email and the id name the account", () => {
+  const A = "11111111-1111-4111-8111-111111111111";
+  const as = (r, patch) => ({ ...r, accounts: r.accounts.map((a) => ({ ...a, ...patch })) });
+  // An older install's folder-login marker: the same fingerprint everywhere, whoever is signed in.
+  const fp = "f0f0f0f0f0f0";
+  const reports = [
+    as(report("a.example.org", "الف", { fp, rows: [turn(1, "claude", 1000)], reset: "2026-10-22T08:00:00Z" }), { email: "one@x.com" }),
+    as(report("b.example.org", "ب", { fp, rows: [turn(1, "claude", 2000)], reset: "2026-10-23T08:00:00Z" }), { email: "two@x.com" }),
+    as(report("c.example.org", "ج", { fp, rows: [turn(1, "claude", 10)], reset: "2026-10-25T08:00:00Z" }), {}),
+    // A token login of account one: its id, no email; the same weekly reset says it is one@x.com.
+    as(report("d.example.org", "د", { fp: "dddddddddddd", rows: [turn(1, "claude", 500)], reset: "2026-10-22T08:02:00Z" }), { org: A }),
+    // Account two signed in on another install: the email joins it.
+    as(report("e.example.org", "ه", { fp: "eeeeeeeeeeee", rows: [turn(1, "claude", 700)], reset: "2026-10-23T08:00:00Z" }), { email: "TWO@x.com" }),
+  ];
+  const fleet = aggregateFleet(reports, { now: NOW });
+  const of = (install) => fleet.accounts.find((g) => g.installs.some((m) => m.install === install));
+  assert.equal(fleet.accounts.length, 3);
+  assert.equal(of("a.example.org").title, "one@x.com");
+  assert.equal(of("d.example.org"), of("a.example.org"));
+  assert.equal(of("a.example.org").inferred, true);
+  assert.equal(of("e.example.org"), of("b.example.org"));
+  assert.equal(of("b.example.org").inferred, false);
+  assert.notEqual(of("c.example.org"), of("a.example.org"));
+  assert.notEqual(of("c.example.org"), of("b.example.org"));
+});
+
+test("a full account is one message naming its installs, in Tehran time; an old report raises no spike and counts in no total", () => {
+  const until = "2026-10-20T01:00:00.000Z"; // 04:30 Tehran, the next day
+  const full = (install, owner) => report(install, owner, { fp: "aaaaaaaaaaaa", rows: [turn(1, "claude", 1e6)], weekly: 100, reset: until, limit: { at: ago(0.5), until } });
+  const spikeRows = [turn(1, "claude", 20e6), ...[2, 3, 4, 5, 6, 7].map((d) => turn(d * 24 + 1, "claude", 1e6))];
+  const old = { ...report("z.example.org", "ز", { fp: "zzzzzzzzzzzz", rows: spikeRows }), at: ago(30) };
+  const reports = [full("a.example.org", "الف"), full("b.example.org", "ب"), full("c.example.org", "ج"), old];
+  const fleet = aggregateFleet(reports, { now: NOW });
+  const alerts = fleetAlerts(fleet, { now: NOW });
+  const limits = alerts.filter((a) => a.key.startsWith("limit"));
+  assert.equal(limits.length, 1);
+  assert.match(limits[0].text, /سقف هفتگی/);
+  assert.match(limits[0].text, /فردا ساعت ۰۴:۳۰/);
+  assert.match(limits[0].text, /الف، ب، ج/);
+  assert.ok(!alerts.some((a) => /\d{4}-\d\d-\d\dT/.test(a.text)), "no UTC timestamps");
+  assert.ok(!alerts.some((a) => a.key.startsWith("weekly")), "the full week is already the limit message");
+  assert.ok(!alerts.some((a) => a.key.startsWith("spike")), "no spike from a day-old report");
+  assert.equal(fleet.totals.last24h.input, 3e6);
+  assert.ok(!fleet.accounts.some((g) => g.installs.some((m) => m.install === "z.example.org")));
+  assert.equal(fleet.installs.find((i) => i.install === "z.example.org").stale, true);
+});
+
+test("pricing: model aliases and list prices; cache reads are priced, not ignored", async () => {
+  const { priceOf, costOf } = await import("../src/pricing.mjs");
+  assert.equal(priceOf("opus").label, "Opus 5.5");
+  assert.equal(priceOf("claude-opus-5-5").input, 4);
+  assert.equal(priceOf("claude-sonnet-5").label, "Sonnet 5.5");
+  assert.equal(priceOf("claude-haiku-5-5").output, 0.5);
+  assert.equal(priceOf("claude-sonnet-4-6").input, 3);
+  assert.equal(priceOf("opus[1m]").label, "Opus 5.5");
+  assert.equal(priceOf("glm-4.6"), null);
+  assert.equal(priceOf("opus").weight, 2);
+  // 1M of each part on Opus 5.5: 4 + 20 + 5 (write = 1.25x input) + 0.2
+  assert.equal(costOf({ input: 1e6, output: 1e6, cacheWrite: 1e6, cacheRead: 1e6 }, "opus"), 29.2);
+  assert.equal(costOf({ input: 1e6 }, "glm-4.6"), 0);
+});
+
+test("the report and the fleet carry cost per model, account and install, and a plan to read it against", () => {
+  const now = new Date("2026-11-01T12:00:00Z");
+  const at = "2026-11-01T10:00:00Z";
+  const rows = [
+    { at, provider: "claude-1", model: "opus", usage: { input_tokens: 0, output_tokens: 1e6, cache_read_input_tokens: 10e6, cache_creation_input_tokens: 1e6 } },
+    { at, provider: "claude-1", model: "sonnet", usage: { input_tokens: 1e6, output_tokens: 0 } },
+  ];
+  const acc = [{ id: "claude-1", kind: "claude", label: "x", fingerprint: "a".repeat(12), org: "00000000-0000-4000-8000-000000000001" }];
+  const report = buildReport({ rows, accounts: acc, install: "a.example", now });
+  // opus: 20 + 5 + 2 = 27; sonnet: 2
+  assert.equal(report.usage.byModel.opus.cost.last24h, 27);
+  assert.equal(report.usage.cost.last7d, 29);
+  assert.equal(report.usage.byAccount["claude-1"].cost.last24h, 29);
+  const fleet = aggregateFleet([cleanReport(report, now)], { now });
+  assert.equal(fleet.totals.cost.last24h, 29);
+  assert.equal(fleet.models[0].model, "opus");
+  assert.equal(fleet.models[0].weight, 2);
+  assert.equal(fleet.accounts[0].cost.last24h, 29);
+  assert.equal(fleet.installs[0].cost.last24h, 29);
+  assert.equal(fleet.plan.weeklyUsd, 0); // the test account has no name or email: not a paid plan
+  // an install of an older version reports no cost: the hub prices its parts
+  const old = cleanReport(report, now);
+  delete old.usage.cost;
+  for (const v of Object.values(old.usage.byModel)) v.cost = null;
+  for (const v of Object.values(old.usage.byAccount)) v.cost = null;
+  const f2 = aggregateFleet([old], { now });
+  assert.equal(f2.installs[0].cost.last24h, 29);
+  assert.equal(Math.round(f2.accounts[0].cost.last24h), 29);
+});

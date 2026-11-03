@@ -280,6 +280,15 @@ export function currentWorktree(reposRoot, chatId, { existsSync = fs.existsSync,
   if (currentDir) {
     const stored = chatSlots(reposRoot, chatId).find((s) => samePath(s.dir, currentDir));
     if (stored) return stored;
+    // The stored tree's own name wins over the assistant's current one when its folder is gone: a
+    // chat moved from Karsara (karsara-<id8>, under /srv/karsara-<who>/repos) on an install whose
+    // assistant was renamed afterwards looked for kaveh/<id8>, found no such branch and could not
+    // start at all (2026-10-27, a colleague), though karsara/<id8> was there to come back on.
+    const named = TREE_NAME.exec(path.basename(String(currentDir)));
+    if (named && named[2] === shortId(chatId)) {
+      const n = /-2$/.test(String(currentDir)) ? 2 : 1;
+      if (named[1] !== chatPrefix(reposRoot, chatId)) return slotAt(reposRoot, chatId, n, named[1]);
+    }
   }
   return slotAt(reposRoot, chatId, existsSync(slotDir(reposRoot, chatId, 2)) ? 2 : 1);
 }

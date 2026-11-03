@@ -294,6 +294,25 @@ body {
   animation: agent-pulse 1.4s ease-in-out infinite;
 }
 
+/* A chat at work: its title shimmers — a light band sweeps along the text in reading direction, like
+ * Claude Code's session list — instead of bouncing dots beside it (owner 2026-10-31). */
+.title-shimmer {
+  background-image: linear-gradient(90deg, var(--muted-foreground) 0%, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%, var(--muted-foreground) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: title-shimmer 2.2s linear infinite;
+}
+.title-shimmer[dir="rtl"] { animation-direction: reverse; }
+@keyframes title-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .title-shimmer { animation: none; background: none; -webkit-text-fill-color: var(--muted-foreground); }
+}
+
 @keyframes agent-pulse {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }
@@ -1268,3 +1287,66 @@ html:not([data-look="karsara"]) .g-repo-top:has([data-state="open"]) {
 [data-dragging] { opacity: 0.35; }
 .g-dragging, .g-dragging * { cursor: grabbing !important; user-select: none !important; }
 [data-drag-handle] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* Settings: a setting's row, hung under what it depends on; grey while that is off; lit when the search lands on it. */
+.g-set-row { scroll-margin-block: 5rem; transition: background-color 400ms; }
+.g-set-row[style*="--depth"] { position: relative; padding-inline-start: calc(var(--depth) * 1.25rem); }
+.g-set-row[style*="--depth"]::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(var(--depth) * 1.25rem + 0.25rem);
+  border-inline-start: 2px solid var(--border);
+}
+.g-set-row[data-dim] { color: var(--muted-foreground); }
+.g-set-row[data-flash] { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.g-set-meter { width: 3rem; height: 4px; overflow: hidden; border-radius: 2px; background: var(--muted); }
+.g-set-meter > span { display: block; height: 100%; border-radius: 2px; background: var(--primary); transition: width 300ms; }
+.g-set-savebar { position: sticky; bottom: 0.75rem; z-index: 5; }
+
+/* Settings → «ظاهر»: small drawings of the page (SettingsPreview.jsx), everything in em from .g-mini. */
+.g-mini { display: block; font-size: 9px; line-height: 1.5; color: var(--foreground); background: var(--background); }
+.g-mini b { font-weight: 600; }
+.g-mini-small { font-size: 8px; }
+.g-mini-app { display: flex; height: 15rem; overflow: hidden; border: 1px solid var(--border); border-radius: 0.875rem; }
+.g-mini-app .g-mini-app-side { width: 34%; flex-shrink: 0; border-inline-end: 1px solid var(--border); }
+.g-mini-zone { position: relative; display: flex; min-width: 0; flex-direction: column; overflow: hidden; cursor: pointer; transition: opacity 180ms; }
+.g-mini-zone > * { flex: 1; min-height: 0; }
+.g-mini-zone[data-rest] { opacity: 0.4; }
+.g-mini-zone[data-rest]:hover { opacity: 0.75; }
+.g-mini-zone[data-on]::after { content: ""; position: absolute; inset: 2px; border: 2px solid var(--primary); border-radius: 0.625rem; pointer-events: none; }
+@media (min-width: 40rem) and (min-height: 44rem) {
+  .g-mini-sticky { position: sticky; top: 0.5rem; z-index: 6; padding-block: 0.25rem; background: var(--background); }
+}
+.g-mini-side { display: flex; height: 100%; min-height: 19em; gap: 0.5em; padding: 0.7em; background: var(--card); }
+.g-mini-app .g-mini-side { min-height: 0; }
+.g-mini-rail { display: flex; flex-direction: column; gap: 0.7em; padding: 0.4em 0.3em; border-radius: 0.5em; background: var(--muted); }
+.g-mini-chat { display: flex; height: 100%; min-height: 0; flex-direction: column; gap: 0.45em; padding: 0.8em 1em; overflow: hidden; }
+.g-mini-composer { display: flex; flex-direction: column; gap: 0.35em; padding: 0.5em 1em 0.7em; }
+.g-mini-ic { width: 1.15em; height: 1.15em; flex-shrink: 0; }
+.g-mini-faint { color: var(--muted-foreground); }
+.g-mini-line { display: block; height: 0.45em; flex-shrink: 0; border-radius: 1em; background: var(--muted); }
+.g-mini-line[data-strong] { background: color-mix(in srgb, var(--foreground) 22%, transparent); }
+.g-mini-rule { flex-shrink: 0; border-top: 1px solid var(--border); }
+.g-mini-row { display: flex; min-width: 0; flex-shrink: 0; align-items: center; gap: 0.4em; padding: 0.15em 0.4em; border-radius: 0.4em; }
+.g-mini-row[data-active] { background: var(--muted); }
+.g-mini-row[data-primary] { background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary); }
+.g-mini-note { background: var(--muted); color: var(--muted-foreground); }
+.g-mini-new { display: flex; flex-shrink: 0; align-items: center; gap: 0.3em; padding: 0.2em 0.5em; border: 1px solid var(--border); border-radius: 0.5em; }
+.g-mini-dot { width: 0.7em; height: 0.7em; flex-shrink: 0; border-radius: 50%; background: var(--muted-foreground); }
+.g-mini-dot[data-brand] { background: var(--primary); }
+.g-mini-dot[data-big] { width: 1.1em; height: 1.1em; border-radius: 0.3em; }
+.g-mini-dot[data-warn] { background: var(--warn); }
+.g-mini-pill { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 0.25em; padding: 0.05em 0.5em; border: 1px solid var(--border); border-radius: 1em; background: var(--card); color: var(--muted-foreground); white-space: nowrap; }
+.g-mini-pill[data-primary] { border-color: transparent; background: var(--primary); color: var(--primary-foreground); }
+.g-mini-bubble { padding: 0.2em 0.7em; border-radius: 0.9em; background: var(--accent); white-space: nowrap; }
+.g-mini-work { display: flex; flex-shrink: 0; align-items: center; gap: 0.35em; color: var(--muted-foreground); }
+.g-mini-text { flex-shrink: 0; }
+.g-mini-steps { display: flex; flex-shrink: 0; flex-direction: column; gap: 0.3em; margin-inline-start: 0.5em; padding-inline-start: 0.6em; border-inline-start: 1px solid var(--border); }
+.g-mini-card { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 0.5em; padding: 0.25em 0.5em; border: 1px solid var(--border); border-radius: 0.5em; background: var(--card); }
+.g-mini-box { display: flex; flex-shrink: 0; align-items: center; gap: 0.4em; padding: 0.35em 0.5em; border: 1px solid var(--border); border-radius: 0.8em; background: var(--card); }
+.g-mini-send { display: inline-flex; flex-shrink: 0; align-items: center; gap: 0.15em; padding: 0.15em 0.3em; border-radius: 1em; background: var(--primary); color: var(--primary-foreground); }
+.g-mini-slider { position: relative; display: inline-block; width: 3.4em; height: 0.5em; border-radius: 1em; background: var(--muted); }
+.g-mini-slider > span { position: absolute; inset-block: -0.15em; inset-inline-start: 1.2em; width: 0.8em; border-radius: 50%; background: var(--primary); }
+.g-mini-ring { width: 1.1em; height: 1.1em; flex-shrink: 0; border: 0.2em solid var(--muted); border-inline-start-color: var(--primary); border-radius: 50%; }
+.g-mini-caption { padding: 0.15em 0.6em; border-top: 1px solid var(--border); background: var(--card); color: var(--muted-foreground); font-size: 1.25em; text-align: center; }

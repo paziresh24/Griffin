@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { api } from "../api.js";
 import { Group, Item } from "./SettingsParts.jsx";
 import { t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 // Settings → MCP servers: the owner's user-scope servers in ~/.claude.json on the server
 // (GET/PUT/DELETE /api/mcp-servers). Env and header values come back masked; leaving a mask as it
@@ -42,7 +43,7 @@ export function McpServersSection() {
   useEffect(() => { for (const s of data?.servers || []) if (s.type !== "stdio") check(s.name); }, [data]);
 
   const remove = async (name) => {
-    if (!window.confirm(t("سرور «{name}» پاک شود؟", { name }))) return;
+    if (!(await askConfirm(t("سرور «{name}» پاک شود؟", { name })))) return;
     try {
       await api(`/api/mcp-servers/${encodeURIComponent(name)}`, { method: "DELETE" });
       load();
@@ -124,7 +125,7 @@ function McpForm({ initial, onDone }) {
   const field = "w-full rounded-lg border bg-background px-3 py-2 text-sm";
   const stdio = type === "stdio";
   // A preset (mcp.js MCP_PRESETS) whose key line is still empty cannot be saved yet.
-  const preset = MCP_PRESETS.find((p) => p.name === initial.name && !initial.previous && p.url === initial.url);
+  const preset = MCP_PRESETS.find((p) => p.name === initial.name && !initial.previous && (p.type === "stdio" ? p.command === initial.command : p.url === initial.url));
   const keyMissing = presetKeyMissing(preset, pairs);
   const save = async () => {
     setBusy(true);

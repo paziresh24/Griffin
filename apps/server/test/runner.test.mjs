@@ -751,3 +751,71 @@ test("a chat moved to another repo gets a new agent (same session) instead of th
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// 2026-10-28 (Mr. Nouri's job): two processes renewed one account's token at once and the turn died
+// with «refreshing it or exited mid-refresh». It waits, then the same turn goes once more on the same session.
+test("a token renewal race is retried once on the same session after the wait", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-refresh-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  let busy = 1;
+  const agent = {
+    agentId: "same",
+    async send(message, options) {
+      sends.push(Date.now());
+      const failed = busy-- > 0;
+      // What Claude Code says on the way out of such a turn: a session checkpoint, no output.
+      await options?.onDelta?.({ update: { type: "checkpoint", lastMessageId: "m1", sessionId: "same" } });
+      return { id: "r", supports: () => true, async cancel() {}, wait: async () => (failed ? { status: "error", error: { message: "x", code: "oauth_refresh_busy" } } : { status: "finished" }) };
+    },
+  };
+  const sdk = { async create() { return agent; }, async resume() { return agent; } };
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {}, oauthRefreshWaitMs: 150 });
+  try {
+    const chat = store.createChat({ title: "t" });
+    store.setAgentId(chat.id, "same");
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => sends.length === 2);
+    await until(() => !store.runningRuns().length);
+    assert.ok(sends[1] - sends[0] >= 140, "the retry waited for the renewal");
+    assert.equal(store.getChat(chat.id).agent_id, "same");
+    assert.deepEqual(store.getKv(`kept:${chat.id}`) || [], []);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Mr. Khajavi 2026-10-29: an account whose OAuth login had expired took six runs of one chat in a row.
+// A refused login marks the account the run was on and the turn is tried once more elsewhere.
+test("a refused login marks its account and retries the turn once on another", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-auth-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  let route = "claude-5";
+  const sends = [];
+  const sdk = {
+    async create() {
+      return {
+        agentId: "a",
+        async send() {
+          const on = route;
+          sends.push(on);
+          return { id: "r", supports: () => true, async cancel() {}, wait: async () => (on === "claude-5" ? { status: "error", error: { message: "OAuth session expired and could not be refreshed", code: "auth_failed" } } : { status: "finished" }) };
+        },
+      };
+    },
+    async resume() { return this.create(); },
+  };
+  const marked = [];
+  const runner = createRunner({ store, sdk, agentOptions: () => ({}), log: {}, runLabel: () => ({ provider: route, model: "opus" }), onAuthFailed: (_chat, _error, used) => (marked.push(used), (route = "claude-6"), true) });
+  try {
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "سلام", images: [] });
+    await until(() => !store.runningRuns().length && sends.length === 2);
+    assert.deepEqual(marked, ["claude-5"]);
+    assert.deepEqual(sends, ["claude-5", "claude-6"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

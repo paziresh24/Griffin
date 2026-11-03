@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { createMikrotikTools, inCidr, MARK } from "../src/mikrotik.mjs";
+import { createMikrotikTools, DEFAULT_ROUTERS, inCidr, MARK } from "../src/mikrotik.mjs";
 import { connectRouterOs, decodeSentences, encodeSentence } from "../src/routeros.mjs";
 import { TEST_SITE } from "./fixture-site.mjs";
 
@@ -263,4 +263,20 @@ test("winbox: credential read once for parallel calls, one retry after a login f
   assert.equal(out.output, "ok");
   assert.equal(calls, 4, "a login failure is retried once");
   assert.equal(reads, 2, "and the retry re-reads the credential");
+});
+
+test("a router with a fixed host reads only user/password from Infisical and connects to that host on 8728", async () => {
+  const reads = [];
+  let seen = null;
+  const tools = createMikrotikTools({
+    vault: { item: async () => { throw new Error("vault must not be read"); } },
+    readSecret: async ({ projectId, path, name }) => { reads.push(`${projectId}${path}:${name}`); return name === "MT_USER" ? "u" : "p"; },
+    connect: async (opts) => { seen = opts; throw new Error("stop"); },
+    routers: { cap: { infisical: { project: "proj", path: "/mt", user: "MT_USER", password: "MT_PASS" }, host: "10.9.8.7", lan: null, writableLists: [] } },
+  });
+  await tools.mikrotik_print.execute({ router: "cap", path: "/system/identity" }).catch(() => {});
+  assert.deepEqual(reads, ["proj/mt:MT_USER", "proj/mt:MT_PASS"]);
+  assert.equal(seen.host, "10.9.8.7");
+  assert.equal(seen.port, 8728);
+  assert.equal(seen.user, "u");
 });

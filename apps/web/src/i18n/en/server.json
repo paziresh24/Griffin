@@ -72,5 +72,6 @@
  "تبدیل صدا به متن: مدل": "Speech to text: model",
  "تبدیل صدا به متن: زبان": "Speech to text: language",
  "ادامهٔ خودکار گفتگو بعد از بازشدن سقف مصرف (حداکثر سه بار پشت هم؛ هر پیام شما لغوش می‌کند؛ پیش‌فرض روشن)": "Continue the chat automatically once the usage limit resets (at most three times in a row; any message from you cancels it; on by default)",
- "پیشنهاد پیام بعدی در کادر (فقط Claude؛ Tab برای پذیرفتن؛ هر پیشنهاد کمی از سهم مصرف می‌برد؛ پیش‌فرض روشن)": "Suggest the next message in the composer (Claude only; Tab accepts; each suggestion uses a little of the usage quota; on by default)"
+ "پیشنهاد پیام بعدی در کادر (فقط Claude؛ Tab برای پذیرفتن؛ هر پیشنهاد کمی از سهم مصرف می‌برد؛ پیش‌فرض روشن)": "Suggest the next message in the composer (Claude only; Tab accepts; each suggestion uses a little of the usage quota; on by default)",
+ "دانش خودکار: هر یادداشتی که ایجنت می‌نویسد (در هر گفتگو، حتی گفتگوی همکاران) بی‌سؤال ذخیره و تأیید می‌شود و به گفتگوهای بعدی می‌رسد؛ یادداشت‌های در انتظار هم تأیید می‌شوند و در «دانش» فقط حذف می‌ماند (پیش‌فرض خاموش)": "Automatic knowledge: every note an agent writes (in any chat, colleagues' too) is saved and approved without asking and reaches later chats; pending notes are approved too, and the Knowledge page only deletes (default off)"
 }

@@ -11,6 +11,7 @@ import { inertText, maskText } from "../redact.mjs";
 import { NO_FILE_TOOLS, fileGuard, fileGuardHooks } from "./file-scope.mjs";
 import { stateGuard, denyOutput, instructionGuardOptions } from "./state-guard.mjs";
 import { planModeRefusal } from "./plan-mode-guard.mjs";
+import { gitIdentityRefusal } from "./git-identity-guard.mjs";
 import { hostConfigDir, hostSpawner, hostTarget } from "./host-spawn.mjs";
 import { isLoginDirKey, loginDirOf, loginDirToken, mainConfigDir, relativizeSharedLinks } from "../claude-account-dir.mjs";
 import { genv } from "../env.mjs";
@@ -118,7 +119,8 @@ export function accountFromStatus(raw) {
   }
   if (!s || typeof s !== "object" || s.loggedIn !== true) return null;
   const str = (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
-  return { email: str(s.email), name: str(s.displayName || s.name || s.orgName), plan: str(s.subscriptionType), method: str(s.authMethod) };
+  // orgId: the account's id at Anthropic (the same for every login of one account; accounting.mjs).
+  return { email: str(s.email), name: str(s.displayName || s.name || s.orgName), plan: str(s.subscriptionType), method: str(s.authMethod), org: str(s.orgId) };
 }
 
 // Built-ins Claude Code may use in the owner's own chats, within the file scope the run brings
@@ -129,7 +131,7 @@ const FULL_NOTE = "This is the owner's own chat with his full Claude Code: besid
 // options.onHost (config CLAUDE_HOST): the same chat, but on the server as the owner's own Unix user.
 // Griffin's tools act as Griffin's own identity: their refusals (and their «do not hunt other
 // credentials» hints) are about that identity, not the owner's own access.
-const HOST_NOTE = "This is the owner's own chat with their full Claude Code, running on this server as their own Unix user, the way their own terminal does: their ssh keys and ~/.ssh/config hosts, kubectl through them, gh, git with their own forge token, their skills and memory. Besides the tools listed above you have every Claude Code built-in (Bash, Read, Write, Edit, …). Use Bash for what they would do from their own terminal. The app's own tools run as the app's own identity: their refusals and their hints not to look for other credentials are about that identity, not about the owner. When one refuses, try the owner's own access in Bash before you report a missing permission. A «Permission denied» for one user or key on a machine is a wrong guess, not «no access»: find how that machine is actually reached (his ~/.ssh/config, his memory and instructions, the install list) before you say access is missing — never raise an access card for a machine we built. Never print secret values; irreversible changes still need the owner's yes. This server is the production install itself, shared by every chat: run heavy test suites one at a time (nice -n19, TMPDIR on disk) or leave them to CI, and never delete files or folders you did not create. When an irreversible request could mean two or more targets you can name, ask him one question with those as options before acting.";
+const HOST_NOTE = "This is the owner's own chat with their full Claude Code, running on this server as their own Unix user, the way their own terminal does: their ssh keys and ~/.ssh/config hosts, kubectl through them, gh, git with their own forge token, their skills and memory. When the owner asks for something on the forge (a merge, an MR, a pipeline), use their own forge access from Bash for what they asked — a push-only credential's 403 is not «no access». Besides the tools listed above you have every Claude Code built-in (Bash, Read, Write, Edit, …). Use Bash for what they would do from their own terminal. The app's own tools run as the app's own identity: their refusals and their hints not to look for other credentials are about that identity, not about the owner. When one refuses, try the owner's own access in Bash before you report a missing permission. A «Permission denied» for one user or key on a machine is a wrong guess, not «no access»: find how that machine is actually reached (his ~/.ssh/config, his memory and instructions, the install list) before you say access is missing — never raise an access card for a machine we built. Never print secret values; irreversible changes still need the owner's yes. This server is the production install itself, shared by every chat: run heavy test suites one at a time (nice -n19, TMPDIR on disk) or leave them to CI, and never delete files or folders you did not create. When an irreversible request could mean two or more targets you can name, ask him one question with those as options before acting.";
 // options.onHost set, but this run fell back to the container (no host target, or a folder login whose token
 // is about to expire): Bash has no ssh keys here. Without this line a chat reported «no access» and raised an
 // access card for a capsule it reaches fine from the host (live 2026-10-21).
@@ -146,6 +148,22 @@ export function fullModeNote({ ownerJob = false, host = false, onHost = false } 
 }
 // Claude Code's own setting `language`: every send carries it, so every chat answers in Persian.
 export const REPLY_LANGUAGE = "Persian";
+// That setting is said once per session (Claude Code repeats it only when it changes or after a
+// compaction), while its English «The user hasn't heard from you in a while…» nudge comes again and
+// again right before a progress line — and the line came out in English (2026-10-28, after !272:
+// «مجدد انگلیسی جواب میدن»). So every turn carries a short Persian note, and the nudge is Persian.
+export const LANGUAGE_NOTE = "زبان: جواب، هر خطِ پیشرفتِ بین ابزارها و هر سؤال فارسی باشد، حتی بعد از خروجی یا یادآوری انگلیسی. کد، دستور، مسیر و شناسه همان‌طور که هست می‌ماند. توضیحِ (description) هر دستور ترمینال روی کارت تأیید به صاحب چت نشان داده می‌شود: یک جملهٔ سادهٔ فارسی که بگوید چه کاری و چرا.";
+// The notes above still lose now and then: a long turn closes in English (2026-11-01: 41 of 219 final
+// answers of the owner's chats). So the turn's own end checks, and rewrites once (stop_hook_active).
+export const ENGLISH_ANSWER_NUDGE = "جواب آخرت انگلیسی بود. همان جواب را کامل به فارسی بنویس، بدون هیچ کار تازه. فقط اگر خود کاربر انگلیسی خواسته، یک خط فارسی بگو و تمام کن.";
+export function mostlyEnglish(text) {
+  const prose = String(text || "").replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g, "");
+  const english = (prose.match(/[A-Za-z]/g) || []).length;
+  return english >= 40 && english > (prose.match(/[\u0600-\u06FF]/g) || []).length * 2;
+}
+export const SILENT_TURN_REMINDER = "مدتی است کاربر از تو خبری نشنیده. در یک جملهٔ کوتاه فارسی بگو تا الان چه پیدا کرده‌ای یا چه می‌کنی، بعد ادامه بده.";
+export const subagentHook = (text) => ({ hooks: [async () => ({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text } })] });
+const languageHook = { hooks: [async () => ({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: LANGUAGE_NOTE } })] };
 
 const BUILTIN_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"];
 
@@ -253,12 +271,19 @@ const runEnv = (apiKey, endpoint, modelId) => (endpoint ? endpointEnv(endpoint, 
 function resultError(message, limit, endpoint) {
   if (endpoint && isEndpointPlanLimit(message)) return { message, code: "plan_limit", autoFallback: true, resetsAt: resetFromText(message) };
   const code = claudeLimitCode(message, limit);
-  return code ? { message, code, autoFallback: autoMovesOn(message, limit), resetsAt: limit?.resetsAt ? limit.resetsAt * 1000 : null } : sessionGone(message);
+  return code ? { message, code, autoFallback: autoMovesOn(message, limit), resetsAt: limit?.resetsAt ? limit.resetsAt * 1000 : resetFromText(message) } : sessionGone(message);
 }
 
 // A login or key the endpoint refused, as Claude Code words it in a `result` (an
 // expired OAuth login can come back as subtype "success" + is_error true + zero tokens).
 const AUTH_RESULT = /failed to authenticate|oauth|\b401\b|invalid api key|not logged in/i;
+// Two Claude Code processes renewing one account's expired token at the same moment: the loser says
+// so and stops (a colleague's 30-minute job, 2026-10-28 06:00Z; the token was renewed by 06:05). Not a
+// refused login — the runner tries the same turn once more after a short wait.
+export const OAUTH_REFRESH_BUSY = /refreshing it or exited mid-refresh/i;
+export const OAUTH_REFRESH_BUSY_CODE = "oauth_refresh_busy";
+// A refused login or key: the runner takes the account out of routing and tries the turn once elsewhere.
+export const AUTH_FAILED_CODE = "auth_failed";
 export const NO_ANSWER = "موتور جواب خالی برگرداند";
 export const NO_ANSWER_CODE = "no_answer";
 
@@ -291,8 +316,9 @@ export function resultFailure(msg, { produced = false, limit = null, endpoint = 
   const raw = msg.result || msg.errors?.join?.("; ") || msg.subtype || "claude run failed";
   const error = resultError(raw, limit, endpoint);
   if (error.code || !AUTH_RESULT.test(raw)) return error;
+  if (OAUTH_REFRESH_BUSY.test(raw)) return { message: `توکن ورود Claude همان لحظه در حال تمدید بود (${maskText(String(raw)).slice(0, 300)})`, code: OAUTH_REFRESH_BUSY_CODE };
   const who = endpoint ? `کلید ${endpoint.label} پذیرفته نشد` : "ورود یا کلید Claude پذیرفته نشد";
-  return { ...error, message: `${who}؛ در تنظیمات ← موتورها دوباره وارد شوید یا کلید تازه بگذارید (${maskText(String(raw)).slice(0, 2_000)})` };
+  return { ...error, code: AUTH_FAILED_CODE, message: `${who}؛ در تنظیمات ← موتورها دوباره وارد شوید یا کلید تازه بگذارید (${maskText(String(raw)).slice(0, 2_000)})` };
 }
 
 // Why Griffin's own tools are not usable in this session, or null. `connected` alone is not enough:
@@ -727,6 +753,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
     } catch {
       /* bookkeeping only */
     }
+    if (!input?.stop_hook_active && mostlyEnglish(input?.last_assistant_message)) return { decision: "block", reason: ENGLISH_ANSWER_NUDGE };
     return { continue: true };
   }
   const tasksChanged = (p) => tellBackground({ type: "tasks", tasks: taskList(p) });
@@ -964,7 +991,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       if (!gotAny && p.route) throw new Error("Claude Code exited before answering");
     } catch (error) {
       const route = p.route;
-      route?.finish({ status: p.abort.signal.aborted ? "cancelled" : "error", error: p.abort.signal.aborted ? null : sessionGone(String(error?.message || error)) });
+      route?.finish({ status: p.abort.signal.aborted ? "cancelled" : "error", error: p.abort.signal.aborted ? null : thrownError(String(error?.message || error)) });
     } finally {
       clearTimeout(p.idleTimer);
       clearTimeout(p.nextTimer);
@@ -1290,8 +1317,17 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       const kept = full && options.backgroundTasks ? { ...(baseHooks || {}), Stop: [...(baseHooks?.Stop || []), { hooks: [stopHook] }] } : baseHooks;
       // Plan mode refuses changes in a hook, before the allow rules that skip canUseTool (plan-mode-guard.mjs).
       const planHook = { hooks: [async (input) => (liveMode === "plan" ? ((why) => (why ? denyOutput(why) : {}))(planModeRefusal(input?.tool_name, input?.tool_input || {}, `mcp__${mcpName()}__`)) : {})] };
-      // Only where plan mode exists: the owner's own chats (fileAccess). A chain he did not start has no hooks at all.
-      const hooks = kept ? { ...kept, PreToolUse: [...(kept.PreToolUse || []), planHook] } : kept;
+      // Only where plan mode exists: the owner's own chats (fileAccess). A chain he did not start has no guard hook at all.
+      const planned = kept ? { ...kept, PreToolUse: [...(kept.PreToolUse || []), planHook] } : kept;
+      // Config GIT_IDENTITY_GUARD (default on): Bash may not pick a commit's name (git-identity-guard.mjs) —
+      // every run with Bash, «بدون پرسیدن» included: it is about whose name a push carries, not a file scope.
+      const identityHook = { hooks: [async (input) => ((why) => (why ? denyOutput(why) : {}))(gitIdentityRefusal(input?.tool_name, input?.tool_input || {}))] };
+      const guarded = full && genv("GIT_IDENTITY_GUARD", "on") !== "off" ? { ...(planned || {}), PreToolUse: [...(planned?.PreToolUse || []), { matcher: "Bash", ...identityHook }] } : planned;
+      // Every chat, guarded or not: the Persian note rides on each user turn (no tool is gated by it).
+      const prompted = { ...(guarded || {}), UserPromptSubmit: [...(guarded?.UserPromptSubmit || []), languageHook] };
+      // A subagent's prompt is Claude Code's generic one: give it the capability map and the rules
+      // that bind every agent here (capability-map.mjs subagentBrief, built per run in index.mjs).
+      const hooks = options.subagentContext ? { ...prompted, SubagentStart: [...(prompted.SubagentStart || []), subagentHook(options.subagentContext)] } : prompted;
       const prev = last;
       let closeMe;
       const me = { closed: new Promise((resolve) => (closeMe = resolve)), done: false, abort, resultAt: 0 };
@@ -1336,7 +1372,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             ...(builtins ? { tools: planGate ? [...builtins, "ExitPlanMode"] : builtins, allowedTools: [...builtins, ...allowedMcp, `mcp__${mcpName()}__*`] } : { allowedTools: [...allowedMcp, `mcp__${mcpName()}__*`] }),
             // Config PLAN_APPROVAL: the handler, and leave to switch to agent mode on approval.
             ...(planGate ? { canUseTool: planGate, allowDangerouslySkipPermissions: true } : {}),
-            ...(hooks ? { hooks } : {}),
+            hooks,
             // With a handler Claude Code would offer its own question tool (no card here) and EnterPlanMode
             // (plan mode is the owner's choice from the chat): both off, as without a handler.
             ...(full && !planGate ? {} : { disallowedTools: [...(full ? [] : ["Bash", "BashOutput", "KillShell", "NotebookEdit"]), ...(planGate ? ["AskUserQuestion", "EnterPlanMode"] : [])] }),
@@ -1350,6 +1386,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             env: {
               ...withMcpSync(runEnv(host && hostLogin ? hostLogin.token : apiKey, endpoint, modelId), full && !host),
               ...gitAuthorEnv(options.gitAuthor),
+              CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT: SILENT_TURN_REMINDER,
               // Claude Code stops suggesting by itself once the account is past its warning line
               // (rate limit «allowed_warning», 72% of the week on 2026-10-22) or after 20 unused ones;
               // the owner's switch (config PROMPT_SUGGESTIONS) decides, not that.
@@ -1460,7 +1497,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
         } catch (error) {
           finish({
             status: abort.signal.aborted && !mcpDown ? "cancelled" : "error",
-            error: mcpDown ? { message: mcpDown } : sessionGone(String(error?.message || error)),
+            error: mcpDown ? { message: mcpDown } : thrownError(String(error?.message || error)),
           });
         } finally {
           started = true;
@@ -1488,6 +1525,9 @@ function bestEffort(fn) {
 // "No conversation found with session ID". Tag it so the runner starts a fresh session.
 // Only the CLI's exact resume failures: an auth error such as «Invalid session
 // token» also says "session", and a fresh session would not fix it.
+// A thrown login failure (the CLI's own words, narrower than AUTH_RESULT) is a refused login too.
+const AUTH_THROWN = /oauth session expired|could not be refreshed|failed to authenticate|not logged in|invalid api key/i;
+const thrownError = (message) => (AUTH_THROWN.test(message) && !OAUTH_REFRESH_BUSY.test(message) ? { message, code: AUTH_FAILED_CODE } : sessionGone(message));
 function sessionGone(message) {
   return /no conversation found with session id|failed to resume session/i.test(message) ? { message, code: "agent_not_found" } : { message };
 }
@@ -1623,11 +1663,18 @@ export const PERMISSION_MODES = { agent: "bypassPermissions", plan: "plan", auto
 // Modes that run like the old default: on the host with his own user, no Claude Code permission card.
 export const runsFree = (mode) => ["agent", "auto"].includes(mode || "agent");
 
+// The card is one sentence the owner reads at a glance; the literal command goes under «جزئیات» on
+// the card (permissionDetail). Owner 2026-10-28, on a card that was a whole shell script: «:|».
+const TOOL_ACTS = { Bash: "اجرای یک دستور در ترمینال", Write: "نوشتن فایل", Edit: "ویرایش فایل", NotebookEdit: "ویرایش notebook", WebFetch: "خواندن یک صفحهٔ وب", WebSearch: "جستجو در وب" };
 export function permissionQuestion(name, input = {}) {
-  const what = typeof input.description === "string" && input.description.trim() ? input.description.trim() : null;
-  const detail = input.command || input.file_path || input.path || input.url || input.pattern || JSON.stringify(input).slice(0, 300);
+  const what = typeof input.description === "string" ? input.description.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   const tool = String(name).replace(/^mcp__[a-z0-9-]+__/, "");
-  return `Claude می‌خواهد ${tool} را اجرا کند${what ? `: ${what}` : ""}\n${String(detail).slice(0, 600)}\nاجازه می‌دهید؟`;
+  const file = typeof input.file_path === "string" || typeof input.notebook_path === "string" ? String(input.file_path || input.notebook_path).split("/").pop() : "";
+  const act = TOOL_ACTS[tool] ? `${TOOL_ACTS[tool]}${file ? ` ${file}` : ""}` : `اجرای ابزار ${tool}`;
+  return `${act}${what ? `: ${what}` : ""}. اجازه می‌دهید؟`;
+}
+export function permissionDetail(name, input = {}) {
+  return String(input.command || input.file_path || input.notebook_path || input.path || input.url || input.query || input.pattern || JSON.stringify(input)).slice(0, 4000);
 }
 
 // An MCP server's question to the owner (Claude Code elicitation): a sign-in link
@@ -1692,7 +1739,7 @@ export function askOwnerTool(approve, { askTool = null, emit = async () => {} } 
     if (name === "ExitPlanMode") return { behavior: "deny", message: "Stay in plan mode: give the plan as your answer and stop." };
     if (name === "AskUserQuestion" && typeof askTool?.execute === "function") return canUseAskUserQuestion(input, askTool, { emit, toolUseID: ctx.toolUseID || null });
     if (typeof approve !== "function") return { behavior: "deny", message: "No one is here to approve this step." };
-    const yes = await approve(permissionQuestion(name, input)).catch(() => "unanswered");
+    const yes = await approve(permissionQuestion(name, input), { detail: permissionDetail(name, input) }).catch(() => "unanswered");
     // A card cut by a restart or a cancel is not a «no» (2026-10-21: «آخرین ابزارم را رد کردید» after
     // an install restarted the server under an open card).
     if (yes === "unanswered") return { behavior: "deny", message: "The owner's approval card closed without an answer (restart or cancel); he did NOT refuse. Ask again if the step is still needed, and never tell him he rejected it." };

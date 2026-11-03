@@ -10,10 +10,10 @@ import { useEffect, useRef, useState } from "react";
 import { Dialog, Popover } from "radix-ui";
 import { Command } from "cmdk";
 import { AlarmClock, ChevronUp, Command as CommandIcon, Grip, MessageCircle, MessageSquare, PanelLeftClose, Pin, PinOff, Plus, Radar, Search, Settings2, Store, TerminalSquare, Users } from "lucide-react";
-import { writeSetting } from "../brand.js";
 import { orderNav } from "../drag.js";
 import { moduleNavItems, sectionOn } from "../modules.js";
-import { useModuleList, useModuleRoute } from "../module-hooks.js";
+import { useModuleBadges, useModuleList, useModuleRoute } from "../module-hooks.js";
+import { badgeText } from "../chat-tools.js";
 import { NAV_ITEMS, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
 import { isPlainClick } from "../sidebar-width.js";
 import { navigate } from "../api.js";
@@ -29,6 +29,13 @@ export const NAV_TARGETS = {
   workbench: { section: "workbench", icon: TerminalSquare, path: "/workbench" },
 };
 
+/** The number beside a section's name (servers that need a look…): nothing for zero. */
+export function NavCount({ count, className = "" }) {
+  const text = badgeText(count);
+  if (!text) return null;
+  return <span className={`g-badge ms-auto shrink-0 rounded-full bg-warn px-1.5 text-[10px] leading-4 text-background ${className}`} aria-label={t("{badge} مورد نیاز به توجه", { badge: count })}>{text}</span>;
+}
+
 /** The chosen place; anything unknown (an older or newer page's value) is the default list. */
 export const navStyleOf = (flags) => (["launcher", "rail", "menu"].includes(flags?.navStyle) ? flags.navStyle : "list");
 
@@ -38,7 +45,9 @@ export function useSections() {
   const moduleRoute = useModuleRoute();
   const moduleList = useModuleList();
   // The pages modules add (modules/, docs/modules.md), after the core sections.
-  const moduleItems = moduleNavItems(moduleList).map((i) => ({ ...i, icon: MODULE_ICONS[i.icon] || MODULE_ICONS.puzzle, section: `m:${i.module}:${i.page}` }));
+  const hasBadge = (moduleList || []).some((m) => (m.pages || []).some((p) => p.badge));
+  const badges = useModuleBadges(hasBadge);
+  const moduleItems = moduleNavItems(moduleList).map((i) => ({ ...i, icon: MODULE_ICONS[i.icon] || MODULE_ICONS.puzzle, section: `m:${i.module}:${i.page}`, badge: badges[`${i.module}:${i.page}`] || 0 }));
   // The core sections are modules too (modules/telegram, …): one that is off here is not offered.
   const items = orderNav([...NAV_ITEMS.filter((item) => sectionOn(moduleList, item.id)).map((item) => ({ ...item, ...NAV_TARGETS[item.id] })), ...moduleItems], flags.navOrder);
   return {
@@ -70,8 +79,7 @@ const goTo = (path) => {
   window.location.hash = path;
 };
 export const openMarket = () => {
-  writeSetting("griffin.settings.section", "market");
-  goTo("/settings");
+  goTo("/settings/market");
 };
 
 // A section as a drag handle and drop place: dropped on another, it takes that place (drag.js).
@@ -99,6 +107,7 @@ export function PinnedRow({ item, active, onGo, onUnpin }) {
     >
       <Icon className="size-[15px] shrink-0" />
       <span>{item.label}</span>
+      <NavCount count={item.badge} />
       <button
         type="button"
         className="g-sn-row-unpin"
@@ -148,7 +157,7 @@ export function NavLauncher({ go, activeSection }) {
                 <NavSlot key={item.id} id={item.id} ids={ids} onOrder={reorder} horizontal className="!flex">
                   <div className="g-sn-tile w-full" data-active={active === item.section ? "" : undefined}>
                     <a href={`#${item.path}`} onClick={linkClick(item.path, pick)} className="g-sn-tile-main" aria-current={active === item.section ? "page" : undefined}>
-                      <span className="g-sn-tile-ic"><Icon className="size-5" /></span>
+                      <span className="g-sn-tile-ic relative"><Icon className="size-5" /><NavCount count={item.badge} className="!absolute -end-2 -top-2 !ms-0" /></span>
                       <span className="g-sn-tile-label">{item.label}</span>
                     </a>
                     <button
@@ -232,6 +241,7 @@ export function NavRail() {
             <NavSlot key={item.id} id={item.id} ids={ids} onOrder={reorder}>
               <a href={`#${item.path}`} onClick={linkClick(item.path, go)} aria-current={active === item.section ? "page" : undefined} aria-label={item.label} data-tip={item.label} className="g-sn-rail-btn g-sn-tip g-sn-tip-side">
                 <Icon className="size-[18px]" />
+                {item.badge > 0 ? <span className="absolute end-0.5 top-0.5 size-2 rounded-full bg-warn" aria-hidden /> : null}
               </a>
             </NavSlot>
           );
@@ -296,6 +306,7 @@ export function SectionMenuItems({ onPick, rowClass, iconClass = "size-4 text-mu
           <button key={item.id} type="button" className={`g-sn-menu-row ${rowClass}`} aria-current={active === item.section ? "page" : undefined} onClick={() => { onPick?.(); goTo(item.path); }}>
             <Icon className={iconClass} />
             <span>{item.label}</span>
+            <NavCount count={item.badge} />
           </button>
         );
       })}

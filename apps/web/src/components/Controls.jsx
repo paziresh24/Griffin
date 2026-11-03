@@ -416,13 +416,8 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
   const readyCount = models.filter((m) => (m.provider !== current || m.more) && ready(m.provider)).length;
   const resting = otherAccounts.filter((id) => !ready(id));
   const openEngines = () => {
-    try {
-      localStorage.setItem("griffin.settings.section", "providers");
-    } catch {
-      // storage off: settings opens on its first section
-    }
     setOpen(false);
-    window.location.hash = "#/settings";
+    window.location.hash = "#/settings/providers";
   };
 
   // Going into «مدل‌های بیشتر» or an account slides forward, coming back slides back.

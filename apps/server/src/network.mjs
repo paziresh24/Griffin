@@ -50,6 +50,9 @@ const secretName = (id) => `network/${id}`;
 export const NETWORK_TOOLS = ["network_agents", "network_ask", "network_reply", "network_connect"];
 
 const STATUS = "network:status";
+// old member id -> the id it moved to (movedTo / memberIs): the peer user and the token we gave a member
+// stay named after its old address, so what it sends from its new one is matched through this.
+const MOVED = "network:moved";
 const OUTBOX = "network:outbox";
 const PROBE_MS = 60_000;
 // An announced restart is believed this long; the member's «ready» (or a good probe) ends it sooner.
@@ -162,6 +165,7 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     const theirs = await getJson(`${to}/api/public/network/card`);
     if (allowedOrigin(theirs?.url, domains) !== to) return null;
     const newId = agentId(new URL(to).host);
+    store.setKv(MOVED, { ...(store.getKv(MOVED) || {}), [id]: newId });
     const all = agents();
     if (!all[newId]) all[newId] = { ...all[id], id: newId, url: to, lastError: null };
     delete all[id];
@@ -174,6 +178,39 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     store.deleteKv?.(iconKey(id));
     log.log?.(`[network] ${origin} moved to ${to}`);
     return newId;
+  }
+  // Is the peer user `userId` (a token this install gave) the member now at `host`? Its own id, or an
+  // id it moved from: the token stays named after the old address (2026-10-27: every karsara-* → griffin-*
+  // member had its usage reports refused with 403 for three days). A move this install did not follow
+  // itself is checked the same way movedTo does: the old address must redirect to `host`.
+  const notMoved = new Map(); // old id -> when it last did not redirect (no fetch per request)
+  async function memberIs(userId, host) {
+    const id = agentId(String(host || "").toLowerCase());
+    if (!id) return false;
+    if (`net-${id}`.slice(0, 41) === userId) return true;
+    const old = String(userId || "").replace(/^net-/, "");
+    if (!old || old === String(userId)) return false;
+    const moved = store.getKv(MOVED) || {};
+    if (moved[old]) return moved[old] === id;
+    if (now() - (notMoved.get(old) || 0) < 3600_000) return false;
+    for (const d of domains) {
+      const suffix = `-${agentId(d)}`;
+      const label = old.endsWith(suffix) ? old.slice(0, -suffix.length) : "";
+      const origin = /^[a-z0-9][a-z0-9-]*$/.test(label) ? allowedOrigin(`https://${label}.${d}`, domains) : null;
+      if (!origin) continue;
+      try {
+        const res = await fetchFn(`${origin}/api/public/network/card`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000), redirect: "manual" });
+        const to = [301, 302, 307, 308].includes(res.status) ? allowedOrigin(new URL(res.headers.get("location") || "", origin).origin, domains) : null;
+        if (to && agentId(new URL(to).host) === id) {
+          store.setKv(MOVED, { ...(store.getKv(MOVED) || {}), [old]: id });
+          return true;
+        }
+      } catch {
+        // the old address does not answer: not a move we can prove
+      }
+    }
+    notMoved.set(old, now());
+    return false;
   }
   let syncedAt = 0;
   async function syncCards({ force = false } = {}) {
@@ -695,7 +732,7 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
       const body = await c.req.json().catch(() => ({}));
       const origin = allowedOrigin(body.from, domains);
       const id = origin ? agentId(new URL(origin).host) : null;
-      if (!id || `net-${id}`.slice(0, 41) !== who.userId) return c.json({ error: "not that member" }, 403);
+      if (!id || !(await memberIs(who.userId, new URL(origin).host))) return c.json({ error: "not that member" }, 403);
       if (!["updating", "ready"].includes(body.state)) return c.json({ error: "bad state" }, 400);
       const updating = body.state === "updating";
       const until = updating ? (Date.parse(body.until) > now() && Date.parse(body.until) < now() + 3600_000 ? body.until : new Date(now() + UPDATE_ETA_MS).toISOString()) : null;
@@ -819,5 +856,5 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     recover();
   }
 
-  return { card, hello, onHello, onToken, gossip, list, ask, say, reply, post, refresh, routes, ownerRoutes, tools, start, connected, pending, recover, probeAll, leave, arrive, flush, statusOf };
+  return { card, memberIs, hello, onHello, onToken, gossip, list, ask, say, reply, post, refresh, routes, ownerRoutes, tools, start, connected, pending, recover, probeAll, leave, arrive, flush, statusOf };
 }

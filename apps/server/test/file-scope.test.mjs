@@ -89,7 +89,7 @@ test("a chain the owner did not start gets no built-in file or web tool; his own
     const options = await optionsOf(missing);
     assert.deepEqual(options.tools, [...NO_FILE_TOOLS, "ToolSearch"], "no scope: no file or web tool (fail closed); ToolSearch reaches the deferred tools");
     assert.ok(!options.allowedTools.some((t) => /^(Read|Write|Edit|Glob|Grep|WebFetch|WebSearch)$/.test(t)));
-    assert.equal(options.hooks, undefined);
+    assert.deepEqual(Object.keys(options.hooks), ["UserPromptSubmit"], "no guard hook, only the Persian note on each turn");
   }
   const own = await optionsOf({ read: ["/tmp"], write: ["/tmp"], deny: [] });
   assert.ok(own.tools.includes("Read") && own.tools.includes("WebFetch"));

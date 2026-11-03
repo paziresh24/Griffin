@@ -1,4 +1,4 @@
-import { BROWSER_TOOL_NAMES } from "../browser-names.mjs";
+import { BROWSER_TOOL_NAMES, MY_BROWSER_TOOL_NAMES } from "../browser-names.mjs";
 import { AGENTS, CALLER_LABELS, DEFAULT_AGENT, filterTools } from "./registry.mjs";
 
 export const SELF_MGMT_TOOLS = [
@@ -52,6 +52,8 @@ export const APP_TOOL_NAMES = [
   "web_fetch",
   // A real browser in the sandbox (browser.mjs), every chat.
   ...BROWSER_TOOL_NAMES,
+  // The owner's own Chrome through the Griffin extension (my-browser.mjs), owner chats only.
+  ...MY_BROWSER_TOOL_NAMES,
   "knowledge_write",
   "knowledge_list",
   "knowledge_edit",

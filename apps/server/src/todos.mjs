@@ -15,6 +15,14 @@ const reply = (text, isError = false) => ({ ...(isError ? { isError: true } : {}
 // Engines name statuses their own way (Cursor TODO_STATUS_*, Claude in_progress, a title instead
 // of content); the board reads one shape.
 export function normalizeTodos(list) {
+  // A model sometimes passes the list as a JSON string (2026-10-30).
+  if (typeof list === "string") {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return [];
+    }
+  }
   if (!Array.isArray(list)) return [];
   return list
     .map((t) => {
@@ -131,9 +139,11 @@ export function watchTodos(store, { pendingDelegates = () => 0 } = {}) {
   const onEvent = (chatId, event) => {
     try {
       if (event?.type !== "tool.done" || !NATIVE.has(event.data?.name)) return;
+      // A call the engine refused set no steps.
+      if (event.data?.result?.status === "error") return;
       const value = event.data?.result?.value ?? event.data?.result;
-      const list = Array.isArray(value?.todos) ? value.todos : Array.isArray(event.data?.args?.todos) ? event.data.args.todos : null;
-      if (list) saveTodos(store, chatId, list);
+      const list = [value?.todos, event.data?.args?.todos].find((l) => Array.isArray(l) || typeof l === "string");
+      if (list != null) saveTodos(store, chatId, list);
     } catch (error) {
       console.error(`[todos] chat ${chatId}: ${error.message}`);
     }

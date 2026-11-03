@@ -9,6 +9,8 @@ import { num, t } from "../i18n.js";
 import { SENDING_LABEL, SENT_LABEL } from "../outbox.js";
 import { QUEUE_WAITING_LABEL, editLossWarning, takeOutError, waitingQueued } from "../queue-peek.js";
 
+import { askConfirm } from "../dialog.jsx";
+
 const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
 
 /**
@@ -30,9 +32,9 @@ export function QueuePeek({ chatId, onEdit }) {
   }, [first]);
 
   const takeOut = async (item, edit) => {
-    if (!edit && !window.confirm(t("این پیام از صف حذف شود؟"))) return;
+    if (!edit && !(await askConfirm(t("این پیام از صف حذف شود؟")))) return;
     const loss = edit ? editLossWarning(item) : null;
-    if (loss && !window.confirm(loss)) return;
+    if (loss && !(await askConfirm(loss))) return;
     setBusy(item.eventId);
     try {
       await api(`/api/chats/${chatId}/queue/${item.eventId}`, { method: "DELETE" });

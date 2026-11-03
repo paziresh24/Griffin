@@ -29,12 +29,62 @@ export function tailStart(messages, limit) {
   return cut;
 }
 
+// A page goes out without the big tool results: they were ~90% of a chat's first screen (a page of
+// 40 messages weighed 4.8 MB, 2026-10-28) though their cards sit folded in the work log. The card
+// fetches its result when it is opened (GET /api/chats/:id/tool-result). Results drawn without a
+// click — charts, files, questions, the plan, a subagent's steps — and failures always go out whole.
+export const LAZY_RESULT_BYTES = 1024;
+const SHOWN_WITHOUT_CLICK = new Set([
+  "show_media", "browser_screenshot", "s3_get", "visualize", "preview_start", "ask_owner", "ask_requester", "ask_agent",
+  "consult", "send_to_person", "owner_task", "task", "todo_write", "TodoWrite", "AskUserQuestion", "ExitPlanMode",
+]);
+const leavable = (part) => part.type === "tool" && part.status === "success" && Boolean(part.result) && Boolean(part.callId) && !SHOWN_WITHOUT_CLICK.has(part.name);
+
+// What the folded card's head shows of a result (Tool.jsx SourceBadge) stays beside the stub.
+function resultHead(result) {
+  const first = result?.value?.content?.find?.((c) => typeof c?.text === "string" || typeof c?.text?.text === "string");
+  const raw = typeof first?.text === "string" ? first.text : first?.text?.text;
+  if (!raw || raw[0] !== "{") return {};
+  try {
+    const { source, attempts } = JSON.parse(raw);
+    return { ...(typeof source === "string" ? { source } : {}), ...(Array.isArray(attempts) ? { attempts } : {}) };
+  } catch {
+    return {};
+  }
+}
+
+/** The messages with each big, folded tool result swapped for a stub that says where to fetch it. */
+export function liteMessages(messages, chatId) {
+  return messages.map((message) => {
+    if (!message.parts?.some(leavable)) return message;
+    let changed = false;
+    const parts = message.parts.map((part) => {
+      if (!leavable(part)) return part;
+      const bytes = JSON.stringify(part.result).length;
+      if (bytes < LAZY_RESULT_BYTES) return part;
+      changed = true;
+      return { ...part, result: { value: { lazy: { chat: chatId, bytes }, ...resultHead(part.result) } } };
+    });
+    return changed ? { ...message, parts } : message;
+  });
+}
+
+/** One tool call's whole result by its callId, newest message first; null when there is none. */
+export function toolResult(timeline, callId) {
+  for (let i = timeline.messages.length - 1; i >= 0; i -= 1) {
+    const part = timeline.messages[i].parts?.find((p) => p.type === "tool" && p.callId === callId);
+    if (part) return { status: part.status, result: part.result ?? null };
+  }
+  return null;
+}
+
 /** The `limit` messages just before the one called `before`; null when there is no such message. */
-export function olderPage(timeline, before, limit) {
+export function olderPage(timeline, before, limit, chatId = null) {
   const at = timeline.messages.findIndex((m) => m.id === before);
   if (at < 0) return null;
   const from = Math.max(0, at - limit);
-  return { messages: timeline.messages.slice(from, at), earlier: from };
+  const messages = timeline.messages.slice(from, at);
+  return { messages: chatId ? liteMessages(messages, chatId) : messages, earlier: from };
 }
 
 export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageSize = 2000 }) {
@@ -86,14 +136,14 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
     const entry = { timeline, rev, body: Buffer.from(JSON.stringify({ timeline, rev })), packed: null, packing: null, kept: 0 };
     // The gzipped body is made on first use, off the main thread, and kept with the entry.
     // The last `limit` messages (timeline.earlier = how many come before them): what a big chat's
-    // first open needs; the rest is fetched page by page (olderPage).
+    // first open needs; the rest is fetched page by page (olderPage). Big tool results stay behind
+    // (liteMessages), also when the whole chat fits in the page.
     entry.tails = new Map();
     entry.tail = (limit) => {
       const cut = tailStart(timeline.messages, limit);
-      if (!cut) return entry;
       let tail = entry.tails.get(limit);
       if (!tail) {
-        const body = Buffer.from(JSON.stringify({ timeline: { ...timeline, messages: timeline.messages.slice(cut), earlier: cut }, rev }));
+        const body = Buffer.from(JSON.stringify({ timeline: { ...timeline, messages: liteMessages(timeline.messages.slice(cut), chatId), ...(cut ? { earlier: cut } : {}) }, rev }));
         tail = { body, packed: null, packing: null };
         tail.gzip = () => {
           tail.packing ||= gzip(body, { level: 4 }).then((packed) => (tail.packed = packed));
@@ -146,5 +196,19 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
     for (const chatId of only ? [only] : [...entries.keys(), ...pending.keys()]) drop(chatId);
   });
 
-  return { get, drop, rev, stats: () => ({ entries: entries.size, bytes }) };
+  // After a restart (every release) the memory is empty and the first open of a big chat folded its
+  // whole log: 1.3–5.3 s on 2026-10-28. The chats likely to be opened next are folded in the
+  // background instead, one at a time, the most recent last so it stays the freshest in memory.
+  async function warm(chatIds) {
+    for (const chatId of [...chatIds].reverse()) {
+      try {
+        await get(chatId);
+      } catch (error) {
+        console.error(`[timelines] warm ${chatId}: ${error.message}`);
+      }
+      await yieldToLoop();
+    }
+  }
+
+  return { get, drop, warm, rev, stats: () => ({ entries: entries.size, bytes }) };
 }

@@ -69,6 +69,20 @@ test("watchTodos: copies Claude's and Cursor's lists, only on a change, and clea
   stop();
 });
 
+test("watchTodos: a list sent as a JSON string is read; a refused call sets nothing", () => {
+  const store = fresh();
+  const chat = store.createChat({ title: "x" });
+  const stop = watchTodos(store);
+  const key = `todo:${chat.id}`;
+  const todos = JSON.stringify([{ content: "a", status: "in_progress" }]);
+
+  store.appendEvent(chat.id, null, "tool.done", { name: "TodoWrite", args: { todos }, result: { status: "error", value: "No such tool available: TodoWrite" } });
+  assert.equal(store.getKv(key), null);
+  store.appendEvent(chat.id, null, "tool.done", { name: "TodoWrite", args: { todos } });
+  assert.deepEqual(store.getKv(key).todos, [{ content: "a", status: "in_progress" }]);
+  stop();
+});
+
 test("owner_task: an access request on the owner's board, linked to the root chat", async () => {
   const store = fresh();
   const root = store.createChat({ title: "سرچ" });

@@ -1,26 +1,30 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   AssistantRuntimeProvider,
   CompositeAttachmentAdapter,
   useExternalStoreRuntime,
 } from "@assistant-ui/react";
-import { api, catchUpTimeline, navigate } from "./api.js";
+import { api, apiPiece, catchUpTimeline, navigate } from "./api.js";
 import { createSender, mergeOutbox, newClientId, outbox } from "./outbox.js";
 import { holdReload } from "./new-version.js";
 import { unwrapResult } from "./result.js";
 import { t } from "./i18n.js";
 import { holdSending, loadDraft, recoverSending, releaseSending, saveDraft } from "./draft.js";
-import { quoteStore, withQuotes } from "./quotes.js";
+import { quoteStore, sendBody } from "./quotes.js";
 import { retryableRunId } from "./side.js";
 import { collectChapters } from "./chat-tools.js";
 import { noteMessage } from "./telegram.js";
 import { guestMessage } from "./guest.js";
-import { FileAttachmentAdapter, ImageAttachmentAdapter, attachmentPayload, countProblem, filesShown } from "./attachments.js";
+import { FileAttachmentAdapter, ImageAttachmentAdapter, attachmentPayload, countProblem, createUploads, filesShown } from "./attachments.js";
 
 export { unwrapResult };
 
-// Pictures go as images (a big one shrunk, or sent as a file); any other file as a file (attachments.js).
-const attachmentAdapter = new CompositeAttachmentAdapter([new ImageAttachmentAdapter(), new FileAttachmentAdapter()]);
+// What a file's upload says to the server (attachments.js sendPieces, server uploads.mjs).
+const uploadTalk = {
+  start: (file) => api("/api/uploads", { method: "POST", body: file }),
+  put: (id, offset, piece, signal) => apiPiece(`/api/uploads/${id}?offset=${offset}`, piece, signal),
+  remove: (id) => api(`/api/uploads/${id}`, { method: "DELETE" }),
+};
 
 // The chat this runtime sends to (the composer keys its draft and quotes by it), a send of the
 // waiting quotes alone (an empty box cannot be submitted through the composer itself), and the
@@ -99,7 +103,7 @@ export const editSend = (clientId) => sender.edit(clientId);
 export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError, children }) {
   const waiting = useSyncExternalStore(outbox.subscribe, () => outbox.forChat(chatId), () => outbox.forChat(chatId));
   // The owner's messages still on their way show after the thread, each with its state.
-  const messages = useMemo(() => mergeOutbox(timeline.messages, chatId ? waiting : []), [timeline.messages, waiting, chatId]);
+  const messages = useMemo(() => mergeOutbox(timeline.messages, waiting), [timeline.messages, waiting]);
   useEffect(() => {
     if (chatId) sender.landed(chatId, timeline.messages);
   }, [chatId, timeline.messages, waiting]);
@@ -126,7 +130,24 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
   const isRunning = lastRun?.status === "running";
   const retryId = chatId ? retryableRunId(messages, kept.length) : null;
   const boxId = chatId;
+  // Each box has its own uploads: pictures go as images (a big one shrunk), any other file as a file.
+  const uploads = useMemo(() => createUploads(uploadTalk), []);
+  const attachmentAdapter = useMemo(() => new CompositeAttachmentAdapter([new ImageAttachmentAdapter(uploads), new FileAttachmentAdapter(uploads)]), [uploads]);
+  const uploading = useSyncExternalStore(uploads.subscribe, uploads.busy);
+  useEffect(() => () => uploads.stop(), [uploads]);
 
+  // One converter per (last run, retry target): assistant-ui drops every cached conversion when this
+  // function changes, so a new one per streamed token rebuilt every message of the chat each time.
+  const lastRunId = lastRun?.id;
+  const convert = useCallback((message) => {
+    const converted = convertMessage(message);
+    // The last run (its error actions show only there) and the run a kept message waits under.
+    const last = message.id === lastRunId;
+    const retry = message.id === retryId;
+    if (!last && !retry) return converted;
+    const onRetry = retry ? () => api(`/api/chats/${chatId}/retry`, { method: "POST" }).catch(onError) : undefined;
+    return { ...converted, metadata: { custom: { ...converted.metadata.custom, ...(last ? { last: true } : {}), ...(onRetry ? { onRetry } : {}) } } };
+  }, [chatId, lastRunId, retryId, onError]);
   const adapter = useMemo(() => {
     const send = async (message, intent) => {
       const typed = attachmentPayload(message);
@@ -141,42 +162,48 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       // The folded quotes join the message here and leave the box only once it is delivered.
       const quotes = freeQuotes(boxId);
       for (const q of quotes) quotesInFlight.add(q.id);
-      const payload = quotes.length ? { ...typed, text: withQuotes(quotes, typed.typed) } : typed;
-      delete payload.typed;
+      const payload = sendBody(typed, quotes);
+      // Shown at once with its state, in a chat or on the new chat page.
+      const shown = { clientId: newClientId(), text: payload.text || "", images: payload.images?.length || 0, ...(payload.files?.length ? { files: filesShown(payload.files) } : {}), intent };
       if (chatId) {
-        // Shown at once with its state; the quotes stay in flight until it is delivered or taken back.
-        const text = payload.text || "";
-        const clientId = newClientId();
+        // The quotes stay in flight until it is delivered or taken back.
         // Held in the browser until the server answers: a page closed meanwhile gives it back.
-        const held = holdSending(tabStorage(), chatId, typed.typed, clientId);
-        await sender.submit({ chatId, clientId, held, text, typed: typed.typed, images: payload.images?.length || 0, ...(payload.files?.length ? { files: filesShown(payload.files) } : {}), intent, payload, quoteIds: quotes.map((q) => q.id), quotes });
+        const held = holdSending(tabStorage(), chatId, typed.typed, shown.clientId);
+        await sender.submit({ ...shown, chatId, held, typed: typed.typed, payload, quoteIds: quotes.map((q) => q.id), quotes });
         return;
       }
-      // A reload mid-send could create the chat and still put the text back in the box.
-      const releaseNew = holdReload();
+      // Waiting in the outbox also holds a reload off: it could create the chat and still put the
+      // text back in the box.
+      outbox.add({ ...shown, at: new Date().toISOString(), chatId: null, state: "sending", quoteIds: [] });
       const held = holdSending(tabStorage(), boxId, typed.typed);
       try {
         const { chat } = await api("/api/chats", {
           method: "POST",
           body: {
             ...payload,
+            clientId: shown.clientId,
             mode: settings.mode,
             model: settings.model,
             effort: settings.effort || undefined,
+            confirm: true,
             agent: settings.agent || "griffin",
             ...(settings.repo != null ? { repo: settings.repo } : {}),
             // «+» on a group's heading: the chat starts in that group.
             ...(settings.groupId ? { groupId: settings.groupId } : {}),
           },
         });
+        // The bubble goes with it and gives way when the new chat's timeline holds the message.
+        outbox.update(shown.clientId, { chatId: chat.id, state: "sent" });
         navigate(chat.id);
         quoteStore.removeSent(boxId, quotes);
       } catch (error) {
+        outbox.remove(shown.clientId);
         // No connection or a refusal: the text returns to the box (the quotes never left it).
         returnToBox(boxId, typed.typed);
+        // The toast says the text waits in the box (App.jsx keptText).
+        if (typed.typed && error && typeof error === "object") error.keptText = typed.typed;
         onError(error);
       } finally {
-        releaseNew();
         releaseSending(tabStorage(), boxId, held);
         for (const q of quotes) quotesInFlight.delete(q.id);
       }
@@ -184,15 +211,11 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
     return {
       messages,
       isRunning,
-      convertMessage: (message) => {
-        const converted = convertMessage(message);
-        // The last run (its error actions show only there) and the run a kept message waits under.
-        const last = message.id === lastRun?.id;
-        const retry = message.id === retryId;
-        if (!last && !retry) return converted;
-        const onRetry = retry ? () => api(`/api/chats/${chatId}/retry`, { method: "POST" }).catch(onError) : undefined;
-        return { ...converted, metadata: { custom: { ...converted.metadata.custom, ...(last ? { last: true } : {}), ...(onRetry ? { onRetry } : {}) } } };
-      },
+      // The first message of a new chat is on its way: the next one has no chat to go to yet.
+      isDisabled: !chatId && waiting.length > 0,
+      // A message waits for the files in its box: the bar on each says how far it is.
+      isSendDisabled: uploading,
+      convertMessage: convert,
       onNew: (message) => send(message, "send"),
       // force: «فوری» — reach the agent now (steered into the turn, or the turn is interrupted and
       // continues with it; runner.mjs), not after it.
@@ -216,7 +239,7 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
       adapters: { attachments: attachmentAdapter },
       unstable_capabilities: { copy: true },
     };
-  }, [chatId, boxId, messages, isRunning, retryId, lastRun?.id, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
+  }, [chatId, boxId, messages, waiting, uploading, attachmentAdapter, isRunning, convert, settings.mode, settings.model, settings.agent, settings.repo, settings.effort, settings.groupId, onError]);
 
   const runtime = useExternalStoreRuntime(adapter);
   const sendQuotes = adapter.sendQuotes;

@@ -14,6 +14,7 @@ import { foldEvents } from "../../../packages/timeline/src/index.mjs";
 import { buildEnvelope } from "../src/peers.mjs";
 import {
   autoMovesOn,
+  resetFromText,
   claudeLimitCode,
   doneTools,
   FALLBACK_KEY,
@@ -24,6 +25,7 @@ import {
   pickAccountHop,
   pickFallback,
   pickRoute,
+  accountMoveNote,
   planFallbackMode,
   waitLabel,
 } from "../src/plan-fallback.mjs";
@@ -554,15 +556,19 @@ test("a delegated subtask that moved after a plan limit says which model answere
   assert.equal(lostSession.modelLabel, undefined, "a lost-session retry is not a limit move");
 });
 
-test("review: curly apostrophes and bare wording still count; «reached your conversation length» does not; auto moves exactly as before", () => {
+test("review: curly apostrophes and bare wording still count; «reached your conversation length» does not; auto moves on the old match and every spent plan", () => {
   for (const t of ["You’ve hit your limit · resets 3pm", "You have hit your limit", "hit your limit", "You’re out of extra usage"]) assert.equal(claudeLimitCode(t), "plan_limit", t);
   assert.equal(claudeLimitCode("You've reached your conversation length"), null);
   // Auto mode: the old match, no more and no less.
   const OLD = /usage limit|rate limit|limit reached|hit your limit|unknown model|model code|not[_ ]?found|overloaded|\b429\b/i;
-  for (const t of ["You're out of extra usage", "Your org is out of usage", "You've hit your weekly limit", "API Error: 429", "Unknown Model", "Fable limit reached", "You've reached your conversation length", "No conversation found"]) {
+  for (const t of ["API Error: 429", "Unknown Model", "Fable limit reached", "You've reached your conversation length", "No conversation found"]) {
     assert.equal(autoMovesOn(t), OLD.test(t), t);
   }
   assert.equal(autoMovesOn("x", { status: "rejected" }), true);
+  assert.equal(new Date(resetFromText("You've hit your weekly limit · resets Nov 3, 2am (UTC)", Date.UTC(2026, 10, 1))).toISOString(), "2026-11-03T02:00:00.000Z");
+  assert.equal(new Date(resetFromText("· resets Jan 2, 12pm (UTC)", Date.UTC(2026, 11, 30))).toISOString(), "2027-01-02T12:00:00.000Z");
+  // Every spent plan moves, without a rate_limit_event too («Platform HA», 2026-11-01).
+  for (const t of ["You've hit your weekly limit · resets Nov 3, 2am (UTC)", "You're out of extra usage", "Your org is out of usage"]) assert.equal(autoMovesOn(t), true, t);
 });
 
 test("auto mode: a spent-plan text the old match missed stays an ordinary error (no move)", async () => {
@@ -600,4 +606,14 @@ test("the kept copy holds no stale lead note: «ارسال دوباره» after 
   } finally {
     done();
   }
+});
+
+test("ask routing moves off an account whose login was refused, even to another model", () => {
+  const kindOf = (id) => id.split("-")[0];
+  const usable = (id) => id !== "claude-5";
+  const enabled = () => true;
+  const list = [{ provider: "claude-5", model: "opus" }, { provider: "zai", model: "glm" }, { provider: "claude-2", model: "sonnet" }];
+  assert.equal(pickRoute(list, { usable, enabled, ask: true, kindOf }).provider, "claude-5", "a plan limit still waits for the card");
+  assert.equal(pickRoute(list, { usable, enabled, ask: true, kindOf, broken: (id) => id === "claude-5" }).provider, "zai");
+  assert.match(accountMoveNote({ from: "پنج", account: "شش", why: "auth" }), /ورود حساب پنج پذیرفته نشد/);
 });

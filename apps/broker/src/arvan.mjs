@@ -1,3 +1,4 @@
+import net from "node:net";
 import { ToolInputError } from "./kube.mjs";
 
 // ArvanCloud CDN API (https://napi.arvancloud.ir/cdn/4.0). Auth header value comes from vault
@@ -60,6 +61,98 @@ function maskSecrets(value, depth = 0) {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, SECRET_KEY.test(k) ? "***" : maskSecrets(v, depth + 1)]));
   }
   return value;
+}
+
+// ---- security rules (arvan_security_rules) --------------------------------------------------
+// Paths from cdn-go-sdk docs (FirewallAPI, WAFAPI, RateLimitingAPI, DDoSAPI, AccountLevelFirewallAPI,
+// ListAPI); every call is a GET. Firewall filters are Wireshark-like expressions, e.g.
+// `ip.src in {1.2.3.0/24} and http.host eq "a.example.com"`, `ip.geoip.country in {"DE"}`, `ip.src in $list`.
+const SECURITY_SECTIONS = ["firewall", "waf", "ratelimit", "ddos"];
+const IP_TOKEN = /(?<![\w:.])((?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?|[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:\/\d{1,3})?)(?![\w:.])/gi;
+
+function ipToBig(ip) {
+  const kind = net.isIP(ip);
+  if (kind === 4) return { v: 4, n: ip.split(".").reduce((acc, o) => (acc << 8n) + BigInt(Number(o)), 0n) };
+  if (kind === 6) {
+    let text = ip.toLowerCase();
+    const v4 = text.match(/(\d+\.\d+\.\d+\.\d+)$/);
+    if (v4) {
+      const n = ipToBig(v4[1]).n;
+      text = text.replace(v4[1], `${(n >> 16n).toString(16)}:${(n & 0xffffn).toString(16)}`);
+    }
+    const [head, tail] = text.split("::");
+    const h = head ? head.split(":") : [];
+    const t = tail !== undefined && tail ? tail.split(":") : [];
+    const groups = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill("0"), ...t];
+    return { v: 6, n: groups.reduce((acc, g) => (acc << 16n) + BigInt(parseInt(g || "0", 16)), 0n) };
+  }
+  return null;
+}
+
+// Does `cidr` (an address or address/prefix) contain `ip`?
+export function cidrContains(cidr, ip) {
+  const [base, bits] = String(cidr).trim().split("/");
+  const a = ipToBig(base);
+  const b = ipToBig(String(ip).trim());
+  if (!a || !b || a.v !== b.v) return false;
+  const width = a.v === 4 ? 32 : 128;
+  const prefix = bits === undefined ? width : Number(bits);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > width) return false;
+  const shift = BigInt(width - prefix);
+  return a.n >> shift === b.n >> shift;
+}
+
+const ipTokens = (text) => [...String(text || "").matchAll(IP_TOKEN)].map((m) => m[1]).filter((t) => ipToBig(t.split("/")[0]));
+// Walk any JSON value and collect the strings that are an IP or CIDR (list contents, sources…).
+function ipStrings(value, out = [], depth = 0) {
+  if (depth > 6 || value == null) return out;
+  if (typeof value === "string") {
+    for (const part of value.split(/[\s,]+/)) if (part && ipToBig(part.split("/")[0])) out.push(part);
+  } else if (Array.isArray(value)) value.forEach((v) => ipStrings(v, out, depth + 1));
+  else if (typeof value === "object") Object.values(value).forEach((v) => ipStrings(v, out, depth + 1));
+  return out;
+}
+
+// How a firewall expression relates to one IP: matched (a literal or a referenced list holds it),
+// no_ip_condition (it filters on country/ASN/path/…, so it may apply to any IP), or other_ips.
+function expressionIpRelation(expr, ip, lists) {
+  const text = String(expr || "");
+  const hits = ipTokens(text).filter((c) => cidrContains(c, ip));
+  const listHits = [];
+  const unresolved = [];
+  for (const m of text.matchAll(/\$([A-Za-z0-9_.-]+)/g)) {
+    const entry = lists.get(m[1].toLowerCase());
+    if (!entry) unresolved.push(m[1]);
+    else if (entry.ips.some((c) => cidrContains(c, ip))) listHits.push(m[1]);
+  }
+  const negated = /\bnot\b|!=|\bne\b/i.test(text);
+  if (hits.length || listHits.length) return { relation: "matched", cidrs: hits, lists: listHits, negated };
+  if (unresolved.length) return { relation: "unknown_list", lists: unresolved, negated };
+  if (!/ip\.src|ip\.addr|\bip\b\s*(in|eq|==)/i.test(text) || /ip\.geoip|asnum|asn/i.test(text)) {
+    return { relation: /ip\.src|ip\.addr/i.test(text) ? "matched_by_other_terms" : "no_ip_condition", negated };
+  }
+  return { relation: negated ? "negated_other_ips" : "other_ips", negated };
+}
+
+// How an expression relates to one host: matched, no_host_condition (applies to every host), or other_hosts.
+function expressionHostRelation(expr, host) {
+  const text = String(expr || "");
+  if (!/http\.host|http\.request\.full_uri|http\.request\.uri|hostname/i.test(text)) return { relation: "no_host_condition" };
+  const quoted = [...text.matchAll(/"([^"]*)"/g)].map((m) => m[1].toLowerCase());
+  const hit = quoted.some((q) => q === host || (q && host.endsWith(q.replace(/^\*/, "")) && q.startsWith("*")) || (q && q.includes(host)));
+  const negated = /\bnot\b|!=|\bne\b/i.test(text);
+  if (hit) return { relation: "matched", negated };
+  return { relation: negated ? "negated_other_hosts" : "other_hosts", negated };
+}
+
+// Rate-limit / DDoS url_pattern (`*` and `?` wildcards): does it cover the host? A pattern with
+// no host part (just a path) covers every host.
+function urlPatternCoversHost(pattern, host) {
+  const bare = String(pattern || "").replace(/^https?:\/\//i, "");
+  const hostPart = bare.split("/")[0];
+  if (!hostPart || !hostPart.includes(".") || bare.startsWith("/")) return true;
+  const re = new RegExp(`^${hostPart.split("").map((c) => (c === "*" ? ".*" : c === "?" ? "." : c.replace(/[.+^${}()|[\]\\]/g, "\\$&"))).join("")}$`, "i");
+  return re.test(host);
 }
 
 export function createArvanTools({ vault, fetchImpl = fetch }) {
@@ -208,6 +301,40 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
       if (items.length < perPage) break;
     }
     return { items: out, total: total ?? out.length, pages };
+  }
+
+  // Generic GET list with full pagination (meta.last_page / links.next, else stop on a short or
+  // repeated page). Used by arvan_security_rules.
+  async function allPages(path, { perPage = 100, maxPages = 50, params } = {}) {
+    const out = [];
+    const seen = new Set();
+    let pages = 0;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const { body } = await request(path, { params: { ...(params || {}), page, per_page: perPage } });
+      pages = page;
+      const listed = dataOf(body);
+      const items = Array.isArray(listed) ? listed : Array.isArray(listed?.data) ? listed.data : [];
+      let fresh = 0;
+      for (const item of items) {
+        const key = item?.id != null ? `id:${item.id}` : JSON.stringify(item);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+        fresh += 1;
+      }
+      if (!items.length || !fresh) break;
+      const meta = body?.meta || {};
+      const lastPage = Number(meta.last_page);
+      if (Number.isFinite(lastPage) && lastPage > 0) {
+        if (page >= lastPage) break;
+        continue;
+      }
+      const next = body?.links?.next;
+      if (next === null || next === "") break;
+      if (next) continue;
+      if (items.length < perPage) break;
+    }
+    return { items: out, pages };
   }
 
   // Arvan wraps payloads as { data: … } or { data: { data: … } }; unwrap common shapes.
@@ -778,6 +905,206 @@ export function createArvanTools({ vault, fetchImpl = fetch }) {
         for (const key of PAGE_RULE_COPY) if (source[key] != null && source[key] !== "") json[key] = source[key]; // Arvan 422s on a null edge_compute_id
         const { body } = await request(`/domains/${encodeURIComponent(domain)}/page-rules`, { method: "POST", json });
         return { domain, created: pageRuleSummary(dataOf(body) || { ...json }), copiedFrom: pageRuleSummary(source), source: "arvan-api" };
+      },
+    },
+
+    arvan_security_rules: {
+      description:
+        "Read the security layer of an ArvanCloud CDN domain (read-only, GET only, all pages): firewall rules (id, name, priority, action, filter expression with the IPs/CIDRs/countries/ASNs/hosts it names, enabled) plus the firewall default action and settings, account-level firewall rules that cover this domain, the IP lists ($name) a rule references, WAF settings/packages/rules, rate-limit settings and rules, DDoS settings and rules. Pass `ip` and/or `host` to keep only the rules that can act on that IP/host — each kept rule says why (matched / no_ip_condition = it filters on country/ASN so it may hit any IP / unknown_list). Use it to explain an Arvan block page (e.g. error 2075 = IP/location block) or a challenge.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          domain: { type: "string", pattern: DOMAIN.source },
+          host: { type: "string", pattern: DOMAIN.source, description: "e.g. dashboard.example.com — only rules that can apply to this host" },
+          ip: { type: "string", maxLength: 64, description: "client IPv4/IPv6 — only rules that can apply to this IP" },
+          section: { type: "string", enum: ["all", ...SECURITY_SECTIONS], description: "default all" },
+        },
+        required: ["domain"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const domain = requireDomain(args.domain);
+        const section = String(args.section || "all");
+        if (section !== "all" && !SECURITY_SECTIONS.includes(section)) throw new ToolInputError(`section must be one of all, ${SECURITY_SECTIONS.join(", ")}`);
+        let host = null;
+        if (args.host) {
+          host = String(args.host).trim().toLowerCase();
+          if (host !== domain && !host.endsWith(`.${domain}`)) throw new ToolInputError(`host must be on ${domain}`);
+        }
+        const ip = args.ip ? String(args.ip).trim() : null;
+        if (ip && !net.isIP(ip)) throw new ToolInputError("ip must be a plain IPv4 or IPv6 address");
+        const want = (s) => section === "all" || section === s;
+        const base = `/domains/${encodeURIComponent(domain)}`;
+        const errors = {};
+        const attempt = async (label, fn) => {
+          try {
+            return await fn();
+          } catch (err) {
+            if (err instanceof ToolInputError && /rejected the credential/.test(err.message)) throw err;
+            errors[label] = String(err?.message || err).slice(0, 200);
+            return null;
+          }
+        };
+        const one = async (path) => dataOf((await request(path)).body);
+        const CAP = 300;
+        const filtered = (rules, view, relate) => {
+          const kept = [];
+          for (const r of rules) {
+            const why = relate ? relate(r) : null;
+            if (why === false) continue;
+            kept.push(why ? { ...view(r), applies: why } : view(r));
+          }
+          return { total: rules.length, shown: Math.min(kept.length, CAP), rules: kept.slice(0, CAP) };
+        };
+        const result = { domain, host, ip, section, source: "arvan-api" };
+
+        if (want("firewall")) {
+          const settings = await attempt("firewall.settings", () => one(`${base}/firewall/settings`));
+          const domainRules = (await attempt("firewall.rules", () => allPages(`${base}/firewall/rules`)))?.items || [];
+          const accountRules = (await attempt("firewall.account_rules", () => allPages(`/account/firewall-rules`)))?.items || [];
+          // Account rules apply to this domain when selection is all, or include lists it, or exclude does not.
+          let domainId = null;
+          if (accountRules.some((r) => r.domain_selection_type && r.domain_selection_type !== "all")) {
+            const d = await attempt("domain", () => one(base));
+            domainId = d?.id ?? null;
+          }
+          const coversDomain = (r) => {
+            const type = r.domain_selection_type || "all";
+            const ids = (r.domain_ids || []).map(String);
+            if (type === "all") return true;
+            if (domainId == null) return true;
+            return type === "include" ? ids.includes(String(domainId)) : !ids.includes(String(domainId));
+          };
+          const allRules = [
+            ...domainRules.map((r) => ({ ...r, level: "domain" })),
+            ...accountRules.filter(coversDomain).map((r) => ({ ...r, level: "account" })),
+          ];
+          // IP lists referenced as $name: resolve names to contents when an ip filter needs them.
+          const lists = new Map();
+          const referenced = new Set(allRules.flatMap((r) => [...String(r.filter_expr || "").matchAll(/\$([A-Za-z0-9_.-]+)/g)].map((m) => m[1].toLowerCase())));
+          if (referenced.size) {
+            const index = (await attempt("firewall.lists", () => allPages(`/dynamic-fields`)))?.items || [];
+            for (const entry of index) {
+              const name = String(entry.name || entry.key || entry.slug || "").toLowerCase();
+              if (!name || !referenced.has(name)) continue;
+              let full = entry;
+              if (ip && entry.id != null) full = (await attempt(`firewall.list.${name}`, () => one(`/dynamic-fields/${encodeURIComponent(entry.id)}`))) || entry;
+              const ips = ipStrings(full.items ?? full.values ?? full.content ?? full.data ?? full);
+              lists.set(name, { id: entry.id ?? null, name: entry.name ?? name, type: entry.type ?? null, size: ips.length || entry.count || entry.items_count || null, ips });
+            }
+          }
+          const view = (r) => ({
+            id: r.id ?? null,
+            level: r.level,
+            name: r.name ?? null,
+            priority: r.priority ?? r.seq ?? null,
+            action: r.action ?? null,
+            action_details: r.action_details ?? null,
+            enabled: r.is_enabled ?? r.status ?? null,
+            filter_expr: r.filter_expr ?? null,
+            ips: ipTokens(r.filter_expr).slice(0, 50),
+            countries: [...String(r.filter_expr || "").matchAll(/geoip\.country\s*(?:in|eq|==|ne|!=)\s*\{?([^}]*?)\}?(?:\s+(?:and|or)\b|\)|$)/gi)].flatMap((m) => m[1].match(/[A-Z]{2}/g) || []),
+            asns: [...String(r.filter_expr || "").matchAll(/(?:asnum|asn)\s*(?:in|eq|==|ne|!=)\s*\{?([^}]*?)\}?(?:\s+(?:and|or)\b|\)|$)/gi)].flatMap((m) => m[1].match(/\d+/g) || []),
+            note: r.note ?? null,
+          });
+          const relate = ip || host
+            ? (r) => {
+                const why = {};
+                if (ip) {
+                  const rel = expressionIpRelation(r.filter_expr, ip, lists);
+                  if (rel.relation === "other_ips") return false;
+                  why.ip = rel;
+                }
+                if (host) {
+                  const rel = expressionHostRelation(r.filter_expr, host);
+                  if (rel.relation === "other_hosts") return false;
+                  why.host = rel;
+                }
+                return why;
+              }
+            : null;
+          const sorted = allRules.sort((a, b) => (a.level === b.level ? 0 : a.level === "account" ? -1 : 1) || (Number(a.priority) || 0) - (Number(b.priority) || 0));
+          result.firewall = {
+            settings: settings ? maskSecrets(settings) : null,
+            default_action: settings?.default_action ?? null,
+            ...filtered(sorted, view, relate),
+            domain_rules: domainRules.length,
+            account_rules: accountRules.length,
+            lists: [...lists.values()].map((l) => ({ id: l.id, name: l.name, type: l.type, size: l.size, ...(ip ? { contains_ip: l.ips.some((c) => cidrContains(c, ip)) } : {}) })),
+          };
+        }
+
+        if (want("waf")) {
+          const settings = await attempt("waf.settings", () => one(`${base}/waf/settings`));
+          const packages = (await attempt("waf.packages", () => allPages(`${base}/waf/packages`)))?.items || [];
+          const rules = (await attempt("waf.rules", () => allPages(`${base}/waf/rules`)))?.items || [];
+          const view = (r) => ({ id: r.id ?? null, name: r.name ?? r.description ?? null, action: r.action ?? r.mode ?? null, enabled: r.is_enabled ?? r.status ?? null, filter_expr: r.filter_expr ?? r.expression ?? null, url_pattern: r.url_pattern ?? null });
+          const relate = ip || host
+            ? (r) => {
+                const why = {};
+                const expr = r.filter_expr ?? r.expression;
+                if (expr && ip) {
+                  const rel = expressionIpRelation(expr, ip, new Map());
+                  if (rel.relation === "other_ips") return false;
+                  why.ip = rel;
+                }
+                if (expr && host) {
+                  const rel = expressionHostRelation(expr, host);
+                  if (rel.relation === "other_hosts") return false;
+                  why.host = rel;
+                }
+                return why;
+              }
+            : null;
+          result.waf = {
+            settings: settings ? maskSecrets(settings) : null,
+            packages: packages.map((p) => ({ id: p.id ?? null, name: p.name ?? null, enabled: p.is_enabled ?? null, disabled_rules: (p.disabled_rules || []).length, disabled_rulesets: (p.disabled_rulesets || []).length, params: maskSecrets(p.params ?? null) })),
+            ...filtered(rules, view, relate),
+          };
+        }
+
+        const sourcesRelate = (r, field, label) => {
+          const why = {};
+          if (host) {
+            if (!urlPatternCoversHost(r.url_pattern, host)) return false;
+            why.host = r.url_pattern ? "url_pattern covers host" : "no host condition";
+          }
+          if (ip) {
+            const sources = ipStrings(r[field] || []);
+            const hit = sources.some((c) => cidrContains(c, ip));
+            if (label === "excluded") why.ip = hit ? "ip is in exclude_sources (exempt)" : "applies to this ip";
+            else {
+              if (sources.length && !hit) return false;
+              why.ip = hit ? "ip is in sources" : "no source condition (any ip)";
+            }
+          }
+          return why;
+        };
+
+        if (want("ratelimit")) {
+          const settings = await attempt("ratelimit.settings", () => one(`${base}/rate-limit/settings`));
+          const rules = (await attempt("ratelimit.rules", () => allPages(`${base}/rate-limit/rules`)))?.items || [];
+          const view = (r) => ({ id: r.id ?? null, url_pattern: r.url_pattern ?? null, action: r.action ?? null, enabled: r.is_enabled ?? null, rate: r.rate ?? null, burst: r.burst ?? null, time_duration: r.time_duration ?? null, block_duration: r.block_duration ?? null, allowed_methods: r.allowed_methods ?? null, exclude_sources: r.exclude_sources ?? [], description: r.description ?? null });
+          result.ratelimit = {
+            settings: settings ? maskSecrets(settings) : null,
+            ...(ip && settings ? { ip_excluded_globally: ipStrings(settings.exclude_sources || []).some((c) => cidrContains(c, ip)) } : {}),
+            ...filtered(rules, view, ip || host ? (r) => sourcesRelate(r, "exclude_sources", "excluded") : null),
+          };
+        }
+
+        if (want("ddos")) {
+          const settings = await attempt("ddos.settings", () => one(`${base}/ddos/settings`));
+          const rules = (await attempt("ddos.rules", () => allPages(`${base}/ddos/rules`)))?.items || [];
+          const view = (r) => ({ id: r.id ?? null, url_pattern: r.url_pattern ?? null, sources: r.sources ?? [], action: r.action ?? null, enabled: r.is_enabled ?? null, description: r.description ?? null });
+          result.ddos = {
+            settings: settings ? maskSecrets(settings) : null,
+            ...filtered(rules, view, ip || host ? (r) => sourcesRelate(r, "sources", "sources") : null),
+          };
+        }
+
+        if (ip) result.note = "Country/ASN of the ip is not resolved here: a rule with relation no_ip_condition or matched_by_other_terms (geoip/ASN) may be the one blocking it.";
+        if (Object.keys(errors).length) result.errors = errors;
+        return result;
       },
     },
 

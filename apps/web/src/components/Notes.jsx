@@ -7,6 +7,7 @@ import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
 import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, sidebarNotes, toLocalInput, untilLabel } from "../notes.js";
 import { t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 // One store for the whole app: the card above the composer and the sidebar list stay in step.
 export const notesStore = createNotesStore(api);
@@ -252,8 +253,8 @@ function NoteItem({ note, now, working, onNavigate }) {
     );
   const saveText = () => guard(notesStore.update(note.id, { text: draft }).then(() => setEditing(false)));
   const setTime = (atMs) => guard(notesStore.update(note.id, { runAt: atMs ? new Date(atMs).toISOString() : null }).then(() => setTimeOpen(false)));
-  const remove = () => {
-    if (window.confirm(t("این یادداشت حذف شود؟"))) guard(notesStore.remove(note.id));
+  const remove = async () => {
+    if ((await askConfirm(t("این یادداشت حذف شود؟")))) guard(notesStore.remove(note.id));
   };
   return (
     <li className={`g-note-item rounded-lg border px-2.5 py-1.5 ${open ? "bg-muted/50" : ""}`} data-open={open ? "true" : undefined}>

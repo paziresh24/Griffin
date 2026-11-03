@@ -109,7 +109,7 @@ test("a permission mode reaches Claude Code, and its permission prompts become t
     })();
   };
   const asked = [];
-  const own = createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl }).create({ cwd: "/tmp", fileAccess: { read: ["/tmp"], write: ["/tmp"], deny: [] }, approve: async (q) => (asked.push(q), q.includes("ls")) });
+  const own = createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl }).create({ cwd: "/tmp", fileAccess: { read: ["/tmp"], write: ["/tmp"], deny: [] }, approve: async (q, extra) => (asked.push({ q, detail: extra?.detail }), extra?.detail?.includes("ls")) });
   for (const [mode, want] of Object.entries(PERMISSION_MODES)) {
     await (await own.send("x", { mode })).wait();
     assert.equal(seen.at(-1).permissionMode, want, mode);
@@ -120,7 +120,11 @@ test("a permission mode reaches Claude Code, and its permission prompts become t
   assert.equal((await can("Bash", { command: "ls -la", description: "فهرست" })).behavior, "allow");
   assert.equal((await can("Bash", { command: "rm -rf x" })).behavior, "deny");
   assert.equal((await can("ExitPlanMode", { plan: "p" })).behavior, "deny");
-  assert.match(asked[0], /Bash.*فهرست[\s\S]*ls -la[\s\S]*اجازه/);
+  // The question is a sentence; the command rides beside it for the card's «جزئیات فنی».
+  assert.match(asked[0].q, /^اجرای یک دستور در ترمینال: فهرست\. اجازه می‌دهید؟$/);
+  assert.equal(asked[0].detail, "ls -la");
+  assert.doesNotMatch(permissionQuestion("Bash", { command: "set -e\nssh root@h 'bash -s'", description: "چرخاندن کلید" }), /ssh|set -e/);
   assert.equal((await askOwnerTool(null)("Bash", {})).behavior, "deny");
-  assert.match(permissionQuestion("mcp__griffin__kube_get", { path: "/x" }), /^Claude می‌خواهد kube_get/);
+  assert.match(permissionQuestion("mcp__griffin__kube_get", { path: "/x" }), /^اجرای ابزار kube_get/);
+  assert.match(permissionQuestion("Edit", { file_path: "/a/b/c.mjs" }), /^ویرایش فایل c\.mjs\./);
 });

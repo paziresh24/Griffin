@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Switch } from "radix-ui";
-import { Check, Store } from "lucide-react";
+import { Check, ChevronDown, LayoutDashboard, MessageSquare, MoreHorizontal, Moon, PanelRight, Palette, RotateCcw, Store, Sun, TextCursorInput } from "lucide-react";
 import { api } from "../api.js";
-import { Group, Item } from "./SettingsParts.jsx";
+import { readSetting, writeSetting } from "../brand.js";
+import { Choice, Group, Help, Item, SettingRow, Toggle } from "./SettingsParts.jsx";
+import { Compare, MiniApp, SceneChoice } from "./SettingsPreview.jsx";
 import { BrandPicker } from "./BrandPicker.jsx";
-import { FLAGS, LOOKS, NAV_STYLES, applyPreset, installPreset, navStyleChoice, navStyleFlags, presetOf, resetUiPrefs, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
+import { FLAGS, LOOKS, NAV_STYLES, installPreset, navStyleChoice, navStyleFlags, presetOf, resetUiPrefs, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
 import { ownedFlags } from "../modules.js";
-import { t } from "../i18n.js";
+import { ZONES, homeChoice, homeFlags, updateChoice, updateFlags, workChoice, workFlags, zoneOfFlag } from "../settings-map.js";
+import { t, num } from "../i18n.js";
 
 // Preview colours are written out here: the skin tokens live on <html>, so a small card cannot
 // borrow the other skin's palette from CSS. Keep them in step with styles.css. Griffin's colour is
@@ -32,67 +34,79 @@ const SKINS = [
   },
 ];
 
-function useDark() {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
-  useEffect(() => {
-    const observer = new MutationObserver(() => setDark(document.documentElement.classList.contains("dark")));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-  return dark;
-}
-
 function Preview({ skin, dark }) {
   const c = dark ? skin.dark : skin.light;
   const box = { border: `1px solid ${c.line}`, background: c.card };
   return (
-    <div className="flex h-28 flex-col gap-2 p-3" style={{ background: c.bg, color: c.text, fontFamily: skin.font, borderRadius: skin.radius - 4 }} aria-hidden>
+    <div className="flex h-24 flex-col gap-1.5 p-2.5" style={{ background: c.bg, color: c.text, fontFamily: skin.font, borderRadius: skin.radius - 4 }} aria-hidden>
       <div className="self-start px-3 py-1 text-xs" style={{ background: c.bubble, borderRadius: skin.radius }}>{t("سلام، وضعیت کلاستر؟")}</div>
-      <div className="text-xs leading-5">{t("همه‌چیز سالم است؛ ۱۲ پاد در حال اجرا.")}</div>
-      <div className="mt-auto flex items-center gap-2 px-2 py-1.5" style={{ ...box, borderRadius: skin.radius }}>
+      <div className="truncate text-xs leading-5">{t("همه‌چیز سالم است؛ ۱۲ پاد در حال اجرا.")}</div>
+      <div className="mt-auto flex items-center gap-2 px-2 py-1" style={{ ...box, borderRadius: skin.radius }}>
         <span className="h-1.5 flex-1 rounded-full" style={{ background: c.line }} />
-        <span className="size-4 rounded-full" style={{ background: c.primary }} />
+        <span className="size-3.5 rounded-full" style={{ background: c.primary }} />
       </div>
     </div>
   );
 }
 
-// Settings → Appearance (one UI, personalised per user): the look (appearance only), the install's
-// logo and colour, then every structural choice as a switch. The two presets are
-// starting points; whatever is changed here is saved for this user on every device (ui-prefs.js).
-// Which sections sit in the menu, and a flag a module owns (the Telegram inbox row), are on that
-// module's card in «بازارچه» (owner 2026-10-20: «تنظیماتش یکپارچه بشه»).
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const ZONE_ICONS = { look: Palette, sidebar: PanelRight, home: LayoutDashboard, chat: MessageSquare, composer: TextCursorInput, other: MoreHorizontal };
+const ZONE_KEY = "griffin.settings.zone";
 
-export function AppearanceSection({ onSection }) {
+// Settings → «ظاهر», from the owner's complaint (2026-11-01: «گیج کننده ترین جا به نظرم بخش ظاهره»):
+// thirty switches in one column became a small live drawing of the page. A tap on a part of it brings
+// that part's options only, «سبک و رنگ» first; each option has a «؟» that draws it off and on. Switches
+// that were parts of one question are one question now (settings-map.js MERGED_FLAGS). Everything
+// stays per user on every device (ui-prefs.js).
+// Which sections sit in the menu, and a flag a module owns, are on that module's card in «بازارچه».
+export function AppearanceSection({ onSection, theme, onTheme, focus }) {
   const { look, flags } = useUiPrefs();
-  const dark = useDark();
-  const matching = LOOKS.find((l) => l.id === look && same(presetOf(l.id).flags, flags))?.id;
-  const chip = (active) =>
-    `press rounded-full border px-3 py-1 text-xs transition-colors ${active ? "border-primary/40 bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`;
+  const dark = theme ? theme === "dark" : document.documentElement.classList.contains("dark");
+  const [zone, setZoneState] = useState(() => readSetting(ZONE_KEY, "look"));
+  const setZone = (id) => {
+    setZoneState(id);
+    writeSetting(ZONE_KEY, id);
+  };
+  const [brand, setBrand] = useState(false);
   const [owned, setOwned] = useState(() => new Set());
   useEffect(() => {
     api("/api/modules/market").then((d) => setOwned(ownedFlags(d.modules)), () => {});
   }, []);
-  // «بخش‌ها به‌صورت آیکون» is one of the choices of «جای بخش‌ها» below.
-  const shownFlags = FLAGS.filter((f) => !owned.has(f.key) && f.key !== "navIcons");
-  const navChoice = navStyleChoice(flags);
-  const areas = [...new Set(shownFlags.map((f) => f.area))];
+  // The search found an option in another part: open that part.
+  useEffect(() => {
+    const target = focus ? zoneOfFlag(focus) : null;
+    if (target) setZone(target);
+  }, [focus]);
+
+  const set = (next) => setUiPrefs({ flags: next });
+  const layout = LOOKS.find((l) => FLAGS.every((f) => Boolean(presetOf(l.id).flags[f.key]) === Boolean(flags[f.key])))?.id || "custom";
+  const home = presetOf(installPreset()).flags;
+  const changed = FLAGS.filter((f) => Boolean(home[f.key]) !== Boolean(flags[f.key])).length;
+  const zoneOf = ZONES.find((z) => z.id === zone) || ZONES[0];
+  const rows = zoneOf.flags.map((key) => FLAGS.find((f) => f.key === key)).filter((f) => f && !owned.has(f.key));
+  const navPlace = navStyleChoice(flags);
+
   return (
-    <div className="space-y-6">
-      <Group title={t("ظاهر")}>
-        <div role="radiogroup" aria-label={t("ظاهر")} className="grid gap-3 p-3 sm:grid-cols-2">
+    <div className="space-y-5">
+      <div className="g-mini-sticky space-y-2">
+        <MiniApp flags={flags} zone={zone} onZone={setZone} />
+        <div role="tablist" aria-label={t("قسمت‌های صفحه")} className="flex flex-wrap gap-1.5">
+          {ZONES.map((z) => {
+            const Icon = ZONE_ICONS[z.id];
+            return (
+              <button key={z.id} type="button" role="tab" aria-selected={zone === z.id} onClick={() => setZone(z.id)} className={`press inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition-colors ${zone === z.id ? "border-primary/40 bg-primary/10 font-medium text-foreground" : "bg-card text-muted-foreground hover:text-foreground"}`}>
+                <Icon className="size-3.5" />{z.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {zone === "look" ? <><Group>
+        <div role="radiogroup" aria-label={t("ظاهر")} className="grid grid-cols-2 gap-3 p-3">
           {SKINS.map((s) => {
             const active = look === s.id;
             return (
-              <button
-                key={s.id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setUiPrefs({ look: s.id })}
-                className={`overflow-hidden rounded-xl border text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}
-              >
+              <button key={s.id} type="button" role="radio" aria-checked={active} onClick={() => setUiPrefs({ look: s.id })} className={`overflow-hidden rounded-xl border text-start transition-shadow ${active ? "ring-2 ring-primary" : "hover:ring-1 hover:ring-primary/40"}`}>
                 <Preview skin={s} dark={dark} />
                 <span className="flex items-center gap-2 px-3 py-2">
                   <span className="min-w-0 flex-1">
@@ -105,70 +119,103 @@ export function AppearanceSection({ onSection }) {
             );
           })}
         </div>
+        {onTheme ? (
+          <SettingRow
+            id="theme"
+            icon={dark ? Moon : Sun}
+            title={t("حالت رنگ")}
+            control={<Choice label={t("حالت رنگ")} value={theme} onChange={onTheme} options={[{ id: "light", label: t("روشن") }, { id: "dark", label: t("تیره") }]} />}
+          />
+        ) : null}
+        <Item
+          icon={Palette}
+          tint="bg-primary/12 text-primary"
+          title={t("لوگو و رنگ")}
+          subtitle={t("برای همهٔ کاربران این نصب")}
+          onClick={() => setBrand(!brand)}
+          trailing={<><span className="size-4 rounded-full" style={{ background: "var(--brand)" }} aria-hidden /><ChevronDown className={`size-4 text-muted-foreground transition-transform ${brand ? "rotate-180" : ""}`} /></>}
+        >
+          {brand ? <div className="border-t p-3"><BrandPicker /></div> : null}
+        </Item>
       </Group>
-      <Group title={t("لوگو و رنگ")}>
-        <div className="p-3">
-          <BrandPicker />
-        </div>
-      </Group>
-      <Group title={t("همه با هم")}>
-        <div className="flex flex-wrap items-center gap-1.5 p-3">
-          {LOOKS.map((l) => (
-            <button key={l.id} type="button" onClick={() => applyPreset(l.id)} className={chip(matching === l.id)}>
-              {t("همه مثل {name}", { name: l.label })}
-            </button>
-          ))}
-          <button type="button" onClick={() => resetUiPrefs()} className={chip(false)} title={t("پیش‌فرض این نصب: {name}", { name: LOOKS.find((l) => l.id === installPreset())?.label || "" })}>
-            {t("برگرداندن به پیش‌فرض نصب")}
-          </button>
-        </div>
-      </Group>
-      {areas.map((area) => (
-        <Group key={area} title={area}>
-          {shownFlags.filter((f) => f.area === area).map((f) => (
-            <Item key={f.key} title={f.label} subtitle={<span className="block whitespace-normal leading-5">{f.hint}</span>} trailing={<Toggle on={Boolean(flags[f.key])} label={f.label} onChange={(on) => setUiPrefs({ flags: { [f.key]: on } })} />} />
-          ))}
-          {area === t("فهرست گفتگوها") ? (
-            <Item
+
+      <Group
+        title={t("چیدمان صفحه")}
+        action={<button type="button" onClick={() => resetUiPrefs()} title={t("پیش‌فرض این نصب: {v}", { v: LOOKS.find((l) => l.id === installPreset())?.label || "" })} className="press inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"><RotateCcw className="size-3" />{t("برگرداندن به پیش‌فرض نصب")}</button>}
+      >
+        <SettingRow
+          id="layout"
+          title={t("نقطهٔ شروع")}
+          help={<Help title={t("نقطهٔ شروع")}><p>{t("همهٔ گزینه‌های چیدمان را یک‌جا مثل گریفین یا کارسرا می‌کند؛ رنگ و فونت از کارت‌های بالا جدا انتخاب می‌شوند. هر چیزی را بعدش جدا عوض کنید، «سفارشی» می‌شود.")}</p></Help>}
+          note={layout === "custom" ? t("{n} گزینه با پیش‌فرض این نصب فرق دارد", { n: num(changed) }) : null}
+          control={<Choice label={t("نقطهٔ شروع")} value={layout} onChange={(id) => id !== "custom" && set(presetOf(id).flags)} options={[...LOOKS.map((l) => ({ id: l.id, label: l.label })), ...(layout === "custom" ? [{ id: "custom", label: t("سفارشی") }] : [])]} />}
+        />
+      </Group></> : null}
+
+      <div className="space-y-4">
+        {zone === "sidebar" ? (
+          <Group>
+            <SettingRow
+              id="navIcons"
               title={t("جای بخش‌ها")}
-              subtitle={
-                <span className="block whitespace-normal leading-5">
-                  {t(NAV_STYLES.find((st) => st.id === navChoice)?.hint || "")}
-                  <span role="radiogroup" aria-label={t("جای بخش‌ها")} className="mt-2 flex flex-wrap gap-1.5">
-                    {NAV_STYLES.map((st) => (
-                      <button key={st.id} type="button" role="radio" aria-checked={navChoice === st.id} onClick={() => setUiPrefs({ flags: navStyleFlags(st.id) })} className={chip(navChoice === st.id)}>
-                        {t(st.label)}
-                      </button>
-                    ))}
-                  </span>
-                </span>
-              }
+              help={<Help title={t("جای بخش‌ها")}><p>{t("تلگرام، جاب، حادثه‌ها و بقیهٔ بخش‌ها کجا باشند. ترتیب را با کشیدن عوض کنید؛ کدام بخش‌ها باشند روی کارت هر بخش در بازارچه است.")}</p></Help>}
+              note={NAV_STYLES.find((st) => st.id === navPlace)?.hint}
+              under={<SceneChoice label={t("جای بخش‌ها")} value={navPlace} scene="sidebar" flags={flags} onChange={(id) => set(navStyleFlags(id))} options={NAV_STYLES.map((st) => ({ id: st.id, label: st.label, flags: navStyleFlags(st.id) }))} />}
             />
-          ) : null}
-          {area === t("فهرست گفتگوها") ? (
-            <Item
+            {navPlace === "list" || navPlace === "icons" ? <FlagRow flag={FLAGS.find((f) => f.key === "navMore")} flags={flags} onSet={set} depth={1} /> : null}
+            <SettingRow
+              id="market-link"
               icon={Store}
               title={t("کدام بخش‌ها در منو باشند")}
-              subtitle={<span className="block whitespace-normal leading-5">{t("روشن و خاموش کردن هر بخش، و آمدنش در منو، روی کارت همان بخش در بازارچه است.")}</span>}
-              trailing={<button type="button" onClick={() => onSection?.("market")} className="press shrink-0 rounded-lg border px-2.5 py-1 text-xs hover:bg-muted">{t("بازارچه")}</button>}
+              help={<Help title={t("کدام بخش‌ها در منو باشند")}><p>{t("روشن و خاموش کردن هر بخش، و آمدنش در منو، روی کارت همان بخش در بازارچه است.")}</p></Help>}
+              control={<button type="button" onClick={() => onSection?.("market")} className="press shrink-0 rounded-lg border px-2.5 py-1 text-xs hover:bg-muted">{t("بازارچه")}</button>}
             />
-          ) : null}
-        </Group>
-      ))}
+            <SettingRow
+              id="updateTopButton"
+              title={t("خبر نسخهٔ تازه کجا بیاید")}
+              help={<Help title={t("خبر نسخهٔ تازه کجا بیاید")}><p>{t("پایین فهرست: یک ردیف باریک. بالای صفحه: آیکونی کنار عنوان گفتگو که با آمدن نسخه روشن می‌شود و زدنش ری‌استارت و اعمال را ثبت می‌کند. فقط در تنظیمات: یک نقطه روی تنظیمات و خود آپدیت در صفحهٔ وضعیت.")}</p></Help>}
+              under={<Choice label={t("خبر نسخهٔ تازه کجا بیاید")} value={updateChoice(flags)} onChange={(id) => set(updateFlags(id))} options={[{ id: "list", label: t("پایین فهرست") }, { id: "top", label: t("بالای صفحه") }, { id: "settings", label: t("فقط در تنظیمات") }]} />}
+            />
+          </Group>
+        ) : null}
+        {zone === "home" ? (
+          <Group>
+            <SettingRow
+              id="homeBoard"
+              title={t("صفحهٔ گفتگوی جدید چه نشان بدهد")}
+              help={<Help title={t("صفحهٔ گفتگوی جدید چه نشان بدهد")}><p>{t("ساده: یک خط معرفی و کادر وسط صفحه. کارها: «منتظر شما» و کارهای در جریان. هر چیز یک جا: تأییدها و سؤال‌ها فقط در خود گفتگو جواب داده می‌شوند و این‌جا یک خط با لینک دارند؛ پیشنهادها و کارهای در جریان فقط در فهرست کناری می‌آیند.")}</p></Help>}
+              under={<SceneChoice wide label={t("صفحهٔ گفتگوی جدید چه نشان بدهد")} value={homeChoice(flags)} scene="home" flags={flags} onChange={(id) => set(homeFlags(id))} options={[{ id: "simple", label: t("ساده"), flags: homeFlags("simple") }, { id: "board", label: t("کارها"), flags: homeFlags("board") }, { id: "one", label: t("هر چیز فقط یک جا"), flags: homeFlags("one") }]} />}
+            />
+          </Group>
+        ) : null}
+        {zone === "chat" ? (
+          <Group>
+            <SettingRow
+              id="workInline"
+              title={t("مراحل کار ایجنت")}
+              help={<Help title={t("مراحل کار ایجنت")}><p>{t("یک خط: بسته، با یک خط از کاری که همین الان انجام می‌شود. باز: هنگام اجرا همهٔ مراحل دیده می‌شود. روایت: حرف‌های ایجنت روی صفحه می‌مانند و فقط مرحله‌های بین دو حرف جمع می‌شوند، مثل کلاد دسکتاپ.")}</p></Help>}
+              under={<SceneChoice wide label={t("مراحل کار ایجنت")} value={workChoice(flags)} scene="chat" flags={flags} onChange={(id) => set(workFlags(id))} options={[{ id: "fold", label: t("یک خط"), flags: workFlags("fold") }, { id: "open", label: t("باز"), flags: workFlags("open") }, { id: "inline", label: t("روایت"), flags: workFlags("inline") }]} />}
+            />
+          </Group>
+        ) : null}
+        {rows.length ? (
+          <Group>
+            {rows.map((f) => <FlagRow key={f.key} flag={f} flags={flags} onSet={set} />)}
+          </Group>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function Toggle({ on, label, onChange }) {
+function FlagRow({ flag, flags, onSet, depth = 0 }) {
   return (
-    <Switch.Root
-      checked={on}
-      onCheckedChange={onChange}
-      dir="ltr"
-      className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-      aria-label={label}
-    >
-      <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
-    </Switch.Root>
+    <SettingRow
+      id={flag.key}
+      title={flag.label}
+      depth={depth}
+      help={<Help title={flag.label}><p>{flag.hint}</p><Compare flags={flags} flagKey={flag.key} /></Help>}
+      control={<Toggle on={Boolean(flags[flag.key])} label={flag.label} onChange={(on) => onSet({ [flag.key]: on })} />}
+    />
   );
 }

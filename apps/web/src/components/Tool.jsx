@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
@@ -8,6 +8,7 @@ import { DirBlock } from "./DirBlock.jsx";
 import { api, navigate, useRoute } from "../api.js";
 import { AskCard } from "./Ask.jsx";
 import { buildEditDiff } from "../edit-diff.js";
+import { loadLazyResult } from "../lazy-result.js";
 import {
   GitlabChangesBody, GitlabCommitsBody, GitlabMemberBody, GitlabMrBody, GitlabMrsBody, GitlabPipelineBody, GitlabPushBody, ShellBody, ShellCommand,
 } from "./ToolViews.jsx";
@@ -25,11 +26,15 @@ import {
   Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox, Camera, Keyboard, MousePointerClick,
 } from "lucide-react";
 
+import { todoList } from "../todos.js";
+
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
 // the child chat while it works instead of only after it finishes.
 export const ChatChildrenContext = createContext([]);
 
 const mdPlugins = { code };
+// Same object every render, so Streamdown's memo holds (see Thread.jsx).
+const shikiTheme = ["github-light", "github-dark"];
 
 const TOOLS = {
   read: { icon: FileText, label: t("خواندن فایل"), subtitle: (a) => a.path },
@@ -112,6 +117,7 @@ const TOOLS = {
   arvan_dns_export: { icon: FileText, label: t("خروجی BIND آروان"), subtitle: (a) => a.domain },
   arvan_dnssec: { icon: Lock, label: t("وضعیت DNSSEC"), subtitle: (a) => a.domain },
   arvan_cache_settings: { icon: Cloud, label: t("تنظیمات کش آروان"), subtitle: (a) => a.domain, open: true },
+  arvan_security_rules: { icon: Cloud, label: t("قواعد فایروال آروان"), subtitle: (a) => [a.host || a.domain, a.ip].filter(Boolean).join(" · "), open: true },
   arvan_load_balancer_get: { icon: Cloud, label: t("لود‌بالانسر آروان"), subtitle: (a) => [a.domain, a.name].filter(Boolean).join(" / "), open: true },
   arvan_purge_tags: { icon: Cloud, label: t("تگ‌های purge"), subtitle: (a) => a.domain },
   arvan_cache_purge: { icon: Cloud, label: t("پاک‌کردن کش آروان"), subtitle: (a) => [a.domain, a.scope].filter(Boolean).join(" · "), open: true },
@@ -134,6 +140,14 @@ const TOOLS = {
   browser_tabs: { icon: AppWindow, label: t("تب‌های مرورگر"), subtitle: (a) => a.action },
   browser_console: { icon: ScrollText, label: t("خطاهای صفحه") },
   browser_close: { icon: X, label: t("بستن مرورگر") },
+  // The owner's own Chrome through the Griffin extension (my-browser.mjs).
+  chrome_tabs: { icon: AppWindow, label: t("تب‌های مرورگر شما"), subtitle: (a) => a.url || a.title || a.action },
+  chrome_snapshot: { icon: AppWindow, label: t("خواندن تب مرورگر شما") },
+  chrome_act: { icon: MousePointerClick, label: t("کار در تب مرورگر شما"), subtitle: (a) => [a.action, a.ref || a.text || a.key].filter(Boolean).join(" · ") },
+  chrome_eval: { icon: Terminal, label: t("اجرای JavaScript در تب شما"), subtitle: (a) => a.expression },
+  chrome_screenshot: { icon: Camera, label: t("عکس از تب شما"), subtitle: (a) => a.title, open: true },
+  chrome_devtools: { icon: ScrollText, label: t("دیباگ تب مرورگر شما"), subtitle: (a) => a.what },
+  chrome_cdp: { icon: Terminal, label: t("فرمان DevTools در تب شما"), subtitle: (a) => a.method },
   tls_check: { icon: Lock, label: t("بررسی گواهی TLS"), subtitle: (a) => a.host, open: true },
   nsin_edge_ranges: { icon: Network, label: t("رنج‌های لبهٔ NSIN") },
   nsin_domains: { icon: Cloud, label: t("دامنه‌های NSIN"), subtitle: (a) => a.search },
@@ -264,6 +278,7 @@ const TOOLS = {
   self_fix: { icon: Activity, label: t("اعمال تعمیر پیشنهادی"), subtitle: (a) => a.fix, open: true },
   // Cluster and GitLab, Infisical, git repos of this chat.
   kube_create: { icon: Boxes, label: t("ساختن آبجکت در کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.manifest?.kind, a.manifest?.metadata?.name].filter(Boolean).join(" / "), open: true },
+  kube_delete: { icon: Trash2, label: t("حذف آبجکت از کلاستر"), subtitle: (a) => [a.cluster, a.namespace, a.kind, a.name].filter(Boolean).join(" / "), open: true },
   later: { icon: CalendarClock, label: t("یادآوری برای بعد"), subtitle: (a) => [a.in || a.at, String(a.text || "").slice(0, 60)].filter(Boolean).join(" — ") },
   kube_copy_secret: { icon: KeyRound, label: t("کپی Secret بین کلاسترها"), subtitle: (a) => [a.fromCluster, a.toCluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
   cnpg_retry_bootstrap: { icon: Database, label: t("تلاش دوباره برای ساخت دیتابیس"), subtitle: (a) => [a.cluster, a.namespace, a.name].filter(Boolean).join(" / "), open: true },
@@ -479,7 +494,7 @@ function PeerMarkdown({ text }) {
   const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
   return (
     <div className="sd-block chat-text leading-7 [&_pre]:my-2 [&_table]:my-2" dir={dir}>
-      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={mdPlugins} shikiTheme={["github-light", "github-dark"]}>
+      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={mdPlugins} shikiTheme={shikiTheme}>
         {text}
       </Streamdown>
     </div>
@@ -691,7 +706,7 @@ export function stepLine(toolName, args) {
   return target ? `${meta.label} — ${target}` : meta.label;
 }
 
-function GenericToolCard({ toolName, args = {}, result, isError, status }) {
+function GenericToolCard({ toolName, args = {}, result, isError, status, callId }) {
   const meta = TOOLS[toolName] || { icon: Server, label: toolName };
   const running = status?.type === "running" || result === undefined;
   const [open, setOpen] = useState(null);
@@ -729,7 +744,7 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
         </button>
         {expanded && !running ? (
           <div className="g-tool-body my-1 rounded-lg border px-3 py-2 text-sm">
-            <ToolBody toolName={toolName} args={args} result={result} isError={isError} />
+            <ToolBody toolName={toolName} args={args} result={result} isError={isError} callId={callId} />
           </div>
         ) : null}
       </div>
@@ -777,7 +792,7 @@ function GenericToolCard({ toolName, args = {}, result, isError, status }) {
             className="overflow-hidden"
           >
             <div className="border-t px-3 py-2 text-sm">
-              <ToolBody toolName={toolName} args={args} result={result} isError={isError} />
+              <ToolBody toolName={toolName} args={args} result={result} isError={isError} callId={callId} />
             </div>
           </motion.div>
         ) : null}
@@ -804,7 +819,33 @@ export function SourceBadge({ source, attempts }) {
   );
 }
 
-function ToolBody({ toolName, args, result, isError }) {
+// A body whose result the page came without (lazy-result.js): fetched now that the card is open.
+function LazyToolBody({ toolName, args, lazy, callId }) {
+  const [state, setState] = useState({ loaded: null, failed: false, attempt: 0 });
+  useEffect(() => {
+    let alive = true;
+    loadLazyResult(api, lazy, callId).then(
+      (loaded) => alive && setState((s) => ({ ...s, loaded, failed: false })),
+      () => alive && setState((s) => ({ ...s, failed: true })),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [lazy.chat, callId, state.attempt]);
+  if (state.loaded) return <ToolBody toolName={toolName} args={args} result={state.loaded.result} isError={state.loaded.isError} />;
+  if (state.failed) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {t("نتیجه نیامد.")}{" "}
+        <button type="button" className="text-primary underline" onClick={() => setState((s) => ({ ...s, failed: false, attempt: s.attempt + 1 }))}>{t("تلاش دوباره")}</button>
+      </p>
+    );
+  }
+  return <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />{t("بارگذاری…")}</p>;
+}
+
+function ToolBody({ toolName, args, result, isError, callId = null }) {
+  if (result?.lazy && callId) return <LazyToolBody toolName={toolName} args={args} lazy={result.lazy} callId={callId} />;
   // The row shows only the sentence, so a failed command keeps the command above the error.
   if (isError && stepTitle(toolName, args) && args.command) {
     return (
@@ -836,7 +877,7 @@ function ToolBody({ toolName, args, result, isError }) {
     case "readTodos":
     case "TodoWrite":
     case "todo_write":
-      return <Todos todos={result?.todos || args.todos || []} />;
+      return <Todos todos={todoList(result?.todos).length ? todoList(result?.todos) : todoList(args.todos)} />;
     case "glob":
       return <List items={result?.files} total={result?.totalFiles} />;
     case "kube_status":

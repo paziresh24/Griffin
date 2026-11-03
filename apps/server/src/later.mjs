@@ -51,5 +51,7 @@ export const isReminder = (row) => Boolean(noteOptions(row).reminder);
 export function reminderMessage(row) {
   const opts = noteOptions(row);
   if (!opts.reminder) return null;
-  return `[${REMINDER_MARK} (${opts.setAt || row.created_at}) — حرف Owner نیست؛ حالا وقتش است]\n${row.text}`;
+  // 2026-10-31: a colleague's Splunk request woke every 30-60 min and asked the owner the same question
+  // four times; his answer («از آقای رضایی بپرس») was never acted on.
+  return `[${REMINDER_MARK} (${opts.setAt || row.created_at}) — حرف Owner نیست؛ حالا وقتش است. اگر از بررسی قبلی چیزی عوض نشده، با جوابی که Owner قبلاً داده پیش برو (اگر گفته از کسی بپرسی، همین حالا از او بپرس) و همان سؤال را دوباره برایش نفرست.]\n${row.text}`;
 }

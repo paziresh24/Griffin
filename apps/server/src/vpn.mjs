@@ -116,7 +116,9 @@ function linkToOutboundRaw(link) {
     return {
       protocol: "vmess",
       settings: { vnext: [{ address: q.add, port: Number(q.port), users: [{ id: q.id, alterId: Number(q.aid || 0), security: q.scy || "auto" }] }] },
-      streamSettings: stream(q, q.add),
+      // A vmess link names the transport «net» and its tcp header «type» (none|http), unlike a URL's
+      // type=ws: reading type first made a plain tcp server «unknown transport protocol: none».
+      streamSettings: stream({ ...q, type: q.net || "tcp", headerType: q.type }, q.add),
     };
   }
   let u = new URL(link);
@@ -323,6 +325,39 @@ export function reachableThrough(proxyUrl, host = "api.telegram.org", timeoutMs 
   });
 }
 
+// A long chat is one request of several megabytes (2026-10-29: a 142k-token chat with an image got
+// ECONNRESET on every retry while small chats on the same install answered): some servers finish a TLS
+// handshake and carry small requests, then cut a large upload. One POST of `bytes` without a key; any
+// HTTP answer (401) means the whole body went through.
+export const LARGE_BODY = 3 * 1024 * 1024;
+export function carriesLarge(proxyUrl, host = "api.anthropic.com", { bytes = LARGE_BODY, timeoutMs = 45_000, ca } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(ok);
+    };
+    const socket = tls.connect({ socket: connectTunnel(new URL(proxyUrl), host, 443), servername: host, ALPNProtocols: ["http/1.1"], ...(ca ? { ca } : {}) }, async () => {
+      socket.write(`POST /v1/messages HTTP/1.1\r\nHost: ${host}\r\ncontent-type: application/json\r\nanthropic-version: 2023-06-01\r\ncontent-length: ${bytes}\r\nconnection: close\r\n\r\n`);
+      const chunk = Buffer.alloc(64 * 1024, 0x61);
+      for (let left = bytes; left > 0 && !done; left -= chunk.length) {
+        if (socket.write(left >= chunk.length ? chunk : chunk.subarray(0, left))) continue;
+        await new Promise((r) => {
+          const go = () => (socket.off("drain", go), socket.off("close", go), r());
+          socket.on("drain", go).on("close", go);
+        });
+      }
+    });
+    socket.once("data", (d) => finish(/^HTTP\/1\.[01] \d{3}/.test(String(d))));
+    socket.on("error", () => finish(false));
+    socket.on("close", () => finish(false));
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
 // Where a server's traffic really comes out (owner 2026-10-19: «کشور vpn ها هم دید کنارش»): Cloudflare's
 // trace page answers loc=<country> for the address that reached it. The server's own address says
 // little — most are behind a CDN — so this is asked through the server itself.
@@ -359,7 +394,7 @@ export function countryOfName(name) {
   return flag ? [...flag[0]].map((c) => String.fromCharCode(c.codePointAt(0) - 0x1f1e6 + 65)).join("") : null;
 }
 
-export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch, log = console } = {}) {
+export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch, log = console, retryMs = 60_000 } = {}) {
   const dir = path.join(dataDir, "vpn");
   const configFile = path.join(dir, "config.json");
   const inputFile = path.join(dir, "input.txt");
@@ -381,7 +416,8 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
   // still tested and shown, but never enters the config.
   // Same 0600 folder as the Xray config; the API only ever shows describeOutbound() of a server.
   let book = null;
-  const byMs = (a, b) => (a.ms ?? 1e9) - (b.ms ?? 1e9);
+  // A server that cuts large Claude requests goes after those that carry them, then by speed.
+  const byMs = (a, b) => (a.claudeLarge === false) - (b.claudeLarge === false) || (a.ms ?? 1e9) - (b.ms ?? 1e9);
   function loadBook() {
     if (book) return book;
     try {
@@ -482,8 +518,19 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
     } finally {
       fs.closeSync(out);
     }
-    child.on("error", (error) => log.error?.(`[vpn] xray: ${error.message}`));
+    const me = child;
+    child.on("error", (error) => {
+      log.error?.(`[vpn] xray: ${error.message}`);
+      // It never started (no binary there yet: a colleague's install, 2026-10-29, moved from the host
+      // into a container whose image has no Xray, kept its VPN off until a restart). A started one
+      // that fails ends in "exit" below; this one gets no "exit", so it is tried again from here.
+      if (child !== me || me.pid || stopping) return;
+      child = null;
+      restartTimer = setTimeout(start, retryMs);
+      restartTimer.unref?.();
+    });
     child.on("exit", (code) => {
+      if (child !== me) return;
       child = null;
       if (stopping) return;
       log.error?.(`[vpn] xray exited (${code}); restarting in 5s`);
@@ -541,8 +588,9 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
       const country = exitCountry(via);
       const [claude, telegram] = await Promise.all([twice("api.anthropic.com"), twice("api.telegram.org")]);
       const ms = Date.now() - started;
-      const where = await country;
-      return claude || telegram ? { live: true, ms, claude, telegram, ...(where ? { country: where } : {}) } : dead;
+      // Not in the server's time either: a big upload through a slow server takes seconds.
+      const [where, claudeLarge] = await Promise.all([country, claude ? carriesLarge(via) : null]);
+      return claude || telegram ? { live: true, ms, claude, claudeLarge, telegram, ...(where ? { country: where } : {}) } : dead;
     } finally {
       p.kill("SIGKILL");
       fs.rmSync(file, { force: true });
@@ -756,6 +804,8 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
       working: lastReach ? lastReach.claude || lastReach.telegram : null,
       claude: lastReach?.claude ?? null,
       telegram: lastReach?.telegram ?? null,
+      // false = every server in use cuts large Claude requests (long chats die with ECONNRESET).
+      claudeLarge: b.servers.some((s) => used.has(s.id) && s.claude) ? b.servers.some((s) => used.has(s.id) && s.claude && s.claudeLarge !== false) : null,
       checkedAt: Math.max(0, ...checks) || null,
       servers: b.servers.map((s) => ({
         id: s.id,
@@ -767,6 +817,7 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
         country: s.country || countryOfName(s.remark),
         countryFrom: s.country ? "exit" : countryOfName(s.remark) ? "name" : null,
         claude: s.claude ?? null,
+        claudeLarge: s.claudeLarge ?? null,
         telegram: s.telegram ?? null,
         ms: s.ms ?? null,
         checkedAt: s.checkedAt || null,

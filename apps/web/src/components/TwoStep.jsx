@@ -6,6 +6,7 @@ import { api } from "../api.js";
 import { Group, Item } from "./SettingsParts.jsx";
 import { TWO_STEP_EVENT } from "../two-step-nudge.js";
 import { t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 // Two-step sign-in (auth.mjs): once on, the token alone no longer opens this from the network — the
 // authenticator app's 6-digit code (or a one-time recovery code) is needed too, and the token as a
@@ -213,7 +214,7 @@ function PasskeysSection({ twoStep, onChange }) {
     }
   };
   const remove = async (item) => {
-    if (!window.confirm(t("passkey «{name}» پاک شود؟ آن دستگاه دیگر بدون توکن وارد نمی‌شود.", { name: item.name }))) return;
+    if (!(await askConfirm(t("passkey «{name}» پاک شود؟ آن دستگاه دیگر بدون توکن وارد نمی‌شود.", { name: item.name })))) return;
     try {
       await api(`/api/auth/passkeys/${encodeURIComponent(item.id)}`, { method: "DELETE" });
       load();

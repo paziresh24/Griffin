@@ -6,9 +6,11 @@
 // Kept: the newest BACKUP_KEEP (default 8) plus the newest of each of the last 7 days.
 // Restore: stop the app, keep the old file aside, `gunzip -c <backup> > <data>/griffin.sqlite`
 // (remove any griffin.sqlite-wal/-shm next to it), start the app.
+// Off the machine: with `offsite` (backup-offsite.mjs) set up, each backup is also sent to S3.
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { dropCopy, offsiteCopyPath } from "./backup-offsite.mjs";
 
 const WORKER = new URL("./backup-worker.mjs", import.meta.url);
 const NAME = /^griffin-(\d{8}T\d{6}Z)\.sqlite\.gz$/;
@@ -31,8 +33,9 @@ export function toPrune(names, { keep = 8, days = 7 } = {}) {
   return sorted.filter((n) => !kept.has(n));
 }
 
-export function createBackups({ store, dbFile, dataDir, config = () => ({}), now = () => Date.now(), log = console }) {
+export function createBackups({ store, dbFile, dataDir, config = () => ({}), offsite = null, now = () => Date.now(), log = console }) {
   let running = null;
+  let sending = null;
   const settings = () => {
     const c = config();
     const hours = Number(c.every ?? 6);
@@ -65,7 +68,7 @@ export function createBackups({ store, dbFile, dataDir, config = () => ({}), now
       last = JSON.parse(store.getKv("backup:last") || "null");
     } catch {}
     const files = list();
-    return { enabled: everyMs > 0, everyHours: everyMs / 3600_000, keep, dir, running: Boolean(running), last, newest: files[0] || null, files };
+    return { enabled: everyMs > 0, everyHours: everyMs / 3600_000, keep, dir, running: Boolean(running), last, newest: files[0] || null, files, offsite: offsite ? { ...offsite.status(), sending: Boolean(sending) } : null };
   }
 
   function dbBytes() {
@@ -78,8 +81,20 @@ export function createBackups({ store, dbFile, dataDir, config = () => ({}), now
     return total;
   }
 
+  // Off-site in the background: the local backup is done and answered; a slow upload never holds it.
+  function sendOff(copy, dir) {
+    sending = offsite
+      .send(copy, dir)
+      .catch((error) => log.error?.(`[backup] off-site: ${error.message}`))
+      .finally(() => {
+        dropCopy(copy);
+        sending = null;
+      });
+    return sending;
+  }
+
   async function once() {
-    const { dir, keep } = settings();
+    const { dir, keep: keepN } = settings();
     const started = now();
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const free = (() => {
@@ -96,15 +111,18 @@ export function createBackups({ store, dbFile, dataDir, config = () => ({}), now
     const name = `griffin-${stampOf(new Date(started))}.sqlite.gz`;
     const final = path.join(dir, name);
     const part = `${final}.part`;
+    // The checked copy stays for the off-site run, unless one is still sending (it takes the next).
+    const keep = offsite?.settings().configured && !sending ? offsiteCopyPath(dir) : "";
     const result = await new Promise((resolve, reject) => {
-      const worker = new Worker(WORKER, { workerData: { src: dbFile, tmp: path.join(dir, `.${name}.tmp`), dest: part } });
+      const worker = new Worker(WORKER, { workerData: { src: dbFile, tmp: path.join(dir, `.${name}.tmp`), dest: part, keep } });
       worker.once("message", resolve);
       worker.once("error", reject);
       worker.once("exit", (code) => code && reject(new Error(`backup worker stopped (${code})`)));
     });
     if (!result.ok) throw new Error(result.error);
     fs.renameSync(part, final);
-    for (const old of toPrune(fs.readdirSync(dir), { keep })) fs.rmSync(path.join(dir, old), { force: true });
+    for (const old of toPrune(fs.readdirSync(dir), { keep: keepN })) fs.rmSync(path.join(dir, old), { force: true });
+    if (keep) sendOff(keep, dir);
     return { ...result, file: name, ms: now() - started };
   }
 
@@ -166,5 +184,14 @@ export function createBackups({ store, dbFile, dataDir, config = () => ({}), now
     return null;
   }
 
-  return { run, list, status, due, start, health };
+  // The off-site copy's own doctor line (missing, failing, behind).
+  const offsiteHealth = () => {
+    const { everyMs } = settings();
+    return offsite && everyMs ? offsite.health(everyMs / 3600_000) : null;
+  };
+
+  // Tests and shutdown: wait for an off-site send in flight.
+  const idle = () => sending || Promise.resolve();
+
+  return { run, list, status, due, start, health, offsiteHealth, idle };
 }

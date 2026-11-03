@@ -35,7 +35,11 @@ FROM ${NODE_SLIM} AS app
 # python3: scripts and tools the chats run in Bash (the node user has no other interpreter).
 # ca-certificates: git/curl over HTTPS from the chats (--no-install-recommends drops it; without it "CAfile: none").
 # adb: the person's phone plugged into their browser (phone-bridge.mjs) is an `adb connect 127.0.0.1:15555` here.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client python3 adb && rm -rf /var/lib/apt/lists/*
+# tini: PID 1 that reaps orphans — node as PID 1 does not, and every `git fetch` leaves a detached
+# `git gc/maintenance --auto` behind (2026-10-27: 8,160 zombie git filled the broker's pids limit on
+# tabrizi, every spawn EAGAIN; 2-4k on every other install after two days).
+# restic: the off-machine copy of each backup to the person's own S3 bucket (backup-offsite.mjs).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client python3 adb tini restic && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules
@@ -51,6 +55,10 @@ COPY apps/server/assets apps/server/assets
 COPY apps/server/scripts apps/server/scripts
 # Modules (modules/<id>/, docs/modules.md): loaded from /app/modules by the module host.
 COPY modules modules
+# modules/*/web/view.js is shared with the server and imports from here: t() (Persian fallback in node)
+# and the MCP presets (tickets' setup prompt). test/docker-web-imports.test.mjs checks every such import is copied.
+COPY apps/web/src/i18n.js apps/web/src/i18n.js
+COPY apps/web/src/mcp.js apps/web/src/mcp.js
 COPY --from=web /src/apps/web/dist apps/web/dist
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
@@ -65,13 +73,15 @@ RUN mkdir -p /run/griffin /data /workspace && chown node:node /run/griffin /data
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/server/src/index.mjs"]
 
 FROM ${NODE_ALPINE} AS broker
 # python3 + the two crypto libs are for the vendored Winbox client (apps/broker/vendor/winbox),
 # used for routers whose RouterOS API is off: their console is reached over Winbox itself.
 # git: clone/fetch/push of the repos chats work on (apps/broker/src/repos.mjs).
-RUN apk add --no-cache age openssh-client python3 py3-pycryptodome py3-ecdsa git
+# tini: reaps the orphaned git children (see the app stage).
+RUN apk add --no-cache age openssh-client python3 py3-pycryptodome py3-ecdsa git tini
 WORKDIR /app
 COPY apps/broker/src apps/broker/src
 COPY apps/broker/vendor apps/broker/vendor
@@ -84,4 +94,5 @@ RUN mkdir -p /run/griffin /broker-data && chown node:node /run/griffin /broker-d
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD node -e "const p=process.env.GRIFFIN_BROKER_SOCKET;require('http').get({socketPath:p,path:'/healthz'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "apps/broker/src/server.mjs"]

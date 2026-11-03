@@ -20,8 +20,11 @@ export const lang = initialLang();
 export const isRtl = lang === "fa";
 export const locale = lang === "fa" ? "fa-IR" : "en-US";
 
+// English only for those who chose it: its ~570 KB of strings were in every visitor's main bundle.
+// The await holds every module that imports this one, so a translation used at import time (a
+// module-level t()) is already there.
 const EN = lang === "en"
-  ? Object.assign({}, ...Object.values(import.meta.glob("./i18n/en/*.json", { eager: true, import: "default" })))
+  ? Object.assign({}, ...(await Promise.all(Object.values(import.meta.glob("./i18n/en/*.json", { import: "default" })).map((load) => load()))))
   : {};
 
 /** Translate a Persian UI string. `{name}` placeholders are filled from `vars`. */

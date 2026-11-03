@@ -5,6 +5,7 @@ import { api, navigate } from "../api.js";
 import { BRAND } from "../brand.js";
 import { clockLabel, exactTime } from "../elapsed.js";
 import { t } from "../i18n.js";
+import { askConfirm, askPrompt } from "../dialog.jsx";
 
 // Griffin's incident layer: alerts from this install's data sources (Grafana-style: the broker's clusters,
 // Alertmanager/Grafana/Prometheus, a webhook, a Telegram alert channel) grouped into incidents, sorted
@@ -236,11 +237,11 @@ function AckButton({ incident: i, onDone }) {
     if (acked) {
       body = { remove: true, member: i.ack[0]?.member || "" };
     } else {
-      const member = i.members.length > 1 ? window.prompt(t("کدام مورد عمدی است؟ خالی = کل حادثه\n{join}", { join: i.members.slice(0, 10).join("\n") }), "") : "";
+      const member = i.members.length > 1 ? (await askPrompt(t("کدام مورد عمدی است؟ خالی = کل حادثه\n{join}", { join: i.members.slice(0, 10).join("\n") }), "")) : "";
       if (member === null) return;
-      const reason = window.prompt(t("چرا عمدی است؟ ({name} دیگر برای این بیدار نمی‌شود)", { name: BRAND.name }), "");
+      const reason = (await askPrompt(t("چرا عمدی است؟ ({name} دیگر برای این بیدار نمی‌شود)", { name: BRAND.name }), ""));
       if (!reason) return;
-      const days = window.prompt(t("تا چند روز؟ خالی = تا وقتی برش دارید"), "");
+      const days = (await askPrompt(t("تا چند روز؟ خالی = تا وقتی برش دارید"), ""));
       if (days === null) return;
       body = { member: member.trim(), reason, ...(Number(days) > 0 ? { days: Number(days) } : {}) };
     }
@@ -484,7 +485,7 @@ function SourceCard({ source: s, onChanged }) {
             {s.enabled ? t("خاموش") : t("روشن")}
           </button>
           {builtin ? null : (
-            <button type="button" disabled={busy} onClick={() => window.confirm(t("منبع «{name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.", { name: s.name })) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
+            <button type="button" disabled={busy} onClick={async () => (await askConfirm(t("منبع «{name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.", { name: s.name }))) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
               <Trash2 className="size-3.5" />
             </button>
           )}

@@ -240,7 +240,7 @@ test("arvan_page_rule_create: copies a sibling's settings, pages through rules, 
   assert.equal(calls.filter((c) => c.method === "POST").length, 1, "no write on refusal");
 });
 
-// 2026-10-22: «which rule and which LB does apigw-x…/orders/v1/* hit?» needed host/path matching,
+// 2026-10-22: «which rule and which LB does api.example.com/orders/v1/* hit?» needed host/path matching,
 // the full body of one rule, and host_header / cache_ignore_cc in the list.
 test("arvan_page_rules: matches host+path, resolves LB names, reads one rule in full, GET only", async () => {
   const rules = [
@@ -504,4 +504,94 @@ test("arvan_dns_delete records: one call for many, resolves all before deleting,
   await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", records: [{ name: "old1" }, { name: "sub" }] }), /NS/);
   await assert.rejects(tools.arvan_dns_delete.execute({ domain: "example.com", name: "old1", records: [{ name: "old2" }] }), /not both/);
   assert.equal(deletes(), 2, "refusals deleted nothing");
+});
+
+test("cidrContains handles v4/v6 prefixes and bare addresses", async () => {
+  const { cidrContains } = await import("../src/arvan.mjs");
+  assert.equal(cidrContains("5.160.0.0/16", "5.160.12.3"), true);
+  assert.equal(cidrContains("5.160.0.0/16", "5.161.0.1"), false);
+  assert.equal(cidrContains("203.0.113.105", "203.0.113.105"), true);
+  assert.equal(cidrContains("2a01:5ec0::/29", "2a01:5ec0:1::5"), true);
+  assert.equal(cidrContains("2a01:5ec0::/29", "5.160.12.3"), false);
+});
+
+function securitySetup() {
+  return setup({
+    responses: {
+      "/cdn/4.0/domains/example.com/firewall/settings": () => Response.json({ data: { is_enabled: true, default_action: "allow", verify_sni: true } }),
+      "/cdn/4.0/domains/example.com/firewall/rules": (u) => {
+        const page = Number(u.searchParams.get("page"));
+        if (page === 1) {
+          return Response.json({
+            data: [
+              { id: "r1", name: "geo", priority: 1, action: "deny", is_enabled: true, filter_expr: 'not ip.geoip.country in {"IR"}' },
+              { id: "r2", name: "east", priority: 2, action: "deny", is_enabled: true, filter_expr: 'ip.src in {185.1.2.0/24} and http.host eq "dash.example.com"' },
+            ],
+            meta: { last_page: 2 },
+          });
+        }
+        return Response.json({
+          data: [
+            { id: "r3", name: "office-only", priority: 3, action: "deny", is_enabled: true, filter_expr: "not ip.src in {10.9.9.9}" },
+            { id: "r4", name: "other-ip", priority: 4, action: "allow", is_enabled: true, filter_expr: "ip.src in {9.9.9.9}" },
+            { id: "r5", name: "other-host", priority: 5, action: "deny", is_enabled: true, filter_expr: 'http.host eq "www.example.com"' },
+            { id: "r6", name: "list", priority: 6, action: "deny", is_enabled: true, filter_expr: "ip.src in $bad_ips" },
+          ],
+          meta: { last_page: 2 },
+        });
+      },
+      "/cdn/4.0/account/firewall-rules": () => Response.json({ data: [{ id: "a1", name: "global", priority: 1, action: "challenge", is_enabled: true, filter_expr: "ip.src in {185.1.0.0/16}", domain_selection_type: "all" }] }),
+      "/cdn/4.0/dynamic-fields": () => Response.json({ data: [{ id: "L1", name: "bad_ips" }] }),
+      "/cdn/4.0/dynamic-fields/L1": () => Response.json({ data: { id: "L1", name: "bad_ips", items: ["185.1.2.3", "7.7.7.0/24"] } }),
+      "/cdn/4.0/domains/example.com/waf/settings": () => new Response("{}", { status: 404 }),
+      "/cdn/4.0/domains/example.com/rate-limit/settings": () => Response.json({ data: { ddos_detection: false, exclude_sources: ["185.1.2.0/24"] } }),
+      "/cdn/4.0/domains/example.com/rate-limit/rules": () => Response.json({ data: [{ id: "rl1", url_pattern: "https://www.example.com/*", rate: 10 }, { id: "rl2", url_pattern: "/api/*", rate: 5, exclude_sources: [] }] }),
+      "/cdn/4.0/domains/example.com/ddos/settings": () => Response.json({ data: { protection_mode: "cookie", captcha_service: "arcaptcha", secret_key: "s3cr3t" } }),
+      "/cdn/4.0/domains/example.com/ddos/rules": () => Response.json({ data: [{ id: "d1", url_pattern: "*", sources: ["8.8.8.8"], action: "captcha" }, { id: "d2", url_pattern: "*", sources: [], action: "cookie" }] }),
+    },
+  });
+}
+
+test("arvan_security_rules reads every section with GET only, all pages, and masks secrets", async () => {
+  const { tools, calls } = securitySetup();
+  const result = await tools.arvan_security_rules.execute({ domain: "example.com" });
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.ok(calls.some((c) => c.path.includes("/firewall/rules") && c.path.includes("page=2")));
+  assert.equal(result.firewall.default_action, "allow");
+  assert.equal(result.firewall.domain_rules, 6);
+  assert.equal(result.firewall.total, 7);
+  assert.equal(result.firewall.rules[0].level, "account");
+  assert.deepEqual(result.firewall.rules.find((r) => r.id === "r1").countries, ["IR"]);
+  assert.deepEqual(result.firewall.rules.find((r) => r.id === "r2").ips, ["185.1.2.0/24"]);
+  assert.equal(result.ddos.settings.secret_key, "***");
+  assert.ok(!JSON.stringify(result).includes("s3cr3t"));
+  assert.ok(!JSON.stringify(result).includes("test-key"));
+  assert.match(result.errors["waf.settings"], /404/);
+  assert.equal(result.ratelimit.total, 2);
+});
+
+test("arvan_security_rules with ip+host keeps only rules that can act on them, with the reason", async () => {
+  const { tools } = securitySetup();
+  const result = await tools.arvan_security_rules.execute({ domain: "example.com", host: "dash.example.com", ip: "185.1.2.3" });
+  const ids = result.firewall.rules.map((r) => r.id);
+  assert.deepEqual(ids.sort(), ["a1", "r1", "r2", "r3", "r6"]);
+  assert.equal(result.firewall.rules.find((r) => r.id === "r2").applies.ip.relation, "matched");
+  assert.equal(result.firewall.rules.find((r) => r.id === "r2").applies.host.relation, "matched");
+  assert.equal(result.firewall.rules.find((r) => r.id === "r1").applies.ip.relation, "no_ip_condition");
+  assert.equal(result.firewall.rules.find((r) => r.id === "r3").applies.ip.relation, "negated_other_ips");
+  assert.deepEqual(result.firewall.rules.find((r) => r.id === "r6").applies.ip.lists, ["bad_ips"]);
+  assert.equal(result.firewall.lists[0].contains_ip, true);
+  assert.deepEqual(result.ratelimit.rules.map((r) => r.id), ["rl2"]);
+  assert.equal(result.ratelimit.ip_excluded_globally, true);
+  assert.deepEqual(result.ddos.rules.map((r) => r.id), ["d2"]);
+});
+
+test("arvan_security_rules rejects a host off the domain, a bad ip and a bad section", async () => {
+  const { tools } = securitySetup();
+  await assert.rejects(tools.arvan_security_rules.execute({ domain: "example.com", host: "evil.org" }), ToolInputError);
+  await assert.rejects(tools.arvan_security_rules.execute({ domain: "example.com", ip: "1.2.3" }), ToolInputError);
+  await assert.rejects(tools.arvan_security_rules.execute({ domain: "example.com", section: "dns" }), ToolInputError);
+  const only = await tools.arvan_security_rules.execute({ domain: "example.com", section: "ddos" });
+  assert.equal(only.firewall, undefined);
+  assert.ok(only.ddos);
 });

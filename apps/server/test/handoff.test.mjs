@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { openStore } from "../src/db.mjs";
-import { buildRules } from "../src/prompt.mjs";
 import { HANDOFF_MAX_OPEN, handoffDismissed, handoffOf, handoffStarted, handoffTool, shellWrites, teamWriteVerdict, watchHandoffs } from "../src/handoff.mjs";
 
 const fresh = () => openStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "griffin-handoff-")), "db.sqlite"));
@@ -102,9 +101,55 @@ test("team write verdict: writes need the handoff, reads pass", () => {
   assert.equal(shellWrites("kubectl logs deploy/x --tail 50"), false);
 });
 
-test("the read-only handoff rules come with the tool, and win over owner_task", () => {
-  const rules = buildRules({ caller: "team", tools: ["handoff_to_owner", "kube_get"] });
-  assert.match(rules, /Read-only chain/);
-  assert.ok(rules.indexOf("Read-only chain") > rules.indexOf("Work as tasks"), "said after the task rule it overrides");
-  assert.doesNotMatch(buildRules({ caller: "owner", tools: ["owner_task"] }), /Read-only chain/);
+
+test("after the owner's yes in a colleague's agent conversation, the handoff starts his chat at once — once per yes", async () => {
+  const { createAsks, OWNER_YES_KEY, ownerSaidYes } = await import("../src/asks.mjs");
+  const { startSuggestedChat } = await import("../src/suggest-start.mjs");
+  const store = fresh();
+  const runner = fakeRunner();
+  const peer = store.createChat({ title: "نقش Developer", caller: "peer:mahdi-bagheri" });
+  const asks = createAsks({ store, log: null });
+  // The owner taps the first (recommended) option of the agent's question; the colleague cannot answer it.
+  const asked = asks.tool(peer.id).execute({ question: "پوش مستقیم به master برای mohr؟", options: [{ label: "بله، فقط mohr" }, { label: "نه" }] });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(asks.answer(peer.id, { answer: "بله، فقط mohr", by: "requester" }), false);
+  assert.equal(asks.answer(peer.id, { answer: "بله، فقط mohr" }), true);
+  await asked;
+  assert.equal(store.getKv(OWNER_YES_KEY(peer.id)).question, "پوش مستقیم به master برای mohr؟");
+
+  const rung = [];
+  const tool = handoffTool({ store, chatId: peer.id, rootChatId: peer.id, who: "نوید (مهدی حسینی)", notify: async (text) => rung.push(text), start: (row) => startSuggestedChat({ store, runner, row }) });
+  const out = body(await tool.execute({ title: "پوش مستقیم mohr", why: "مهدی پوش مستقیم می‌خواهد", prompt: "git_push را برای mahdibagheri/mohr باز کن" }));
+  assert.match(out.started, /شروع شد/);
+  const row = store.getSuggestion(out.id);
+  assert.equal(row.status, "started");
+  assert.equal(runner.sent.length, 1, "the owner's chat got the prompt without a click");
+  assert.equal(runner.sent[0].chatId, row.started_chat_id);
+  assert.match(runner.sent[0].text, /جواب «بله، فقط mohr» داد/, "the started chat knows what he said yes to");
+  assert.equal(handoffOf(store, row.started_chat_id).from, peer.id, "its results report back");
+  assert.match(rung[0], /شروع شد/);
+  assert.equal(store.getKv(OWNER_YES_KEY(peer.id)), null, "the yes is spent");
+
+  // The next handoff in the same conversation waits for its own approval.
+  const next = body(await tool.execute({ title: "کار دیگر", why: "w", prompt: "p" }));
+  assert.equal(next.started, undefined);
+  assert.equal(store.getSuggestion(next.id).status, "open");
+  assert.match(rung[1], /«شروع»/);
+
+  assert.equal(ownerSaidYes("نه، فعلاً نه", [{ label: "نه، فعلاً نه" }]), false);
+  assert.equal(ownerSaidYes("اوکیه"), true);
+  assert.equal(ownerSaidYes("فقط برای mohr", [{ label: "فقط برای mohr" }, { label: "رد" }]), true);
+  assert.equal(ownerSaidYes("فقط برای mohr", [{ label: "اول بررسی کن" }]), false);
+});
+
+test("an old yes or a no never starts a handoff by itself", async () => {
+  const { OWNER_YES_KEY } = await import("../src/asks.mjs");
+  const store = fresh();
+  const runner = fakeRunner();
+  const peer = store.createChat({ title: "x", caller: "peer:a" });
+  store.setKv(OWNER_YES_KEY(peer.id), { question: "q", answer: "بله", at: new Date(Date.now() - 4 * 3_600_000).toISOString() });
+  const tool = handoffTool({ store, chatId: peer.id, rootChatId: peer.id, start: async () => { throw new Error("must not start"); } });
+  const out = body(await tool.execute({ title: "t", why: "w", prompt: "p" }));
+  assert.equal(out.started, undefined);
+  assert.equal(runner.sent.length, 0);
 });

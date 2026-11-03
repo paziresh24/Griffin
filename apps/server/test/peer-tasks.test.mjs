@@ -427,3 +427,15 @@ test("a new colleague chat is titled by its request, not the agent's name", asyn
   assert.ok(title.startsWith("سلام. لطفاً وضعیت دیپلوی"));
   assert.ok(title.endsWith("…") && title.length <= 61);
 });
+
+test("background:true archives the chat once the task ends; a normal request stays listed", async () => {
+  const { tasks, peer, store } = setup(async (_id, emit) => {
+    emit("text", { text: "متن کارت" });
+  });
+  const bg = await tasks.send(peer, { message: "این متن را قالب بزن", background: true, fresh: true, waitSec: 2 });
+  assert.equal(bg.state, "completed");
+  assert.equal(store.getChat(bg.contextId).archived, 1);
+  const plain = await tasks.send(peer, { message: "دیسک شرق چقدر جا دارد؟", fresh: true, waitSec: 2 });
+  assert.equal(plain.state, "completed");
+  assert.equal(store.getChat(plain.contextId).archived, 0);
+});

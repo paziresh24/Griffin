@@ -24,6 +24,7 @@ import { withoutInertMarks } from "../redact.mjs";
 import { keptIds } from "../runner.mjs";
 import { isPdf, notePdfs, pdfBudgetProblem } from "../attachments.mjs";
 import { isOwnerChat } from "../owner-chat-tools.mjs";
+import { ownerClaim, ownerReached, unbackedSendError } from "../owner-reach.mjs";
 import { forwardHead, incidentForwardHead, sessionLinePrompt, smallTalk, threadInboundPrompt, threadOwnerPrompt, wantsGriffin } from "./threads.mjs";
 
 const parseJson = (text) => {
@@ -752,6 +753,13 @@ export function createDesk({ store, runner, channelOf, accountChannel = () => nu
     // delete_sent act on all of it.
     const length = markdownToPlain(body).length; // what Telegram gets (tables grow a little)
     if (length > MAX_TEXT) return { error: `too long (${length} chars, max ${MAX_TEXT}): split it into two send_to_person calls` };
+    // «به X سپردم» / «تصمیمش با X است» goes out only once this conversation really reached him
+    // (owner-reach.mjs): its own report at the end of the turn never does.
+    const claim = ownerClaim(body);
+    if (claim) {
+      const wrote = store.getKv(ownerKey(mother.integrationId, mother.key))?.at;
+      if (!ownerReached(store, chatId, { ownerWroteAt: wrote ? new Date(wrote).toISOString() : null })) return { error: unbackedSendError(claim) };
+    }
     const turn = turnOf(chatId);
     const reason = holdReason(chatId, mother);
     if (reason) {

@@ -2,13 +2,18 @@ import { mediaContent, storeMedia } from "./media.mjs";
 import fs from "node:fs";
 import http from "node:http";
 import { gitPrefix } from "./persona.mjs";
+import { OWNER_EXEC } from "./owner-exec.mjs";
 
 // Exposes broker tools to the Cursor agent as SDK customTools. The broker owns the tool
 // list and schemas; this side only forwards calls over the shared unix socket.
 export function brokerRequest(socketPath, method, urlPath, body, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
+    // Node frames no DELETE body unless the length is explicit; the broker then reads the body as a
+    // second request and answers a bare 400 (Settings → Secrets delete).
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    const headers = { "content-type": "application/json", ...(payload === undefined ? {} : { "content-length": Buffer.byteLength(payload) }) };
     const req = http.request(
-      { socketPath, method, path: urlPath, headers: { "content-type": "application/json" }, timeout: timeoutMs },
+      { socketPath, method, path: urlPath, headers, timeout: timeoutMs },
       (res) => {
         let data = "";
         res.setEncoding("utf8");
@@ -24,7 +29,7 @@ export function brokerRequest(socketPath, method, urlPath, body, timeoutMs = 180
     );
     req.on("timeout", () => req.destroy(new Error("broker timeout")));
     req.on("error", reject);
-    req.end(body === undefined ? undefined : JSON.stringify(body));
+    req.end(payload);
   });
 }
 
@@ -96,7 +101,10 @@ export function createToolSource({ socketPath, refreshMs = 5 * 60_000, request =
         inputSchema: hidden(def.name, def.inputSchema),
         async execute(args) {
           try {
-            const response = await request(socketPath, "POST", `/tools/${def.name}`, { ...(args ?? {}), ...(SERVER_ARGS[def.name]?.() || {}) });
+            const body = { ...(args ?? {}), ...(SERVER_ARGS[def.name]?.() || {}) };
+            // kube_exec's identity is the server's verdict (owner-exec.mjs), never an argument.
+            if (def.name === "kube_exec") body.asOwner = args?.[OWNER_EXEC] === true;
+            const response = await request(socketPath, "POST", `/tools/${def.name}`, body);
             if (response.body?.ok) return { content: toContent(response.body.result, chatId) };
             return errorResult(response.body?.error || `http ${response.status}`, response.body?.attempts);
           } catch (error) {

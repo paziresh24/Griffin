@@ -43,7 +43,7 @@ function fakeBotApi() {
   return { fetchImpl, calls, push, sent: () => calls.filter((c) => /^send/.test(c.method)) };
 }
 
-function setup({ pendingWork, sendFiles, modelChoices } = {}) {
+function setup({ pendingWork, sendFiles, modelChoices, watched, ownerAskWaitMs } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-int-"));
   const store = openStore(path.join(dir, "db.sqlite"));
   seedExampleAgents(store);
@@ -85,7 +85,7 @@ function setup({ pendingWork, sendFiles, modelChoices } = {}) {
     },
   };
   const runner = createRunner({ store, sdk, log: {}, onCancel: (c) => asks.cancel(c), agentOptions: (chat) => ({ local: { customTools: { [ASK_TOOL]: asks.tool(chat.id) } } }) });
-  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, pendingWork, sendFiles, modelChoices, log: {} });
+  const integrations = createIntegrations({ store, runner, asks, fetchImpl: bot.fetchImpl, pendingWork, sendFiles, modelChoices, watched, ownerAskWaitMs, log: {} });
   integrationsHolder.current = integrations;
   const cleanup = async () => {
     integrations.stopAll();
@@ -534,6 +534,44 @@ test("answering an ask_owner from the UI deletes the mirrored Telegram question;
   }
 });
 
+// A colleague, 2026-10-24: «وقتی دارم اینجا کار می‌کنم چرا باید سؤالاتش رو بره توی سیو مسیج تلگرام بپرسه؟»
+test("a question in a chat open in the browser waits there; Telegram gets it only if it stays open", async () => {
+  const open = new Set();
+  const { store, bot, integrations, asks, cleanup } = setup({ watched: (id) => open.has(id), ownerAskWaitMs: 150 });
+  try {
+    const added = await integrations.addBot({ kind: "telegram_bot", token: "555:ABCDEFGHIJKLMNOPQRSTUVWXYZ" });
+    store.updateIntegration(added.id, { settings: { pairedChats: ["777"], pairedNames: { 777: "Owner" }, username: "platformops_bot" } });
+    const chat = store.createChat({ title: "chat", mode: "agent", caller: "owner", agent: "griffin" });
+    open.add(chat.id);
+    const asked = (re) => bot.sent().some((c) => re.test(c.body.text || ""));
+
+    // Answered in the page within the wait: nothing goes to Telegram.
+    const first = asks.tool(chat.id).execute({ question: "پایگاه داده شرق را ری‌استارت کنم؟", options: [{ label: "الف" }, { label: "ب" }] });
+    await until(() => asks.isWaiting(chat.id));
+    assert.equal(asks.answer(chat.id, { answer: "الف", selected: ["الف"] }), true);
+    await first;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(asked(/پایگاه داده شرق/), false, "an answered question never reaches Telegram");
+
+    // Left open past the wait: it reaches Telegram after all.
+    const second = asks.tool(chat.id).execute({ question: "کش آروان پاک شود؟", options: [{ label: "الف" }] });
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(asked(/کش آروان/), false, "not at once while the page is open");
+    await until(() => asked(/کش آروان/));
+    asks.answer(chat.id, { answer: "الف", selected: ["الف"] });
+    await second;
+
+    // Nobody looking: at once, as before.
+    open.delete(chat.id);
+    const third = asks.tool(chat.id).execute({ question: "گزارش هفتگی ارسال شود؟", options: [{ label: "الف" }] });
+    await until(() => asked(/گزارش هفتگی/));
+    asks.answer(chat.id, { answer: "الف", selected: ["الف"] });
+    await third;
+  } finally {
+    await cleanup();
+  }
+});
+
 // A delegated child's question is mirrored onto the root chat by asks; only that copy may reach
 // Telegram. Delivering the child's own tool.started too sent every question twice (2026-09-22).
 test("a delegated child's question reaches the Owner once, under the root requester", async () => {
@@ -586,19 +624,19 @@ test("telegram account: assistant-signed DMs are answered only when autoReplyAge
   const load = async () => ({ TelegramClient: function () { return fakeClient; }, StringSession: function () {}, NewMessage: function () {}, CustomFile: function () {} });
   const settings = {};
   const peerCalls = [];
-  const person = { id: "p1", display_name: "Maryam", access: { peerAgent: { user: "maryam-sadeghi" } } };
+  const person = { id: "p1", display_name: "Maryam", access: { peerAgent: { user: "maryam-karimi" } } };
   const bridge = {
     integration: () => ({ settings }),
     upsertPerson: async () => person,
     addPersonMessage: () => {},
     receive: async () => {}, answer: async () => false, answerOwnerAsk: async () => false,
     isCovered: () => false, coverageName: () => null, startCoverage: async () => ({}), endCoverage: async () => null,
-    bindPeerAgentPerson: async () => ({ user: "maryam-sadeghi", created: false }),
+    bindPeerAgentPerson: async () => ({ user: "maryam-karimi", created: false }),
     receivePeerAgent: async (...a) => peerCalls.push(a),
   };
   const channel = createAccountChannel({ integration: { id: "acc", secret: JSON.stringify({ session: "s", apiId: 1, apiHash: "h" }), settings: {} }, bridge, load, log: {} });
   await channel.start();
-  const signed = { out: false, chatId: 42n, peerId: { userId: 42n }, id: 11, message: "سلام سارا، لاگ n8n رو می‌خوام\n— دستیار هوشمند مریم صادقی (پیام خودکار)" };
+  const signed = { out: false, chatId: 42n, peerId: { userId: 42n }, id: 11, message: "سلام سارا، لاگ n8n رو می‌خوام\n— دستیار هوشمند مریم کریمی (پیام خودکار)" };
 
   await handler({ message: signed });
   assert.equal(peerCalls.length, 0, "off by default: no automatic reply");
@@ -617,8 +655,8 @@ test("in a colleague's linked chat, approval goes to the Owner's bot and a clari
     store.updateIntegration(added.id, {
       settings: { pairedChats: ["777"], pairedNames: { 777: "Owner" }, username: "griffin_ops_bot" },
     });
-    store.createPeerUser({ id: "maryam-sadeghi", label: "مریم صادقی" });
-    const chat = store.createChat({ title: "peer", caller: "peer:maryam-sadeghi", agent: "griffin" });
+    store.createPeerUser({ id: "maryam-karimi", label: "مریم کریمی" });
+    const chat = store.createChat({ title: "peer", caller: "peer:maryam-karimi", agent: "griffin" });
     store.linkChat(added.id, "10000004", chat.id);
 
     asks.tool(chat.id).execute({ question: "دسترسی n8n بدهم؟", options: [{ label: "بله" }, { label: "نه" }] });

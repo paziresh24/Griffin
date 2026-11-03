@@ -10,6 +10,60 @@ const IPS_URL = "https://nsin.ir/ips.txt";
 const DOMAIN = /^[a-z0-9.-]{3,253}$/;
 const CIDR = /^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12][0-9]|3[0-2])$/;
 const PERIODS = new Set(["3h", "6h", "12h", "24h", "7d", "30d"]);
+// The edges a request is logged under; a count by edge reports whatever else there was as `other`.
+const NODES = ["IR", "IRM", "IRMA", "IRAFRA", "NL"];
+// countBy keys; "node" alone is answered from exact totals, any other mix by reading the rows.
+const COUNT_KEYS = ["node", "status", "err_reason", "minute"];
+const SCAN_PAGE = 500;
+const SCAN_MAX = 20_000;
+const GROUPS_MAX = 300;
+// Header/body columns of a log row: large, and they carry the visitor's cookies.
+const LOG_HEAVY_FIELDS = [
+  "headers",
+  "origin_req_headers",
+  "origin_headers",
+  "client_resp_headers",
+  "body",
+  "cookie_names",
+  "origin_error_body",
+  "origin_error_body_base64",
+];
+const LOG_HEADER_FIELDS = ["headers", "origin_req_headers", "origin_headers", "client_resp_headers"];
+const SECRET_HEADER = /cookie|authorization|auth-token|api-key|apikey|token|session|secret|password/i;
+
+/** Header maps arrive as JSON strings; a credential-like header keeps its name, never its value. */
+function maskHeaders(value) {
+  if (typeof value !== "string" || !value) return value;
+  try {
+    const map = JSON.parse(value);
+    if (!map || typeof map !== "object" || Array.isArray(map)) return "[unreadable headers dropped]";
+    for (const name of Object.keys(map)) if (SECRET_HEADER.test(name)) map[name] = ["[masked]"];
+    return JSON.stringify(map);
+  } catch {
+    return "[unreadable headers dropped]";
+  }
+}
+
+function logRow(row, slim) {
+  if (!row || typeof row !== "object") return row;
+  const out = { ...row };
+  if (slim) {
+    for (const k of LOG_HEAVY_FIELDS) delete out[k];
+    if (typeof out.origin_error_body_preview === "string") out.origin_error_body_preview = out.origin_error_body_preview.slice(0, 300);
+  } else {
+    for (const k of LOG_HEADER_FIELDS) if (k in out) out[k] = maskHeaders(out[k]);
+  }
+  return out;
+}
+
+function countValue(row, key) {
+  if (key === "minute") {
+    const ms = Date.parse(row?.timestamp || "");
+    return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 16) + "Z" : null;
+  }
+  const v = row?.[key];
+  return v === undefined || v === "" ? null : v;
+}
 const RECORD_TYPES = new Set([
   "A",
   "AAAA",
@@ -110,6 +164,70 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     const p = String(value || "24h");
     if (!PERIODS.has(p)) throw new ToolInputError(`period must be one of ${[...PERIODS].join(", ")}`);
     return p;
+  }
+
+  function timeOf(value, name) {
+    const at = new Date(String(value));
+    if (Number.isNaN(at.getTime())) throw new ToolInputError(`${name} must be an ISO time, e.g. 2026-10-29T06:00:00Z`);
+    return at.toISOString().replace(/\.\d+Z$/, "Z");
+  }
+
+  /** A past window: from + to, or one of the sliding periods. */
+  function windowOf(args) {
+    if (!args.from && !args.to) return { period: periodOf(args.period) };
+    if (!args.from || !args.to) throw new ToolInputError("from and to go together");
+    if (args.period) throw new ToolInputError("give period or from/to, not both");
+    const from = timeOf(args.from, "from");
+    const to = timeOf(args.to, "to");
+    if (from >= to) throw new ToolInputError("from must be before to");
+    return { from, to };
+  }
+
+  function countKeysOf(value) {
+    if (value === undefined || value === null || value === "") return null;
+    const keys = [...new Set(String(value).split(",").map((k) => k.trim()).filter(Boolean))];
+    if (!keys.length || keys.some((k) => !COUNT_KEYS.includes(k))) {
+      throw new ToolInputError(`countBy takes a comma list of ${COUNT_KEYS.join(", ")}`);
+    }
+    return keys;
+  }
+
+  /** Counts by any mix of keys: reads the rows oldest first, at most SCAN_MAX of them. */
+  async function countRows(domain, window, params, keys) {
+    const counts = new Map();
+    let scanned = 0;
+    let total = null;
+    let hasMore = true;
+    while (hasMore && scanned < SCAN_MAX) {
+      const { body } = await request("/analytics/logs", {
+        params: { ...params, limit: SCAN_PAGE, offset: scanned || undefined, sort: "time:asc", count: scanned ? "0" : "exact", fields: "list" },
+      });
+      const rows = Array.isArray(body?.data) ? body.data : [];
+      if (!scanned && Number.isFinite(body?.total)) total = body.total;
+      for (const row of rows) {
+        const group = Object.fromEntries(keys.map((k) => [k, countValue(row, k)]));
+        const id = JSON.stringify(group);
+        const hit = counts.get(id);
+        if (hit) hit.count += 1;
+        else counts.set(id, { ...group, count: 1 });
+      }
+      scanned += rows.length;
+      hasMore = Boolean(body?.has_more) && rows.length > 0;
+    }
+    const byMinute = keys[0] === "minute";
+    const groups = [...counts.values()].sort((a, b) => (byMinute && a.minute !== b.minute ? String(a.minute).localeCompare(String(b.minute)) : b.count - a.count));
+    return {
+      domain,
+      ...window,
+      countBy: keys,
+      total,
+      rowsScanned: scanned,
+      truncated: hasMore,
+      ...(hasMore ? { note: `stopped after ${SCAN_MAX} rows (oldest first); narrow the window or the filters` } : {}),
+      groups: groups.slice(0, GROUPS_MAX),
+      ...(groups.length > GROUPS_MAX ? { groupsOmitted: groups.length - GROUPS_MAX } : {}),
+      source: "nsin-api",
+    };
   }
 
   function requireKind(value) {
@@ -624,37 +742,66 @@ export function createNsinTools({ vault, fetchImpl = fetch } = {}) {
     },
 
     nsin_request_logs: {
-      description: "Raw request logs (plan feature). Filter by status, URI, cache, IP, ray id.",
+      description:
+        "Raw request logs (plan feature). Filter by status, URI, cache, IP, ray id, edge (node), errFault and errReason, in a sliding period or a past window (from + to, UTC or with an offset). A page is at most 100 rows: read on with offset while has_more. countBy \"node\" returns exact counts per edge for the same filters instead of rows, e.g. status 504 vs status 200 tells one bad edge from a bad origin. countBy with status, err_reason or minute (comma list, e.g. \"node,status\") reads the rows server-side (max 20k) and returns counts only. Rows come slim (no header/body columns) unless slim:false; cookie and auth headers are always masked.",
       inputSchema: {
         type: "object",
         properties: {
           domain: { type: "string" },
           period: { type: "string" },
+          from: { type: "string", description: "start of a past window (ISO time); needs to" },
+          to: { type: "string", description: "end of a past window (ISO time); needs from" },
           status: { type: "integer" },
           uri: { type: "string" },
           hostname: { type: "string" },
           remoteAddr: { type: "string" },
           rayId: { type: "string" },
-          limit: { type: "integer", minimum: 1, maximum: 200 },
+          node: { type: "string", description: "edge, e.g. IRM, IRMA, IR, IRAFRA, NL" },
+          errFault: { type: "string", description: "who NSIN blames, e.g. origin" },
+          errReason: { type: "string", description: "failure reason, e.g. origin_timeout" },
+          cache: { type: "string", enum: ["hit", "miss", "bypass"] },
+          slim: { type: "boolean", description: "drop header/body columns (default true; false keeps them, cookies masked)" },
+          limit: { type: "integer", minimum: 1, maximum: 100 },
+          offset: { type: "integer", minimum: 0 },
+          countBy: {
+            type: "string",
+            description: "node (exact counts per edge) or a comma list of node, status, err_reason, minute — counts instead of rows",
+          },
         },
         required: ["domain"],
         additionalProperties: false,
       },
       async execute(args) {
         const domain = requireDomain(args.domain);
-        const { body } = await request("/analytics/logs", {
-          params: {
-            domain,
-            period: periodOf(args.period),
-            status: args.status,
-            uri: args.uri,
-            hostname: args.hostname,
-            remoteAddr: args.remoteAddr,
-            rayId: args.rayId,
-            limit: args.limit ?? 50,
-          },
-        });
-        return { domain, period: periodOf(args.period), logs: body, source: "nsin-api" };
+        const window = windowOf(args);
+        const params = {
+          domain,
+          ...window,
+          status: args.status,
+          uri: args.uri,
+          hostname: args.hostname,
+          remoteAddr: args.remoteAddr,
+          rayId: args.rayId,
+          node: args.node,
+          errFault: args.errFault,
+          errReason: args.errReason,
+          cache: args.cache,
+        };
+        const countBy = countKeysOf(args.countBy);
+        if (countBy && !(countBy.length === 1 && countBy[0] === "node")) return countRows(domain, window, params, countBy);
+        if (countBy) {
+          if (args.node) throw new ToolInputError("countBy node already covers every edge; drop node");
+          // One row per call: the answer is its exact `total`, not the rows.
+          const count = async (node) => (await request("/analytics/logs", { params: { ...params, node, limit: 1 } })).body?.total ?? 0;
+          const [total, ...each] = await Promise.all([count(args.node), ...NODES.map(count)]);
+          const byNode = Object.fromEntries(NODES.map((node, i) => [node, each[i]]));
+          return { domain, ...window, total, byNode, other: total - each.reduce((a, b) => a + b, 0), source: "nsin-api" };
+        }
+        const { body } = await request("/analytics/logs", { params: { ...params, limit: args.limit ?? 50, offset: args.offset } });
+        // A single ray id is asked for its whole row (origin body included), so it is not slimmed by default.
+        const slim = args.slim ?? !args.rayId;
+        const logs = Array.isArray(body?.data) ? { ...body, data: body.data.map((row) => logRow(row, slim)) } : body;
+        return { domain, ...window, logs, source: "nsin-api" };
       },
     },
 

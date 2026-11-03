@@ -23,6 +23,7 @@ export const MCP_TOOLS = [
         model: { type: "string", description: "Optional model (\"account:model\") for a new conversation or to switch one; must be one of your allowedModels from griffin_limits. Default: the owner's choice for you." },
         messageId: { type: "string", description: "Idempotency key: resending the same messageId returns the same task." },
         fresh: { type: "boolean", description: "Start a new conversation even if the message looks like a follow-up of a recent request." },
+        background: { type: "boolean", description: "Routine machine work (e.g. a bot's text formatting): the new conversation is archived as soon as the task ends, so it stays out of the owner's chat list; still readable in the archive." },
         waitSec: { type: "number", description: "Seconds to wait for a result before returning (default 10; up to 55 when the client accepts SSE, else 12)." },
       },
       required: ["message"],

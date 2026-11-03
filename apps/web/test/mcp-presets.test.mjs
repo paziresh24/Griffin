@@ -26,3 +26,12 @@ test("saving waits for the personal key", () => {
   assert.equal(presetKeyMissing(preset, "x-api-key: msg_abc"), false);
   assert.equal(presetKeyMissing(undefined, ""), false);
 });
+
+test("a stdio preset still fills the form", () => {
+  const preset = { name: "x", type: "stdio", command: "node", args: ["a.mjs"], hint: "h" };
+  const form = presetForm(preset);
+  assert.deepEqual(form, { name: "x", type: "stdio", command: "node", args: ["a.mjs"], env: {}, hint: "h" });
+  form.args.push("b");
+  assert.equal(preset.args.length, 1);
+  assert.equal(presetKeyMissing(preset, ""), false);
+});

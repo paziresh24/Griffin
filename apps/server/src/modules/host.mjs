@@ -13,7 +13,10 @@ import { planSwitch } from "./plan.mjs";
 
 const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: String(error?.message || error) }) }] });
-const SAFE_SQL = (id) => new RegExp(`^\\s*CREATE\\s+(UNIQUE\\s+)?(TABLE|INDEX)\\s+IF\\s+NOT\\s+EXISTS\\s+(mod_${id.replace(/-/g, "_")}_\\w+|\\w+\\s+ON\\s+mod_${id.replace(/-/g, "_")}_\\w+)`, "i");
+const SAFE_SQL = (id) => {
+  const own = `mod_${id.replace(/-/g, "_")}_\\w+`;
+  return new RegExp(`^\\s*(CREATE\\s+(UNIQUE\\s+)?(TABLE|INDEX)\\s+IF\\s+NOT\\s+EXISTS\\s+(${own}|\\w+\\s+ON\\s+${own})|ALTER\\s+TABLE\\s+${own}\\s+ADD\\s+COLUMN\\s+\\w+\\s+(TEXT|INTEGER|REAL)\\b[^;]*$)`, "i");
+};
 
 /**
  * Which modules are switched on, from the MODULES config:
@@ -54,8 +57,10 @@ export function listModuleDirs(dir) {
  * @param getConfig (key) => string: a core config value, read live (a module's `sets` is compared with it)
  * @param setConfig (patch) => void: writes core config (the marketplace applies a module's `sets`)
  * @param onChange () => void: told after the marketplace changed what is on
+ * @param jobs the app's scheduled jobs (jobs/index.mjs) or a function returning them (they are made after the
+ *   modules); a module reaches them only through api.jobs, and only with requires.jobs
  */
-export async function createModuleHost({ dir, store, enabled = "", product = "griffin", callTool = async () => { throw new Error("no tool source"); }, env = (_n, d = "") => d, getConfig = () => "", setConfig = () => {}, onChange = () => {}, defaultProvider = "cursor", mcpServers = null, complete = async () => "", log = console }) {
+export async function createModuleHost({ dir, store, enabled = "", product = "griffin", callTool = async () => { throw new Error("no tool source"); }, env = (_n, d = "") => d, getConfig = () => "", setConfig = () => {}, onChange = () => {}, defaultProvider = "cursor", mcpServers = null, jobs = null, complete = async () => "", log = console }) {
   const available = listModuleDirs(dir);
   // The preset needs every manifest read first: a module that does not parse is simply not in it.
   const presetIds = available.filter((id) => {
@@ -118,8 +123,18 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
   async function load(manifest) {
     const { id } = manifest;
     const prefix = toolPrefix(id);
-    const mod = { manifest, tools: new Map(), sources: new Map(), actions: new Map() };
+    const mod = { manifest, tools: new Map(), sources: new Map(), actions: new Map(), stops: [] };
     const key = (k) => `mod:${id}:${k}`;
+    const needJobs = () => {
+      if (!manifest.requires.jobs) throw new Error(`module ${id} does not declare requires.jobs`);
+      const app = typeof jobs === "function" ? jobs() : jobs;
+      if (!app) throw new Error("jobs are not available on this install");
+      return app;
+    };
+    const jobKey = (k) => {
+      if (!/^[a-z0-9-]{1,40}$/.test(String(k || ""))) throw new Error("job key is a-z, 0-9 and dashes");
+      return String(k);
+    };
     const api = {
       id,
       manifest,
@@ -137,7 +152,7 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
         const done = store.getKv(key("schema")) || [];
         if (done.includes(name)) return;
         for (const statement of String(sql).split(";").map((s) => s.trim()).filter(Boolean)) {
-          if (!SAFE_SQL(id).test(statement)) throw new Error(`migration «${name}»: only CREATE TABLE/INDEX IF NOT EXISTS on mod_${prefix}_* is allowed`);
+          if (!SAFE_SQL(id).test(statement)) throw new Error(`migration «${name}»: only CREATE TABLE/INDEX IF NOT EXISTS, or ALTER TABLE … ADD COLUMN, on mod_${prefix}_* is allowed`);
           store.db.exec(statement);
         }
         store.setKv(key("schema"), [...done, name]);
@@ -151,11 +166,16 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
         if (!manifest.requires.tools.includes(tool)) throw new Error(`«${tool}» is not in requires.tools of module ${id}`);
         return callTool(tool, args);
       },
-      // An MCP server the module declared in requires.mcp: { url, headers } as the owner set it, or null.
+      // An MCP server the module declared in requires.mcp, as the owner set it, or null: http/sse
+      // { type, url, headers }, stdio { type: "stdio", command, args, env } (what Claude Code itself
+      // would start; the entry's own env only, nothing else of the install's). url is "" for stdio.
       mcpServer: (name) => {
         if (!manifest.requires.mcp.includes(name)) throw new Error(`«${name}» is not in requires.mcp of module ${id}`);
         const server = mcpServers?.get(name);
-        return server ? { url: server.url || "", headers: { ...(server.headers || {}) } } : null;
+        if (!server) return null;
+        const stdio = server.type === "stdio" || (!server.url && server.command);
+        if (stdio) return { type: "stdio", url: "", headers: {}, command: String(server.command || ""), args: Array.isArray(server.args) ? server.args.map(String) : [], env: { ...(server.env || {}) } };
+        return { type: server.type === "sse" ? "sse" : "http", url: server.url || "", headers: { ...(server.headers || {}) } };
       },
       // One question to the install's small model (the one that names chats), only for a module that
       // declared requires.ai. "" when no account can answer now; the module then shows without it.
@@ -163,25 +183,86 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
         if (!manifest.requires.ai) throw new Error(`module ${id} does not declare requires.ai`);
         return String((await complete(String(prompt).slice(0, 12_000))) || "").trim();
       },
+      // The module's own scheduled jobs, only with requires.jobs. A job is named by the module's key
+      // (a-z, 0-9, dashes): ensure makes it once (and again if the person deleted it), later calls
+      // answer the same job; status says whether it is there; remove deletes it. Nothing else of the
+      // install's jobs is reachable. Call ensure only after the person said yes (a button on the page).
+      jobs: {
+        ensure: (spec) => {
+          const jobsApp = needJobs();
+          const k = jobKey(spec?.key);
+          const name = String(spec?.name || "").trim();
+          const prompt = String(spec?.prompt || "").trim();
+          const cron = String(spec?.cron || "").trim();
+          if (!name || !prompt || !cron) throw new Error("jobs.ensure needs name, prompt and cron");
+          const known = store.getKv(key(`job:${k}`));
+          if (known && jobsApp.get(known)) return { id: known, created: false };
+          const made = jobsApp.create({
+            name,
+            prompt,
+            agent: String(spec?.agent || "griffin"),
+            mode: String(spec?.mode || "auto"),
+            triggerType: "schedule",
+            trigger: { cron },
+            promptChatId: "owner", // the person's own click on the module's page, as on the jobs page
+          });
+          store.setKv(key(`job:${k}`), made.id);
+          return { id: made.id, created: true };
+        },
+        status: (k) => {
+          const id = store.getKv(key(`job:${jobKey(k)}`));
+          const job = id && needJobs().get(id);
+          return job ? { id: job.id, enabled: job.enabled !== false } : null;
+        },
+        remove: (k) => {
+          const id = store.getKv(key(`job:${jobKey(k)}`));
+          store.deleteKv(key(`job:${jobKey(k)}`));
+          if (id && needJobs().get(id)) needJobs().remove(id);
+          return Boolean(id);
+        },
+      },
+      // Called when the module is switched off (or never finished starting): the place to clear a timer or close a
+      // connection, since a switched-off module is dropped without a restart. Run last-registered first; an error is logged.
+      onStop: (fn) => {
+        if (typeof fn !== "function") throw new Error("onStop needs a function");
+        mod.stops.push(fn);
+      },
       tool: (name, def) => mod.tools.set(name, def),
       source: (name, fn) => mod.sources.set(name, fn),
       action: (name, fn) => mod.actions.set(name, fn),
     };
     const file = path.join(dir, id, "server.mjs");
-    if (fs.existsSync(file)) {
-      const imported = await import(pathToFileURL(file).href);
-      if (typeof imported.default !== "function") throw new Error("server.mjs must export default function register(api)");
-      await imported.default(api);
-    }
-    // What module.json says must be what server.mjs does: a page nobody feeds is a bug found at start.
-    const declared = new Set(manifest.tools.map((t) => t.name));
-    for (const name of mod.tools.keys()) if (!declared.has(name)) throw new Error(`tool «${name}» is registered but not declared in module.json`);
-    for (const name of declared) if (!mod.tools.has(name)) throw new Error(`tool «${name}» is declared but server.mjs does not register it`);
-    for (const page of manifest.pages.filter((p) => p.kind === "list")) {
-      if (!mod.sources.has(page.source)) throw new Error(`page «${page.id}» reads source «${page.source}» which server.mjs does not register`);
-      for (const action of page.actions) if (!mod.actions.has(action.id)) throw new Error(`page «${page.id}» has action «${action.id}» which server.mjs does not register`);
+    try {
+      if (fs.existsSync(file)) {
+        const imported = await import(pathToFileURL(file).href);
+        if (typeof imported.default !== "function") throw new Error("server.mjs must export default function register(api)");
+        await imported.default(api);
+      }
+      // What module.json says must be what server.mjs does: a page nobody feeds is a bug found at start.
+      const declared = new Set(manifest.tools.map((t) => t.name));
+      for (const name of mod.tools.keys()) if (!declared.has(name)) throw new Error(`tool «${name}» is registered but not declared in module.json`);
+      for (const name of declared) if (!mod.tools.has(name)) throw new Error(`tool «${name}» is declared but server.mjs does not register it`);
+      for (const page of manifest.pages.filter((p) => p.kind === "list")) {
+        if (!mod.sources.has(page.source)) throw new Error(`page «${page.id}» reads source «${page.source}» which server.mjs does not register`);
+        if (page.badge && !mod.sources.has(page.badge)) throw new Error(`page «${page.id}» badge reads source «${page.badge}» which server.mjs does not register`);
+        for (const action of page.actions) if (!mod.actions.has(action.id)) throw new Error(`page «${page.id}» has action «${action.id}» which server.mjs does not register`);
+      }
+    } catch (error) {
+      await stopModule(mod); // a module that did not start must not leave its timer behind
+      throw error;
     }
     return mod;
+  }
+
+  // Run a module's onStop callbacks (last registered first), once; one that throws does not hide the others.
+  async function stopModule(mod) {
+    for (const fn of mod.stops.splice(0).reverse()) {
+      try {
+        await fn();
+      } catch (error) {
+        log.error?.(`[modules] ${mod.manifest.id}: onStop failed: ${error.message}`);
+      }
+    }
   }
 
   const fullName = (mod, name) => `${toolPrefix(mod.manifest.id)}_${name}`;
@@ -194,7 +275,10 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
   // --- the marketplace: what is on, what switching would do, and doing it ---------------------------
 
   // A module's own settings (module.json config), as the owner set them in the marketplace.
-  const ownConfig = (id) => store.getKv(`mod:${id}:config`) || {};
+  // A function declaration, not a const: a module reads its config while it registers, which happens before this line runs.
+  function ownConfig(id) {
+    return store.getKv(`mod:${id}:config`) || {};
+  }
   function setOwnConfig(id, patch) {
     const m = manifests.get(id);
     const next = { ...ownConfig(id) };
@@ -273,7 +357,9 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
 
   /** Every installed module as the marketplace shows it. */
   function market() {
-    const rows = [...manifests.values()].map((m) => ({
+    // A module with `mcpOnly` has a card only where every requires.mcp server is set (or it is already on).
+    const shown = [...manifests.values()].filter((m) => !m.mcpOnly || on.has(m.id) || m.requires.mcp.every((name) => mcpServers?.get(name)));
+    const rows = shown.map((m) => ({
       id: m.id,
       title: m.title,
       description: m.description,
@@ -299,7 +385,7 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
       // pages, by the id the web's menu hides them with (a builtin section's is the module id; the web
       // keeps only those that really are menu entries).
       settings: { config: m.settings.config, flags: m.settings.flags, own: ownSettings(m) },
-      nav: m.pages.map((pg) => ({ id: pg.kind === "builtin" ? m.id : `m:${m.id}:${pg.id}`, title: pg.title, builtin: pg.kind === "builtin" })),
+      nav: m.pages.filter((pg) => !pg.hidden).map((pg) => ({ id: pg.kind === "builtin" ? m.id : `m:${m.id}:${pg.id}`, title: pg.title, builtin: pg.kind === "builtin" })),
     }));
     for (const [id, error] of broken) rows.push({ id, title: id, description: "", version: "", builtin: false, enabled: false, ok: false, error, preset: false, provides: [], conflicts: [], requires: [], requiredBy: [], adds: { agents: [], tools: 0, pages: [] }, chats: 0, switchNote: "", drift: null, category: "other", icon: "puzzle", choice: "", settings: { config: [], flags: [], own: [] }, nav: [] });
     return rows.sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.title.localeCompare(b.title, "fa"));
@@ -347,6 +433,7 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
     const next = { ...overrides() };
     for (const x of p.disable) {
       const m = manifests.get(x);
+      if (loaded.has(x)) await stopModule(loaded.get(x));
       loaded.delete(x);
       failed.delete(x);
       on.delete(x);
@@ -377,11 +464,16 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
     store.setKv("modules:overrides", next);
     if (Object.keys(p.config).length && !Object.keys(result.failed).length) setConfig(p.config);
     host.seedAgents();
+    host.adoptChats();
     onChange();
     return { ...result, plan: p };
   }
 
   const host = {
+    /** Stop every loaded module (their onStop callbacks); the host is not used afterwards. */
+    async stop() {
+      for (const mod of loaded.values()) await stopModule(mod);
+    },
     market,
     plan,
     apply,
@@ -389,7 +481,21 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
     configOwners,
     ids: () => [...loaded.keys()],
     /** The enabled modules as the web needs them (pages and what they read), without any code. */
-    list: () => [...loaded.values()].map(({ manifest: m }) => ({ id: m.id, title: m.title, description: m.description, version: m.version, builtin: m.builtin, pages: m.pages, agents: m.agents.map((a) => a.id) })),
+    list: () =>
+      [...loaded.values()].map(({ manifest: m }) => ({
+        id: m.id,
+        title: m.title,
+        description: m.description,
+        version: m.version,
+        builtin: m.builtin,
+        pages: m.pages,
+        agents: m.agents.map((a) => a.id),
+        // A chat or selection button needs what the module reads: hidden until every requires.mcp server is set.
+        ...(() => {
+          const ready = m.requires.mcp.every((name) => mcpServers?.get(name));
+          return { chatActions: ready ? m.chatActions : [], selectionActions: ready ? m.selectionActions : [] };
+        })(),
+      })),
     toolNames: () => [...toolIndex().keys()],
 
     /** customTools for a chat: namespaced, so two modules can never shadow each other or the core. */
@@ -416,6 +522,27 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
     verdictOf(name) {
       const hit = toolIndex().get(name);
       return hit?.spec.risk === "write" ? { approve: `«${hit.spec.description || name}» (ماژول ${hit.mod.manifest.title})` } : null;
+    },
+
+    /**
+     * A module that names a chat folder (module.json chatFolder) gets the chats it made before the folder
+     * existed moved into it, once: only chats in no folder (the owner's own placing stays), archived ones
+     * too. The folder is made only when there is something to put in it.
+     */
+    adoptChats() {
+      const moved = {};
+      for (const { manifest } of loaded.values()) {
+        const name = manifest.chatFolder;
+        if (!name || store.getKv(`mod:${manifest.id}:foldered`) === name) continue;
+        const loose = store.listModuleChats(manifest.id).filter((c) => !c.group_id);
+        if (loose.length) {
+          const group = store.listGroups().find((g) => g.name === name) || store.createGroup(name);
+          for (const chat of loose) store.updateChat(chat.id, { groupId: group.id });
+          moved[manifest.id] = loose.length;
+        }
+        store.setKv(`mod:${manifest.id}:foldered`, name);
+      }
+      return moved;
     },
 
     /**
@@ -450,6 +577,20 @@ export async function createModuleHost({ dir, store, enabled = "", product = "gr
     /** /api/modules for the owner's session (the router that mounts it is the owner-only one). */
     routes(api) {
       api.get("/api/modules", (c) => c.json({ modules: this.list(), status: statusList(), installed: manifests.size }));
+      // The numbers beside menu entries: { "<module>:<page>": n } for every page that declares a badge source (a source that fails or answers no number is left out).
+      api.get("/api/modules/badges", async (c) => {
+        const out = {};
+        for (const [id, mod] of loaded) {
+          for (const page of mod.manifest.pages.filter((p) => p.kind === "list" && p.badge)) {
+            try {
+              const answer = await mod.sources.get(page.badge)({}, {});
+              const n = Number(typeof answer === "number" ? answer : answer?.count);
+              if (Number.isFinite(n) && n >= 0) out[`${id}:${page.id}`] = Math.floor(n);
+            } catch {}
+          }
+        }
+        return c.json({ badges: out });
+      });
       // The marketplace: every installed module, what switching one would do, and doing it.
       api.get("/api/modules/market", (c) => c.json({ modules: market() }));
       // A module's own settings (module.json config), from its card in the marketplace.

@@ -150,9 +150,9 @@ test("buildRules: griffin in a colleague thread is not sent to itself and sees o
   const { buildRules } = await import("../src/prompt.mjs");
   const text = buildRules({ agent: "griffin", caller: "team", tools: ["ask_agent", "delegate", "end_agent"] });
   assert.doesNotMatch(text, /ask_agent \{agent:"griffin"\}/);
-  assert.match(text, /THIS conversation \(authoritative\): ask_agent, delegate, end_agent\./);
+  assert.match(text, /really has \(3\): ask_agent delegate end_agent\n/);
   assert.match(text, /Close the thread \(end_agent\)/, "a colleague thread gets the thread rules");
-  assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner" }), /authoritative\): /);
+  assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner" }), /Capability map/); // no tool list given, no map
 });
 
 test("only the mother agent is told it is the assistant; other agents are told they are not", () => {

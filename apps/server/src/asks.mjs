@@ -26,6 +26,24 @@ export const ASK_REQUESTER_TOOL = "ask_requester";
 export const OWNER = "owner";
 export const REQUESTER = "requester";
 
+// The owner's last «yes» on a conversation (root chat id), kept across restarts: a chain that cannot
+// do the approved work itself hands it to his main chat, and that chat starts at once instead of
+// waiting for a second click (handoff.mjs; owner 2026-10-28: «بهش دسترسی میدم میگه تو دادی ولی من
+// نمیکنم … هی خودم مجبورم … روی دکمه چت جدید بزنم»).
+export const OWNER_YES_KEY = (rootChatId) => `owneryes:${rootChatId}`;
+const NO_RE = /^\s*(نه|خیر|نکن|نزن|نمی|رد|لغو|صبر|فعلا|فعلاً|no\b|nope|cancel|deny|reject)/iu;
+const YES_RE = /^\s*(بله|بلی|آره|اره|آری|باشه|اوکی|ok|okay|yes|yep|sure|تأیید|تایید|موافق|انجام|بزن|بکن|بده|برو|حله|درسته|شروع|اجازه|مجاز|go\b)/iu;
+
+/** The owner's answer reads as a yes: a plain affirmative, or the first (recommended) option unless it is a no. */
+export function ownerSaidYes(answer, options = null) {
+  const text = String(answer || "").trim();
+  if (!text || NO_RE.test(text)) return false;
+  if (YES_RE.test(text)) return true;
+  const first = Array.isArray(options) && options.length ? options[0] : null;
+  const label = String(first && typeof first === "object" ? (first.label ?? "") : (first ?? "")).trim();
+  return Boolean(label) && label === text && !NO_RE.test(label);
+}
+
 /** Who should answer this question. Used both here and by the Telegram bridge, which sees only
  *  the tool.started event (the SDK calls execute() a while later). */
 export function audienceFor(chat, args = {}) {
@@ -91,8 +109,10 @@ const requesterSchema = {
 // «با kube_secret بخوانم یا kube_exec؟» is the agent's call, never a person's. 2026-10-06: a
 // sub-agent sent exactly that to a colleague's agent mid-task. A tool name (lowercase snake_case
 // with a known prefix) in the question or options means the agent is outsourcing a tool choice.
-const TOOL_NAME_RE = /\b(?:kube|infisical|debug|pg|gitlab|arvan|nsin|mikrotik|s3|grafana|dns|http|tls|telegram|knowledge|jobs)_[a-z_]+\b/;
-function toolChoiceQuestion(args) {
+// A secret key name is not one: «gitlab__token» (double underscore) stopped a real question to Ms.
+// Mahla on 2026-10-30.
+const TOOL_NAME_RE = /\b(?:kube|infisical|debug|pg|gitlab|arvan|nsin|mikrotik|s3|grafana|dns|http|tls|telegram|knowledge|jobs)_[a-z][a-z_]*\b/;
+export function toolChoiceQuestion(args) {
   const text = [args?.question, ...(Array.isArray(args?.options) ? args.options.map((o) => o?.label ?? o) : [])].join("\n");
   return TOOL_NAME_RE.test(String(text));
 }
@@ -217,6 +237,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
             : option,
         )
       : args.options;
+    const detail = args.detail ? maskText(String(args.detail)).slice(0, 4000) : null;
     args = { ...args, options };
 
     // Every open question has its own id: the main page, the in-chat card and a Telegram button
@@ -237,6 +258,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
       mirrorIds,
       by: null,
       options: Array.isArray(options) ? options : null,
+      detail,
     };
 
     // Mirror the question onto the root chat so AskCard appears where the owner is looking.
@@ -247,7 +269,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
       const started = store.appendEvent(target, null, "tool.started", {
         callId: `peer-ask-${item.id}`,
         name: ASK_TOOL,
-        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id, ...(link ? { link } : {}), ...(args.header ? { header: String(args.header).slice(0, 40) } : {}) },
+        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id, ...(detail ? { detail } : {}), ...(link ? { link } : {}), ...(args.header ? { header: String(args.header).slice(0, 40) } : {}) },
         fromChatId: chatId,
       });
       mirrorIds.push(started.id);
@@ -275,7 +297,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
       // tool arguments (openai-compatible) log tool.started with empty args, so no question ever reached
       // Telegram after 2026-09-24's engine switch. This carries the real text and audience.
       store?.appendEvent?.(target, null, "ask.pending", {
-        question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId, askId: item.id, via: item.via,
+        question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId, askId: item.id, via: item.via, ...(detail ? { detail } : {}),
       });
       changed(target);
       for (const wake of listeners.get(target) || []) wake();
@@ -340,6 +362,9 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
     // by/question/options let a caller (the guard's owner-answer bridge) tell an approval apart
     // from a clarification without re-reading the event log.
     if (text?.answered) settled.set(target, { question: next.question, answer: text, at: Date.now() });
+    if (text?.answered && next.audience === OWNER && by === OWNER && ownerSaidYes(text.answer, next.options)) {
+      store?.setKv?.(OWNER_YES_KEY(target), { question: next.question, answer: String(text.answer || "").slice(0, 300), at: new Date().toISOString() });
+    }
     onSettled(target, {
       answer: text?.answered ? text.answer : null,
       cancelled: !text?.answered,
@@ -396,10 +421,11 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
     // { answered, answer, selected } or { answered: false, reason }.
     // The options travel with the question: a delegated child's confirm is delivered from its
     // mirror on the root chat, and without them it reached Telegram with no buttons.
-    confirm(chatId, { question, options = [{ label: "بله" }, { label: "نه" }] }) {
+    // detail: the literal call (a shell command) the card shows folded under the question.
+    confirm(chatId, { question, options = [{ label: "بله" }, { label: "نه" }], detail = null }) {
       // via:"guard" — the guard's own approval flow manages its own repeats (decision cache +
       // unanswered map), so the nag guard must not swallow its questions.
-      return enqueue(chatId, String(question || ""), { audience: OWNER, options, via: "guard" });
+      return enqueue(chatId, String(question || ""), { audience: OWNER, options, via: "guard", detail });
     },
 
     // Claude Code's plan approval (ExitPlanMode in plan mode; config PLAN_APPROVAL, providers/claude.mjs).
@@ -445,6 +471,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
             question: item.question,
             options: item.options,
             multiSelect: item.multiSelect,
+            ...(item.detail ? { detail: item.detail } : {}),
             audience: item.audience,
             via: item.via,
             at: item.at,

@@ -39,6 +39,11 @@ const KINDS = {
   horizontalpodautoscalers: { group: "apis/autoscaling/v2", namespaced: true },
   httproutes: { group: "apis/gateway.networking.k8s.io/v1", namespaced: true },
   "clusters.postgresql.cnpg.io": { group: "apis/postgresql.cnpg.io/v1", plural: "clusters", namespaced: true },
+  // 2026-11-02: «ابزار فهرست Backupها را ندارم» in an ops chain — RBAC already reads every CRD.
+  "backups.postgresql.cnpg.io": { group: "apis/postgresql.cnpg.io/v1", plural: "backups", namespaced: true },
+  "scheduledbackups.postgresql.cnpg.io": { group: "apis/postgresql.cnpg.io/v1", plural: "scheduledbackups", namespaced: true },
+  "mariadbs.k8s.mariadb.com": { group: "apis/k8s.mariadb.com/v1alpha1", plural: "mariadbs", namespaced: true },
+  "applications.argoproj.io": { group: "apis/argoproj.io/v1alpha1", plural: "applications", namespaced: true },
 };
 
 const DF_PATH = /^\/[A-Za-z0-9_./-]{0,200}$/;
@@ -204,7 +209,7 @@ export function createTools({
 
     kube_get: {
       description:
-        "Read-only list/get of one Kubernetes kind (pods, nodes, events, pvc, pv, services, deployments, statefulsets, daemonsets, jobs, cronjobs, ingresses, CNPG clusters), summarized. Falls back to emergency SSH.",
+        "Read-only list/get of one Kubernetes kind (pods, nodes, events, pvc, pv, services, deployments, statefulsets, daemonsets, jobs, cronjobs, ingresses, CNPG clusters/backups/scheduledbackups, MariaDB, Argo applications — those live in namespace argocd), summarized. Falls back to emergency SSH.",
       inputSchema: {
         type: "object",
         properties: {
@@ -332,7 +337,9 @@ export function createTools({
         const container = optionalName(args.container, "container");
         const command = String(args.command || "");
         if (!command.trim()) throw new ToolInputError("command required");
-        const result = await kube.exec(name, { namespace, pod, container, command: ["sh", "-c", command] });
+        // asOwner is set by the server alone (apps/server/src/owner-exec.mjs), never by the model.
+        const asOwner = args.asOwner === true;
+        const result = await kube.exec(name, { namespace, pod, container, command: ["sh", "-c", command], asOwner });
         return { cluster: name, namespace, pod, container: container || null, output: String(result.value).slice(0, 20_000), source: result.source, attempts: result.attempts };
       },
     },
@@ -395,6 +402,74 @@ export function createTools({
         const base = String(m.apiVersion).includes("/") ? `/apis/${m.apiVersion}` : `/api/${m.apiVersion}`;
         const out = await kube.publicWrite(name, `${base}/namespaces/${namespace}/${kindPlural(kind)}`, { method: "POST", body: m });
         return { cluster: name, namespace, kind, name: out?.metadata?.name || m.metadata.name || m.metadata.generateName, uid: out?.metadata?.uid || null, created: true };
+      },
+    },
+    // 2026-10-29 (freeturn-monitor): a colleague's orphaned CronJob — already disabled in git, kept
+    // alive by prune=false — went on sending Telegram messages; the owner granted full access and
+    // the run still answered «ابزاری برای حذف CronJob ندارم»: no tool could change or delete an
+    // existing object. One named object of a workload kind; never data or credentials.
+    kube_delete: {
+      description:
+        `Delete ONE named namespaced object of a workload kind: ${Object.keys(KUBE_DELETE_KINDS).join(", ")} (e.g. an orphaned CronJob that git already removed but Argo, with prune off, left running). Background propagation: a CronJob's Jobs/Pods and a Deployment's ReplicaSets go with it. Refuses PVCs, Secrets, Namespaces, RBAC, CRDs/custom resources and platform namespaces. Refuses any object an Argo app still has in git, whatever its selfHeal (a live object: the change is an MR), and any Argo-tracked object whose app cannot be read; only orphans git no longer has, non-Argo objects, and Pods a controller remakes (a restart). A colleague's conversation deletes only in their own namespace; at most 3 deletes per conversation an hour without a fresh owner yes; a Deployment/StatefulSet asks the owner every time, even with full access. Confirms it is gone.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          cluster,
+          namespace: k8sName("namespace of the object"),
+          kind: { type: "string", description: `one of ${Object.keys(KUBE_DELETE_KINDS).join(", ")}` },
+          name: k8sName("object name"),
+        },
+        required: ["cluster", "namespace", "kind", "name"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        const clusterName = requireCluster(args);
+        const namespace = requiredName(args.namespace, "namespace");
+        const objectName = requiredName(args.name, "name");
+        const asked = String(args.kind || "").trim();
+        const kind = Object.keys(KUBE_DELETE_KINDS).find((k) => [k.toLowerCase(), kindPlural(k)].includes(asked.toLowerCase()));
+        if (!kind) throw new ToolInputError(`${asked || "kind"} is not deleted from here — only ${Object.keys(KUBE_DELETE_KINDS).join(", ")}. Data and credentials (PVC, Secret, Namespace, RBAC, CRDs/custom resources): not from here — an MR or the owner.`);
+        if (protectedNamespace(namespace)) throw new ToolInputError(`namespace ${namespace} is platform/credentials — nothing is deleted there from here; an MR or the owner`);
+        const { group, version } = KUBE_DELETE_KINDS[kind];
+        const path = `${group ? `/apis/${group}/${version}` : `/api/${version}`}/namespaces/${namespace}/${kindPlural(kind)}/${objectName}`;
+        const before = await kube.publicRequest(clusterName, path);
+        if (before.notFound) return { cluster: clusterName, namespace, kind, name: objectName, deleted: false, found: false, note: "not found — nothing to delete" };
+        const meta = before.body?.metadata || {};
+        const owner = (meta.ownerReferences || []).find((ref) => ref.controller);
+        // A Pod its controller remakes is a restart, not a removal.
+        const restart = kind === "Pod" && ["ReplicaSet", "StatefulSet", "Job"].includes(owner?.kind);
+        const argoApp = await argoAppOf(kube, clusterName, { group, kind, namespace, name: objectName }, meta);
+        // 2026-10-29: of 170 owner apps on east none has selfHeal or prune, so a delete of a live
+        // object stays deleted = an outage. Only what git no longer has (the orphan) or what Argo
+        // does not track goes; unknown is refused (fail closed).
+        if (argoApp && !restart && argoApp.inGit === true) {
+          throw new ToolInputError(`${kind} ${namespace}/${objectName} is live in git for Argo app ${argoApp.name} (prune=${argoApp.prune}, selfHeal=${argoApp.selfHeal}) — deleting it here is an outage that Argo will not undo. The change is an MR in git.`);
+        }
+        if (argoApp && !restart && argoApp.inGit !== false) {
+          throw new ToolInputError(`${kind} ${namespace}/${objectName} looks tracked by Argo app ${argoApp.name}, but ${argoApp.found ? "its resource list" : "the app"} could not be read — not deleted (fail closed). Check the app; the change is an MR or the owner.`);
+        }
+        try {
+          await kube.publicWrite(clusterName, path, { method: "DELETE", body: { kind: "DeleteOptions", apiVersion: "v1", propagationPolicy: "Background" } });
+        } catch (error) {
+          if (error?.status !== 404) throw error;
+        }
+        const after = await kube.publicRequest(clusterName, path);
+        const gone = Boolean(after.notFound);
+        const notes = [];
+        if (owner) notes.push(`owned by ${owner.kind} ${owner.name} — its controller may make a new one`);
+        if (argoApp?.inGit) notes.push(`still in git for Argo app ${argoApp.name}: the next sync brings it back — remove it in git too`);
+        return {
+          cluster: clusterName,
+          namespace,
+          kind,
+          name: objectName,
+          deleted: true,
+          gone,
+          ...(gone ? {} : { terminating: Boolean(after.body?.metadata?.deletionTimestamp) }),
+          argoApp,
+          ...(notes.length ? { note: notes.join("; ") } : {}),
+          source: "public-api",
+        };
       },
     },
     kube_copy_secret: {
@@ -558,7 +633,18 @@ export function createTools({
         if (command.length > 16_000) throw new ToolInputError(`invalid command: ${command.length} chars, the limit is 16000`);
         if (/[\0\r]/.test(command)) throw new ToolInputError("invalid command: contains NUL or CR (\\r) — use plain \\n line endings");
         const target = { host, port, user, ...(site.ssh?.keySlug ? { keySlug: site.ssh.keySlug } : {}), tofu: true };
-        const { stdout, stderr } = await sshRun(target, command, { timeoutMs: 120_000 });
+        // 2026-10-28: colleague installs have no ssh__griffin. Their agents hit this, read it as
+        // «no access to my own host», and a one-line curl (the host's egress IP) went to Nova and
+        // waited on the owner. The sandbox is on that same host; say so instead of a bare «not set».
+        const { stdout, stderr } = await sshRun(target, command, { timeoutMs: 120_000 }).catch((error) => {
+          if (!/ssh__griffin is not set/.test(error?.message || "")) throw error;
+          throw new ToolInputError(
+            "ssh_exec is not available on this install (no platform key ssh__griffin; this is not a missing access to your own host). " +
+            "Your sandbox (debug_exec, host sandbox) runs on this same server: network questions — its public egress IP (curl -s https://api.ipify.org), " +
+            "whether it reaches a host or port — are answered there directly, no login needed. To work on the server as your own console user, " +
+            "ssh from the sandbox with the user and password your own secret store holds for it (fed to ssh, never printed)."
+          );
+        });
         return { host, user, port, stdout, stderr, source: `ssh ${user}@${host}:${port}` };
       },
     },
@@ -669,6 +755,67 @@ async function inHomeIfForbidden(kube, cluster, namespace, run) {
 }
 
 const KUBE_CREATE_DENY = /^(Namespace|Node|PersistentVolume|ClusterRole|ClusterRoleBinding|Role|RoleBinding|ServiceAccount|CustomResourceDefinition|MutatingWebhookConfiguration|ValidatingWebhookConfiguration|ValidatingAdmissionPolicy|ValidatingAdmissionPolicyBinding|StorageClass|PriorityClass|APIService|CertificateSigningRequest)$/;
+
+// kube_delete's kinds: exactly what RBAC platform.griffin may delete (platform-gitops platform-rbac,
+// 2026-10-29). Data (PVC), credentials (Secret), Namespaces, RBAC and custom resources never.
+const KUBE_DELETE_KINDS = {
+  CronJob: { group: "batch", version: "v1" },
+  Job: { group: "batch", version: "v1" },
+  Pod: { group: "", version: "v1" },
+  ConfigMap: { group: "", version: "v1" },
+  Service: { group: "", version: "v1" },
+  Deployment: { group: "apps", version: "v1" },
+  StatefulSet: { group: "apps", version: "v1" },
+  HTTPRoute: { group: "gateway.networking.k8s.io", version: "v1" },
+};
+
+// The platform's own namespaces: control plane, GitOps, identity and credentials (Authentik akadmin,
+// Infisical admin, GitLab root, admin SA tokens — the same planes griffin.yaml keeps Secrets out of),
+// operators and shared gateways. Nothing is deleted there from a tool; that is an MR or the owner.
+const PROTECTED_NAMESPACES = new Set([
+  "kube-system", "kube-public", "kube-node-lease", "default",
+  "argocd", "platform-rbac", "platform-kube-access", "authentik", "infisical",
+  "gitlab", "gitlab-runner", "cert-manager", "kyverno", "gateway", "monitoring",
+]);
+export function protectedNamespace(namespace) {
+  const ns = String(namespace || "").toLowerCase();
+  return PROTECTED_NAMESPACES.has(ns) || ns.endsWith("-system");
+}
+
+// The Argo Application that manages an object: its tracking-id annotation
+// (`<app>:<group>/<Kind>:<ns>/<name>`, `<appNs>_<app>` for apps outside argocd), else the
+// app.kubernetes.io/instance label. -> null (not Argo's) | { name, found, prune, selfHeal, inGit }.
+// inGit: the app's status still lists the object as desired (true), lists it only to prune or not
+// at all (false), or it cannot be told (null: no resource list, the app unreadable, or a
+// tracking-id naming an app that is gone) — kube_delete refuses null as well as true.
+async function argoAppOf(kube, cluster, target, meta) {
+  const tracking = String(meta?.annotations?.["argocd.argoproj.io/tracking-id"] || "");
+  const ref = tracking.includes(":") ? tracking.split(":")[0] : String(meta?.labels?.["app.kubernetes.io/instance"] || "");
+  if (!ref) return null;
+  const [appNs, appName] = ref.includes("_") ? ref.split("_", 2) : ["argocd", ref];
+  if (!K8S_NAME.test(appNs) || !K8S_NAME.test(appName)) return null;
+  let app;
+  try {
+    app = await kube.publicRequest(cluster, `/apis/argoproj.io/v1alpha1/namespaces/${appNs}/applications/${appName}`);
+  } catch (error) {
+    return { name: appName, found: false, inGit: null, error: String(error?.message || error).slice(0, 200) };
+  }
+  // A bare instance label naming no app is a helm release, not Argo's; a tracking-id is Argo's own.
+  if (app.notFound) return tracking ? { name: appName, found: false, inGit: null } : null;
+  const automated = app.body?.spec?.syncPolicy?.automated || null;
+  const resources = app.body?.status?.resources;
+  const entry = Array.isArray(resources)
+    ? resources.find((r) => r.kind === target.kind && r.name === target.name && (r.namespace || "") === target.namespace && (r.group || "") === target.group)
+    : undefined;
+  return {
+    name: appName,
+    found: true,
+    automated: Boolean(automated),
+    prune: Boolean(automated?.prune),
+    selfHeal: Boolean(automated?.selfHeal),
+    inGit: Array.isArray(resources) ? Boolean(entry && !entry.requiresPruning) : null,
+  };
+}
 
 // Kind → its REST plural (lowercase; -y → -ies, -s → -es); the irregular ones listed.
 export function kindPlural(kind) {
@@ -796,6 +943,16 @@ export function summarize(kind, item) {
       return { ...meta, hosts: (spec.rules || []).map((r) => r.host).filter(Boolean), className: spec.ingressClassName || null };
     case "clusters.postgresql.cnpg.io":
       return summarizeCnpg(item);
+    case "backups.postgresql.cnpg.io":
+      return { ...meta, cluster: spec.cluster?.name || null, method: spec.method || s.method || null, phase: s.phase || null, started: s.startedAt || null, stopped: s.stoppedAt || null, error: s.error || null, backupId: s.backupId || null };
+    case "scheduledbackups.postgresql.cnpg.io":
+      return { ...meta, cluster: spec.cluster?.name || null, schedule: spec.schedule, suspend: Boolean(spec.suspend), lastSchedule: s.lastScheduleTime || null, nextSchedule: s.nextScheduleTime || null };
+    case "mariadbs.k8s.mariadb.com": {
+      const ready = (s.conditions || []).find((c) => c.type === "Ready");
+      return { ...meta, replicas: spec.replicas ?? 1, ready: ready?.status || null, message: ready?.message || null, currentPrimary: s.currentPrimary || null };
+    }
+    case "applications.argoproj.io":
+      return { ...meta, destination: spec.destination?.namespace || null, sync: s.sync?.status || null, revision: (s.sync?.revision || "").slice(0, 8) || null, health: s.health?.status || null, operation: s.operationState?.phase || null, conditions: (s.conditions || []).map((c) => `${c.type}: ${String(c.message || "").slice(0, 160)}`), outOfSync: (s.resources || []).filter((r) => r.status === "OutOfSync").slice(0, 8).map((r) => `${r.kind}/${r.name}`) };
     default:
       return meta;
   }

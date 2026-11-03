@@ -190,7 +190,9 @@ export function createClicks({ store, network = null, supportHost = () => "", se
       const r = cleanReport(body?.report);
       if (!r) return c.json({ error: "bad report" }, 400);
       // A member reports for itself only: the token it holds was made for its own address.
-      if (`net-${agentId(r.install)}`.slice(0, 41) !== who.userId) return c.json({ error: "report for another install" }, 403);
+      // (or the one it moved from: the token stays named after its old address, network.memberIs)
+      const same = network?.memberIs ? await network.memberIs(who.userId, r.install) : `net-${agentId(r.install)}`.slice(0, 41) === who.userId;
+      if (!same) return c.json({ error: "report for another install" }, 403);
       keep(r, who.label);
       return c.json({ ok: true });
     });

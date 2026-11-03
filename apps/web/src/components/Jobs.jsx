@@ -7,6 +7,7 @@ import { api, navigate } from "../api.js";
 import { BRAND, agentMeta } from "../brand.js";
 import { AgentPicker, MODES } from "./Controls.jsx";
 import { t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 // A job's mode: the chat's mode list (Controls.jsx) plus «محدود» (owner 2026-10-19). What each means in
 // a job, which nobody watches while it runs (jobs/owner-jobs.mjs); a job someone else wrote is always
@@ -153,8 +154,8 @@ function JobCard({ job, targets, onChange, onEdit }) {
     }
   };
 
-  const remove = () => {
-    if (!window.confirm(t("جاب «{name}» و گفتگوهای اجراهایش حذف شوند؟", { name: job.name }))) return;
+  const remove = async () => {
+    if (!(await askConfirm(t("جاب «{name}» و گفتگوهای اجراهایش حذف شوند؟", { name: job.name })))) return;
     call(`/api/jobs/${job.id}`, "DELETE");
   };
 

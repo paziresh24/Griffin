@@ -409,3 +409,45 @@ test("a network peer's own namespace (kv peer-owner) runs without asking; a type
   assert.equal(await guardTools(tool, { chatId: "a", asks, store }).kube_exec.execute(other), "ran");
   assert.equal(asked, 2);
 });
+
+// 2026-10-29, freeturn-monitor: deleting is not creating — every call names its object and asks,
+// a yes is not learned for the namespace, and a colleague's own namespace does not pass by itself.
+test("kube_delete always asks the owner, per object, and is never trusted on a colleague's own namespace", async () => {
+  forgetDecisions();
+  const cj = { cluster: "east", namespace: "akazemi", kind: "CronJob", name: "freeturn-monitor" };
+  assert.match(classify("kube_delete", cj).approve, /^حذف CronJob freeturn-monitor در namespace «akazemi» \(کلاستر east\)$/);
+  const asks = createAsks();
+  const store = recorder();
+  const kv = new Map([["peertrust:akazemi", { inPod: true }]]);
+  let caller = "owner";
+  store.rootChatId = () => "d1";
+  store.getChat = () => ({ id: "d1", caller, title: "حذف کرون‌جاب" });
+  store.getKv = (k) => kv.get(k) || null;
+  store.setKv = (k, v) => kv.set(k, v);
+  let ran = 0;
+  const tools = { kube_delete: { inputSchema: { type: "object", properties: {} }, async execute() { ran += 1; return { content: [] }; } } };
+  const guarded = guardTools(tools, { chatId: "d1", asks, store, caller: "owner" });
+  assert.ok(guarded.kube_delete.inputSchema.properties.intent);
+  const pending = guarded.kube_delete.execute({ ...cj, intent: "آقای کاظمی می‌خوان کرون‌جاب قدیمی‌شون که پیام می‌فرسته پاک بشه" });
+  await new Promise((r) => setTimeout(r, 20));
+  const q = store.events.find((e) => e.type === "tool.started").data.args.question;
+  assert.match(q, /\(حذف CronJob freeturn-monitor در namespace «akazemi» \(کلاستر east\)\)/, "the exact object is on the card even with a plain sentence");
+  asks.answer("d1", { answer: "بله", selected: ["بله"] });
+  await pending;
+  assert.equal(ran, 1);
+  assert.equal(kv.get("grants"), undefined, "a yes to a delete is not learned for the namespace");
+  const second = guarded.kube_delete.execute({ ...cj, name: "other-job" });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asks.isWaiting("d1"), true, "another object asks again");
+  asks.answer("d1", { answer: "نه", selected: ["نه"] });
+  await second;
+  assert.equal(ran, 1);
+  // A colleague's own namespace, even one trusted in-pod: not run without the owner.
+  forgetDecisions();
+  caller = "peer:akazemi";
+  const out = await guarded.kube_delete.execute(cj);
+  assert.equal(out.isError, true);
+  assert.equal(ran, 1, "the colleague call did not run");
+  assert.equal(store.rows.some((r) => r.tool === "kube_delete" && r.decision === "trusted"), false);
+  forgetDecisions();
+});

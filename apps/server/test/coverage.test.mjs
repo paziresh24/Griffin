@@ -74,7 +74,7 @@ test("guardTeamTools blocks destructive SQL without asking", async () => {
   assert.match(result.content[0].text, /مخرب/);
 });
 
-test("guardTeamTools refuses write SQL without asking and points at the handoff", async () => {
+test("guardTeamTools refuses write SQL without asking and points at request_full_access", async () => {
   const asks = createAsks();
   let ran = false;
   const tools = {
@@ -90,7 +90,7 @@ test("guardTeamTools refuses write SQL without asking and points at the handoff"
   assert.equal(asks.isWaiting("c2"), false, "nobody is asked per call");
   assert.equal(ran, false);
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /handoff_to_owner/);
+  assert.match(result.content[0].text, /request_full_access/);
 });
 
 test("guardTeamTools refuses team-only writes (MR, purge, kubectl apply) the owner's chats run freely", async () => {
@@ -106,7 +106,7 @@ test("guardTeamTools refuses team-only writes (MR, purge, kubectl apply) the own
   ]) {
     const out = await guarded[name].execute(args);
     assert.equal(out.isError, true, name);
-    assert.match(out.content[0].text, /handoff_to_owner/, name);
+    assert.match(out.content[0].text, /request_full_access/, name);
   }
   assert.deepEqual(ran, []);
   await guarded.debug_exec.execute({ command: "kubectl -n hojat-khajavi get backups.postgresql.cnpg.io" });

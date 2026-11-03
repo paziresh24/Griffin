@@ -5,6 +5,10 @@ import { optionOf, rowMatches, shelves, actionOutcome, cellText, filterQuery, in
 test("the route of a module page", () => {
   assert.deepEqual(parseModuleRoute("#/m/mr-explainer/mrs"), { module: "mr-explainer", page: "mrs" });
   assert.equal(parseModuleRoute("#/m/mr-explainer"), null);
+  assert.deepEqual(parseModuleRoute("#/m/centers-servers/centers/SHIRAZ"), { module: "centers-servers", page: "centers", arg: "SHIRAZ" }); // a page may take one argument
+  assert.equal(parseModuleRoute("#/m/x1/centers/a/b"), null);
+  assert.equal(modulePath("centers-servers", "centers", "SHIRAZ"), "/m/centers-servers/centers/SHIRAZ");
+  assert.equal(modulePath("a1", "b"), "/m/a1/b");
   assert.equal(parseModuleRoute("#/m/Bad/x"), null);
   assert.equal(parseModuleRoute("#/jobs"), null);
   assert.equal(modulePath("a-b", "c"), "/m/a-b/c");
@@ -15,6 +19,7 @@ test("the sidebar gets one entry per page of every enabled module", () => {
   assert.deepEqual(items.map((i) => i.path), ["/m/tix/all", "/m/tix/mine", "/m/mr/l"]);
   assert.equal(items[0].id, "m:tix:all");
   assert.deepEqual(moduleNavItems(null), []);
+  assert.deepEqual(moduleNavItems([{ id: "cs", pages: [{ id: "list", title: "فهرست", icon: "" }, { id: "detail", title: "جزئیات", icon: "", hidden: true }] }]).map((i) => i.page), ["list"]); // a hidden page has no menu entry
 });
 
 test("filters: defaults, and a query without empty values", () => {

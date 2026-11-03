@@ -23,5 +23,12 @@
   "هنوز بکاپی نیست": "No backup yet",
   "ویزاردها": "Wizards",
   "پراکسی خروجی": "Outbound proxy",
-  "چک زنده": "Live check"
+  "چک زنده": "Live check",
+  "بیرون از سرور: {url}": "Off-site: {url}",
+  "بیرون از سرور: تنظیم نشده": "Off-site: not set up",
+  "در حال فرستادن…": "Sending…",
+  "آخرین: {at} · {mb} مگابایت تازه": "Last: {at} · {mb} MB new",
+  "خطا: {error}": "Error: {error}",
+  "با بکاپ بعدی فرستاده می‌شود": "Sent with the next backup",
+  "BACKUP_S3_URL و سکرت‌های backup/… در تنظیمات": "Set BACKUP_S3_URL and the backup/… secrets in Settings"
 }

@@ -117,3 +117,25 @@ test("a colleague chat the owner renamed is not the automatic title", () => {
   assert.equal(isPeerAutoTitle("موافقت آقای کاظمی", wrapped), false);
   assert.equal(peerAutoTitle("\n  خط اول\nخط دوم"), "خط اول");
 });
+
+// Named when its first run starts, from the question alone — like Claude Code (owner 2026-10-31).
+test("a chat is named from its question while its first run is still going", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "titles-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const prompts = [];
+  const titler = createTitler({ store, log: {}, generate: async (p) => { prompts.push(p); return "عنوان چت از ابتدا"; } });
+  try {
+    const chat = store.createChat({ title: "تو کلاد کد عنوان چت همون اول درست میشه", mode: "agent" });
+    store.appendEvent(chat.id, null, "user", { text: "تو کلاد کد عنوان چت همون اول درست میشه" });
+    const runId = store.startRun(chat.id);
+    store.appendEvent(chat.id, runId, "run.started", {});
+    assert.equal(await titler(chat.id), "عنوان چت از ابتدا");
+    assert.ok(!prompts[0].includes("Answer:"), "no answer yet");
+    store.appendEvent(chat.id, runId, "text", { text: "جواب" });
+    store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+    assert.equal(await titler(chat.id), null, "not named twice");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

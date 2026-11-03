@@ -43,5 +43,5 @@ test("what waits for the owner is counted in front, before the running dot", () 
 test("App sets the tab from tabTitle and settings reports its section", () => {
   const app = fs.readFileSync(new URL("../src/App.jsx", import.meta.url), "utf8");
   assert.match(app, /document\.title = tabTitle\(/);
-  assert.match(app, /<SettingsPage onBack=\{[^}]*\} onSection=\{setSettingsSection\} \/>/);
+  assert.match(app, /<SettingsPage onBack=\{[^}]*\} onSection=\{setSettingsSection\} /);
 });

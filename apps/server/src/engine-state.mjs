@@ -12,16 +12,22 @@ export const isCreditError = (text) => CREDIT.test(String(text || ""));
 // again marks it again. A passing test clears it at once.
 export const CREDIT_RETRY_MS = 6 * 60 * 60_000;
 
-/** { state: "ok"|"limited"|"credit"|"no_key"|"off", until? } */
-export function engineState({ enabled, keyed, limitedUntil = 0, creditAt = 0, now = Date.now() }) {
+// A login or key the engine refused (an expired OAuth login that could not be renewed, a revoked key):
+// out of routing until someone signs in again, a test passes, or this long has gone by (a colleague,
+// 2026-10-29: claude-5's login had expired and six runs of one chat went to it while 4/6/7 were fine).
+export const AUTH_RETRY_MS = 30 * 60_000;
+
+/** { state: "ok"|"limited"|"auth"|"credit"|"no_key"|"off", until? } */
+export function engineState({ enabled, keyed, limitedUntil = 0, creditAt = 0, authAt = 0, now = Date.now() }) {
   if (!enabled) return { state: "off" };
   if (!keyed) return { state: "no_key" };
+  if (authAt && now - authAt < AUTH_RETRY_MS) return { state: "auth", since: authAt };
   if (creditAt && now - creditAt < CREDIT_RETRY_MS) return { state: "credit", since: creditAt };
   if (limitedUntil > now) return { state: "limited", until: limitedUntil };
   return { state: "ok" };
 }
 
-const TIER = { ok: 0, limited: 1, credit: 2, no_key: 3, off: 4 };
+const TIER = { ok: 0, limited: 1, auth: 2, credit: 3, no_key: 4, off: 5 };
 /** Stable sort by usability: items keep their own order inside a tier; limited by reset time.
  *  idOf(item) -> account id; stateOf(id) -> engineState(). */
 export function rankByState(list, stateOf, idOf = (item) => item.provider ?? item.id) {
@@ -31,9 +37,10 @@ export function rankByState(list, stateOf, idOf = (item) => item.provider ?? ite
     .map((x) => x.item);
 }
 
-/** A probe's verdict (doctor.mjs probeEngine) -> the state to store: "credit" | "limited" | "ok" | null. */
+/** A probe's verdict (doctor.mjs probeEngine) -> the state to store: "credit" | "limited" | "auth" | "ok" | null. */
 export function probeVerdict(result) {
   if (!result) return null;
+  if (result.cause === "bad_key") return "auth";
   if (result.state === "credit" || result.state === "limited") return result.state;
   if (result.ok && !result.busy) return "ok";
   return null;

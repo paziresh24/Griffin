@@ -162,6 +162,38 @@ test("runner: Claude's own turn after a background task ends is a run of the cha
   runner.shutdown({ timeoutMs: 200 });
 });
 
+for (const [name, refusal, limited] of [
+  ["a spent plan moves the account", { subtype: "error_during_execution", is_error: true, result: "You've hit your weekly limit · resets Nov 3, 2am (UTC)" }, ["claude-1"]],
+  ["an empty answer", { subtype: "success", is_error: false, result: "", usage: { output_tokens: 0 } }, []],
+]) {
+  test(`runner: Claude's own turn refused by the engine goes on as a run: ${name}`, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-wake-"));
+    const store = openStore(path.join(dir, "db.sqlite"));
+    const fake = fakeClaude();
+    const sdk = { ...createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl: fake.queryImpl }), kind: "claude" };
+    const opts = { cwd: dir, fileAccess: { read: [dir], write: [dir], deny: [] }, claudeCode: true, idleCloseMs: 30, cliTurnQuietMs: 50, backgroundTasks: true };
+    const marked = [];
+    let route = "claude-1";
+    const runner = createRunner({ store, sdk, agentOptions: async () => opts, log: { error() {} }, runLabel: () => ({ provider: route, model: "opus" }), onPlanLimit: (_chat, _error, used) => (marked.push(used), (route = "claude-2"), true) });
+    const chat = store.createChat({ title: "t" });
+    await runner.send(chat.id, { text: "bg ci", ownerText: true });
+    await until(() => events(store, chat.id, "run.finished").length === 1);
+    await until(() => runner.backgroundTasks(chat.id).length === 1);
+    const p = fake.processes[0];
+    p.emit({ type: "system", subtype: "task_notification", task_id: "ci", status: "failed", summary: "limit", session_id: p.id });
+    p.emit({ type: "assistant", message: { content: [] }, session_id: p.id });
+    await until(() => runner.isActive(chat.id));
+    p.emit({ type: "result", ...refusal, user_message_uuid: "notification", session_id: p.id });
+    await until(() => events(store, chat.id, "run.finished").length === 3);
+    const started = events(store, chat.id, "run.started").map(dataOf);
+    assert.equal(started[1].wake, true);
+    assert.equal(started[2].wake, undefined, "a normal run of the chat");
+    assert.deepEqual(marked, limited);
+    assert.deepEqual(events(store, chat.id, "run.finished").map((e) => dataOf(e).status), ["finished", "error", "finished"]);
+    runner.shutdown({ timeoutMs: 200 });
+  });
+}
+
 test("tool-builder: a run cut by a restart is not the report; the finish is, and the asker is woken when the tool is live", async () => {
   const store = tmpStore("griffin-tb2-");
   const sent = [];

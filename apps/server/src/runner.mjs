@@ -5,6 +5,8 @@ import { FOLLOW_THROUGH_NUDGE, leavesWorkOpen } from "./follow-through.mjs";
 import { inertText, maskText } from "./redact.mjs";
 import { fileMeta, forEngine, isInline, keepOnDisk, mergeMessages, toSdkMessage } from "./attachments.mjs";
 import { ASK_TOOL } from "./asks.mjs";
+import { rootCallerOf } from "./agents/profiles.mjs";
+import { colleagueCaller } from "./colleague-access.mjs";
 import { UPGRADE_TOOL, upgradeNote } from "./model-upgrade.mjs";
 import { accountMoveNote, doneTools, droppedNote, ENGINE_UNAVAILABLE, resetFromText, FALLBACK_KEY, FALLBACK_OFFERS_KEY, fallbackNote, fallbackQuestion, saidWait, saidYes, storableMessage, withLeadNote } from "./plan-fallback.mjs";
 
@@ -37,6 +39,17 @@ export const WAKEUPS_KEY = "session-wakeups";
 const fa = (n) => Number(n || 0).toLocaleString("fa-IR");
 const WAKEUP_RESTORE_MS = Math.max(0, Number(process.env.GRIFFIN_WAKEUP_KEEP_HOURS ?? 24)) * 3_600_000;
 
+// The continue after a restart ended a chat's background tasks: nothing else would wake it, however
+// much the turn promised to report them. Not blindly again: a task's work may be half done.
+export function lostTasksPrompt(names = []) {
+  const lines = names.slice(0, 12).map((name) => `- «${String(name).slice(0, 400)}»`);
+  return (
+    "[ادامه پس از ری‌استارت سرور — این پیام را سیستم فرستاده، نه Owner]\n" +
+    `این کارهای پس‌زمینهٔ این گفتگو با ری‌استارت متوقف شدند و نتیجه‌شان دیگر نمی‌رسد:\n${lines.join("\n")}\n` +
+    "اگر هنوز لازم است، اول ببین هر کدام کجا مانده و بعد از همان‌جا ادامه بده یا دوباره راهش بینداز و نتیجه را بگو؛ کور تکرارش نکن. اگر دیگر لازم نیست، یک خط بگو و رهایش کن."
+  );
+}
+
 // The continue after a restart wiped a chat's wake-ups (Karsara's wording): re-arm or do them now.
 export function lostWakeupsPrompt(crons = []) {
   const lines = (Array.isArray(crons) ? crons : []).slice(0, 12).map((cron) => `- ${cron.schedule ? `«${cron.schedule}» ` : ""}${cron.recurring ? "(تکرارشونده) " : ""}«${String(cron.prompt || "بی‌متن").slice(0, 400)}»`);
@@ -59,6 +72,7 @@ const LIMIT_RESUME_SLACK_MS = 60_000;
 // A reset further away than this (a weekly limit) is not waited for: days later is a surprise.
 const LIMIT_RESUME_MAX_WAIT_MS = 6 * 60 * 60_000;
 const LIMIT_RESUME_KEY = "limit-resume";
+export const WAKE_REFUSED_TEXT = "(خودکار) نوبتی که بعد از تمام شدن یک کار پس‌زمینه خودت شروع کردی بی‌جواب ماند. ببین کارهای پس‌زمینه کجا مانده‌اند؛ هر کدام با سقف حساب یا خطا ایستاده از همان‌جا ادامه بده و نتیجه را بگو.";
 export const LIMIT_RESUME_TEXT = "(خودکار) سقف مصرف باز شد. از همان‌جا که کار ماند ادامه بده.";
 const clock = (ms) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ms));
 
@@ -117,6 +131,9 @@ const DEFAULT_FORCE_MS = 3 * 60_000;
 // (onDelta) and is appended to the store; the UI and the final answer are derived from those events.
 export function createRunner({
   store,
+  // How long a turn waits for another process to finish renewing the account's token before its retry.
+  // 60 s: long enough for the token keeper (claude-token-keeper.mjs, 45 s) to clear a dead holder's lock.
+  oauthRefreshWaitMs = 60_000,
   // providerFor(chat) -> { create, resume, clearStuck? }. Falls back to legacy `sdk`.
   providerFor = null,
   sdk = null,
@@ -131,6 +148,9 @@ export function createRunner({
   onFinished = () => {},
   // onPlanLimit(chat, error, provider) -> true when the chat should be retried once on another provider.
   onPlanLimit = () => false,
+  // onAuthFailed(chat, error, provider) -> true when the account's login or key was refused and the
+  // chat should be retried once on another account (that account is taken out of routing meanwhile).
+  onAuthFailed = () => false,
   // PLAN_FALLBACK=ask (plan-fallback.mjs): askFallback(chat) -> true when a plan limit in this chat
   // asks the owner on a card instead of moving the run; fallbackFor(chat) -> the engine it would go
   // on with ({ provider, model, name, fromName }) or null. Default: never ask (auto-fallback).
@@ -165,6 +185,9 @@ export function createRunner({
   // once (follow-through.mjs); pendingWork(chatId) -> its delegated subtasks still owing a report.
   followThrough = () => false,
   pendingWork = () => 0,
+  // ownerClaimCheck(chat, tail) -> { nudge, note } when the answer a colleague is about to get says
+  // the owner was told or decides, and nothing reached him (owner-reach.mjs); null = deliver it.
+  ownerClaimCheck = () => null,
   log = console,
 }) {
   const active = new Map(); // chatId -> { runId, run, cancelRequested, cancelRequestedAt, forcedDone, queue, lastEventAt }
@@ -266,7 +289,9 @@ export function createRunner({
       store.appendEvent(chatId, runId, type, data);
     };
     const label = runLabel(chat);
-    emit("run.started", { model: label.model, mode: chat.mode, provider: label.provider, ...(label.effort ? { effort: label.effort } : {}), wake: true });
+    // The account of the process this turn runs in, which the chat may have been routed off already.
+    entry.provider = runAccount.get(chatId) || label.provider;
+    emit("run.started", { model: label.model, mode: chat.mode, provider: entry.provider, ...(label.effort ? { effort: label.effort } : {}), wake: true });
     return {
       onDelta: ({ update }) => {
         for (const event of eventsFromUpdate(update)) {
@@ -287,6 +312,8 @@ export function createRunner({
   // A turn that closed on a promise with nothing left to wake it is sent on, once per message of
   // the owner (nudged clears on the next send). The OpenAI-compatible engine does this in its loop.
   const nudged = new Set();
+  const wakeRetried = new Set();
+  const runAccount = new Map(); // chatId -> the account its latest run started its process on
   function followUp(chatId, entry, status) {
     if (status !== "finished" || entry.cancelRequested || nudged.has(chatId) || stopping) return false;
     const chat = store.getChat(chatId);
@@ -297,6 +324,27 @@ export function createRunner({
     store.appendEvent(chatId, null, "note", { text: "ایجنت گفت ادامه می‌دهد ولی چیزی بیدارش نمی‌کرد؛ خودکار دوباره راهش انداختم تا کار را تمام کند." });
     startRun(chatId, FOLLOW_THROUGH_NUDGE);
     return true;
+  }
+
+  // A turn of its own that the engine refused (a spent plan, an empty answer) got no answer to the
+  // task that woke it, and its later tasks die the same way: nothing else would wake the chat
+  // («Platform HA», 2026-11-01: seven tasks stopped at the weekly limit, silent until the owner asked).
+  // It goes on as a normal run, whose own path moves accounts. An empty one only once per owner message.
+  function wakeRefused(chatId, entry, result, status, emit) {
+    if (status !== "error" || entry.cancelRequested) return false;
+    const chat = store.getChat(chatId);
+    if (!chat || chat.archived) return false;
+    if (result?.error?.code === "no_answer") {
+      if (wakeRetried.has(chatId)) return false;
+      wakeRetried.add(chatId);
+      return true;
+    }
+    const moves = result?.error?.autoFallback ?? result?.error?.code === "plan_limit";
+    if (result?.error?.code !== "plan_limit" || !moves) return false;
+    const moved = onPlanLimit(chat, result.error, entry.provider);
+    if (moved && (!askFallback(chat) || accountHop(chat))) return true;
+    planLimitResume(chatId, result.error, emit);
+    return false;
   }
 
   function finishAdopted(chatId, entry, result, emit) {
@@ -316,6 +364,12 @@ export function createRunner({
     }
     if (status === "finished") Promise.resolve().then(() => onFinished(chatId)).catch(() => {});
     if (!entry.queue.length && kept.next(chatId) < 0 && followUp(chatId, entry, status)) return;
+    const refused = wakeRefused(chatId, entry, result, status, emit);
+    if (refused && !entry.queue.length && kept.next(chatId) < 0) {
+      emit("note", { text: "نوبت خودکار این چت بی‌جواب ماند؛ دوباره راهش انداختم تا کار متوقف نماند." });
+      startRun(chatId, WAKE_REFUSED_TEXT);
+      return;
+    }
     const queued = entry.queue.splice(0);
     runq.save(chatId, null, []);
     if (kept.next(chatId) >= 0) {
@@ -326,9 +380,11 @@ export function createRunner({
     if (queued.length) startRun(chatId, mergeQueued(messagesOf(queued)), [], { ids: idsOf(queued) });
   }
   // Boot: what the last process stopped is said in its chat, once.
+  const stoppedTasks = []; // [chatId, names]: the boot wakes these chats (below)
   for (const [chatId, tasks] of Object.entries(bgSaved())) {
     if (store.getChat(chatId) && Array.isArray(tasks) && tasks.length) {
       store.appendEvent(chatId, null, "note", { text: `این کارهای پس‌زمینه با راه‌اندازی دوبارهٔ برنامه متوقف شدند: ${tasks.map(taskName).join("، ")}` });
+      stoppedTasks.push([chatId, tasks.map(taskName)]);
     }
   }
   store.deleteKv?.(BG_TASKS_KEY);
@@ -666,6 +722,13 @@ export function createRunner({
   // The repo too: a folder switch sets the old tree aside, and an agent made for it would start Claude
   // Code in a folder that no longer exists (2026-10-20: the SDK read the spawn ENOENT as «binary does not
   // match this system's libc»); a new one runs the setup that makes the new repo's tree first.
+  // A colleague's conversation shows «بپرس» (or «بدون پرسیدن» while it holds his grant), but its
+  // tools carry their own gates (colleague-access.mjs, index.mjs): the engine itself never stops on a
+  // permission card nobody there can answer.
+  const sdkMode = (chat) => {
+    const root = chat?.parent_chat_id ? rootCallerOf(store, chat) : chat?.caller;
+    return colleagueCaller(root) ? "agent" : chat?.mode || "agent";
+  };
   const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}`;
   const liveAgent = (chatId) => {
     const chat = store.getChat(chatId);
@@ -787,11 +850,12 @@ export function createRunner({
       // when the error comes back (the owner may have moved the agent meanwhile — 2026-10-18 the
       // API-key account got marked with the subscription's weekly limit and every chat stalled).
       entry.provider = label.provider;
+      runAccount.set(chatId, label.provider);
       const run = await startSdkRun(chat, sdkMessage, {
         ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}),
         ...(label.effort ? { effort: label.effort } : {}),
         // A permission mode (auto/ask/edits) is Claude's; other engines read only «plan».
-        mode: chat.mode || "agent",
+        mode: sdkMode(chat),
         // Claude only: other engines' SDKs get no options they do not know.
         // userMessageId: the turn's file checkpoint, used where Claude keeps one (run.checkpoint).
         ...(sdkFor(chat)?.kind === "claude" ? { ...ownerExtras(chat), userMessageId: randomUUID() } : {}),
@@ -823,24 +887,14 @@ export function createRunner({
       reached(chatId, entry);
       if (entry.cancelRequested) await cancelSdkRun(run);
       let result = await run.wait();
-      // The light model asked for the stronger one (model-upgrade.mjs): the same run goes on, in the
-      // same session, on that model — one answer for the colleague, one run.finished for its readers.
-      const up = normalizeStatus(result.status, entry.cancelRequested) === "finished" ? upgrades?.take(chatId) : null;
-      if (up) {
-        // The answer is the text after the last tool (timeline finalText): what the light model
-        // wrote after asking is cut off by a step of its own.
-        if (entry.textAfterUpgrade) {
-          const callId = `${UPGRADE_TOOL}-${runId}`;
-          emit("tool.started", { callId, name: UPGRADE_TOOL, args: { model: up.model } });
-          emit("tool.done", { callId, name: UPGRADE_TOOL, result: { content: [{ type: "text", text: JSON.stringify({ model: up.model }) }] } });
-        }
-        emit("note", { text: `ادامه با مدل قوی‌تر (${up.model})${up.reason ? ` — ${up.reason}` : ""}` });
+      // A further leg of the same run, in the same session: one answer for the colleague, one
+      // run.finished for its readers.
+      const goOn = async (text, modelOpts) => {
         emit("run.phase", { phase: "connecting" });
         entry.tail = "";
-        const next = await startSdkRun(store.getChat(chatId) || chat, upgradeNote(up.reason), {
-          model: { id: up.model },
-          ...(up.effort ? { effort: up.effort } : {}),
-          mode: chat.mode || "agent",
+        const next = await startSdkRun(store.getChat(chatId) || chat, text, {
+          ...modelOpts,
+          mode: sdkMode(store.getChat(chatId) || chat),
           ...(sdkFor(chat)?.kind === "claude" ? { ...ownerExtras(chat), userMessageId: randomUUID() } : {}),
           onDelta: ({ update }) => {
             for (const event of eventsFromUpdate(update)) {
@@ -851,7 +905,36 @@ export function createRunner({
         });
         entry.run = next;
         if (entry.cancelRequested) await cancelSdkRun(next);
-        result = await next.wait();
+        return next.wait();
+      };
+      // The light model asked for the stronger one (model-upgrade.mjs): the run goes on on that model.
+      const up = normalizeStatus(result.status, entry.cancelRequested) === "finished" ? upgrades?.take(chatId) : null;
+      if (up) {
+        // The answer is the text after the last tool (timeline finalText): what the light model
+        // wrote after asking is cut off by a step of its own.
+        if (entry.textAfterUpgrade) {
+          const callId = `${UPGRADE_TOOL}-${runId}`;
+          emit("tool.started", { callId, name: UPGRADE_TOOL, args: { model: up.model } });
+          emit("tool.done", { callId, name: UPGRADE_TOOL, result: { content: [{ type: "text", text: JSON.stringify({ model: up.model }) }] } });
+        }
+        emit("note", { text: `ادامه با مدل قوی‌تر (${up.model})${up.reason ? ` — ${up.reason}` : ""}` });
+        result = await goOn(upgradeNote(up.reason), { model: { id: up.model }, ...(up.effort ? { effort: up.effort } : {}) });
+      }
+      // An answer to a colleague that says the owner was told, or leaves a decision with him, while
+      // nothing of this conversation reached him (owner-reach.mjs): it goes on once, to ask him or
+      // to drop the line, before the colleague gets it.
+      let claim = null;
+      try {
+        if (normalizeStatus(result.status, entry.cancelRequested) === "finished") claim = ownerClaimCheck(store.getChat(chatId) || chat, entry.tail || "");
+      } catch (checkError) {
+        log.error?.(`[runner] owner claim check ${chatId}: ${checkError.message}`);
+      }
+      if (claim?.nudge) {
+        emit("note", { text: claim.note });
+        const same = up
+          ? { model: { id: up.model }, ...(up.effort ? { effort: up.effort } : {}) }
+          : { ...(label.model && label.model !== "auto" ? { model: { id: label.model } } : chat.model ? { model: { id: chat.model } } : {}), ...(label.effort ? { effort: label.effort } : {}) };
+        result = await goOn(claim.nudge, same);
       }
       status = normalizeStatus(result.status, entry.cancelRequested);
       if (status === "error") error = result.error?.message || "run failed";
@@ -887,6 +970,15 @@ export function createRunner({
       }
       // A session the provider only discovers is gone at send time: retry once on a fresh one.
       if (status === "error" && result.error?.code === "agent_not_found" && !entry.retried) entry.retryOnFallback = true;
+      // Another Claude Code process was renewing this account's token: wait for it, still holding the
+      // chat (what arrives meanwhile queues behind), then the same turn once more on the same session.
+      if (status === "error" && result.error?.code === "oauth_refresh_busy" && !entry.retried && !entry.produced && !entry.cancelRequested) {
+        await new Promise((resolve) => setTimeout(resolve, oauthRefreshWaitMs));
+        if (!entry.cancelRequested) {
+          entry.emptyRetry = true;
+          entry.retryOnFallback = true;
+        }
+      }
       // An empty result (success, no text, no tool, no output token) is a transient engine hiccup:
       // send the same message once more on the same session before the owner sees an error.
       if (status === "error" && result.error?.code === "no_answer" && !entry.retried && !entry.produced) {
@@ -902,6 +994,16 @@ export function createRunner({
         if (onPlanLimit(chat, { message: result.error.message, resetsAt: Date.now() + 15 * 60_000 }, entry.provider)) {
           entry.retryOnFallback = true;
           entry.hop = accountHop(chat) || null;
+        }
+      }
+      // A refused login (an expired OAuth that could not be renewed): the account leaves routing and
+      // the turn goes once to the next account, the session kept when it is the same model.
+      if (status === "error" && result.error?.code === "auth_failed" && !entry.retried && !entry.produced && !entry.cancelRequested) {
+        const chat = store.getChat(chatId);
+        if (onAuthFailed(chat, result.error, entry.provider)) {
+          entry.retryOnFallback = true;
+          const hop = accountHop(chat);
+          entry.hop = hop ? { ...hop, why: "auth" } : null;
         }
       }
     } catch (caught) {
@@ -1104,6 +1206,7 @@ export function createRunner({
     // note: for the agent only (the agents tagged with «@»): it rides on the message, the thread shows the text.
     async send(chatId, { text, images = [], files = [], intent = "send", clientId = null, from = null, ownerText = false, note = "" }) {
       nudged.delete(chatId);
+      wakeRetried.delete(chatId);
       const current = active.get(chatId);
       let effective = intent;
       if (current && effective === "send" && isSoftBusy(chatId)) effective = "queue";
@@ -1525,12 +1628,17 @@ export function createRunner({
   }
 
   {
-    const lost = Object.entries(wakeSaved()).filter(([chatId, item]) => store.getChat(chatId) && !store.getChat(chatId).archived && Array.isArray(item?.crons) && item.crons.length && Date.now() - Number(item.at || 0) <= WAKEUP_RESTORE_MS);
+    const lost = Object.entries(wakeSaved())
+      .filter(([chatId, item]) => store.getChat(chatId) && !store.getChat(chatId).archived && Array.isArray(item?.crons) && item.crons.length && Date.now() - Number(item.at || 0) <= WAKEUP_RESTORE_MS)
+      .map(([chatId, item]) => [chatId, lostWakeupsPrompt(item.crons)]);
     store.deleteKv?.(WAKEUPS_KEY);
-    lost.forEach(([chatId, item], i) => {
+    // ponytail: no per-hour cap like MAX_RESUMES; a task that kills the process would loop, add one if it ever does.
+    const wakeable = (chat) => chat && !chat.archived && chat.caller !== "task" && !chat.job_id && !notResumable(chat);
+    const tasks = stoppedTasks.filter(([chatId]) => wakeable(store.getChat(chatId))).map(([chatId, names]) => [chatId, lostTasksPrompt(names)]);
+    [...lost, ...tasks].forEach(([chatId, text], i) => {
       const timer = setTimeout(() => {
         if (stopping) return;
-        api.send(chatId, { text: lostWakeupsPrompt(item.crons), intent: active.has(chatId) ? "queue" : "send" }).catch((error) => log.error?.(`[runner] lost wake-ups ${chatId}: ${error?.message || error}`));
+        api.send(chatId, { text, intent: active.has(chatId) ? "queue" : "send" }).catch((error) => log.error?.(`[runner] lost wake-ups ${chatId}: ${error?.message || error}`));
       }, (pending.list().length + i) * resumeGapMs + 5_000);
       timer.unref?.();
     });
@@ -1560,7 +1668,10 @@ async function cancelSdkRun(run) {
 }
 
 // Events that do not mean anything reached the owner (a run that only emitted these failed silently).
-const QUIET_EVENTS = new Set(["run.phase", "usage", "usage.request", "status", "thinking", "thinking.done"]);
+// Bookkeeping only: nothing of it reaches the owner, so a run that had only these "produced" nothing.
+// checkpoint (the session entry a run ended on) counted as output and kept a token renewal race from
+// its retry (a colleague's job, 2026-10-28 11:30Z).
+const QUIET_EVENTS = new Set(["run.phase", "usage", "usage.request", "status", "thinking", "thinking.done", "checkpoint"]);
 
 function normalizeStatus(status, cancelRequested) {
   const value = String(status || "").toLowerCase();

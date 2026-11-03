@@ -16,7 +16,7 @@ test("clone/fetch/push: the token goes in env, only a chat branch is pushed, not
     if (args[0] === "push") return { stdout: "", stderr: "remote: https://gitlab.example.com/g/app/-/merge_requests/new?x=1\n" };
     return { stdout: "main\n", stderr: "" };
   };
-  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root, git });
+  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root, git, authorFix: false });
 
   const pushed = await tools.git_push.execute({ repo: "app", branch: "griffin/ab12cd34" });
   assert.equal(pushed.mergeRequestUrl, "https://gitlab.example.com/g/app/-/merge_requests/new?x=1");
@@ -83,5 +83,91 @@ test("git_fetch update leaves a checkout on its own branch alone, ff's a trackin
   const own = await tools.git_fetch.execute({ repo: "app", update: true });
   assert.deepEqual([own.fetched, own.updated], [true, false]);
   assert.match(own.reason, /not on a branch/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("git_push toDefault: only an allowed project, onto its default branch, never --force", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-repos-"));
+  for (const r of ["mohr", "other"]) fs.mkdirSync(path.join(root, r, ".git"), { recursive: true });
+  const calls = [];
+  const git = async (args, { cwd }) => {
+    calls.push({ args, cwd });
+    if (args[0] === "remote") return { stdout: `https://gitlab.example.com/${cwd.endsWith("mohr") ? "mahdibagheri/mohr" : "g/other"}.git\n`, stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+  const fetchImpl = async (url) => ({ ok: true, json: async () => ({ default_branch: "master" }), text: async () => "", url });
+  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root, git, fetchImpl, defaultPush: new Set(["mahdibagheri/mohr"]) });
+
+  const out = await tools.git_push.execute({ repo: "mohr", branch: "navid/ab12cd34", toDefault: true });
+  assert.equal(out.target, "master");
+  assert.deepEqual(calls.at(-1).args, ["push", "--porcelain", "origin", "refs/heads/navid/ab12cd34:refs/heads/master"]);
+  assert.ok(calls.every((c) => !c.args.some((a) => /^(-f|--force)/.test(a) || a.startsWith("+"))), "never forced");
+
+  await assert.rejects(tools.git_push.execute({ repo: "other", branch: "navid/ab12cd34", toDefault: true }), /not allowed/);
+  await assert.rejects(tools.git_push.execute({ repo: "mohr", branch: "master", toDefault: true }), /chat branch/);
+  // Off by default: no list, no direct push.
+  await assert.rejects(createRepoTools({ vault, host: "https://gitlab.example.com/", root, git, fetchImpl, defaultPush: new Set() }).git_push.execute({ repo: "mohr", branch: "navid/ab12cd34", toDefault: true }), /not allowed/);
+});
+
+// 2026-10-29: Platform's author watch flagged pushes made with a person's token whose commits said
+// «Nova» / «Kian». The branch's new commits go out as the token's user; a colleague's commit already
+// on origin keeps its author; the chat's worktree stays clean.
+test("git_push re-makes the branch's unpushed commits as the token's user", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-author-"));
+  const as = (name, email) => ({ ...process.env, GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email });
+  const sh = (cwd, env, ...a) => String(execFileSync("git", a, { cwd, stdio: "pipe", env }));
+  const sara = as("Sara", "sara@x.ir");
+  const nova = as("Nova", "nova@agents.example.org");
+  sh(root, sara, "init", "-q", "--bare", "-b", "main", "origin.git");
+  sh(root, sara, "clone", "-q", "origin.git", "seed");
+  const seed = path.join(root, "seed");
+  sh(seed, sara, "commit", "-q", "--allow-empty", "-m", "base");
+  sh(seed, sara, "push", "-q", "origin", "HEAD:main");
+  sh(seed, sara, "checkout", "-q", "-b", "sara/feature");
+  fs.writeFileSync(path.join(seed, "s.txt"), "sara\n");
+  sh(seed, sara, "add", "s.txt");
+  sh(seed, sara, "commit", "-q", "-m", "sara's work");
+  sh(seed, sara, "push", "-q", "origin", "sara/feature");
+  sh(root, sara, "clone", "-q", "origin.git", "app");
+  const app = path.join(root, "app");
+  const wt = path.join(root, "wt");
+  sh(app, nova, "worktree", "add", "-q", "-b", "nova/ab12cd34", wt, "origin/main");
+  fs.writeFileSync(path.join(wt, "a.txt"), "one\n");
+  sh(wt, nova, "add", "a.txt");
+  sh(wt, nova, "commit", "-q", "-m", "fix: one\n\nbody line\n\nCo-Authored-By: x <y@z>");
+  sh(wt, nova, "merge", "-q", "--no-edit", "origin/sara/feature");
+  fs.writeFileSync(path.join(wt, "a.txt"), "two\n");
+  sh(wt, nova, "commit", "-q", "-am", "fix: two");
+  const before = sh(wt, nova, "log", "--format=%H %B", "-1", "HEAD~2");
+
+  const fetchImpl = async (url) => (String(url).endsWith("/user") ? Response.json({ name: "Alex Example", username: "root", email: "alex@x.ir" }) : new Response("", { status: 404 }));
+  const tools = createRepoTools({ vault, host: "https://gitlab.example.com/", root, fetchImpl });
+  const out = await tools.git_push.execute({ repo: "app", branch: "nova/ab12cd34" });
+  assert.equal(out.pushed, true);
+  assert.equal(out.rewritten.length, 3, "two own commits and the merge");
+  assert.equal(out.author, "Alex Example <alex@x.ir>");
+
+  const pushedLog = sh(path.join(root, "origin.git"), sara, "log", "--format=%an|%ae|%cn|%ce|%s", "nova/ab12cd34");
+  assert.deepEqual(pushedLog.trim().split("\n").sort(), [
+    "Alex Example|alex@x.ir|Alex Example|alex@x.ir|fix: two",
+    "Alex Example|alex@x.ir|Alex Example|alex@x.ir|Merge remote-tracking branch 'origin/sara/feature' into nova/ab12cd34",
+    "Sara|sara@x.ir|Sara|sara@x.ir|sara's work",
+    "Alex Example|alex@x.ir|Alex Example|alex@x.ir|fix: one",
+    "Sara|sara@x.ir|Sara|sara@x.ir|base",
+  ].sort());
+  // Same message (body and trailers), same tree; the worktree sees no change.
+  assert.equal(sh(wt, nova, "log", "--format=%B", "-1", "HEAD~2"), before.slice(before.indexOf(" ") + 1));
+  assert.equal(sh(wt, nova, "status", "--porcelain"), "");
+  assert.equal(sh(wt, nova, "rev-parse", "HEAD"), sh(path.join(root, "origin.git"), sara, "rev-parse", "nova/ab12cd34"));
+
+  // Nothing new: nothing re-made.
+  const again = await tools.git_push.execute({ repo: "app", branch: "nova/ab12cd34" });
+  assert.equal(again.rewritten, undefined);
+  // A token whose user cannot be read: pushed as is, and said so.
+  fs.writeFileSync(path.join(wt, "a.txt"), "three\n");
+  sh(wt, nova, "commit", "-q", "-am", "fix: three");
+  const blind = createRepoTools({ vault, host: "https://gitlab.example.com/", root, fetchImpl: async () => new Response("", { status: 403 }) });
+  assert.match((await blind.git_push.execute({ repo: "app", branch: "nova/ab12cd34" })).authorCheck, /could not be read/);
   fs.rmSync(root, { recursive: true, force: true });
 });

@@ -137,3 +137,24 @@ test("the shell steps fit debug_exec, and the pieces rebuild the daemon exactly"
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("the browser presents a desktop Chrome User-Agent, never HeadlessChrome (WAFs block that word)", () => {
+  const source = fs.readFileSync(new URL("../src/browser-daemon.mjs", import.meta.url), "utf8");
+  assert.match(source, /return desktopUserAgent\(b\.version\(\)\);/);
+  const body = source.match(/export const desktopUserAgent = \(version\) =>\s*(`[^`]+`)/)[1];
+  const desktopUserAgent = new Function("version", `return ${body}`);
+  assert.equal(desktopUserAgent("142.0.7444.59"), "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36");
+  assert.doesNotMatch(desktopUserAgent("142.0.7444.59"), /Headless/);
+  assert.match(desktopUserAgent(""), /Chrome\/142\.0\.0\.0/);
+});
+
+test("browser_open passes userAgent to the daemon and its schema keeps it printable", async () => {
+  const { browser, requests } = setup();
+  const tools = browser.tools("c");
+  const ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  await tools.browser_open.execute({ url: "https://console.kavenegar.com/membership/login", userAgent: ua });
+  assert.equal(JSON.parse(requests.at(-1).init.body).userAgent, ua);
+  const pattern = new RegExp(tools.browser_open.inputSchema.properties.userAgent.pattern);
+  assert.ok(pattern.test(ua));
+  assert.ok(!pattern.test("a\nb"));
+});

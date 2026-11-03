@@ -138,6 +138,7 @@ const NEEDS_APPROVAL = new Map([
   ["gitlab_project_member", "دادن نقش (Reporter/Developer) به یک کاربر روی پروژهٔ گیت‌لب"],
   ["kube_copy_secret", "کپی secret بین کلاسترها"],
   ["kube_create", "ساختن یک آبجکت در کلاستر"],
+  ["kube_delete", "حذف یک آبجکت از کلاستر"],
   ["kube_exec", "اجرای دستور داخل پاد"],
   ["cnpg_retry_bootstrap", "حذف Jobهای bootstrap دیتابیس"],
   ["arvan_dns_create", "ساخت رکورد DNS آروان"],
@@ -209,6 +210,10 @@ export function classify(name, args = {}) {
     const command = String(args?.command || "");
     return routerReadOnly(command) ? null : { approve: `دستور روی روتر ${args?.router || ""}`.trim() };
   }
+  // Deleting is not creating (2026-10-29, freeturn-monitor): every call names its one object, has
+  // no scope (scopeOf) so a yes is never learned for a namespace, and no colleague passes it on
+  // their own namespace — only the owner's yes or a full-access grant (index.mjs skips the gate).
+  if (name === "kube_delete") return { approve: `حذف ${args?.kind || "آبجکت"} ${args?.name || "?"} در namespace «${args?.namespace || "?"}» (کلاستر ${args?.cluster || "?"})` };
   const reason = NEEDS_APPROVAL.get(name);
   return reason ? { approve: reason } : null;
 }
@@ -276,15 +281,17 @@ export function isYes(answer) {
 // and that cluster's question was asked twice).
 const guardAsked = new Map(); // masked question -> askedAt
 
-export async function confirmWithOwner(store, asks, chatId, question) {
-  const args = { question, options: [{ label: "بله" }, { label: "نه" }] };
+// detail: the literal call (a shell command), shown folded under the question on the card.
+export async function confirmWithOwner(store, asks, chatId, question, { detail = null } = {}) {
+  const safeDetail = detail ? maskText(String(detail)) : null;
+  const args = { question, options: [{ label: "بله" }, { label: "نه" }], ...(safeDetail ? { detail: safeDetail } : {}) };
   const callId = `guard-${Date.now()}`;
   // The question embeds a detail of the gated call — pg_query write SQL and
   // infisical_upsert values carry credentials, so the mirrored events get the same masking.
   const safeQuestion = maskText(question);
   guardAsked.set(safeQuestion, Date.now());
   store?.appendEvent?.(chatId, null, "tool.started", { callId, name: ASK_TOOL, args: { ...args, question: safeQuestion } });
-  const conf = await asks.confirm(chatId, { question: safeQuestion });
+  const conf = await asks.confirm(chatId, { question: safeQuestion, ...(safeDetail ? { detail: safeDetail } : {}) });
   store?.appendEvent?.(chatId, null, "tool.done", { callId, name: ASK_TOOL, args: { ...args, question: safeQuestion }, result: conf });
   return conf;
 }
@@ -559,6 +566,7 @@ function actionDetail(name, args) {
   if (name === "mikrotik_exec") return String(args?.command || "").slice(0, 160);
   if (name === "pg_query") return String(args?.sql || "").replace(/\s+/g, " ").slice(0, 120);
   if (name === "kube_exec") return args?.pod ? `پاد ${args.pod}` : ""; // a shell one-liner means nothing to the owner
+  if (name === "kube_delete") return ""; // the action line already names the object
   if (name === "infisical_upsert") return String(args?.name || "");
   // A DNS cleanup is one call for the whole list: the owner sees every record he is saying yes to.
   if (name === "arvan_dns_delete") {
@@ -633,7 +641,7 @@ export function approvalQuestion(store, chatId, name, args, action, intent = "",
       if (detail) lines.push(`(این بار: ${detail})`);
     }
     // The exact call stays visible for a raw control-plane write or a full-cache purge.
-    if (name === "debug_exec" || name === "arvan_cache_purge") lines.push(`(${action})`);
+    if (name === "debug_exec" || name === "arvan_cache_purge" || name === "kube_delete") lines.push(`(${action})`);
   } else {
     const detail = actionDetail(name, args);
     lines.push(scope ? `${scope}\n(این بار: ${detail})` : `${action}${detail ? ` — ${detail}` : ""}`);
@@ -863,4 +871,91 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
     };
   }
   return out;
+}
+
+// kube_delete's own fence, in every chain — full access and the owner's «بدون پرسیدن» too (owner
+// 2026-10-29, after !352: of 170 owner apps on east none has selfHeal or prune, so a deleted live
+// object stays deleted = an outage; a full-access chain had no per-call gate at all):
+// - a colleague's chain (team / peer:*) deletes only in the requester's own namespace;
+// - a Deployment/StatefulSet asks the owner on every call (the outage-sized kinds);
+// - more than DELETE_CAP deletes in one conversation within an hour: every further one asks.
+// passThrough: the inner gate refuses this chain's writes outright (a colleague on «بپرس», an
+// unattended run) — nothing is asked here then, the namespace rule still holds.
+const DELETE_CAP = 3;
+const DELETE_WINDOW_MS = 60 * 60 * 1000;
+const DELETE_ASK_KINDS = /^(deployments?|statefulsets?)$/i;
+const deleteKey = (root) => `kubedelete:${root}`;
+
+/** The namespaces a colleague's chain may delete in; null = not a colleague chain. */
+export function colleagueNamespaces(store, chatId) {
+  const root = store?.getChat?.(store?.rootChatId?.(chatId) || chatId);
+  const caller = String(root?.caller || "");
+  if (caller.startsWith("peer:")) return selfIds(store, caller);
+  if (caller !== "team") return null;
+  // A Telegram colleague has no namespace of their own here unless kv `peer-owner` maps
+  // "person:<id>" to their slug(s); without it nothing is theirs (fail closed).
+  if (!root?.person_id) return [];
+  const mapped = store?.getKv?.("peer-owner")?.[`person:${root.person_id}`];
+  return (Array.isArray(mapped) ? mapped : mapped ? [mapped] : []).map((x) => String(x).toLowerCase());
+}
+
+export function deleteGuard(tools, { chatId, asks, store = null, caller = "?", passThrough = false, now = () => Date.now() } = {}) {
+  const tool = tools?.kube_delete;
+  if (!tool?.execute) return tools;
+  const inner = tool.execute.bind(tool);
+  return {
+    ...tools,
+    kube_delete: {
+      ...tool,
+      inputSchema: withIntent(tool.inputSchema),
+      async execute(rawArgs) {
+        const { [WHY]: _why, [INTENT]: intent = "", ...args } = rawArgs || {};
+        const record = (decision, detail, approver) => store?.recordApproval?.({ chatId, caller, tool: "kube_delete", args: redactArgs("kube_delete", args), decision, detail, ...(approver ? { approver } : {}) });
+        const own = colleagueNamespaces(store, chatId);
+        const ns = String(args.namespace || "").toLowerCase();
+        if (own && !own.includes(ns)) {
+          const reason = `namespace «${args.namespace}» مالِ ${ownerLabel(store, args.namespace)} است، نه درخواست‌کننده؛ از گفتگوی یک همکار فقط در namespace خودش حذف می‌شود (با دسترسی کامل هم). این حذف کارِ خودِ ${ownerLabel(store, args.namespace)} یا ${OWNER.nameFa} است.`;
+          record("blocked", reason);
+          return refused(reason);
+        }
+        if (passThrough) return inner(rawArgs);
+        const root = store?.rootChatId?.(chatId) || chatId;
+        const t = now();
+        const recent = (store?.getKv?.(deleteKey(root)) || []).filter((at) => t - Date.parse(at) < DELETE_WINDOW_MS);
+        const why = [];
+        if (DELETE_ASK_KINDS.test(String(args.kind || ""))) why.push(`${args.kind} است: حذفش اگر هنوز استفاده می‌شود یعنی قطع سرویس، و Argo برش نمی‌گرداند`);
+        if (recent.length >= DELETE_CAP) why.push(`این حذف شمارهٔ ${recent.length + 1} در یک ساعت گذشتهٔ همین گفتگوست (سقف بی‌پرسش ${DELETE_CAP})`);
+        if (why.length) {
+          const key = decisionKey(store, chatId, "kube_delete", args);
+          const known = decisions.get(key);
+          if (known && !known.yes && Date.now() - known.at < DECISION_TTL_MS) {
+            return refused("Owner همین حذف را قبلاً رد کرده؛ دوباره نپرس — به درخواست‌کننده بگو چرا انجام نشد", known.conf);
+          }
+          const action = classify("kube_delete", args).approve;
+          const question = approvalQuestion(store, chatId, "kube_delete", args, action, plainIntent(intent)).replace(/\nاوکیه؟$/, `\n${why.map((w) => `⚠️ ${w}.`).join("\n")}\nاوکیه؟`);
+          const conf = await confirmWithOwner(store, asks, chatId, question);
+          const yes = consentOf(conf);
+          record(yes ? "approved" : "denied", conf, "owner");
+          if (conf?.answered) decisions.set(key, { yes, conf, at: Date.now() }); // the inner gate, if any, does not ask again
+          if (!yes) return refused(conf?.answered ? "Owner تأیید نکرد؛ همین حذف را دوباره نپرس — به درخواست‌کننده بگو چرا انجام نشد" : "سؤال تأیید بی‌جواب بسته شد", conf);
+        }
+        // Reserved before the call, so parallel deletes cannot all slip under the cap.
+        const stamp = new Date(t).toISOString();
+        store?.setKv?.(deleteKey(root), [...recent, stamp]);
+        let out;
+        try {
+          out = await inner(rawArgs);
+        } finally {
+          const text = (out?.content || []).map((c) => c?.text || "").join("");
+          const deleted = out && !out.isError && /"deleted":\s*true/.test(text);
+          if (!deleted) {
+            const list = store?.getKv?.(deleteKey(root)) || [];
+            const i = list.indexOf(stamp);
+            if (i >= 0) store?.setKv?.(deleteKey(root), [...list.slice(0, i), ...list.slice(i + 1)]);
+          }
+        }
+        return out;
+      },
+    },
+  };
 }

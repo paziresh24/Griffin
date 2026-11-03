@@ -26,6 +26,8 @@ import { PaletteKey, SectionMenuFoot, SectionMenuItems } from "./SectionNav.jsx"
 import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 
+import { askAlert, askConfirm, askPrompt } from "../dialog.jsx";
+
 // The sidebar's one list (flag «یک فهرست برای همه», ui-prefs.js): Karsara's own list (karsara-live
 // Sidebar.jsx, release a9c3e3ee51bc), kept as close to it as Griffin's data allows, drawn inside the one
 // Sidebar (Sidebar.jsx gives the header, the sections and the footer).
@@ -395,14 +397,7 @@ export function UserMenu({ onNavigate }) {
   };
   const go = (hash, section = null) => {
     setOpen(false);
-    if (section) {
-      try {
-        localStorage.setItem("griffin.settings.section", section);
-      } catch {
-        /* storage blocked: Settings opens on its first section */
-      }
-    }
-    window.location.hash = hash;
+    window.location.hash = section ? `${hash}/${section}` : hash;
     onNavigate?.();
   };
   return (
@@ -556,25 +551,25 @@ function InboxRow({ row, active, onOpen }) {
 // The owner's groups: created from the list or from a chat's «انتقال به گروه», renamed and deleted
 // from the group's heading. Deleting a group never touches its chats; they become ungrouped.
 async function newGroup() {
-  const name = window.prompt(t("نام گروه جدید"))?.trim();
+  const name = (await askPrompt(t("نام گروه جدید")))?.trim();
   if (!name) return null;
   const { group } = await api("/api/groups", { method: "POST", body: { name } }).catch(groupFailed);
   return group || null;
 }
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
-const deleteFailed = (error) => window.alert(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("حذف انجام نشد"));
-function deleteForGood(chat) {
-  if (!window.confirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }))) return;
+const deleteFailed = async (error) => (await askAlert(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("حذف انجام نشد")));
+async function deleteForGood(chat) {
+  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title })))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).catch(deleteFailed);
 }
-function deleteAllArchived(ids) {
-  if (!window.confirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }))) return;
+async function deleteAllArchived(ids) {
+  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length })))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } })
-    .then((r) => { if (r.skipped?.length) window.alert(t("{length} گفتگو در حال کار بود و حذف نشد.", { length: r.skipped.length })); })
+    .then(async (r) => { if (r.skipped?.length) (await askAlert(t("{length} گفتگو در حال کار بود و حذف نشد.", { length: r.skipped.length }))); })
     .catch(deleteFailed);
 }
-const groupFailed = () => {
-  window.alert(t("کار روی گروه انجام نشد؛ دوباره امتحان کنید."));
+const groupFailed = async () => {
+  (await askAlert(t("کار روی گروه انجام نشد؛ دوباره امتحان کنید.")));
   return {};
 }
 
@@ -612,14 +607,14 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   if (!chats.length && !group) return null;
   // The chat on screen stays in sight even inside a folded group.
   const shown = folded ? chats.filter((c) => c.id === activeId) : chats;
-  const rename = () => {
+  const rename = async () => {
     setMenu(false);
-    const name = window.prompt(t("نام گروه"), group.name)?.trim();
+    const name = (await askPrompt(t("نام گروه"), group.name))?.trim();
     if (name && name !== group.name) api(`/api/groups/${group.id}`, { method: "PATCH", body: { name } }).catch(groupFailed);
   };
-  const remove = () => {
+  const remove = async () => {
     setMenu(false);
-    if (window.confirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name }))) {
+    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name })))) {
       api(`/api/groups/${group.id}`, { method: "DELETE" }).catch(groupFailed);
     }
   };
@@ -720,9 +715,9 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
   const unread = isUnread(chat);
   const state = chatState(chat, isUnread);
   const patch = (body) => api(`/api/chats/${chat.id}`, { method: "PATCH", body }).catch(() => {});
-  const rename = () => {
+  const rename = async () => {
     setMenu(false);
-    const title = window.prompt(t("عنوان جدید"), chat.title);
+    const title = (await askPrompt(t("عنوان جدید"), chat.title));
     if (title?.trim()) patch({ title });
   };
   return (
@@ -749,9 +744,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
           className="flex min-h-[inherit] min-w-0 flex-1 items-center gap-2 py-1.5 ps-2.5 text-start">
           {state.id === "ask" ? (
             <span className="kc-state-wrap" title={state.label}><CircleHelp className="kc-state kc-state-ask" aria-label={state.label} /></span>
-          ) : state.id === "running" ? (
-            <span className="kc-dot kc-dot-run" title={state.label} />
-          ) : state.id === "background" ? (
+          ) : state.id === "running" ? null : state.id === "background" ? (
             <span className="kc-state-wrap" title={state.label}><Hourglass className="kc-state kc-state-bg" aria-label={state.label} /></span>
           ) : state.id === "error" ? (
             <span className="kc-dot kc-dot-bad" title={state.label} />
@@ -764,11 +757,12 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
               <AlarmClock className="kc-state" aria-label={t("از جاب {v}", { v: chat.jobName || "" })} />
             </span>
           ) : null}
+          {/* At work, the title itself shimmers (like Claude Code) instead of a pulsing dot (owner 2026-10-31). */}
           <span
-            className="min-w-0 flex-1 truncate"
+            className={`min-w-0 flex-1 truncate ${state.id === "running" ? "title-shimmer" : ""}`}
             dir={textDir(chat.title)}
             data-unread={unread || undefined}
-            title={agents.length > 1 ? agents.map((id) => agentMeta(id).label).join(t("، ")) : undefined}
+            title={agents.length > 1 ? agents.map((id) => agentMeta(id).label).join(t("، ")) : state.id === "running" ? state.label : undefined}
           >
             {chat.title}
           </span>
@@ -799,12 +793,10 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
                   data-active={child.id === activeId ? "true" : undefined}
                   className="kc-list-row w-full text-start !text-[13px]"
                 >
-                  {child.runStatus === "running" ? (
-                    <span className="kc-dot kc-dot-run" title={t("در حال اجرا")} />
-                  ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
+                  {child.runStatus === "error" || child.runStatus === "cancelled" ? (
                     <span className="kc-dot !bg-[var(--bad)]" title={t("خطا")} />
                   ) : null}
-                  <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)} data-unread={childUnread || undefined}>{child.title}</span>
+                  <span className={`min-w-0 flex-1 truncate ${child.runStatus === "running" ? "title-shimmer" : ""}`} dir={textDir(child.title)} data-unread={childUnread || undefined} title={child.runStatus === "running" ? t("در حال اجرا") : undefined}>{child.title}</span>
                   {childUnread ? <span className="kc-unread" title={t("محتوای دیده‌نشده")} /> : null}
                 </a>
               </li>

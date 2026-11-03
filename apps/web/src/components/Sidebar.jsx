@@ -32,6 +32,7 @@ import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 import { NavLauncher, NavSlot, PaletteKey, PinnedRow, SectionMenuFoot, SectionMenuItems, navStyleOf, useSections } from "./SectionNav.jsx";
 import { t, isRtl } from "../i18n.js";
+import { askConfirm, askPrompt } from "../dialog.jsx";
 
 const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));
 
@@ -86,11 +87,13 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
             event.preventDefault();
             startChat(null);
           }}
-          className={k ? "kc-icon-btn shrink-0" : "press flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"}
+          className={k ? "kc-icon-btn shrink-0 !w-auto gap-1 px-2 text-xs" : "press flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"}
           title={t("گفتگوی جدید")}
           aria-label={t("گفتگوی جدید")}
         >
           <Plus className="size-4" />
+          {/* A bare «+» beside «فضای کار» read as «new workspace» (a colleague 2026-11-02): say what it makes. */}
+          <span>{t("چت جدید")}</span>
         </a>
       </div>
     ),
@@ -560,8 +563,7 @@ function UserBar({ onNavigate, k: karsara = false }) {
     api("/api/profile").then((p) => (p.photo && p.photo !== profile?.photo ? setProfile(p) : setPhotoFailed(true)), () => setPhotoFailed(true));
   };
   const openSettings = (section = null) => {
-    if (section) writeSetting("griffin.settings.section", section);
-    window.location.hash = "/settings";
+    window.location.hash = section ? `/settings/${section}` : "/settings";
     onNavigate?.();
   };
   const [menu, setMenu] = useState(false);
@@ -655,8 +657,7 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
   }
   const openSettings = () => {
     setMore(false);
-    writeSetting("griffin.settings.section", "market");
-    go("/settings");
+    go("/settings/market");
   };
   // Always in sight, so a module that is off (the MR list …) can be found without knowing «بیشتر» exists.
   const storeLink = icons ? (
@@ -715,7 +716,7 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
   if (icons) {
     return (
       <div className="flex flex-wrap items-center gap-1 px-1">
-        {shown.map(({ id, label, icon: Icon, path, section: target }) => (
+        {shown.map(({ id, label, icon: Icon, path, section: target, badge }) => (
           <NavSlot key={id} id={id} ids={ids} onOrder={reorder} horizontal>
           <a
             href={`#${path}`}
@@ -727,9 +728,10 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
               event.preventDefault();
               go(path);
             }}
-            className={`g-icon-btn g-sn-tip g-sn-tip-below flex size-9 items-center justify-center rounded-lg transition-colors ${activeSection === target ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+            className={`g-icon-btn g-sn-tip g-sn-tip-below relative flex size-9 items-center justify-center rounded-lg transition-colors ${activeSection === target ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
           >
             <Icon className="size-4" />
+            {badge > 0 ? <span className="absolute end-1 top-1 size-2 rounded-full bg-warn" aria-hidden /> : null}
           </a>
           </NavSlot>
         ))}
@@ -741,9 +743,9 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
   }
   return (
     <div className={karsara ? undefined : "space-y-0.5"}>
-      {shown.map(({ id, label, icon, path, section: target }) => (
+      {shown.map(({ id, label, icon, path, section: target, badge }) => (
         <NavSlot key={id} id={id} ids={ids} onOrder={reorder}>
-          <NavButton active={activeSection === target} icon={icon} href={`#${path}`} label={label} onClick={() => go(path)} k={karsara} />
+          <NavButton active={activeSection === target} icon={icon} href={`#${path}`} label={label} onClick={() => go(path)} k={karsara} badge={badge || 0} />
         </NavSlot>
       ))}
       {moreMenu}
@@ -776,7 +778,7 @@ function NavButton({ active, icon: Icon, href, label, onClick, k = false, badge 
 // The owner's groups: created from the list or from a chat's «انتقال به گروه», renamed and deleted
 // from the group's heading. Deleting a group never touches its chats; they become ungrouped.
 async function newGroup() {
-  const name = window.prompt(t("نام گروه جدید"))?.trim();
+  const name = (await askPrompt(t("نام گروه جدید")))?.trim();
   if (!name) return null;
   const { group } = await api("/api/groups", { method: "POST", body: { name } }).catch(groupFailed);
   return group || null;
@@ -801,14 +803,14 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
     : limit && !more ? chats.filter((chat, i) => i < limit || chat.id === activeId) : chats;
   // An empty group of the owner's still shows (a new one must show up to be used).
   if (!chats.length && !group) return null;
-  const rename = () => {
+  const rename = async () => {
     setMenu(false);
-    const name = window.prompt(t("نام گروه"), group.name)?.trim();
+    const name = (await askPrompt(t("نام گروه"), group.name))?.trim();
     if (name && name !== group.name) api(`/api/groups/${group.id}`, { method: "PATCH", body: { name } }).catch(groupFailed);
   };
-  const remove = () => {
+  const remove = async () => {
     setMenu(false);
-    if (window.confirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name }))) {
+    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name })))) {
       api(`/api/groups/${group.id}`, { method: "DELETE" }).catch(groupFailed);
     }
   };
@@ -836,6 +838,19 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
               title={t("گفتگوی جدید در «{name}»", { name: group.name })}
               aria-label={t("گفتگوی جدید در گروه {name}", { name: group.name })}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          ) : null}
+          {/* «بدون گروه» gets its «+» too (a colleague 2026-11-02): a new chat without a group. */}
+          {dropTarget?.kind === "loose" && onNewChat ? (
+            <button
+              type="button"
+              onClick={() => onNewChat(null)}
+              data-no-drag=""
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
+              title={t("گفتگوی جدید بدون گروه")}
+              aria-label={t("گفتگوی جدید بدون گروه")}
             >
               <Plus className="size-3.5" />
             </button>
@@ -905,9 +920,9 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
     await patch({ groupId: group.id });
     onGroupCreated?.();
   };
-  const rename = () => {
+  const rename = async () => {
     closeMenu();
-    const title = window.prompt(t("عنوان جدید"), chat.title);
+    const title = (await askPrompt(t("عنوان جدید"), chat.title));
     if (title?.trim()) patch({ title });
   };
   return (
@@ -935,14 +950,17 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-start text-sm"
         >
           {logos ? <ChatAgentGlyphs agents={agents} /> : null}
-          <span className={`min-w-0 flex-1 truncate ${unread ? "font-semibold text-foreground" : ""}`} dir={textDir(chat.title)}>
+          {/* At work, the title itself shimmers (like Claude Code) — nothing jumps beside it (owner 2026-10-31). */}
+          <span
+            className={`min-w-0 flex-1 truncate ${unread ? "font-semibold text-foreground" : ""} ${state.id === "running" ? "title-shimmer" : ""}`}
+            dir={textDir(chat.title)}
+            title={state.id === "running" ? state.label : undefined}
+          >
             {chat.title}
           </span>
           {state.id === "ask" ? (
             <span className="shrink-0" title={state.label}><CircleHelp className="size-3.5 text-warn" aria-label={state.label} /></span>
-          ) : state.id === "running" ? (
-            <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>
-          ) : state.failed ? (
+          ) : state.id === "running" ? null : state.failed ? (
             <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطادار")} />
           ) : null}
           {chat.reminderAt ? <span className="shrink-0" title={reminderLabel(chat.reminderAt)}><BellRing className="size-3.5 text-muted-foreground" aria-label={reminderLabel(chat.reminderAt)} /></span> : null}
@@ -1057,12 +1075,12 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
 // host = on the server as the owner (his ssh keys, kubectl, git); container = inside Griffin, without them.
 const RUNS_ON = [["host", t("روی سرور، با دسترسی کامل شما"), Server], ["container", t("داخل کانتینر، بدون کلیدهای شما"), Box]];
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
-function deleteForGood(chat) {
-  if (!window.confirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }))) return;
+async function deleteForGood(chat) {
+  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title })))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(() => toast.success(t("حذف شد")), failed);
 }
-function deleteAllArchived(ids) {
-  if (!window.confirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }))) return;
+async function deleteAllArchived(ids) {
+  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length })))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } }).then(
     (r) => toast.success(r.skipped?.length ? t("{length} حذف شد؛ {length2} در حال کار بود", { length: r.deleted.length, length2: r.skipped.length }) : t("{length} حذف شد", { length: r.deleted.length })),
     failed,

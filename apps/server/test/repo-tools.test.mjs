@@ -40,3 +40,20 @@ test("repo tools read, edit, search and commit inside the worktree, and nothing 
   fs.symlinkSync("/etc", path.join(dir, "out"));
   await assert.rejects(t.repo_read.execute({ path: "out/hostname" }), /symlink/);
 });
+
+// 2026-10-29: Kaveh's commits went out under a person's token with the persona's name.
+test("repo_git commits as the GitLab user the pushes go out as; --author is refused", async () => {
+  const dir = repo();
+  const t = createRepoChatTools({ dir, repo: "app", branch: "griffin/ab12cd34", push: async () => ({}), author: async () => ({ name: "SM Hossein Nouri", email: "nouri@x.ir" }) });
+  fs.writeFileSync(path.join(dir, "b.txt"), "b\n");
+  await t.repo_git.execute({ args: ["add", "b.txt"] });
+  await t.repo_git.execute({ args: ["commit", "-m", "b"] });
+  const who = String(execFileSync("git", ["log", "-1", "--format=%an|%ae|%cn|%ce"], { cwd: dir })).trim();
+  assert.equal(who, "SM Hossein Nouri|nouri@x.ir|SM Hossein Nouri|nouri@x.ir");
+  await assert.rejects(t.repo_git.execute({ args: ["commit", "--allow-empty", "--author=Kaveh <k@k>", "-m", "x"] }), /--author is not allowed/);
+  // No GitLab user known: the old identity, the commit still goes through.
+  const blind = createRepoChatTools({ dir, repo: "app", branch: "griffin/ab12cd34", push: async () => ({}), author: async () => null });
+  await blind.repo_git.execute({ args: ["commit", "--allow-empty", "-m", "c"] });
+  assert.notEqual(String(execFileSync("git", ["log", "-1", "--format=%ae"], { cwd: dir })).trim(), "nouri@x.ir");
+  fs.rmSync(dir, { recursive: true, force: true });
+});

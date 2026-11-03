@@ -98,6 +98,7 @@ export function buildInbox({ store, asks, isActive = () => false }) {
       question: a.question,
       options: a.options || null,
       multiSelect: a.multiSelect,
+      ...(a.detail ? { detail: a.detail } : {}),
       at: new Date(a.at).toISOString(),
     });
   }

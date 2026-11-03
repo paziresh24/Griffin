@@ -62,6 +62,12 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
         <CircleHelp className="g-ask-icon mt-0.5 size-4 shrink-0 text-primary" />
         <p className="min-w-0 flex-1 font-medium" dir="auto">{args.question}</p>
       </div>
+      {typeof args.detail === "string" && args.detail ? (
+        <details className="mx-3 mt-1.5 text-xs text-muted-foreground">
+          <summary className="cursor-pointer select-none">{t("جزئیات فنی")}</summary>
+          <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono" dir="ltr">{args.detail}</pre>
+        </details>
+      ) : null}
       {askLink(args) && !closed ? (
         <a href={askLink(args)} target="_blank" rel="noopener noreferrer" className="press mx-3 mt-2 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-muted">
           <ExternalLink className="size-3.5" /> {t("باز کردن صفحهٔ ورود")}

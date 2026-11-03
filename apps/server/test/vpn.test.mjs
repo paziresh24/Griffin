@@ -10,6 +10,15 @@ const vmess = "vmess://" + Buffer.from(JSON.stringify({ add: "b.example.com", po
 const trojan = "trojan://secret@c.example.com:443?sni=c.example.com#t";
 const ss = "ss://" + Buffer.from("aes-256-gcm:pw").toString("base64") + "@d.example.com:8388#s";
 
+test("a vmess link's net is the transport and its type the tcp header", () => {
+  const link = (o) => "vmess://" + Buffer.from(JSON.stringify({ add: "e.example.com", port: "2044", id: "66666666-7777-8888-9999-000000000000", aid: "0", ...o })).toString("base64");
+  assert.deepEqual(linkToOutbound(link({ net: "tcp", type: "none", tls: "" })).streamSettings, { network: "tcp", security: "none" });
+  const http = linkToOutbound(link({ net: "tcp", type: "http", host: "h.example.com", path: "/p" })).streamSettings;
+  assert.equal(http.network, "tcp");
+  assert.equal(http.tcpSettings.header.type, "http");
+  assert.equal(linkToOutbound(link({ net: "ws", type: "none", path: "/w" })).streamSettings.wsSettings.path, "/w");
+});
+
 test("share links become Xray outbounds", () => {
   const v = linkToOutbound(vless);
   assert.equal(v.protocol, "vless");
@@ -242,4 +251,26 @@ test("a flag in a server's name gives its country until it is measured", () => {
   assert.equal(countryOfName("NL 🇳🇱 fast"), "NL");
   assert.equal(countryOfName("plain"), null);
   assert.equal(describeOutbound(linkToOutbound(vless)).country, undefined, "the country never comes from the link's parts");
+});
+
+test("an Xray that could not start at all is tried again, so a binary put in place later brings the VPN up", async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-vpn-"));
+  const dir = path.join(data, "vpn");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(xrayConfig([linkToOutbound(vless)])));
+  const bin = fakeXray(dir);
+  fs.chmodSync(bin, 0o644); // there, but it cannot run: spawn fails without a process, as when it is missing
+  const vpn = createVpn({ dataDir: data, env: { GRIFFIN_XRAY: bin }, retryMs: 50, log: { info() {}, error() {} } });
+  try {
+    vpn.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(vpn.list().running, false, "not shown as running when it never started");
+    fs.chmodSync(bin, 0o755);
+    const until = Date.now() + 3000;
+    while (!vpn.list().running && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(vpn.list().running, true);
+  } finally {
+    await vpn.stop();
+    fs.rmSync(data, { recursive: true, force: true });
+  }
 });

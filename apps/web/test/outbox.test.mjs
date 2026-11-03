@@ -220,3 +220,16 @@ test("a message on its way or not delivered counts as unsent (it holds a new ver
   const source = fs.readFileSync(new URL("../src/runtime.jsx", import.meta.url), "utf8");
   assert.match(source, /outbox\.unsent\(\) && !releaseReload\) releaseReload = holdReload\(\)/);
 });
+
+test("the first message of a new chat shows on the new chat page and follows the chat it created", () => {
+  const outbox = createOutbox();
+  outbox.add({ chatId: null, clientId: "n", text: "این را بخوان", state: "sending", quoteIds: [] });
+  assert.deepEqual(mergeOutbox([], outbox.forChat(null)).map((m) => [m.text, m.sendState]), [["این را بخوان", "sending"]]);
+  outbox.update("n", { chatId: "new-chat", state: "sent" });
+  assert.equal(outbox.forChat(null).length, 0);
+  const settled = [];
+  const sender = createSender({ outbox, post: async () => {}, catchUp: () => {}, settle: (entry, outcome) => settled.push([entry.chatId, outcome]) });
+  sender.landed("new-chat", [{ role: "user", text: "این را بخوان", clientId: "n" }]);
+  assert.equal(outbox.forChat("new-chat").length, 0, "the timeline's copy takes over");
+  assert.deepEqual(settled, [["new-chat", "sent"]]);
+});

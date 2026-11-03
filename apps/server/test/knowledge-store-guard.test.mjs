@@ -352,7 +352,7 @@ test("Griffin: the data folder's secrets refuse Bash and file-tool writes; the o
   const allowed = [
     `echo x > ${env.home}/.gitconfig.bak`,
     `cd ${env.home} && npm init -y`,
-    `git config --global user.name x && mkdir -p ${env.home}/src && touch ${env.home}/src/a`,
+    `git config --global core.editor vim && mkdir -p ${env.home}/src && touch ${env.home}/src/a`,
     `touch ${env.data}set/x`,
     `cat ${env.data}/griffin.db > /dev/null`,
   ];
@@ -368,7 +368,7 @@ test("Griffin: STATE_GUARD=off, and outside full Claude Code nothing changes", a
   // STATE_GUARD=off: index.mjs passes no stateGuard, and Bash is unguarded as before.
   const off = await hookOptions(env, { stateGuard: undefined });
   assert.equal((await decide(off, "Bash", { command: `echo x > ${note}` }, env.worktree)).decision, "allow");
-  assert.equal(off.hooks.PreToolUse.length, 2, "only the file guard and the plan-mode guard");
+  assert.equal(off.hooks.PreToolUse.length, 3, "only the file guard, the plan-mode guard and the git identity guard");
   // Without full Claude Code there is no Bash; the file guard alone runs.
   const scoped = await hookOptions(env, { claudeCode: false });
   assert.equal(scoped.hooks.PreToolUse.length, 2);

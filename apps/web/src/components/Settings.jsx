@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, Bell, Palette, Coins, Settings2, Stethoscope, ArrowRight, BookOpen, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, Globe, KeyRound, Languages, Loader2, LogOut, MessageSquare, MessageSquareHeart, MousePointerClick, Plug, Plus, RefreshCw, Send, ShieldOff, Smartphone, Sparkles, Store, Trash2, UserRound, Wallet, X, Pencil, Undo2 } from "lucide-react";
+import { Activity, BarChart3, Bell, Palette, ArrowRight, Bot, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, KeyRound, Languages, Loader2, LogOut, MessageSquare, Plug, Plus, RefreshCw, Search, Send, ShieldOff, Sparkles, Store, Trash2, UserRound, X, Pencil, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
-import { Group, Item, SectionHeader } from "./SettingsParts.jsx";
-import { BRAND, agentMeta } from "../brand.js";
+import { Choice, Group, Item, SectionHeader, SettingRow, Tabs, Toggle } from "./SettingsParts.jsx";
+import { BRAND, agentMeta, readSetting, writeSetting } from "../brand.js";
 import { lang, num, setLang, t } from "../i18n.js";
 import { ProvidersSection } from "./Providers.jsx";
 import { FeedbackInbox } from "./Feedback.jsx";
@@ -16,7 +16,9 @@ import { DoctorSection } from "./Doctor.jsx";
 import { SecretsSection } from "./Secrets.jsx";
 import { McpServersSection } from "./McpServers.jsx";
 import { PhoneSection } from "./Phone.jsx";
-import { ConfigSection } from "./Config.jsx";
+import { MyBrowserSection } from "./MyBrowser.jsx";
+import { ServerBrowserSection } from "./ServerBrowser.jsx";
+import { ConfigSection, FeatureHelp, FeaturesSection, featureBadges, useFeatureRows } from "./Config.jsx";
 import { profileChanged } from "../profile.js";
 import { TokensSection } from "./Tokens.jsx";
 import { UsageBadge } from "./Usage.jsx";
@@ -25,12 +27,17 @@ import { AgentsPage } from "./Agents.jsx";
 import { AppearanceSection } from "./Appearance.jsx";
 import { ModulesSection } from "./Modules.jsx";
 import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
-import { useFlag, useLook } from "../ui-prefs.js";
+import { setUiPrefs, useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
+import { FIRST_SECTION, linkedSection, pageOf, pagesFor, searchSettings, sectionId, settingsIndex } from "../settings-map.js";
+import { blockedBy, featureDepth, featureOf, featureOn, featureValue } from "../settings-features.js";
+import { Compare } from "./SettingsPreview.jsx";
 import { agoPhrase, connectionRows } from "../karsara-shell.js";
 import { exactTime } from "../elapsed.js";
 import { ProxyStep } from "./Setup.jsx";
 import { UpdateNotice } from "./UpdateNotice.jsx";
 import { TwoStepSection } from "./TwoStep.jsx";
+
+import { askConfirm } from "../dialog.jsx";
 
 const KIND_META = {
   telegram_bot: { label: t("ربات تلگرام"), icon: Send, tint: "text-sky-500 bg-sky-500/12", link: (u, code) => `https://t.me/${u}?start=${code}`, help: t("در تلگرام از @BotFather یک ربات بساز و توکنش را اینجا بگذار.") },
@@ -38,76 +45,28 @@ const KIND_META = {
   telegram_account: { label: t("اکانت تلگرام"), icon: UserRound, tint: "text-sky-500 bg-sky-500/12" },
 };
 
-// Ten sections in three groups, tidier than a flat list: name and sessions are one
-// «حساب», chat behaviour and this device's notifications one «گفتگو و اعلان», the live check and the
-// server's status one «سلامت». Old ids still open the right one (ALIASES). «بازارچه» (the modules) sits
-// on its own above the groups (owner 2026-10-20: «جاش تو منو خوب نیست»), and holds every module's
-// own settings on its card.
-const SECTIONS = [
-  // The karsara look only, and first there: its connection checklist.
-  { id: "status", group: t("شما"), label: t("وضعیت"), icon: Activity, title: t("وضعیت اتصال‌ها"), description: "", karsaraOnly: true },
-  { id: "market", group: "", label: t("بازارچه"), icon: Store, title: t("بازارچه"), description: t("بخش‌های گریفین و افزونه‌ها: روشن و خاموش کردن، آمدن در منو و تنظیمات هر کدام، همه روی کارت خودش. تعارض‌ها و جابه‌جایی گفتگوها را خودش حساب می‌کند.") },
-  { id: "account", group: t("شما"), label: t("حساب"), icon: UserRound, title: t("حساب"), description: t("نام شما در منو، زبان رابط و نشست‌های ورود.") },
-  { id: "appearance", group: t("شما"), label: t("ظاهر"), icon: Palette, title: t("ظاهر"), description: t("ظاهر و چیدمان برنامه، برای شما روی همهٔ دستگاه‌ها.") },
-  { id: "chat", group: t("شما"), label: t("گفتگو و اعلان"), icon: MessageSquare, title: t("گفتگو و اعلان"), description: t("رفتار کادر پیام و ادامهٔ کار، و اعلان روی همین دستگاه.") },
-  { id: "agents", group: t("دستیار"), label: t("ایجنت‌ها"), icon: Bot, title: t("ایجنت‌ها"), description: t("هر ایجنت پروفایل خودش را دارد: موتور، مدل و ابزارهای روشن. برای تنظیم، روی کارت بزن.") },
-  { id: "providers", group: t("دستیار"), label: t("موتورها"), icon: Cpu, title: t("موتورها"), description: t("حساب‌ها، کلیدها و مدل پیش‌فرض هر موتور.") },
-  { id: "connections", group: t("دستیار"), label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: t("ربات‌ها و اکانت تلگرامی که {name} از آن‌ها پیام می‌گیرد.", { name: BRAND.name }) },
-  { id: "proxy", group: t("دستیار"), label: t("پراکسی و VPN"), icon: Globe, title: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
-  { id: "mcp", group: t("دستیار"), label: t("سرورهای MCP"), icon: Plug, title: t("سرورهای MCP"), description: t("سرورهای MCP شخصی شما برای Claude Code کامل.") },
-  { id: "phone", group: t("دستیار"), label: t("گوشی"), icon: Smartphone, title: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد؛ ایجنت روی آن adb دارد. بدون نرم‌افزار روی کامپیوتر.") },
-  { id: "knowledge", group: t("دستیار"), label: t("دانش"), icon: BookOpen, title: t("دانش"), description: t("فقط یادداشت‌های تأییدشده به قواعد ایجنت می‌روند.") },
-  { id: "secrets", group: t("دستیار"), label: t("سکرت‌ها"), icon: KeyRound, title: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
-  { id: "health", group: t("سیستم"), label: t("سلامت"), icon: Stethoscope, title: t("سلامت"), description: t("چک زنده و تعمیر با یک کلیک، و وضعیت سرور.") },
-  { id: "clicks", group: t("سیستم"), label: t("نقشهٔ کلیک‌ها"), icon: MousePointerClick, title: t("نقشهٔ کلیک‌ها"), description: t("کجای صفحه بیشتر کلیک می‌شود، کدام کلیک‌ها بی‌اثرند و کدام بخش‌ها زده نمی‌شوند؛ ۱۴ روز اخیر. روی نصب نگه‌دارنده، همهٔ نصب‌ها با هم. فقط نام دکمه و بخش شمرده می‌شود، هرگز متن.") },
-  { id: "feedback", group: t("سیستم"), label: t("بازخوردها"), icon: MessageSquareHeart, title: t("بازخوردها"), description: t("بازخورد و درخواست پشتیبانی که به این نصب رسیده، با تصویر صفحه و جزئیات.") },
-  // Only on an install that answers GET /api/accounting (accounting.mjs).
-  { id: "accounting", group: t("سیستم"), label: t("حسابداری مصرف"), icon: Wallet, title: t("حسابداری مصرف"), description: t("مصرف همهٔ نصب‌ها از دیتابیس خودشان، اکانت‌های مشترک Claude و هشدارها. فقط روی همین نصب."), hubOnly: true },
-  { id: "tokens", group: t("سیستم"), label: t("مصرف توکن"), icon: Coins, title: t("مصرف توکن"), description: t("توکن روزبه‌روز، به تفکیک مدل و گفتگو.") },
-  { id: "config", group: t("سیستم"), label: t("پیکربندی"), icon: Settings2, title: t("پیکربندی"), description: t("تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.") },
-];
-const ALIASES = { profile: "account", notifications: "chat", doctor: "health", modules: "market" };
-// The karsara look: its own list, in its order and words, with no group headings; after it only
-// what a Griffin install also needs (the token page the user menu opens, the look, secrets,
-// configuration). "Agents" is in the user menu there; the live check sits under "Status".
-const KARSARA_SECTIONS = [
-  { id: "status", label: t("وضعیت"), icon: Activity, title: t("وضعیت اتصال‌ها"), description: "" },
-  { id: "account", label: t("نام شما"), icon: UserRound, title: t("نام شما"), description: t("پایین فهرست گفتگوها نشان داده می‌شود. اگر اکانت تلگرامتان وصل باشد، نام و عکس همان حساب خودبه‌خود می‌آید؛ نامی که این‌جا بنویسید جای نام تلگرام را می‌گیرد. خالی بگذارید تا نام تلگرام بماند.") },
-  { id: "connections", label: t("اتصال‌ها"), icon: Send, title: t("اتصال‌ها"), description: "" },
-  { id: "proxy", label: t("پراکسی و VPN"), icon: Globe, title: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
-  { id: "notifications", label: t("اعلان‌ها"), icon: Bell, title: t("اعلان‌ها"), description: t("وقتی گفتگو تمام شود، سؤالی منتظر جواب باشد، یا یک کار پس‌زمینه نتیجه بدهد، حتی با صفحه خاموش خبر می‌رسد.") },
-  { id: "composer", label: t("گفتگو"), icon: MessageSquare, title: t("گفتگو"), description: t("رفتارهای خودکار گفتگو؛ همه را می‌شود خاموش کرد.") },
-  { id: "knowledge", label: t("دانش"), icon: BookOpen, title: t("دانش ایجنت‌ها"), description: "" },
-  { id: "mcp", label: "MCP", icon: Plug, title: t("سرورهای MCP"), description: "" },
-  { id: "phone", label: t("گوشی"), icon: Smartphone, title: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد؛ ایجنت روی آن adb دارد. بدون نرم‌افزار روی کامپیوتر.") },
-  { id: "providers", label: t("ارائه‌دهنده‌ها"), icon: KeyRound, title: t("ارائه‌دهنده‌ها"), description: "" },
-  ...["market", "tokens", "feedback", "clicks", "appearance", "secrets", "config"].map((id) => SECTIONS.find((s) => s.id === id)),
-];
-const KARSARA_ALIASES = { profile: "account", chat: "composer", health: "status", doctor: "status", modules: "market" };
-const sectionsFor = (karsara, hub = false) => (karsara ? KARSARA_SECTIONS : SECTIONS.filter((s) => !s.karsaraOnly && (hub || !s.hubOnly)));
-const sectionId = (id, karsara = false) => {
-  const next = karsara ? KARSARA_ALIASES[id] || id : ALIASES[id] || (id === "status" ? "health" : id);
-  return sectionsFor(karsara, true).some((s) => s.id === next) ? next : null;
-};
+const PAGE_ICONS = { activity: Activity, user: UserRound, palette: Palette, message: MessageSquare, bot: Bot, plug: Plug, store: Store, chart: BarChart3 };
+const LAST_SECTION = "griffin.settings.section";
 
-// Griffin opens Settings on "Health" or the section picked last. The karsara look always opens on
-// "Status"; a section asked for just before opening (the user bar's "Account", the composer's engines link) is
-// taken once and cleared, and a tab picked inside Settings is not remembered.
-const readSection = (karsara) => {
-  const first = karsara ? "status" : "health";
-  try {
-    const asked = sectionId(localStorage.getItem("griffin.settings.section"), karsara);
-    if (karsara) localStorage.removeItem("griffin.settings.section");
-    return asked || first;
-  } catch {
-    return first;
-  }
+const subscribeHash = (callback) => {
+  window.addEventListener("hashchange", callback);
+  return () => window.removeEventListener("hashchange", callback);
 };
+const useHash = () => useSyncExternalStore(subscribeHash, () => window.location.hash);
 
-export function SettingsPage({ onBack, onSection }) {
-  const karsara = useFlag("settingsList"); // the karsara settings list (ui-prefs.js)
+/** With no section in the address: the one picked last, or «وضعیت» when the flag asks to start there. */
+const restingSection = (fromStatus) => (fromStatus ? FIRST_SECTION : sectionId(readSetting(LAST_SECTION, "")) || FIRST_SECTION);
+
+// The address says which section is open (#/settings/providers), so a link, the back button and a
+// phone all agree. A phone at #/settings shows the list of pages instead of a section; a computer has
+// that list beside it (owner 2026-11-01: «توی گوشی هم مضخرفه، نوار بغل اسکرول هم نمیشه»: the column had
+// no scroll of its own, so on a short screen the rows past its end could not be reached).
+export function SettingsPage({ onBack, onSection, theme, onTheme }) {
+  const fromStatus = useFlag("settingsList"); // «تنظیمات همیشه از «وضعیت» باز شود» (ui-prefs.js)
   const flat = useLook() === "karsara";
-  const [section, setSectionState] = useState(() => readSection(karsara));
+  const hash = useHash();
+  const linked = linkedSection(hash);
+  const section = linked || restingSection(fromStatus);
   // "Usage accounting" is there only where the server has it.
   const [hub, setHub] = useState(false);
   useEffect(() => {
@@ -117,149 +76,171 @@ export function SettingsPage({ onBack, onSection }) {
       alive = false;
     };
   }, []);
-  const shownSections = sectionsFor(karsara, hub);
-  // The skin switched while Settings is open: a section the new skin lacks falls back to its first.
-  useEffect(() => {
-    if (!shownSections.some((s) => s.id === section)) setSectionState(readSection(karsara));
-  }, [karsara]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pages = useMemo(() => pagesFor(hub), [hub]);
+  const page = pageOf(section, pages) || pages[0];
+  const current = page.sections.find((s) => s.id === section) || page.sections[0];
   // The open section names the browser tab (tab-title.js).
   useEffect(() => {
-    onSection?.(shownSections.find((s) => s.id === section)?.label || "");
+    onSection?.(current.label);
     return () => onSection?.("");
-  }, [section, onSection]);
-  const setSection = (id) => {
-    setSectionState(id);
-    if (karsara) return;
-    try { localStorage.setItem("griffin.settings.section", id); } catch { /* private mode */ }
+  }, [current.label, onSection]);
+  useEffect(() => {
+    if (linked && !fromStatus) writeSetting(LAST_SECTION, linked);
+  }, [linked, fromStatus]);
+  const setSection = useCallback((id) => {
+    window.location.hash = `/settings/${id}`;
+  }, []);
+
+  // A search result opens its section and shows the row it found.
+  const [focus, setFocus] = useState(null);
+  const open = (entry) => {
+    setSection(entry.section);
+    setFocus(entry.focus || null);
   };
-  const current = shownSections.find((s) => s.id === section) || shownSections.find((s) => s.id === (karsara ? "status" : "health"));
+  useEffect(() => {
+    if (!focus) return undefined;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const row = document.getElementById(`set-${focus}`);
+      tries += 1;
+      if (!row && tries < 30) return;
+      clearInterval(timer);
+      setFocus(null);
+      if (!row) return;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.dataset.flash = "";
+      setTimeout(() => delete row.dataset.flash, 1800);
+    }, 100);
+    return () => clearInterval(timer);
+  }, [focus]);
+
+  const backArrow = (label, onClick) => (
+    <button type="button" onClick={onClick} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={label}>
+      <ArrowRight className="rtl-mirror size-4" />
+    </button>
+  );
+  const title = <h1 className="font-semibold">{t("تنظیمات")}</h1>;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
-      <aside className="g-settings-rail hidden w-60 shrink-0 flex-col border-e bg-card/50 sm:flex">
-        <div className="flex items-center gap-2 px-4 pb-4 pt-[max(env(safe-area-inset-top),1rem)]">
-          <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-            <ArrowRight className="size-4 rtl-mirror" />
-          </button>
-          <h1 className="font-semibold">{t("تنظیمات")}</h1>
+      <aside className="g-settings-rail hidden min-h-0 w-60 shrink-0 flex-col border-e bg-card/50 sm:flex">
+        <div className="flex shrink-0 items-center gap-2 px-4 pb-3 pt-[max(env(safe-area-inset-top),1rem)]">
+          {backArrow(t("بازگشت"), onBack)}
+          {title}
         </div>
-        <nav className="space-y-0.5 px-3">
-          {shownSections.map(({ id, group, label, icon: Icon }, index) => {
-            const active = section === id;
-            const heading = !karsara && shownSections[index - 1]?.group !== group;
-            return (
-              <div key={id}>
-              {heading && group ? <p className={`px-3 pb-1 text-[11px] font-medium text-muted-foreground ${index ? "pt-4" : ""}`}>{group}</p> : null}
-              <button
-                type="button"
-                onClick={() => setSection(id)}
-                aria-current={active ? "page" : undefined}
-                className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                }`}
-              >
-                {active ? <motion.span layoutId="settings-nav" className="g-nav-bar absolute inset-y-1.5 start-0 w-0.5 rounded-full bg-primary" /> : null}
-                <Icon className={`size-4 ${active ? "text-primary" : ""}`} />
-                {label}
-              </button>
-              </div>
-            );
-          })}
-        </nav>
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+          <SettingsSearch pages={pages} onOpen={open}>
+            <nav className="space-y-0.5">
+              {pages.map((p) => {
+                const Icon = PAGE_ICONS[p.icon];
+                const active = page.id === p.id;
+                return (
+                  <button key={p.id} type="button" onClick={() => setSection(p.sections[0].id)} aria-current={active ? "page" : undefined} className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>
+                    {active ? <motion.span layoutId="settings-nav" className="g-nav-bar absolute inset-y-1.5 start-0 w-0.5 rounded-full bg-primary" /> : null}
+                    <Icon className={`size-4 shrink-0 ${active ? "text-primary" : ""}`} />
+                    <span className="min-w-0 truncate">{p.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          </SettingsSearch>
+        </div>
       </aside>
 
       <div className="scrollbar-thin min-w-0 flex-1 overflow-y-auto">
-        <div className="g-settings-content mx-auto w-full max-w-2xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-10">
+        {linked ? null : (
+          <div className="px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:hidden">
+            <div className="mb-4 flex items-center gap-2">
+              {backArrow(t("بازگشت"), onBack)}
+              {title}
+            </div>
+            <SettingsSearch pages={pages} onOpen={open}>
+              <nav className="divide-y overflow-hidden rounded-2xl border bg-card">
+                {pages.map((p) => {
+                  const Icon = PAGE_ICONS[p.icon];
+                  return (
+                    <button key={p.id} type="button" onClick={() => setSection(p.sections[0].id)} className="press flex w-full items-center gap-3 px-4 py-3 text-start">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary"><Icon className="size-[18px]" /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{p.label}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{p.blurb}</span>
+                      </span>
+                      <ChevronLeft className="rtl-mirror size-4 shrink-0 text-muted-foreground" />
+                    </button>
+                  );
+                })}
+              </nav>
+            </SettingsSearch>
+          </div>
+        )}
+        <div className={`g-settings-content mx-auto w-full max-w-2xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-10 ${linked ? "" : "hidden sm:block"}`}>
           <div className="mb-4 flex items-center gap-2 sm:hidden">
-            <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-              <ArrowRight className="size-4 rtl-mirror" />
-            </button>
+            {backArrow(t("همهٔ تنظیمات"), () => { window.location.hash = "/settings"; })}
             <h1 className="font-semibold">{t("تنظیمات")}</h1>
           </div>
-          <div className="g-settings-strip scrollbar-none -mx-4 mb-6 flex gap-1.5 overflow-x-auto px-4 sm:hidden">
-            {shownSections.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setSection(id)}
-                aria-current={section === id ? "page" : undefined}
-                className={`press flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${
-                  section === id ? "border-primary/40 bg-primary/10 font-medium text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <Icon className="size-3.5" /> {label}
-              </button>
-            ))}
-          </div>
-
-          <motion.div key={section} initial={flat ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+          {current.id === "connections" ? null : <SectionHeader title={page.label} description={current.description} />}
+          {page.sections.length > 1 && current.id !== "connections" ? <Tabs label={page.label} tabs={page.sections} value={current.id} onChange={setSection} /> : null}
+          <motion.div key={current.id} initial={flat ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
             {current.id === "connections" ? (
-              <ConnectionsSection meta={current} />
-            ) : current.id === "status" ? (
-              <>
+              <ConnectionsSection page={page} meta={current} onTab={setSection} />
+            ) : current.id === "health" ? (
+              <div className="space-y-6">
                 <UpdateNotice place="settings" />
-                <KarsaraStatusSection title={current.title} onSection={setSection} />
-              </>
+                <ConnectionsCheck onSection={setSection} />
+                <DoctorSection />
+              </div>
+            ) : current.id === "server" ? (
+              <StatusSection />
+            ) : current.id === "secrets" ? (
+              <SecretsSection />
+            ) : current.id === "feedback" ? (
+              <FeedbackInbox />
+            ) : current.id === "clicks" ? (
+              <ClickMapSection />
+            ) : current.id === "accounting" ? (
+              <AccountingSection />
+            ) : current.id === "proxy" ? (
+              <ProxyStep heading={false} />
+            ) : current.id === "mcp" ? (
+              <McpServersSection />
+            ) : current.id === "phone" ? (
+              <PhoneSection />
+            ) : current.id === "browser" ? (
+              <div className="space-y-8">
+                <section className="space-y-3"><h3 className="text-sm font-semibold">{t("مرورگر سرور")}</h3><ServerBrowserSection /></section>
+                <section className="space-y-3"><h3 className="text-sm font-semibold">{t("مرورگر من")}</h3><MyBrowserSection /></section>
+              </div>
+            ) : current.id === "features" ? (
+              <FeaturesSection />
+            ) : current.id === "config" ? (
+              <ConfigSection onSection={setSection} />
+            ) : current.id === "tokens" ? (
+              <div className="space-y-6">
+                <div className="rounded-xl border p-1"><UsageBadge open /></div>
+                <TokensSection />
+              </div>
+            ) : current.id === "agents" ? (
+              <AgentsPage embedded />
+            ) : current.id === "providers" ? (
+              <ProvidersSection />
+            ) : current.id === "knowledge" ? (
+              <KnowledgeSection />
+            ) : current.id === "chat" ? (
+              <div className="space-y-6">
+                <ChatPrefsSection />
+                <SttSection />
+                <PushSection />
+              </div>
+            ) : current.id === "appearance" ? (
+              <AppearanceSection onSection={setSection} theme={theme} onTheme={onTheme} focus={focus} />
+            ) : current.id === "market" ? (
+              <ModulesSection />
             ) : (
-              <>
-                <SectionHeader title={current.title} description={current.description} />
-                {current.id === "health" ? (
-                  <>
-                    <UpdateNotice place="settings" />
-                    <HealthSection />
-                  </>
-                ) : section === "secrets" ? (
-                  <SecretsSection />
-                ) : section === "feedback" ? (
-                  <FeedbackInbox />
-                ) : section === "clicks" ? (
-                  <ClickMapSection />
-                ) : section === "accounting" ? (
-                  <AccountingSection />
-                ) : section === "proxy" ? (
-                  <ProxyStep heading={false} />
-                ) : section === "mcp" ? (
-                  <McpServersSection />
-                ) : section === "phone" ? (
-                  <PhoneSection />
-                ) : section === "config" ? (
-                  <ConfigSection onSection={setSection} />
-                ) : section === "tokens" ? (
-                  <div className="space-y-6">
-                    <div className="rounded-xl border p-1"><UsageBadge open /></div>
-                    <TokensSection />
-                  </div>
-                ) : section === "agents" ? (
-                  <AgentsPage embedded />
-                ) : section === "providers" ? (
-                  <ProvidersSection />
-                ) : section === "knowledge" ? (
-                  <KnowledgeSection />
-                ) : section === "notifications" ? (
-                  <PushSection />
-                ) : section === "composer" ? (
-                  <div className="space-y-6">
-                    <ChatPrefsSection />
-                    <SttSection />
-                  </div>
-                ) : section === "chat" ? (
-                  <div className="space-y-6">
-                    <ChatPrefsSection />
-                    <SttSection />
-                    <PushSection />
-                  </div>
-                ) : section === "appearance" ? (
-                  <AppearanceSection onSection={setSection} />
-                ) : section === "market" ? (
-                  <ModulesSection />
-                ) : (
-                  <div className="space-y-6">
-                    <ProfileSection />
-                    <TwoStepSection />
-                    <AccountSection />
-                  </div>
-                )}
-              </>
+              <div className="space-y-6">
+                <ProfileSection />
+                <TwoStepSection />
+                <AccountSection />
+              </div>
             )}
           </motion.div>
         </div>
@@ -268,11 +249,44 @@ export function SettingsPage({ onBack, onSection }) {
   );
 }
 
-// Karsara skin: «وضعیت» — the connection checklist (karsara-shell.js connectionRows) from fast reads,
-// then the live check below it, as Karsara shows them.
+// The box above the pages. While something is typed its results stand in for the list below it.
+function SettingsSearch({ pages, onOpen, children }) {
+  const [query, setQuery] = useState("");
+  const [rows, setRows] = useState(null);
+  const asked = useRef(false);
+  const load = () => {
+    if (asked.current) return;
+    asked.current = true;
+    api("/api/config").then((d) => setRows(d.settings || []), () => setRows([]));
+  };
+  const entries = useMemo(() => settingsIndex(rows || [], pages), [rows, pages]);
+  const found = query.trim() ? searchSettings(query, entries) : null;
+  return (
+    <>
+      <label className="relative mb-3 block">
+        <Search className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input type="search" value={query} onFocus={load} onChange={(e) => setQuery(e.target.value)} placeholder={t("جستجو در تنظیمات")} aria-label={t("جستجو در تنظیمات")} className="w-full rounded-lg border bg-background py-1.5 pe-2 ps-8 text-sm outline-none focus:border-primary" />
+      </label>
+      {!found ? children : found.length ? (
+        <ul className="space-y-0.5">
+          {found.map((entry) => (
+            <li key={entry.id}>
+              <button type="button" onClick={() => { setQuery(""); onOpen(entry); }} className="w-full rounded-lg px-3 py-1.5 text-start hover:bg-muted/60">
+                <span className="block text-sm" dir="auto">{entry.title}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">{entry.path}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="px-3 py-4 text-center text-xs text-muted-foreground">{t("چیزی پیدا نشد")}</p>}
+    </>
+  );
+}
+
+// «وضعیت»: the connection checklist (karsara-shell.js connectionRows) from fast reads, above the live check.
 const STATUS_ICON = { ok: Check, warn: KeyRound, off: X };
 const STATUS_TINT = { ok: "bg-ok/12 text-ok", warn: "bg-warn/12 text-warn", off: "bg-muted text-muted-foreground" };
-function KarsaraStatusSection({ title, onSection }) {
+function ConnectionsCheck({ onSection }) {
   const [reads, setReads] = useState({});
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -289,65 +303,32 @@ function KarsaraStatusSection({ title, onSection }) {
   }, []);
   const rows = connectionRows(reads);
   return (
-    <div className="space-y-6">
-      <SectionHeader title={title} />
-      <Group joined>
-        {!loaded ? (
-          <div className="flex justify-center py-8 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
-        ) : !rows.length ? (
-          <p className="px-4 py-6 text-center text-sm text-muted-foreground">{t("وضعیت اتصال‌ها خوانده نشد.")}</p>
-        ) : (
-          rows.map((row) => (
-            <Item
-              key={row.id}
-              icon={STATUS_ICON[row.level]}
-              tint={STATUS_TINT[row.level]}
-              title={row.title}
-              subtitle={row.subtitle}
-              trailing={row.action ? (
-                <button
-                  type="button"
-                  onClick={() => (row.action.href ? (window.location.hash = row.action.href.slice(1)) : onSection(row.action.section))}
-                  className="g-pill press rounded-lg border px-2.5 py-1 text-xs hover:bg-muted"
-                >
-                  {row.action.label}
-                </button>
-              ) : null}
-            />
-          ))
-        )}
-      </Group>
-      <DoctorSection bare />
-    </div>
-  );
-}
-
-// «سلامت»: the live check with its one-click fixes, and the server's status, as two tabs of one page.
-function HealthSection() {
-  const [tab, setTab] = useState("doctor");
-  const tabs = [
-    { id: "doctor", label: t("چک و تعمیر") },
-    { id: "status", label: t("وضعیت سرور") },
-  ];
-  return (
-    <div className="space-y-5">
-      <div role="tablist" aria-label={t("سلامت")} className="inline-flex rounded-full border bg-card p-0.5 text-sm">
-        {tabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === item.id}
-            onClick={() => setTab(item.id)}
-            className={`relative rounded-full px-3.5 py-1.5 transition-colors ${tab === item.id ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            {tab === item.id ? <motion.span layoutId="health-tab" className="absolute inset-0 rounded-full bg-muted" transition={{ type: "spring", stiffness: 500, damping: 38 }} /> : null}
-            <span className="relative">{item.label}</span>
-          </button>
-        ))}
-      </div>
-      {tab === "doctor" ? <DoctorSection /> : <StatusSection />}
-    </div>
+    <Group joined title={t("وضعیت اتصال‌ها")}>
+      {!loaded ? (
+        <div className="flex justify-center py-8 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
+      ) : !rows.length ? (
+        <p className="px-4 py-6 text-center text-sm text-muted-foreground">{t("وضعیت اتصال‌ها خوانده نشد.")}</p>
+      ) : (
+        rows.map((row) => (
+          <Item
+            key={row.id}
+            icon={STATUS_ICON[row.level]}
+            tint={STATUS_TINT[row.level]}
+            title={row.title}
+            subtitle={row.subtitle}
+            trailing={row.action ? (
+              <button
+                type="button"
+                onClick={() => (row.action.href ? (window.location.hash = row.action.href.slice(1)) : onSection(sectionId(row.action.section) || row.action.section))}
+                className="g-pill press rounded-lg border px-2.5 py-1 text-xs hover:bg-muted"
+              >
+                {row.action.label}
+              </button>
+            ) : null}
+          />
+        ))
+      )}
+    </Group>
   );
 }
 
@@ -435,7 +416,7 @@ function PushSection() {
   );
 }
 
-function ConnectionsSection({ meta }) {
+function ConnectionsSection({ page, meta, onTab }) {
   const [data, setData] = useState(null);
   const [adding, setAdding] = useState(false);
   const load = useCallback(() => api("/api/integrations").then(setData, (e) => toast.error(e.message)), []);
@@ -448,7 +429,7 @@ function ConnectionsSection({ meta }) {
   return (
     <>
       <SectionHeader
-        title={meta.title}
+        title={page.label}
         description={meta.description}
         action={
           <button type="button" onClick={() => setAdding(true)} className="press flex shrink-0 items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm">
@@ -456,6 +437,7 @@ function ConnectionsSection({ meta }) {
           </button>
         }
       />
+      <Tabs label={page.label} tabs={page.sections} value={meta.id} onChange={onTab} />
       {!data ? (
         <div className="flex justify-center py-16"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
       ) : data.integrations.length === 0 ? (
@@ -500,7 +482,7 @@ function IntegrationRow({ integration, onChange }) {
     }
   };
   const remove = async () => {
-    if (!window.confirm(t("«{name}» حذف شود؟ گفتگوهای ساخته‌شده در گریفین می‌مانند.", { name: integration.name }))) return;
+    if (!(await askConfirm(t("«{name}» حذف شود؟ گفتگوهای ساخته‌شده در گریفین می‌مانند.", { name: integration.name })))) return;
     await api(`/api/integrations/${integration.id}`, { method: "DELETE" }).catch((e) => toast.error(e.message));
     onChange();
   };
@@ -595,56 +577,58 @@ function IntegrationRow({ integration, onChange }) {
   );
 }
 
-// "Chat": the chat switches, on top of /api/config — all are
-// live there, so no restart. An unset key follows the env, else on.
-const CHAT_PREFS = [
-  { key: "PROMPT_SUGGESTIONS", icon: Sparkles, title: t("پیشنهاد پیام بعدی"), subtitle: t("کم‌رنگ در کادر، Tab برای پذیرفتن؛ فقط Claude") },
-  { key: "AUTO_CONTINUE", icon: RefreshCw, title: t("ادامهٔ خودکار بعد از سقف"), subtitle: t("با بازشدن سقف مصرف، حداکثر سه بار؛ پیام شما لغوش می‌کند") },
-  { key: "SIDE_CHAT", icon: MessageSquare, title: t("چت کناری"), subtitle: t("یک گفتگوی جدا کنار گفتگوی باز، با همان زمینه") },
-];
+// «گفتگو»: the chat switches of /api/config (settings-features.js, group chat), all live. The next-message
+// suggestion is one question made of an install setting and a per-user flag: off, in a row above the
+// box, or as ghost text in it.
+const CHAT_KEYS = ["ENTER_KEY", "AUTO_CONTINUE", "PLAN_FALLBACK", "PLAN_APPROVAL", "SIDE_CHAT", "CHAT_SEARCH_MESSAGES"];
+const CHAT_ICONS = { AUTO_CONTINUE: RefreshCw, SIDE_CHAT: MessageSquare };
 
 function ChatPrefsSection() {
-  const [settings, setSettings] = useState(null);
-  const [busy, setBusy] = useState(null);
-  const load = useCallback(() => api("/api/config").then((d) => setSettings(d.settings || []), (e) => toast.error(e.message)), []);
-  useEffect(() => {
-    load();
-  }, [load]);
-  const set = async (key, on) => {
-    setBusy(key);
-    try {
-      await api("/api/config", { method: "PATCH", body: { [key]: on ? "on" : "off" } });
-      await load();
-    } catch (error) {
-      toast.error(error.message);
-    } finally {
-      setBusy(null);
-    }
+  const { rows, busy, set } = useFeatureRows();
+  const { flags } = useUiPrefs();
+  if (!rows) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
+  const row = (key) => rows.find((r) => r.key === key);
+  const suggest = featureOf("PROMPT_SUGGESTIONS");
+  const next = featureOf("NEXT_STEP_RETURNS");
+  const suggestOn = featureOn(suggest, row(suggest.key));
+  const where = !suggestOn ? "off" : flags.nextGhost ? "ghost" : "row";
+  const pick = (id) => {
+    if ((id === "off") === suggestOn) set(suggest.key, id === "off" ? "off" : "on");
+    if (id !== "off") setUiPrefs({ flags: { nextGhost: id === "ghost" } });
   };
-  if (!settings) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
+  const nextBlocked = blockedBy(next, rows);
   return (
     <Group title={t("گفتگو")}>
-      {CHAT_PREFS.map(({ key, icon, title, subtitle }) => {
-        const on = (settings.find((s) => s.key === key)?.effective || "on") !== "off";
+      <SettingRow
+        id="PROMPT_SUGGESTIONS"
+        icon={Sparkles}
+        title={suggest.title}
+        help={<FeatureHelp feature={suggest}><Compare flags={flags} flagKey="nextGhost" /></FeatureHelp>}
+        under={<Choice label={suggest.title} value={where} onChange={pick} disabled={busy === suggest.key} options={[{ id: "off", label: t("خاموش") }, { id: "row", label: t("ردیف بالای کادر") }, { id: "ghost", label: t("کم‌رنگ داخل کادر") }]} />}
+      />
+      <div id="set-nextGhost" />
+      <SettingRow
+        id={next.key}
+        title={next.title}
+        depth={featureDepth(next) || 1}
+        dim={Boolean(nextBlocked)}
+        help={<FeatureHelp feature={next} />}
+        badges={featureBadges(next)}
+        control={<Toggle on={featureOn(next, row(next.key))} label={next.title} disabled={Boolean(nextBlocked)} busy={busy === next.key} onChange={(on) => set(next.key, on ? "on" : "off")} />}
+      />
+      {CHAT_KEYS.map((key) => {
+        const feature = featureOf(key);
+        const current = row(key);
         return (
-          <Item
+          <SettingRow
             key={key}
-            icon={icon}
-            tint="bg-primary/12 text-primary"
-            title={title}
-            subtitle={subtitle}
-            trailing={
-              <Switch.Root
-                checked={on}
-                disabled={busy === key}
-                onCheckedChange={(checked) => set(key, checked)}
-                dir="ltr"
-                className="relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors data-[state=checked]:bg-primary"
-                aria-label={title}
-              >
-                <Switch.Thumb className="block size-5 translate-x-0.5 rounded-full bg-background shadow transition-transform duration-200 data-[state=checked]:translate-x-[1.375rem]" />
-              </Switch.Root>
-            }
+            id={key}
+            icon={CHAT_ICONS[key]}
+            title={feature.title}
+            help={<FeatureHelp feature={feature} />}
+            badges={featureBadges(feature)}
+            control={feature.choices ? null : <Toggle on={featureOn(feature, current)} label={feature.title} busy={busy === key} onChange={(on) => set(key, on ? "on" : "off")} />}
+            under={feature.choices ? <Choice label={feature.title} value={featureValue(feature, current)} disabled={busy === key} onChange={(value) => set(key, value)} options={Object.entries(feature.choices).map(([id, label]) => ({ id, label }))} /> : null}
           />
         );
       })}
@@ -708,14 +692,14 @@ function ProfileSection() {
 function AccountSection() {
   const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
   const revokeAll = async () => {
-    if (!window.confirm(t("از همهٔ دستگاه‌ها (از جمله همین) خارج شوی؟"))) return;
+    if (!(await askConfirm(t("از همهٔ دستگاه‌ها (از جمله همین) خارج شوی؟")))) return;
     await api("/api/auth/revoke-all", { method: "POST" }).catch((e) => toast.error(e.message));
     window.location.reload();
   };
   // The new token is shown here once (never stored by the page); this device stays signed in.
   const [newToken, setNewToken] = useState("");
   const rotate = async () => {
-    if (!window.confirm(t("توکن ورود عوض شود؟ توکن فعلی (ورود، اسکریپت‌ها و CLI) از کار می‌افتد و بقیهٔ دستگاه‌ها خارج می‌شوند."))) return;
+    if (!(await askConfirm(t("توکن ورود عوض شود؟ توکن فعلی (ورود، اسکریپت‌ها و CLI) از کار می‌افتد و بقیهٔ دستگاه‌ها خارج می‌شوند.")))) return;
     try {
       setNewToken((await api("/api/auth/rotate-token", { method: "POST" })).token);
     } catch (e) {
@@ -953,6 +937,12 @@ const KNOWLEDGE_FILTERS = [
   ["all", t("همه")],
   ["trash", t("حذف‌شده")],
 ];
+// Knowledge on auto-approve (owner 2026-11-01, KNOWLEDGE_AUTO_APPROVE=on): every note is approved
+// when it is written, so the page is a list with delete only — no review toggle, no edit.
+const KNOWLEDGE_AUTO_FILTERS = [
+  ["all", t("همه")],
+  ["trash", t("حذف‌شده")],
+];
 
 function KnowledgeSection() {
   const karsara = useFlag("timeAgo"); // «زمان به‌صورت «… پیش»»
@@ -990,8 +980,8 @@ function KnowledgeSection() {
     setConfirmDel(null);
     act(key, () => api(`/api/knowledge/${agent}/note`, { method: "DELETE", body: { file } }), t("به «حذف‌شده» رفت؛ بازیابی‌شدنی است"));
   };
-  const purge = (item) => {
-    if (!window.confirm(t("این دانش برای همیشه حذف می‌شود و قابل بازیابی نیست. ادامه؟"))) return;
+  const purge = async (item) => {
+    if (!(await askConfirm(t("این دانش برای همیشه حذف می‌شود و قابل بازیابی نیست. ادامه؟")))) return;
     act(`trash/${item.id}`, () => api(`/api/knowledge/${item.agent}/trash`, { method: "DELETE", body: { id: item.id } }), t("برای همیشه حذف شد"));
   };
   const restore = (item) => act(`trash/${item.id}`, () => api(`/api/knowledge/${item.agent}/restore`, { method: "POST", body: { id: item.id } }), t("بازیابی شد"));
@@ -1009,6 +999,9 @@ function KnowledgeSection() {
   };
 
   if (!data) return <div className="flex justify-center py-16"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>;
+  const auto = Boolean(data.autoApprove);
+  const filters = auto ? KNOWLEDGE_AUTO_FILTERS : KNOWLEDGE_FILTERS;
+  const view = auto && filter !== "trash" ? "all" : filter;
   const all = Object.entries(data.agents || {});
   const counts = {
     pending: all.reduce((n, [, notes]) => n + notes.filter((x) => !x.reviewed).length, 0),
@@ -1016,21 +1009,22 @@ function KnowledgeSection() {
   };
   counts.all = counts.pending + counts.reviewed;
   counts.trash = trash.length;
-  const shown = filter === "trash"
+  const shown = view === "trash"
     ? []
     : all
-        .map(([agent, notes]) => [agent, notes.filter((x) => filter === "all" || (filter === "reviewed") === Boolean(x.reviewed))])
+        .map(([agent, notes]) => [agent, notes.filter((x) => view === "all" || (view === "reviewed") === Boolean(x.reviewed))])
         .filter(([, notes]) => notes.length);
 
   return (
     <div className="space-y-6">
+      {auto ? <p className="text-xs text-muted-foreground">{t("دانش خودکار است: هر یادداشتی که ایجنت می‌نویسد خودش تأیید می‌شود و به گفتگوهای بعدی می‌رسد. هر کدام غلط بود، حذفش کنید.")}</p> : null}
       <div className="flex gap-1 rounded-xl bg-muted p-1">
-        {KNOWLEDGE_FILTERS.map(([id, label]) => (
+        {filters.map(([id, label]) => (
           <button
             key={id}
             type="button"
             onClick={() => setFilter(id)}
-            className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ${filter === id ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
+            className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ${view === id ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
           >
             {label}
             <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[11px] tabular-nums">{num(counts[id])}</span>
@@ -1038,7 +1032,7 @@ function KnowledgeSection() {
         ))}
       </div>
 
-      {filter === "trash" ? (
+      {view === "trash" ? (
         trash.length ? (
           <Group title={t("حذف‌شده · {toLocaleString}", { toLocaleString: trash.length.toLocaleString("fa") })}>
             {trash.map((item) => (
@@ -1076,7 +1070,7 @@ function KnowledgeSection() {
         )
       ) : !shown.length ? (
         <p className="rounded-2xl border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
-          {counts.all ? t("در این دسته یادداشتی نیست.") : t("هنوز یادداشتی نیست. ایجنت‌ها با knowledge_write می‌نویسند و اینجا تأییدش می‌کنی.")}
+          {counts.all ? t("در این دسته یادداشتی نیست.") : auto ? t("هنوز یادداشتی نیست. ایجنت‌ها خودشان می‌نویسند و اینجا می‌بینید.") : t("هنوز یادداشتی نیست. ایجنت‌ها با knowledge_write می‌نویسند و اینجا تأییدش می‌کنی.")}
         </p>
       ) : (
         shown.map(([agent, notes]) => (
@@ -1098,7 +1092,7 @@ function KnowledgeSection() {
                   onClick={() => setOpen(expanded ? null : key)}
                   trailing={
                     <>
-                      <span
+                      {auto ? null : <span
                         role="button"
                         tabIndex={0}
                         onClick={(e) => { e.stopPropagation(); if (busy !== key) flip(agent, note.file, !note.reviewed); }}
@@ -1109,7 +1103,7 @@ function KnowledgeSection() {
                       >
                         {busy === key ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
                         {note.reviewed ? t("تأییدشده") : t("تأیید")}
-                      </span>
+                      </span>}
                       <ChevronDown className={`size-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
                     </>
                   }
@@ -1146,10 +1140,12 @@ function KnowledgeSection() {
                         <>
                           <pre className="scrollbar-thin max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-background p-3 text-xs leading-5" dir="auto">{note.body}</pre>
                           <div className="mt-3 flex items-center gap-2">
-                            <button type="button" onClick={() => { setConfirmDel(null); setEditing({ key, agent, file: note.file, title: note.title, body: note.body }); }} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs">
-                              <Pencil className="size-3" />
-                              {t("ویرایش")}
-                            </button>
+                            {auto ? null : (
+                              <button type="button" onClick={() => { setConfirmDel(null); setEditing({ key, agent, file: note.file, title: note.title, body: note.body }); }} className="press inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1.5 text-xs">
+                                <Pencil className="size-3" />
+                                {t("ویرایش")}
+                              </button>
+                            )}
                             {confirmDel === key ? (
                               <>
                                 <span className="text-xs text-muted-foreground">{t("مطمئنی؟ بازیابی‌شدنی است.")}</span>

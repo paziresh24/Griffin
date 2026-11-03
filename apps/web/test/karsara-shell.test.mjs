@@ -76,7 +76,7 @@ test("Karsara skin's new chat page: centred blurb, setup card and composer, noth
   assert.doesNotMatch(karsara, /board \? null : <h2/, "the blurb shows even when the board has items");
 });
 
-test("Karsara skin wiring: one list stays on screen for a job or peer chat; Settings opens on «وضعیت»", async () => {
+test("Karsara skin wiring: one list stays on screen for a job or peer chat; Settings can open on «وضعیت»", async () => {
   const { readFileSync } = await import("node:fs");
   const read = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
   const sidebar = read("components/Sidebar.jsx");
@@ -84,8 +84,6 @@ test("Karsara skin wiring: one list stays on screen for a job or peer chat; Sett
   assert.match(sidebar, /const inboxChat = inboxOn && section === "manual" && !showArchived \? inboxRow/, "the inbox row only above the owner's own list");
   assert.match(sidebar, /timeAgo \? shortAgo\(/, "rows show «۵ دقیقه» with «زمان به‌صورت «… پیش»»");
   const settings = read("components/Settings.jsx");
-  const readSection = settings.slice(settings.indexOf("const readSection ="), settings.indexOf("export function SettingsPage"));
-  assert.match(readSection, /const first = karsara \? "status" : "health";/);
-  assert.match(readSection, /if \(karsara\) localStorage\.removeItem\("griffin\.settings\.section"\);/, "an asked-for section is taken once");
-  assert.match(settings, /\{ id: "status",[^\n]*karsaraOnly: true \}/, "«وضعیت» is a Karsara-skin tab only");
+  assert.match(settings, /const restingSection = \(fromStatus\) => \(fromStatus \? FIRST_SECTION :/, "the flag starts on «وضعیت»; otherwise the section picked last");
+  assert.match(settings, /const section = linked \|\| restingSection\(fromStatus\);/, "an address that names a section wins");
 });

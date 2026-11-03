@@ -44,8 +44,13 @@ test("plan mode lets ToolSearch through: loading a tool changes nothing", () => 
   assert.equal(planModeRefusal("ToolSearch", { query: "select:mcp__griffin__kube_get" }, "mcp__griffin__"), null);
 });
 
-test("the owner's rules drop the tool-name list; a limited caller keeps it", () => {
+test("every run gets the capability map of its own tools; a limited caller is told the rest does not apply", () => {
   const tools = ["kube_get", "ask_owner"];
-  assert.doesNotMatch(buildRules({ agent: "griffin", caller: "owner", tools }), /Tools you actually have/);
-  assert.match(buildRules({ agent: "griffin", caller: "team", tools }), /Tools you actually have in THIS conversation/);
+  const owner = buildRules({ agent: "griffin", caller: "owner", tools });
+  assert.match(owner, /Capability map — written from the tools THIS conversation really has \(2\)/);
+  assert.doesNotMatch(owner, /does not apply here/);
+  const team = buildRules({ agent: "griffin", caller: "team", tools });
+  assert.match(team, /Capability map/);
+  assert.match(team, /not in the list at the top of this map does not apply here/);
+  assert.doesNotMatch(team, /mikrotik_\*/); // only families it has
 });

@@ -8,5 +8,6 @@
   "PDFهای یک پیام روی هم حداکثر {mb} مگابایت": "The PDFs of one message add up to at most {mb} MB",
   "حداکثر {n} تصویر در یک پیام": "At most {n} images in one message",
   "این فایل را ببین.": "Look at this file.",
-  "این تصویر را ببین.": "Look at this image."
+  "این تصویر را ببین.": "Look at this image.",
+  "«{name}» آپلود نشد؛ حذفش کنید و دوباره بگذارید": "«{name}» did not upload; remove it and attach it again"
 }

@@ -12,6 +12,7 @@ test("a reset under a day is a countdown; further away a weekday and time", () =
 
 test("limit labels, plan names and why limits are missing", () => {
   assert.equal(planName("max"), "Max");
+  assert.equal(planName("ultra"), "Ultra");
   assert.equal(limitLabel({ label: "session" }), "محدودیت ۵ ساعته");
   assert.equal(limitLabel({ label: "weekly_model", model: "Fable" }), "هفتگی · Fable");
   assert.match(limitsProblem("plan limits do not apply to this login"), /وارد شو/);

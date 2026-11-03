@@ -57,5 +57,36 @@ test("sse server needs the endpoint event; stdio is not probed", async () => {
   const p = await checkMcpServer({ type: "sse", url: plain.url });
   plain.close();
   assert.deepEqual({ ok: p.ok, reason: p.reason }, { ok: false, reason: "no_endpoint_event" });
-  assert.deepEqual(await checkMcpServer({ type: "stdio", command: "npx" }), { checked: false, type: "stdio", note: "stdio" });
+  assert.deepEqual(await checkMcpServer({ type: "stdio" }), { checked: false, type: "stdio", note: "stdio" });
+});
+
+// A fake stdio MCP server: `node -e <script>` speaking newline-delimited JSON-RPC.
+const FAKE = `
+let b="";process.stdin.on("data",d=>{b+=d;let i;while((i=b.indexOf("\\n"))>=0){const m=JSON.parse(b.slice(0,i));b=b.slice(i+1);
+if(m.id==null)continue;
+const r=m.method==="initialize"?{serverInfo:{name:"fake-stdio"}}:{tools:[{name:"a"},{name:"b"}]};
+if(process.env.MODE==="bad"&&m.method==="initialize"){console.log(JSON.stringify({jsonrpc:"2.0",id:m.id,error:{message:"x"}}));continue}
+console.log(JSON.stringify({jsonrpc:"2.0",id:m.id,result:r}))}});`;
+
+test("stdio server: initialize + tools/list, env reaches the child but not the result", async () => {
+  const r = await checkMcpServer({ type: "stdio", command: process.execPath, args: ["-e", FAKE], env: { TOKEN: "SECRET-env-value" } });
+  assert.deepEqual({ checked: r.checked, type: r.type, ok: r.ok, server: r.server, tools: r.tools }, { checked: true, type: "stdio", ok: true, server: "fake-stdio", tools: 2 });
+  assert.equal(typeof r.ms, "number");
+  assert.ok(!JSON.stringify(r).includes("SECRET-env-value"));
+  const bad = await checkMcpServer({ command: process.execPath, args: ["-e", FAKE], env: { MODE: "bad" } });
+  assert.deepEqual({ ok: bad.ok, reason: bad.reason }, { ok: false, reason: "bad_initialize" });
+});
+
+test("stdio server: missing command, early exit and silence say why", async () => {
+  const gone = await checkMcpServer({ command: "definitely-not-a-command-xyz" });
+  assert.deepEqual({ ok: gone.ok, reason: gone.reason }, { ok: false, reason: "ENOENT" });
+  const exited = await checkMcpServer({ command: process.execPath, args: ["-e", "process.exit(1)"] });
+  assert.deepEqual({ ok: exited.ok, reason: exited.reason }, { ok: false, reason: "exited" });
+  const slow = await checkMcpServer({ command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] }, { timeoutMs: 300 });
+  assert.deepEqual({ ok: slow.ok, reason: slow.reason }, { ok: false, reason: "timeout" });
+});
+
+test("baseEnv: only what a command needs to run, never the app's settings or keys", async () => {
+  const { baseEnv } = await import("../src/mcp-health.mjs");
+  assert.deepEqual(baseEnv({ PATH: "/bin", HOME: "/h", GRIFFIN_OWNER_TOKEN: "x", ANTHROPIC_API_KEY: "y" }), { PATH: "/bin", HOME: "/h" });
 });

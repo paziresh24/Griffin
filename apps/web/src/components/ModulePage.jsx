@@ -1,5 +1,5 @@
 import { Suspense, useMemo, useState } from "react";
-import { AlarmClock, ArrowRight, ExternalLink, GitMerge, Inbox, LifeBuoy, Loader2, MessageCircle, Puzzle, Radar, RefreshCw, Search, SquareTerminal, Ticket, Users } from "lucide-react";
+import { AlarmClock, ArrowRight, ExternalLink, GitMerge, Inbox, Lamp, LifeBuoy, ListPlus, Loader2, MessageCircle, Puzzle, Radar, RefreshCw, Search, SquareTerminal, Ticket, Users } from "lucide-react";
 import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { readSetting, writeSetting } from "../brand.js";
@@ -12,7 +12,7 @@ import { t } from "../i18n.js";
 // The colour of a shelf's dot and count; the status colours, never the palette (the rule for statuses).
 const TONE_DOT = { ok: "bg-ok", warn: "bg-warn", bad: "bg-bad", info: "bg-signal", muted: "bg-muted-foreground/40" };
 
-export const MODULE_ICONS = { "git-merge": GitMerge, ticket: Ticket, puzzle: Puzzle, "message-circle": MessageCircle, inbox: Inbox, users: Users, radar: Radar, "terminal-square": SquareTerminal, "alarm-clock": AlarmClock, "life-buoy": LifeBuoy };
+export const MODULE_ICONS = { "git-merge": GitMerge, ticket: Ticket, puzzle: Puzzle, "message-circle": MessageCircle, inbox: Inbox, users: Users, radar: Radar, "terminal-square": SquareTerminal, "alarm-clock": AlarmClock, "life-buoy": LifeBuoy, lamp: Lamp, "list-plus": ListPlus };
 
 // The one page every module shares (kind "list"): filters on top, a row per record, a button per
 // action. What the rows are and what a button does is the module's server.mjs, not this file.
@@ -32,7 +32,7 @@ export function ModulePage({ route, onBack }) {
   if (View) {
     return (
       <Suspense fallback={<p className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />{t("در حال بارگذاری…")}</p>}>
-        <View key={`${mod.id}/${page.id}`} mod={mod} page={page} onBack={onBack} />
+        <View key={`${mod.id}/${page.id}/${route.arg || ""}`} mod={mod} page={page} arg={route.arg || ""} onBack={onBack} />
       </Suspense>
     );
   }
@@ -74,7 +74,7 @@ function ListPage({ mod, page, onBack }) {
       if (outcome.kind === "message") toast(outcome.message);
       if (outcome.kind === "chat") {
         // The ordinary chat API: the chat is the owner's, with every guard a chat has.
-        const { chat } = await api("/api/chats", { method: "POST", body: { agent: outcome.chat.agent, title: outcome.chat.title, text: outcome.chat.text, module: mod.id } });
+        const { chat } = await api("/api/chats", { method: "POST", body: { agent: outcome.chat.agent, title: outcome.chat.title, text: outcome.chat.text, module: mod.id, refs: outcome.chat.refs } });
         navigate(chat.id);
       }
     } catch (e) {

@@ -37,9 +37,23 @@ test("a new chat's send is held under its own key; empty text is not held", asyn
 
 test("the runtime holds each send, releases it when settled, and recovers after the timeline loads", () => {
   const src = fs.readFileSync(new URL("../src/runtime.jsx", import.meta.url), "utf8");
-  assert.match(src, /holdSending\(tabStorage\(\), chatId, typed\.typed, clientId\)/, "a chat's send is held with its client id");
+  assert.match(src, /holdSending\(tabStorage\(\), chatId, typed\.typed, shown\.clientId\)/, "a chat's send is held with its client id");
   assert.match(src, /settle: \(entry, outcome, error\) => \{\s*if \(entry\.held\) releaseSending/, "every settle releases it");
   assert.match(src, /releaseSending\(tabStorage\(\), boxId, held\)/, "a new chat's send is released when the POST ends");
   assert.match(src, /function tabStorage\(\) \{\s*try \{\s*return window\.sessionStorage;/, "held per tab: another tab never takes over a send this one owns");
   assert.match(src, /returnToBox\(chatId, recoverSending\(tabStorage\(\), chatId, landed\)\)/, "a lost send goes back to the box");
+});
+
+test("a failed send still has the typed text for the box (504 during a restart, 2026-10-29)", async () => {
+  const { sendBody } = await import("../src/quotes.js");
+  const typed = { typed: "متن بلند", text: "متن بلند", images: [] };
+  const body = sendBody(typed, []);
+  assert.equal(typed.typed, "متن بلند", "the typed text is not taken from the object the box gets back");
+  assert.equal("typed" in body, false);
+  assert.equal(body.text, "متن بلند");
+  const quoted = sendBody(typed, [{ text: "نقل" }]);
+  assert.equal(quoted.text, "> نقل\n\nمتن بلند");
+  assert.equal(typed.typed, "متن بلند");
+  const src = fs.readFileSync(new URL("../src/runtime.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /delete payload\.typed/, "the runtime never strips the typed text in place");
 });

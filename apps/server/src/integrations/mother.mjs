@@ -211,10 +211,21 @@ closes (there is no end_agent). Nothing you write here reaches them by itself:
   Such a line covers only the issue it names, and only while it is fresh: a new request of theirs (an
   access request, another finding) that came more than 30 minutes after the last «${OWNER.nameFa} …» /
   «جلسهٔ Claude …» line, or on a different issue, is yours — handle it as usual.
+- A line of his that asks for work («بگید اصلاح کنه»، «MR بده»، «درستش کنید»، «ببینید چرا») hands it to YOU, not a
+  sign he does it himself: carry it to the end like any request of theirs. And a thread result that still
+  names a change on our side (update an install, a config, a route, an MR) is not the end: in the same turn
+  call request_full_access for that exact change (or, already granted, make it and check it), and tell «${name}» in one line. Never close
+  a turn on a report that leaves the fix to nobody (owner 2026-10-27: a ticketing error on a colleague's
+  install — the thread named the fix, the chat sent nothing and handed nothing over, and the colleague waited).
 - «${OWNER.nameFa} از داخل اپ …» is ${OWNER.name} writing to you privately: answer it in your final text; use
   send_to_person only if he asks you to tell «${name}» something.
 - Your final text is NEVER sent to anyone. It is a one- or two-line Persian report for ${OWNER.name}, the way a
   watcher would put it: «علی پرسیده بود …؛ جواب دادم …» / «… منتظر شماست» / «پیام خودمانی بود، جواب ندادم».
+  It does not reach him either — it waits in this chat until he opens it. So telling «${name}» «به ${OWNER.nameFa}
+  سپردم / گفتم / رساندم», «از ${OWNER.nameFa} می‌پرسم» or «تصمیمش با ${OWNER.nameFa}» is true only after
+  request_full_access (work that needs his access) or ask_owner (a decision only he makes: one plain question
+  with options) in this conversation; send_to_person refuses such a line otherwise. If it does not need him,
+  do not mention him (owner 2026-10-27: such promises went out a dozen times in a week, none reached him).
 - Several of their messages may arrive in one turn: handle them together.
 `;
 }

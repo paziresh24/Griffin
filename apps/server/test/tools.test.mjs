@@ -80,3 +80,26 @@ test("byte-array image data from the SDK is not stored in events", async () => {
   assert.equal(clip({ data: new Uint8Array(100) }).data, "[binary omitted: 100 bytes]");
   assert.deepEqual(clip({ counts: { 0: 1, 1: 2 } }), { counts: { 0: 1, 1: 2 } }, "small numeric maps stay");
 });
+
+test("brokerRequest delivers a DELETE body intact (explicit content-length)", async () => {
+  const { default: http } = await import("node:http");
+  const { default: os } = await import("node:os");
+  const { default: path } = await import("node:path");
+  const { brokerRequest } = await import("../src/tools.mjs");
+  const sock = path.join(os.tmpdir(), `br-${process.pid}-${Date.now()}.sock`);
+  const server = http.createServer((req, res) => {
+    let data = "";
+    req.on("data", (c) => (data += c));
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ method: req.method, got: JSON.parse(data) }));
+    });
+  });
+  await new Promise((r) => server.listen(sock, r));
+  try {
+    const r = await brokerRequest(sock, "DELETE", "/secrets", { name: "a/b" }, 5000);
+    assert.deepEqual(r.body, { method: "DELETE", got: { name: "a/b" } });
+  } finally {
+    server.close();
+  }
+});

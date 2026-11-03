@@ -1,40 +1,37 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ChevronDown, ListChecks, Menu, Network, PanelRightOpen, Square, Wifi, WifiOff, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
-import { api, navigate, useChats, usePageRoute, useRoute, useTelegramPerson, useTimeline } from "./api.js";
+import { api, navigate, useBrowserRoute, useChats, usePageRoute, useRoute, useTelegramPerson, useTimeline } from "./api.js";
 import { connectionNotice } from "./timeline-memo.js";
 import { lastRun } from "@griffin/timeline";
 import { tabTitle } from "./tab-title.js";
+import { linkedSection } from "./settings-map.js";
+import { todoList } from "./todos.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
 import { num, t, isRtl, locale } from "./i18n.js";
-import { AgentsPage } from "./components/Agents.jsx";
-import { JobsPage } from "./components/Jobs.jsx";
+
 import { ModulePage, SectionOff } from "./components/ModulePage.jsx";
 import { pageOff, parseModuleRoute } from "./modules.js";
 import { useModuleList } from "./module-hooks.js";
-import { IncidentsPage } from "./components/Incidents.jsx";
-import { PeersPage } from "./components/Peers.jsx";
-import { InboxPeoplePage } from "./components/InboxPeople.jsx";
 import { peopleRoute } from "./inbox-people.js";
 import { GlobalPanel, MotherPanel, TelegramRedirect, WatchPill } from "./components/Telegram.jsx";
 import { TelegramChat } from "./components/TelegramChat.jsx";
 import { motherName } from "./telegram.js";
-import { SettingsPage } from "./components/Settings.jsx";
-import { WorkbenchPage } from "./components/Workbench.jsx";
-import { SetupPage, setupFlowFromHash } from "./components/Setup.jsx";
 import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { ServerDown } from "./components/ServerDown.jsx";
 import { AgentGlyph, ThemeToggle } from "./components/Controls.jsx";
 import { ShareButton } from "./components/Share.jsx";
+import { ModuleChatActions } from "./components/ModuleChatActions.jsx";
 import { Toaster, toast } from "sonner";
 import { FeedbackButton, FeedbackDialogs } from "./components/Feedback.jsx";
-import { DEFAULT_ENGINE_EVENT } from "./components/Providers.jsx";
+import { DEFAULT_ENGINE_EVENT } from "./engine-events.js";
 import { Thread } from "./components/Thread.jsx";
 import { ChatRecord } from "./components/ComposerAssist.jsx";
 import { ChatChildrenContext } from "./components/Tool.jsx";
 import { SideChatButton, SidePanel } from "./components/SideChat.jsx";
+import { BrowserButton, BrowserPanel, useChatBrowser } from "./components/BrowserPanel.jsx";
 import { RepoChips } from "./components/RepoChips.jsx";
 import { emptySide, sideReducer } from "./side.js";
 import { loadUiPrefs, useFlag, useLook } from "./ui-prefs.js";
@@ -52,6 +49,34 @@ import { hasBoard } from "./board.js";
 import { NeedsYou, TaskLists } from "./components/Board.jsx";
 import { UpdateNotice } from "./components/UpdateNotice.jsx";
 import { NavRail, SectionsPalette } from "./components/SectionNav.jsx";
+
+import { isHeavyEffort, isHeavyModel } from "./model-policy.js";
+import { DialogHost, askConfirm } from "./dialog.jsx";
+
+// The sidebar draws only when its own props change: the open chat streams its answer from App's
+// state, and the whole list (hundreds of chats) used to redraw on every piece of it.
+const MemoSidebar = memo(Sidebar);
+
+// Pages away from the chat load when first opened: they were a large part of the 2.9 MB bundle every
+// visit downloaded and parsed before the chat could show.
+const lazyPage = (load, name) => lazy(() => load().then((m) => ({ default: m[name] })));
+const AgentsPage = lazyPage(() => import("./components/Agents.jsx"), "AgentsPage");
+const JobsPage = lazyPage(() => import("./components/Jobs.jsx"), "JobsPage");
+const IncidentsPage = lazyPage(() => import("./components/Incidents.jsx"), "IncidentsPage");
+const PeersPage = lazyPage(() => import("./components/Peers.jsx"), "PeersPage");
+const InboxPeoplePage = lazyPage(() => import("./components/InboxPeople.jsx"), "InboxPeoplePage");
+const SettingsPage = lazyPage(() => import("./components/Settings.jsx"), "SettingsPage");
+const WorkbenchPage = lazyPage(() => import("./components/Workbench.jsx"), "WorkbenchPage");
+// The wizard keyed by its flow (#/setup/<flow>), so moving between flows starts the new one fresh.
+const SetupPage = lazy(() =>
+  import("./components/Setup.jsx").then((m) => ({
+    default: (props) => <m.SetupPage key={m.setupFlowFromHash()} flow={m.setupFlowFromHash() || "first"} {...props} />,
+  })),
+);
+function PageLoading() {
+  return <div className="flex h-full flex-1 items-center justify-center text-sm text-muted-foreground">{t("در حال بارگذاری…")}</div>;
+}
+const NO_CHILDREN = [];
 
 // The thread's connection state in the header (timeline-memo.js connectionNotice). `wrap`: the
 // phone's own row, where the whole sentence shows.
@@ -78,13 +103,14 @@ function newChatContextNote(id, title = "") {
 export default function App() {
   const chatId = useRoute();
   const page = usePageRoute();
+  const browserRoute = useBrowserRoute();
   // The core sections are modules (modules/<id>): one switched off in this install shows a note, not its page.
   const moduleList = useModuleList();
   const telegramPerson = useTelegramPerson();
   // «نقشهٔ کلیک‌ها» (clicks.js): what is clicked here, counted — never what is written.
   // A phone this tab bridged before (Settings → «گوشی», phone.js) comes back by itself.
   useEffect(() => { resumePhone().catch(() => {}); }, []);
-  useEffect(() => startClicks({ section: () => (window.location.hash === "#/settings" ? readSetting("griffin.settings.section", "") : "") }), []);
+  useEffect(() => startClicks({ section: () => (window.location.hash.startsWith("#/settings") ? linkedSection(window.location.hash) || readSetting("griffin.settings.section", "") : "") }), []);
   const { chats, archived, groups, looseAt, sideChat, privateShare, loading: chatsLoading, failed: chatsFailed, retry: retryChats } = useChats();
   const { timeline, connection, reconnect, loadOlder } = useTimeline(chatId);
   const notice = connectionNotice(connection);
@@ -159,7 +185,7 @@ export default function App() {
   }, [chatId, seenTarget]);
   // The look (appearance only): the header's icon buttons, the drawer and the list's starting width.
   const karsara = useLook() === "karsara";
-  const SidebarView = Sidebar;
+  const SidebarView = MemoSidebar;
   // The owner's look and flags from the server; the first load after the update saves this browser's.
   useEffect(() => {
     loadUiPrefs();
@@ -216,8 +242,9 @@ export default function App() {
   const [theme, setTheme] = useState(() => readSetting(STORAGE.theme, "dark"));
   const [draft, setDraft] = useState(() => ({
     mode: "auto", // «خودکار» by default; plan and «بدون پرسیدن» are a choice for one chat, not kept between chats
-    model: readSetting(STORAGE.model, ""),
-    effort: readSetting(STORAGE.effort, ""),
+    // A remembered stronger model or higher effort is not carried into a new chat: it is chosen and confirmed each time.
+    model: isHeavyModel(readSetting(STORAGE.model, "")) ? "" : readSetting(STORAGE.model, ""),
+    effort: isHeavyEffort(readSetting(STORAGE.effort, "")) ? "" : readSetting(STORAGE.effort, ""),
     agent: readSetting(STORAGE.agent, "griffin"),
     repo: null, // null = the server's default repo; "" = none
     groupId: "", // the owner's group a chat from a group's «+» goes into; that one new chat only
@@ -247,15 +274,23 @@ export default function App() {
     writeSetting(STORAGE.theme, theme);
   }, [theme]);
 
-  const settings = chat
-    ? {
-        mode: chat.mode,
-        model: chat.model || draft.model || "",
-        effort: chat.effort || "",
-        agent: chat.agent || draft.agent || "griffin",
-        repo: chat.repo || "",
-      }
-    : { ...draft, groupId: groups.some((g) => g.id === draft.groupId) ? draft.groupId : "" };
+  // One object while nothing in it changes: the runtime's context (runtime.jsx runtimeChat) and the
+  // composer depend on it, and a fresh one each render redrew them on every streamed piece.
+  const hasChat = Boolean(chat);
+  const settings = useMemo(
+    () =>
+      hasChat
+        ? {
+            mode: chat.mode,
+            model: chat.model || draft.model || "",
+            effort: chat.effort || "",
+            agent: chat.agent || draft.agent || "griffin",
+            repo: chat.repo || "",
+          }
+        : { ...draft, groupId: groups.some((g) => g.id === draft.groupId) ? draft.groupId : "" },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasChat, chat?.mode, chat?.model, chat?.effort, chat?.agent, chat?.repo, draft, groups],
+  );
   useEffect(() => {
     applyAgentTheme(settings.agent);
   }, [settings.agent]);
@@ -323,10 +358,16 @@ export default function App() {
     // Model and effort are per chat (any provider: "claude:haiku"); the agent's default model and
     // effort live on the agents page. A fresh composer remembers them for the next chat.
     if (patch.model != null || patch.effort != null) {
-      if (chat) await patchChat(patch);
+      // Sonnet at «medium» is the default; a stronger model or higher effort needs a second confirmation.
+      const heavy = [isHeavyModel(patch.model) ? t("مدل {model}", { model: patch.model }) : "", isHeavyEffort(patch.effort) ? t("تلاش {effort}", { effort: patch.effort }) : ""].filter(Boolean);
+      if (heavy.length && !(await askConfirm(t("{what} از سهمیهٔ پلن بیشتر مصرف می‌کند. مطمئنی که این گفتگو با آن اجرا شود؟ (سوییچ وسط گفتگو یک بار کل آن را بدون کش پردازش می‌کند.)", { what: heavy.join(" + ") }), { danger: true, yes: t("بله، اجرا شود") }))) return;
+      // Switching the model inside a started chat re-reads the whole chat without cache once (owner's colleague, 2026-11-02).
+      const switching = chat && patch.model != null && patch.model !== (chat.model || "");
+      if (switching && !heavy.length && !(await askConfirm(t("عوض کردن مدل وسط گفتگو یک بار کل گفتگو را بدون کش پردازش می‌کند و هزینه دارد. ادامه می‌دهی؟")))) return;
+      if (chat) await patchChat(heavy.length ? { ...patch, confirm: true } : patch);
       setDraft((d) => ({ ...d, ...patch }));
-      if (patch.model != null) writeSetting(STORAGE.model, patch.model || "");
-      if (patch.effort != null) writeSetting(STORAGE.effort, patch.effort || "");
+      if (patch.model != null && !isHeavyModel(patch.model)) writeSetting(STORAGE.model, patch.model || "");
+      if (patch.effort != null && !isHeavyEffort(patch.effort)) writeSetting(STORAGE.effort, patch.effort || "");
       return;
     }
     if (chat && (patch.mode != null || patch.agent != null)) {
@@ -347,16 +388,21 @@ export default function App() {
   // Open chat: PATCH persona in place. Fresh composer: remember default for next chat.
   // The sidebar's agent menu always opens a new chat with the agent picked, the one already shown
   // too (a colleague 2026-10-24: picking it inside a chat changed that chat, or nothing, and left him there).
-  const selectAgent = (agent) => {
+  const selectAgent = useCallback((agent) => {
     setDraft((d) => ({ ...d, agent, groupId: "" }));
     writeSetting(STORAGE.agent, agent);
     navigate(null);
-  };
+  }, []);
+  const hideSidebar = useCallback(() => setSidebarHidden(true), []);
+  const closeDrawer = useCallback(() => setDrawer(false), []);
 
   const onError = useCallback((e) => setError(e), []);
 
   // Side chat of the open chat: state per parent; a quote from «به چت کناری» opens it seeded.
   const [side, sideDispatch] = useReducer(sideReducer, emptySide());
+  // This chat's own browser beside it (BrowserPanel.jsx): owner chats.
+  const ownChat = Boolean(chatId) && (chat?.caller || "owner") === "owner";
+  const chatBrowser = useChatBrowser(ownChat ? chatId : null);
   const [sideSeed, setSideSeed] = useState(null);
   // Off with the SIDE_CHAT switch (config.mjs; it rides on the chat list).
   const sideParent = sideChat && chatId && chat && !chat.parentChatId && !chat.sideOf && (chat.caller || "owner") === "owner" ? chatId : null;
@@ -403,6 +449,7 @@ export default function App() {
             mode: draft.mode,
             ...(chat?.model ? { model: chat.model } : {}),
             effort: draft.effort || undefined,
+            confirm: true,
             agent: settings.agent || "griffin",
             ...(chat?.repo ? { repo: chat.repo } : {}),
           },
@@ -428,6 +475,7 @@ export default function App() {
           mode: draft.mode,
           model: draft.model,
           effort: draft.effort || undefined,
+          confirm: true,
           agent: draft.agent || "griffin",
           ...(settings.groupId ? { groupId: settings.groupId } : {}),
         },
@@ -442,10 +490,12 @@ export default function App() {
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      {page === "setup" ? (
-        <SetupPage key={setupFlowFromHash()} flow={setupFlowFromHash() || "first"} onClose={() => navigate(null)} />
+      {browserRoute ? (
+        <BrowserPanel key={browserRoute} chatId={browserRoute} exists standalone onClose={() => navigate(browserRoute)} />
+      ) : page === "setup" ? (
+        <Suspense fallback={<PageLoading />}><SetupPage onClose={() => navigate(null)} /></Suspense>
       ) : page === "settings" ? (
-        <SettingsPage onBack={() => navigate(null)} onSection={setSettingsSection} />
+        <Suspense fallback={<PageLoading />}><SettingsPage onBack={() => navigate(null)} onSection={setSettingsSection} theme={theme} onTheme={setTheme} /></Suspense>
       ) : (
         <>
           <ResizableSidebar initial={karsara ? SIDEBAR_WIDTH.karsara : SIDEBAR_WIDTH.initial} hidden={listHidden}>
@@ -462,7 +512,7 @@ export default function App() {
               page={page}
               agent={settings.agent}
               onAgentChange={selectAgent}
-              onHide={page ? undefined : () => setSidebarHidden(true)}
+              onHide={page ? undefined : hideSidebar}
             />
           </ResizableSidebar>
           {drawer ? (
@@ -482,15 +532,16 @@ export default function App() {
                   page={page}
                   agent={settings.agent}
                   onAgentChange={selectAgent}
-                  onClose={() => setDrawer(false)}
+                  onClose={closeDrawer}
                 />
               </div>
             </div>
           ) : null}
 
           <main className="flex min-w-0 flex-1 flex-col">
+            <Suspense fallback={<PageLoading />}>
             {page === "m" && parseModuleRoute(window.location.hash) ? <div className="scrollbar-thin h-full overflow-y-auto"><ModulePage route={parseModuleRoute(window.location.hash)} onBack={() => navigate(null)} /></div> : pageOff(moduleList, page) ? <SectionOff onBack={() => navigate(null)} /> : page === "jobs" ? <JobsPage onBack={() => navigate(null)} /> : page === "incidents" ? <IncidentsPage onBack={() => navigate(null)} /> : page === "peers" ? <PeersPage onBack={() => navigate(null)} /> : page === "inbox" ? <InboxPeoplePage peerId={peopleRoute(window.location.hash)?.peerId || null} onBack={() => navigate(null)} /> : page === "telegram" ? (telegramView && telegramPerson ? <TelegramChat key={telegramPerson} personId={telegramPerson} onMenu={() => setDrawer(true)} /> : <TelegramRedirect personId={telegramPerson} />) : page === "agents" ? <AgentsPage onBack={() => navigate(null)} /> : page === "workbench" ? <WorkbenchPage onBack={() => navigate(null)} /> : <GriffinRuntime key={chatId || "new"} chatId={chatId} timeline={timeline} settings={settings} kept={chat?.kept || []} onError={onError}>
-              <ChatChildrenContext.Provider value={chat?.children || []}>
+              <ChatChildrenContext.Provider value={chat?.children || NO_CHILDREN}>
               <ChatRecord.Provider value={chat}>
               <Thread
                 header={
@@ -560,11 +611,13 @@ export default function App() {
                     ) : null}
                     {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="hidden sm:flex" /> : null}
                     {sideParent ? <SideChatButton open={side.open} count={side.sides.length} onClick={() => sideDispatch({ type: "toggle" })} /> : null}
+                    {ownChat ? <BrowserButton open={chatBrowser.open} exists={chatBrowser.exists} onClick={chatBrowser.toggle} /> : null}
                     {chat?.parentChatId && chat.runStatus === "running" ? (
                       <button type="button" onClick={() => stopChat(chat.id)} className="press inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs text-bad hover:bg-bad/10">
                         <Square className="size-3.5" /> {t("توقف")}
                       </button>
                     ) : null}
+                    {chatId ? <ModuleChatActions modules={moduleList} chat={chat ? { ...chat, id: chatId } : { id: chatId }} messages={timeline?.messages} /> : null}
                     <ShareButton chatId={chatId} privateShare={privateShare} />
                     <ThemeToggle theme={theme} onChange={setTheme} />
                     <UpdateNotice place="top" />
@@ -619,9 +672,11 @@ export default function App() {
               </ChatRecord.Provider>
               </ChatChildrenContext.Provider>
             </GriffinRuntime>}
+          </Suspense>
           </main>
           {!page && chat?.mother ? <MotherPanel key={chat.id} chat={chat} sheet={panelSheet} onCloseSheet={() => setPanelSheet(false)} /> : null}
           {!page && chat?.global ? <GlobalPanel key={chat.id} chat={chat} sheet={panelSheet} onCloseSheet={() => setPanelSheet(false)} /> : null}
+          {!page && ownChat && chatBrowser.open ? <BrowserPanel key={chatId} chatId={chatId} exists={chatBrowser.exists} onClose={chatBrowser.close} /> : null}
           {page ? null : (
             <SidePanel
               parentId={sideParent}
@@ -640,6 +695,7 @@ export default function App() {
       )}
 
       <SectionsPalette chats={chats} onNewChat={() => newChatIn(null)} />
+      <DialogHost />
       <Toaster position="top-center" theme={theme} dir={isRtl ? "rtl" : "ltr"} closeButton toastOptions={{ className: "font-sans" }} />
       <ServerDown />
       <FeedbackDialogs />
@@ -659,7 +715,11 @@ function TodoProgress({ timeline }) {
       const part = message.parts[j];
       // Cursor's updateTodos, Claude's TodoWrite, the openai engine's todo_write.
       if (part.type === "tool" && /^(updateTodos|TodoWrite|todo_write)$/.test(part.name)) {
-        return unwrapResult(part).result?.todos || part.args?.todos || null;
+        const { result, isError } = unwrapResult(part);
+        // A call the engine refused set no steps; an earlier one may have.
+        if (isError) continue;
+        const list = todoList(result?.todos);
+        return list.length ? list : todoList(part.args?.todos);
       }
     }
     return null;
@@ -725,10 +785,8 @@ function SubagentsBar({ chat }) {
                 className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-start"
               >
                 <AgentGlyph id={child.agent} className="size-4 shrink-0" />
-                <span className="min-w-0 flex-1 truncate" dir={textDir(child.title)}>{child.title}</span>
-                {child.runStatus === "running" ? (
-                  <span className="agent-dots shrink-0 text-signal" aria-hidden><i /><i /><i /></span>
-                ) : child.runStatus === "error" || child.runStatus === "cancelled" ? (
+                <span className={`min-w-0 flex-1 truncate ${child.runStatus === "running" ? "title-shimmer" : ""}`} dir={textDir(child.title)}>{child.title}</span>
+                {child.runStatus === "running" ? null : child.runStatus === "error" || child.runStatus === "cancelled" ? (
                   <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطا")} />
                 ) : null}
               </button>

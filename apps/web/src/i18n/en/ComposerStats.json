@@ -13,5 +13,11 @@
   "پس از اولین پیام نمایش داده می‌شود": "Shown after the first message",
   "پس از پیامِ بعدی نمایش داده می‌شود": "Shown after the next message",
   "استفاده‌شده": "Used",
-  "موتور فعلی سهمیهٔ پلن گزارش نمی‌دهد.": "The current engine does not report plan limits."
+  "موتور فعلی سهمیهٔ پلن گزارش نمی‌دهد.": "The current engine does not report plan limits.",
+  "بستن": "Close",
+  "این گفتگو با Sonnet هم پیش می‌رود و ارزان‌تر است.": "This chat would do fine on Sonnet, and cheaper.",
+  "{runs} نوبت آخر با مدل سنگین کار سبکی بود (میانگین {tools} ابزار در هر نوبت).": "The last {runs} turns on a heavy model were light (about {tools} tools per turn).",
+  "تغییر به Sonnet": "Switch to Sonnet",
+  "امروز {ratio} برابر همیشه مصرف کرده‌اید.": "You've used {ratio}× your usual today.",
+  "۲۴ ساعت اخیر حدود {today} دلار به قیمت API؛ روز معمول {baseline} دلار. {share}٪ آن Opus و مدل‌های سنگین بوده.": "Last 24 hours ≈ ${today} at API price; a usual day is ${baseline}. {share}% was Opus and other heavy models."
 }

@@ -188,14 +188,15 @@ test("on, but not full Claude Code (a colleague's chat): the setting does nothin
 
 // The runner side: the chat lists its tasks, stops one, says when one ends, stops them all when the
 // chat is archived or deleted, and a restart says which ones it ended.
-function runnerWith({ on = true, dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-bg-")) } = {}) {
+function runnerWith({ on = true, dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-bg-")), notResumable } = {}) {
   const store = openStore(path.join(dir, "db.sqlite"));
   const fake = fakeClaude();
   const sdk = { ...createClaudeProvider({ apiKey: "sk-ant-api-test", queryImpl: fake.queryImpl }), kind: "claude" };
-  const runner = createRunner({ store, sdk, agentOptions: async () => fullOwner({ cwd: dir, ...(on ? { backgroundTasks: true } : {}) }), log: { error() {} } });
+  const runner = createRunner({ store, sdk, agentOptions: async () => fullOwner({ cwd: dir, ...(on ? { backgroundTasks: true } : {}) }), log: { error() {} }, resumeGapMs: 10, ...(notResumable ? { notResumable } : {}) });
   return { store, fake, runner, dir };
 }
 const notes = (store, chatId) => store.eventsAfter(chatId).filter((e) => e.type === "note").map((e) => e.payload?.text ?? e.data?.text ?? JSON.parse(e.payload_json || e.data_json || "{}").text);
+const userTexts = (store, chatId) => store.eventsAfter(chatId).filter((e) => e.type === "user").map((e) => e.payload?.text ?? e.data?.text ?? JSON.parse(e.payload_json || e.data_json || "{}").text);
 const finishedRuns = (store, chatId) => store.eventsAfter(chatId).filter((e) => e.type === "run.finished").length;
 
 test("runner, on: a chat lists its background task, stops it, and says so in the chat", async () => {
@@ -239,6 +240,25 @@ test("runner, on: a restart says in the chat which background tasks it ended", a
   const again = runnerWith({ dir: first.dir });
   assert.ok(notes(again.store, chat.id).some((t) => /راه‌اندازی دوباره/.test(t) && /sleep for b1/.test(t)));
   assert.equal(again.store.getKv(BG_TASKS_KEY), null, "said once");
+  // The note alone left the chat silent until the owner asked: the boot wakes it.
+  await until(() => userTexts(again.store, chat.id).some((t) => /ادامه پس از ری‌استارت/.test(t) && /sleep for b1/.test(t)), 8_000);
+});
+
+test("runner, on: the boot wakes no chat nobody waits on (archived, consult); a consult still gets the note", async () => {
+  const first = runnerWith();
+  const archived = first.store.createChat({ title: "archived" });
+  const consult = first.store.createChat({ title: "consult" });
+  const live = first.store.createChat({ title: "live" });
+  for (const chat of [archived, consult, live]) {
+    await first.runner.send(chat.id, { text: "bg b1", ownerText: true });
+    await until(() => first.runner.backgroundTasks(chat.id).length === 1);
+  }
+  await first.runner.shutdown({ timeoutMs: 200 });
+  first.store.updateChat(archived.id, { archived: 1 });
+  const again = runnerWith({ dir: first.dir, notResumable: (chat) => chat.id === consult.id });
+  await until(() => userTexts(again.store, live.id).some((t) => /ادامه پس از ری‌استارت/.test(t)), 15_000);
+  assert.ok(notes(again.store, consult.id).some((t) => /راه‌اندازی دوباره/.test(t)));
+  for (const chat of [archived, consult]) assert.ok(!userTexts(again.store, chat.id).some((t) => /ادامه پس از ری‌استارت/.test(t)));
 });
 
 test("runner, off (default): nothing is kept or listed", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { MessageSquarePlus, PanelLeft, PanelRight, SquarePen } from "lucide-react";
 import { SELECTION_QUOTE_MAX, quoteForChat } from "../side.js";
 import { quoteStore } from "../quotes.js";
@@ -6,6 +6,12 @@ import { useRuntimeChat } from "../runtime.jsx";
 import { textDir } from "../dir.js";
 import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
+import { useModuleList } from "../module-hooks.js";
+import { moduleView } from "../module-views.js";
+import { moduleSelectionActions, selectionForModule } from "../modules.js";
+import { MODULE_ICONS } from "./ModulePage.jsx";
+import { ModuleActionDialog } from "./ModuleChatActions.jsx";
+import { ChatRecord } from "./ComposerAssist.jsx";
 
 // The side panel sits on the reading end's far side: left in RTL, right in LTR.
 const SideIcon = isRtl ? PanelLeft : PanelRight;
@@ -15,7 +21,9 @@ const SideIcon = isRtl ? PanelLeft : PanelRight;
 // folded above the composer until the message is sent — and «به چت کناری», which starts a side chat
 // with the quote — and «به چت جدید»: the same popup, but the note is a required request and the new
 // chat starts with quote + request (App handles griffin:new-chat-insert). Only selections inside an
-// answer (.sd-block) count, never tool cards or the box.
+// answer (.sd-block) count, never tool cards or the box. After those, the enabled modules' own items
+// (module.json selectionActions, e.g. board-app «به بک‌لاگ»): each opens that module's screen in a dialog
+// with { chat: { id, title }, selection }.
 
 // The main thread and the side chat each mount this; a selection belongs to the one it is in.
 const inSide = (el) => Boolean(el?.closest?.(".side-panel"));
@@ -37,6 +45,9 @@ export function SelectionActions({ canSide = false }) {
   const { boxId, chatId } = useRuntimeChat();
   const [target, setTarget] = useState(null); // { text, rect } while a quotable selection is open
   const [quoting, setQuoting] = useState(null); // { text, x, y } while the note popup is open
+  const [moduleOpen, setModuleOpen] = useState(null); // { module, action, selection } while a module's dialog is open
+  const chat = useContext(ChatRecord);
+  const moduleItems = moduleSelectionActions(useModuleList()).filter(({ module, action }) => moduleView(module.id, action.view));
   const anchor = useRef(null);
   const sync = useCallback(() => setTarget(selectionTarget(anchor.current)), []);
 
@@ -87,6 +98,27 @@ export function SelectionActions({ canSide = false }) {
     drop();
   };
 
+  const openModule = (module, action) => {
+    if (!target) return;
+    setModuleOpen({ module, action, selection: selectionForModule(target.text) });
+    drop();
+  };
+  const dialog = (
+    <ModuleActionDialog
+      open={moduleOpen}
+      props={moduleOpen ? { chat: { id: chatId || chat?.id || "", title: chat?.title || "" }, selection: moduleOpen.selection } : null}
+      onClose={() => setModuleOpen(null)}
+    />
+  );
+
+  if (moduleOpen) {
+    return (
+      <>
+        <span ref={anchor} hidden />
+        {dialog}
+      </>
+    );
+  }
   if (quoting) {
     return (
       <>
@@ -125,6 +157,17 @@ export function SelectionActions({ canSide = false }) {
             </button>
           </>
         )}
+        {moduleItems.map(({ module, action }) => {
+          const Icon = MODULE_ICONS[action.icon] || MODULE_ICONS.puzzle;
+          return (
+            <span key={`${module.id}:${action.id}`} className="contents">
+              <span className="h-4 w-px bg-border" aria-hidden />
+              <button type="button" className={button} onClick={() => openModule(module, action)} title={module.title}>
+                <Icon className="size-3.5" /> {action.label}
+              </button>
+            </span>
+          );
+        })}
       </div>
     </>
   );

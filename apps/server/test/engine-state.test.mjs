@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CREDIT_RETRY_MS, engineState, isCreditError, probeVerdict, rankByState, sameModelNames } from "../src/engine-state.mjs";
+import { AUTH_RETRY_MS, CREDIT_RETRY_MS, engineState, isCreditError, probeVerdict, rankByState, sameModelNames } from "../src/engine-state.mjs";
 import { autoMovesOn, claudeLimitCode } from "../src/plan-fallback.mjs";
 import { probeOutcome } from "../src/providers/claude.mjs";
 import { classifyEngineError } from "../src/doctor.mjs";
@@ -122,4 +122,12 @@ test("the maintainer's inbox: a network member's report with its picture; suppor
   assert.equal((await call("Bearer net")).status, 200);
   assert.equal(fb.inbox()[0].from, "یارا");
   fs.rmSync(dir, { recursive: true });
+});
+
+test("a refused login leaves routing until a new sign-in, a passing test or AUTH_RETRY_MS", () => {
+  assert.equal(engineState({ enabled: true, keyed: true, authAt: NOW - 1000, now: NOW }).state, "auth");
+  assert.equal(engineState({ enabled: true, keyed: true, authAt: NOW - AUTH_RETRY_MS - 1, now: NOW }).state, "ok");
+  const states = { a: { state: "auth" }, b: { state: "limited", until: NOW + 1000 }, c: { state: "ok" }, d: { state: "credit" } };
+  assert.deepEqual(rankByState([{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }], (id) => states[id], (x) => x.id).map((x) => x.id), ["c", "b", "a", "d"]);
+  assert.equal(probeVerdict({ ok: false, cause: "bad_key" }), "auth");
 });

@@ -1,8 +1,10 @@
 import { finalText, foldEvents, wholeRun } from "@griffin/timeline";
 
-// Short chat titles like Cursor's sidebar: after a chat's first finished run, a small tool-less agent
-// turns the question and answer into 2-5 words. Titles the owner renamed are never touched. A title the
-// model could not give (429 from the title provider, owner 2026-10-22) is tried again after the next run.
+// Short chat titles like Cursor's sidebar: a small tool-less agent turns the question into 2-5 words the
+// moment its first run starts, as Claude Code does (owner 2026-10-31: «عنوانش همون اول درست میشه نه وقتی
+// چت تموم میشه»); a chat still untitled after a run is named from the question and its answer. Titles the
+// owner renamed are never touched. A title the model could not give (429 from the title provider, owner
+// 2026-10-22) is tried again after the next run.
 export const TITLE_PROMPT = `You name chats in a sidebar. Reply with ONLY the title: 2 to 5 words, in the language of the
 question (Persian when it is Persian), no quotes, no trailing punctuation, no emoji. Name the subject, not the
 request (e.g. "فروش امروز", "فضای دیسک S3", "آخرین فایل باکت").`;
@@ -30,13 +32,14 @@ export function createTitler({ store, generate, timelines = null, log = console 
     // «گفتگو» is what a keyless install wrote in place of a title: still the auto one, renamed now.
     const peer = String(chat.caller || "").startsWith("peer:");
     const auto = chat.title === STUCK_TITLE || (firstUser && (peer ? isPeerAutoTitle(chat.title, firstUser.text) : chat.title === autoTitle(firstUser.text)));
-    if (!firstUser || !runs.length || !auto) return null;
+    if (!firstUser || !auto) return null;
     inFlight.add(chatId);
     try {
-      const answer = finalText(wholeRun(messages, runs[0].runId) || runs[0]).slice(0, 1500);
+      // At the first run's start there is no answer yet: the question alone names the chat.
+      const answer = runs.length ? finalText(wholeRun(messages, runs[0].runId) || runs[0]).slice(0, 1500) : "";
       // A colleague's agent's request comes wrapped in the rules for it; the title is about the request.
       const question = peer ? peerRequestText(firstUser.text) : firstUser.text;
-      const title = cleanTitle(await generate(`${TITLE_PROMPT}\n\nQuestion:\n${question.slice(0, 1500)}\n\nAnswer:\n${answer}`));
+      const title = cleanTitle(await generate(`${TITLE_PROMPT}\n\nQuestion:\n${question.slice(0, 1500)}${answer ? `\n\nAnswer:\n${answer}` : ""}`));
       const current = store.getChat(chatId);
       if (!title || current.title !== chat.title) return null;
       store.updateChat(chatId, { title });

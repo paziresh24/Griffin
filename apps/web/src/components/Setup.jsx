@@ -9,9 +9,8 @@ import { BrandPicker } from "./BrandPicker.jsx";
 import { ClaudeSignin } from "./Providers.jsx";
 import { AccountLogin } from "./Settings.jsx";
 import { t } from "../i18n.js";
-
-// Translates a text and its string values (the wizard passes labels as values).
-export const tr = (text, vars) => t(text, vars && Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, typeof v === "string" ? t(v) : v])));
+import { fill, tr } from "../fill.js";
+import { askConfirm } from "../dialog.jsx";
 
 // Setup wizards: first run (engine → name → look → messenger), and each piece on its own from
 // Settings or from a doctor finding. #/setup/<flow>. Every step tests what it saved for real before
@@ -974,7 +973,7 @@ function VpnBox({ onConnected }) {
     return next;
   });
   const clear = async () => {
-    if (!window.confirm(t("همهٔ سرورهای VPN پاک شوند؟ تلگرام و موتورها دوباره مستقیم وصل می‌شوند."))) return;
+    if (!(await askConfirm(t("همهٔ سرورهای VPN پاک شوند؟ تلگرام و موتورها دوباره مستقیم وصل می‌شوند.")))) return;
     setBusy("clear");
     try {
       const r = await api("/api/setup/vpn", { method: "DELETE" });
@@ -1027,6 +1026,11 @@ function VpnBox({ onConnected }) {
               </>
             ) : null}
           </div>
+          {list?.claudeLarge === false && !(list?.routing?.direct || []).includes("api.anthropic.com") ? (
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs leading-6">
+              {t("سرورهای این VPN درخواست‌های بزرگ Claude را قطع می‌کنند؛ چت‌های طولانی با «اتصال قطع شد» می‌مانند. اگر این سرور بدون VPN به Claude می‌رسد، api.anthropic.com و platform.claude.com را در «همیشه مستقیم (بدون VPN)» بنویسید، یا سرور دیگری اضافه کنید.")}
+            </p>
+          ) : null}
           <ul className="divide-y rounded-lg border bg-background text-sm">
             {servers.map((s) => (
               <li key={s.id} className={`flex items-start gap-2 px-3 py-2 ${s.enabled === false ? "opacity-60" : ""}`}>
@@ -1045,7 +1049,7 @@ function VpnBox({ onConnected }) {
                   <span className="block truncate text-[11px] text-muted-foreground" dir="ltr">{s.protocol} · {s.address}{s.port ? `:${s.port}` : ""} · {s.network}{s.security !== "none" ? `/${s.security}` : ""}</span>
                   <span className="block text-[11px] leading-5 text-muted-foreground" title={s.checkedAt ? exactTime(s.checkedAt) : ""}>
                     {s.state === "live"
-                      ? t("Claude {v} · تلگرام {v2}{v3}", { v: s.claude ? "✓" : "✗", v2: s.telegram ? "✓" : "✗", v3: s.ms ? t(" · {faN} میلی‌ثانیه", { faN: faN(s.ms) }) : "" })
+                      ? t("Claude {v} · تلگرام {v2}{v3}", { v: s.claude ? (s.claudeLarge === false ? t("✓ (فقط پیام کوچک)") : "✓") : "✗", v2: s.telegram ? "✓" : "✗", v3: s.ms ? t(" · {faN} میلی‌ثانیه", { faN: faN(s.ms) }) : "" })
                       : s.state === "dead" ? t("به Claude و تلگرام نرسید") : t("هنوز امتحان نشده")}
                     {s.checkedAt ? ` · ${clockLabel(s.checkedAt)}` : ""}
                   </span>

@@ -10,6 +10,9 @@ import { BRAND } from "../brand.js";
 import { ProbeResult } from "./Setup.jsx";
 import { CustomEndpointCard, ZaiQuota } from "./PlanLimits.jsx";
 
+import { DEFAULT_ENGINE_EVENT } from "../engine-events.js";
+import { askConfirm } from "../dialog.jsx";
+
 export const KIND_LABEL = { cursor: "Cursor", claude: "Claude", openai: "OpenAI-compatible" };
 // The name a person sees: the one it was given, else the signed-in Claude email, else the kind and its
 // number — never the raw id («claude-2»).
@@ -25,6 +28,7 @@ const KIND_BADGE = {
 function status(p) {
   if (!p.enabled) return { tone: "off", pill: t("خاموش"), line: t("خاموش است؛ هیچ کاری به آن نمی‌رود.") };
   if (!p.hasKey) return { tone: "bad", pill: t("وصل نیست"), line: p.kind === "claude" ? t("هنوز وارد اکانت Claude نشده‌ای یا کلیدی نگذاشته‌ای.") : t("کلید ندارد؛ «تنظیمات» را بزن و کلید را بگذار.") };
+  if (p.state === "auth") return { tone: "bad", pill: t("ورود منقضی"), line: t("ورود یا کلید این حساب پذیرفته نشد؛ کاری به آن نمی‌رود تا دوباره وارد شوید یا «تست» قبول شود.") };
   if (p.state === "credit") return { tone: "bad", pill: t("اعتبار تمام شده"), line: t("اعتبار (Credit) این حساب تمام شده؛ تا شارژ نشود آخرِ صف می‌ماند و کار به موتورهای دیگر می‌رود.") };
   if (p.limitedUntil) return { tone: "warn", pill: t("سقف پر"), line: t("به سقف مصرف (۵ ساعته یا هفتگی) خورده؛ تا {time} کار به موتور بعدی می‌رود و بعد خودش برمی‌گردد.", { time: resetLabel(p.limitedUntil) }) };
   if (p.health?.ok) return { tone: "ok", pill: t("آماده"), line: t("وصل است و جواب می‌دهد.") };
@@ -144,7 +148,7 @@ async function makeDefault(id) {
   window.dispatchEvent(new CustomEvent(DEFAULT_ENGINE_EVENT));
   toast.success(t("پیش‌فرض شد"), { description: t("گفتگوهای تازه، گفتگوهای «خودکار» و ایجنت‌ها از این به بعد اول با این موتور کار می‌کنند.") });
 }
-export const DEFAULT_ENGINE_EVENT = "griffin:default-engine";
+export { DEFAULT_ENGINE_EVENT };
 
 // The card's title with a pencil: a name changes right here, saved on its own with no connection test
 // (a name has nothing to test; owner 2026-10-19).
@@ -200,7 +204,7 @@ function EngineCard({ p, presets, reload, canDefault = false, onToggle = null, s
     api(`/api/doctor/engine/${p.id}`).then((r) => {
       if (!live) return;
       const now = r.state || (r.ok ? "ok" : null);
-      if (now && now !== p.state && (now !== "ok" || p.state === "limited" || p.state === "credit")) reload();
+      if (now && now !== p.state && (now !== "ok" || p.state === "limited" || p.state === "credit" || p.state === "auth")) reload();
       else if (!r.ok) setProbe(r);
     }, () => {});
     return () => { live = false; };
@@ -224,7 +228,7 @@ function EngineCard({ p, presets, reload, canDefault = false, onToggle = null, s
     if ((r.state || (r.ok ? "ok" : null)) && (r.state || "ok") !== p.state) reload();
   };
   const remove = act(async () => {
-    if (!window.confirm(t("موتور «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) }))) return;
+    if (!(await askConfirm(t("موتور «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) })))) return;
     await api(`/api/providers/${p.id}`, { method: "DELETE" });
   });
   const button = "press inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted";

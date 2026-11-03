@@ -222,3 +222,22 @@ test("archive path: a clean tree whose branch has pushed commits is removed but 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a moved chat whose tree is gone comes back on its stored name's branch after the assistant was renamed", async () => {
+  const { root, reposRoot, repoDir } = setupRepo();
+  const before = process.env.GRIFFIN_GIT_BRANCH_PREFIX;
+  try {
+    // Made by Karsara under another root (/srv/karsara-<who>/repos), then the folder was removed.
+    git(["branch", "karsara/movedc01", "main"], repoDir);
+    const stored = "/srv/karsara-someone/repos/_wt/karsara-movedc01";
+    process.env.GRIFFIN_GIT_BRANCH_PREFIX = "kaveh";
+    const dir = await ensureChatWorktree({ ...opts(reposRoot, "movedc01"), currentDir: stored });
+    assert.equal(dir, path.join(reposRoot, "_wt", "karsara-movedc01"));
+    assert.equal(git(["rev-parse", "--abbrev-ref", "HEAD"], dir), "karsara/movedc01");
+    assert.ok(fs.existsSync(path.join(dir, "a.txt")));
+  } finally {
+    if (before === undefined) delete process.env.GRIFFIN_GIT_BRANCH_PREFIX;
+    else process.env.GRIFFIN_GIT_BRANCH_PREFIX = before;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -8,6 +8,9 @@ import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-swi
 import { t } from "../i18n.js";
 import { copyText } from "../copy.js";
 import { useFlag, useLook } from "../ui-prefs.js";
+import { RefChips } from "./RefChips.jsx";
+
+import { askConfirm } from "../dialog.jsx";
 
 // The row above the composer: where the chat runs, the repo it works on (picked
 // before the first message; then fixed), its own branch and its worktree. Each chip does something:
@@ -19,7 +22,7 @@ async function switchFolder(chatId, repo) {
   try {
     const preview = await api(`/api/chats/${chatId}/folder?repo=${encodeURIComponent(repo)}`);
     if (preview.busy) return toast.error(FOLDER_BUSY);
-    if (!window.confirm(`${t("این گفتگو به {repo} برود؟", { repo })}\n\n${folderSwitchLines(preview).join("\n")}`)) return;
+    if (!(await askConfirm(`${t("این گفتگو به {repo} برود؟", { repo })}\n\n${folderSwitchLines(preview).join("\n")}`))) return;
     await api(`/api/chats/${chatId}/folder`, { method: "POST", body: { repo } });
     toast.success(t("گفتگو به {repo} رفت", { repo }));
   } catch (error) {
@@ -82,6 +85,7 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
           </span>
         )
       ) : null}
+      <RefChips chatId={chatId} />
       {group ? (
         <span className={chip} title={t("این گفتگو در این گروه ساخته می‌شود")}>
           <FolderInput /> <span className="truncate" dir="auto">{group.name}</span>
@@ -97,6 +101,12 @@ function RepoPicker({ repo, onChange, moving = false }) {
   const data = usePolling(`/api/repos?r=${refresh}`, 5 * 60_000);
   const repos = data?.repos || [];
   const [open, setOpen] = useState(false);
+  // Each opening reads the list again: a repo cloned after this page loaded (another chat's agent)
+  // only showed up after a reload, or once the first message moved the page to the chat (2026-10-28).
+  const toggle = (next) => {
+    if (next) setRefresh((n) => n + 1);
+    setOpen(next);
+  };
   const [query, setQuery] = useState("");
   const [cloning, setCloning] = useState(false);
   const pick = (value) => {
@@ -119,7 +129,7 @@ function RepoPicker({ repo, onChange, moving = false }) {
     }
   };
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={open} onOpenChange={toggle}>
       <Popover.Trigger asChild>
         <button type="button" className={`${chip} data-[state=open]:text-foreground`} title={moving ? t("ریپوی این گفتگو (انتخاب ریپوی دیگر = بردن گفتگو به آن، بعد از تأیید)") : t("ریپوی این گفتگو")}>
           <Folder /> <span className="ltr truncate">{repo || t("بدون ریپو")}</span>

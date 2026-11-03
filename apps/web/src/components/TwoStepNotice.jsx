@@ -24,8 +24,7 @@ export function TwoStepNotice() {
   }, []);
   if (!showNudge(state, laterAt)) return null;
   const open = () => {
-    writeSetting("griffin.settings.section", "account");
-    window.location.hash = "/settings";
+    window.location.hash = "/settings/account";
   };
   const later = () => {
     const at = String(Date.now());

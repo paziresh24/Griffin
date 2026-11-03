@@ -121,5 +121,7 @@
   "کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.": "Keys for engines and tools, encrypted on this server.",
   "چک زنده و تعمیر با یک کلیک، و وضعیت سرور.": "Live check, one-click repair, and server status.",
   "توکن روزبه‌روز، به تفکیک مدل و گفتگو.": "Tokens day by day, by model and chat.",
-  "تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.": "Settings that used to be environment variables; restart from here."
+  "تنظیماتی که قبلاً متغیر محیطی بود؛ با ری‌استارت از همین‌جا.": "Settings that used to be environment variables; restart from here.",
+  "دانش خودکار است: هر یادداشتی که ایجنت می‌نویسد خودش تأیید می‌شود و به گفتگوهای بعدی می‌رسد. هر کدام غلط بود، حذفش کنید.": "Knowledge is automatic: every note an agent writes is approved on its own and reaches later chats. Delete any that is wrong.",
+  "هنوز یادداشتی نیست. ایجنت‌ها خودشان می‌نویسند و اینجا می‌بینید.": "No notes yet. Agents write them on their own and you see them here."
 }

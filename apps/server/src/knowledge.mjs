@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { agentSlug } from "./persona.mjs";
+import { genv } from "./env.mjs";
 
 // Local knowledge tree under the workspace. Authoritative on this server; GitLab push is
 // best-effort and out of scope here. Nothing unreviewed is injected into the prompt —
@@ -62,11 +63,21 @@ const deleteSchema = {
   additionalProperties: false,
 };
 
+// Owner 2026-11-01: «بخش دانش رو کلا خودکار کن. فقط بتونیم حذف کنیم». With the setting on
+// (Settings → Configuration, KNOWLEDGE_AUTO_APPROVE=on; off by default so other installs keep the
+// review gate), every knowledge_write is saved as reviewed from any chat, an agent's edit keeps the
+// note approved, notes still pending are approved in one sweep (approvePendingNotes), and the
+// owner's page only deletes.
+export function knowledgeAutoApprove() {
+  return genv("KNOWLEDGE_AUTO_APPROVE", "off") === "on";
+}
+
 // autoTrust (GRIFFIN_KNOWLEDGE_AUTO_TRUST=1) / trust (knowledge-trust.mjs createChatTrust:
 // recordNote, isTrustedNote). Notes are recorded whenever trust is given, so turning the flag on
 // later trusts notes written while it was off too.
-export function createKnowledge({ store, root, git = true, autoTrust = false, trust = null } = {}) {
+export function createKnowledge({ store, root, git = true, autoTrust = false, trust = null, autoApprove = knowledgeAutoApprove } = {}) {
   if (!root) throw new Error("knowledge root required");
+  const approving = () => (typeof autoApprove === "function" ? Boolean(autoApprove()) : Boolean(autoApprove));
   fs.mkdirSync(root, { recursive: true });
   ensureGit(root, git, store);
 
@@ -139,7 +150,9 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
     tool(chatId) {
       return {
         [KNOWLEDGE_WRITE]: {
-          description: autoTrust
+          description: approving()
+            ? "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. On this install knowledge is automatic: the note is approved at once and reaches later chats; the owner only deletes wrong ones."
+            : autoTrust
             ? "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. A note written in the owner's own chat that read no third-party content (a colleague, Telegram, the web, another chat) reaches later chats automatically; others wait for the owner's review."
             : "Save a durable note into this agent's local knowledge git (under knowledge/agents/<id>/knowledge/). Do not put secrets. Notes are NOT auto-injected into future prompts until the owner reviews them.",
           inputSchema: writeSchema,
@@ -169,13 +182,15 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
               ? new Date(Date.now() + ttlHours * 3600_000).toISOString()
               : null;
             const at = new Date().toISOString();
+            const approved = approving();
             const front = [
               "---",
               `title: ${JSON.stringify(title)}`,
               `agent: ${agentId}`,
               `chat: ${chatId}`,
               `at: ${at}`,
-              `reviewed: false`,
+              `reviewed: ${approved ? "true" : "false"}`,
+              ...(approved ? ["approved_by: auto"] : []),
               ...(ttl ? [`expires: ${ttl}`] : []),
               "---",
               "",
@@ -193,9 +208,11 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
                 text: JSON.stringify({
                   path: rel,
                   agent: agentId,
-                  reviewed: false,
+                  reviewed: approved,
                   committed,
-                  note: autoTrust
+                  note: approved
+                    ? "saved and approved automatically; it reaches later chats"
+                    : autoTrust
                     ? "saved locally; reaches later chats automatically if this chat read no third-party content, otherwise after the owner's review"
                     : "saved locally; not injected into prompts until reviewed",
                 }),
@@ -275,7 +292,7 @@ export function createKnowledge({ store, root, git = true, autoTrust = false, tr
             const file = String(args?.file || "");
             const denied = mayTouch(ctx, file);
             if (denied) return fail(denied);
-            const out = editNote(root, ctx.agentId, file, { title: args?.title, body: args?.body }, { by: ctx.by, git });
+            const out = editNote(root, ctx.agentId, file, { title: args?.title, body: args?.body }, { by: ctx.by, git, keepReview: approving() });
             if (out.error) return fail(out.error);
             trust?.recordNote(ctx.agentId, file, chatId, out.text);
             const live = out.reviewed || Boolean(autoTrust && trust?.isTrustedNote(ctx.agentId, file, out.text));
@@ -489,6 +506,42 @@ export function setNoteReviewed(root, agentId, file, reviewed, { git = true, by 
   return true;
 }
 
+// Knowledge on auto-approve: every note still waiting for review is approved in one go (one commit,
+// one audit line per note, by {kind:"auto"}). Cheap when nothing waits — a directory scan, no write.
+export function approvePendingNotes(root, { git = true } = {}) {
+  let agents;
+  try {
+    agents = fs.readdirSync(path.join(root, "agents"));
+  } catch {
+    return 0;
+  }
+  let approved = 0;
+  for (const agentId of agents) {
+    const dir = path.join(root, "agents", agentId, "knowledge");
+    let names;
+    try {
+      names = fs.readdirSync(dir).filter((n) => NOTE_FILE.test(n));
+    } catch {
+      continue;
+    }
+    for (const file of names) {
+      const full = path.join(dir, file);
+      let text;
+      try {
+        text = fs.readFileSync(full, "utf8");
+      } catch {
+        continue;
+      }
+      if (frontmatter(text).get("reviewed") === "true") continue;
+      fs.writeFileSync(full, setFront(text, { reviewed: "true", approved_by: "auto" }), "utf8");
+      appendAudit(root, { action: "review", agent: agentId, file, by: { kind: "auto" } });
+      approved += 1;
+    }
+  }
+  if (approved) commit(root, git, `knowledge: auto-approve ${approved} pending note(s)`);
+  return approved;
+}
+
 // ---- Edit / delete / restore -------------------------------------------------------------------
 // Decision (owner 2026-10-19): an edit by the OWNER keeps the review state (he is the reviewer; his
 // edit of an approved note stays approved, a pending one stays pending). An edit by an AGENT always
@@ -542,7 +595,7 @@ function setFront(text, updates) {
 const whoLabel = (by) => (by?.kind === "agent" ? `agent:${by.agent || ""}${by.chat ? `@${by.chat}` : ""}` : "owner");
 const noteFileOk = (file) => NOTE_FILE.test(String(file || "")) && !String(file).startsWith(".");
 
-export function editNote(root, agentId, file, { title, body } = {}, { by = { kind: "owner" }, git = true } = {}) {
+export function editNote(root, agentId, file, { title, body } = {}, { by = { kind: "owner" }, git = true, keepReview = false } = {}) {
   if (!noteFileOk(file)) return { error: `bad note file name: ${file}` };
   const full = path.join(root, "agents", agentId, "knowledge", file);
   let text;
@@ -562,7 +615,7 @@ export function editNote(root, agentId, file, { title, body } = {}, { by = { kin
   const wasReviewed = frontmatter(text).get("reviewed") === "true";
   const updates = { edited_at: new Date().toISOString(), edited_by: whoLabel(by).replace(LINE_BREAKS, " ") };
   if (wantTitle != null) updates.title = JSON.stringify(wantTitle);
-  if (by?.kind === "agent") updates.reviewed = "false";
+  if (by?.kind === "agent" && !keepReview) updates.reviewed = "false";
   let next = setFront(text, updates);
   if (wantBody != null) next = next.replace(/^(---\n[\s\S]*?\n---\n)[\s\S]*$/, (_, head) => `${head}\n${wantBody}\n`);
   fs.writeFileSync(full, next, "utf8");

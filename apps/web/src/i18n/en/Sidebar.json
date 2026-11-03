@@ -57,6 +57,7 @@
   "گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.": "Delete the group \"{name}\"? Its conversations stay where they are and just lose the group.",
   "گفتگوی جدید در «{name}»": "New conversation in \"{name}\"",
   "گفتگوی جدید در گروه {name}": "New conversation in group {name}",
+  "گفتگوی جدید بدون گروه": "New conversation without a group",
   "گزینه‌های گروه {name}": "Options for group {name}",
   "تغییر نام گروه": "Rename group",
   "حذف گروه": "Delete group",

@@ -1,9 +1,10 @@
 import { readBuildCommit, readChangelog } from "./build-commit.mjs";
-import { isInboxOrigin, markInboxOrigin } from "./telegram-inbox.mjs";
-import { handoffDismissed, handoffStarted } from "./handoff.mjs";
+import { handoffDismissed } from "./handoff.mjs";
+import { startSuggestedChat } from "./suggest-start.mjs";
+import { colleagueCaller, endFullAccess, grantFullAccess } from "./colleague-access.mjs";
 import { COVERAGE_CALLER, coverageOwnerNote } from "./integrations/coverage.mjs";
 import { isGlobalChat, motherInfo } from "./integrations/mother.mjs";
-import { createTimelineCache, olderPage } from "./timeline-cache.mjs";
+import { createTimelineCache, olderPage, toolResult } from "./timeline-cache.mjs";
 import { genv } from "./env.mjs";
 import { usageByModel } from "@griffin/timeline";
 import { autoTitle } from "./titles.mjs";
@@ -11,10 +12,16 @@ import { servingHeaders } from "./media.mjs";
 import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { DEFAULT_PROVIDER, normalizeProvider, PROVIDERS } from "./providers/index.mjs";
 import { EFFORTS, effortOf, splitModel } from "./providers/ids.mjs";
+import { chatAdvice, spendAdvice } from "./usage-advice.mjs";
+import { heavyKey, isHeavyEffort, isHeavyModel, needsConfirm } from "./model-policy.mjs";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { maskText } from "./redact.mjs";
+import { watchChat } from "./viewers.mjs";
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { streamSSE } from "hono/streaming";
 import { BusyError, fastWanted, keptIds, ownerTyped, setFastWanted } from "./runner.mjs";
 import { branchName, branchOfTree } from "./worktrees.mjs";
@@ -29,8 +36,9 @@ import { PERSONA } from "./persona.mjs";
 import { explainRun } from "./why.mjs";
 import { aggregateTokenUsage, ownerTimeZone, tokenUsageSince, TOKEN_USAGE_MAX_DAYS } from "./token-usage.mjs";
 import { registerGuestRoutes, registerOwnerShareRoutes } from "./private-share.mjs";
-import { promptSha, publicSuggestion, setSideAllowEdits, settleSuggestion, sideAllowsEdits, SUGGEST_NOTE_MAX, withOwnerNote } from "./chat-tools.mjs";
-import { fitPdfBudget, notePdfs, parseFiles, pdfKey, unnotePdfs } from "./attachments.mjs";
+import { createUploads, registerUploadRoutes } from "./uploads.mjs";
+import { promptSha, publicSuggestion, setSideAllowEdits, settleSuggestion, sideAllowsEdits, SUGGEST_NOTE_MAX } from "./chat-tools.mjs";
+import { fitPdfBudget, MAX_FILES, notePdfs, parseFiles, pdfKey, unnotePdfs } from "./attachments.mjs";
 import { noteOwnerOrder, ownerLabel } from "./guard.mjs";
 import { isReminder, reminderMessage } from "./later.mjs";
 import { runsFree } from "./providers/claude.mjs";
@@ -39,6 +47,8 @@ import { runsFree } from "./providers/claude.mjs";
 const CHAT_MODES = new Set(["agent", "plan", "auto", "ask", "edits"]);
 
 const MAX_TEXT = 20_000;
+// How long one built chat list may answer other pages without a «chats» event (see /api/chats).
+const LIST_REUSE_MS = 2000;
 const TASK_OUTPUT_TAIL = 64 * 1024;
 
 // The live background tasks, each with `detail`: the masked command / prompt of the tool call that
@@ -81,7 +91,10 @@ export function publicMcpServer(server) {
     serverName: server?.serverInfo?.name || null,
   };
 }
-const MAX_IMAGES = 4;
+const MAX_IMAGES = 20;
+// What goes to the model inside the message, as before: the rest of a message's pictures are kept as
+// files, so a message of many cannot weigh the session down on every later turn.
+const MAX_INLINE_IMAGES = 4;
 const MAX_IMAGE_BASE64 = 7_000_000; // ~5 MB
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
@@ -98,9 +111,10 @@ let live = null;
 let bootCommit;
 const runningCommit = () => (bootCommit === undefined ? (bootCommit = readBuildCommit()) : bootCommit);
 
-export function createApp({ store, runner, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, folderSwitch = null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", movedHosts = [], publicUrl = "", onNoteRun = null, sideChat = () => true, privateShare = () => false, guestTelegram = null, onGuestActivity = null, nextStepReturns = () => false, searchMessages = () => false, iconVersion = () => "", buildCommit = runningCommit(), sessionRecheckMs = 60_000, updates = null, previews = null, mentionNote = () => "" }) {
+export function createApp({ store, runner, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, folderSwitch = null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", uploadsDir = join(tmpdir(), `griffin-uploads-${process.pid}`), movedHosts = [], publicUrl = "", onNoteRun = null, sideChat = () => true, privateShare = () => false, guestTelegram = null, onGuestActivity = null, nextStepReturns = () => false, enterKey = () => "enter", searchMessages = () => false, iconVersion = () => "", buildCommit = runningCommit(), sessionRecheckMs = 60_000, updates = null, previews = null, mentionNote = () => "" }) {
   const app = new Hono();
   const sendingByClientId = new Map(); // "<chatId>:<clientId>" -> the send still in flight
+  const uploads = createUploads(uploadsDir);
   // What the owner tagged with «@» in a message (agents, colleagues' agents, his chats): a note for
   // the chat's agent only.
   const tagged = (text, chat) => {
@@ -193,6 +207,10 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       c.res.headers.set("x-accel-buffering", "no");
     }
   });
+  // JSON answers go out gzipped: the chat list alone was ~900 KB raw on an install with ~800 chats,
+  // fetched on every list change by every open page, through the CDN and the colleagues' relays.
+  // Streams (text/event-stream) and answers already encoded (the timeline) are left as they are.
+  app.use("/api/*", compress({ encoding: "gzip" }));
 
   // The assistant's name and the product for this install (persona.mjs, identity.mjs): the login page
   // needs them before auth, and a fresh browser takes the product's skin. No owner name here.
@@ -292,14 +310,30 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
   });
   if (extraRoutes) extraRoutes(app);
 
+  // Every open page reloads the list (and the archive) on the same «chats» event: one build — a few
+  // hundred ms of synchronous SQL and mapping on an install with ~800 chats — serves them all until
+  // the next change, and at most LIST_REUSE_MS for anything that changes without an event.
+  const listReuse = new Map();
+  store.bus?.on?.("chats", () => listReuse.clear());
+  const reusedList = (key, build) => {
+    const hit = listReuse.get(key);
+    if (hit && Date.now() - hit.at < LIST_REUSE_MS) return hit.value;
+    const value = build();
+    listReuse.set(key, { at: Date.now(), value });
+    return value;
+  };
   app.get("/api/chats", (c) => {
     const archived = c.req.query("archived") === "1";
     const personId = c.req.query("person") || null;
-    const childrenByParent = childChatsByParent(store);
-    const withChildren = (chat) => publicChat(store, chat, childrenByParent.get(chat.id));
-    if (personId) return c.json({ chats: store.listChatsForPerson(personId, { archived }).map(withChildren) });
-    // sideChat: the SIDE_CHAT switch (config.mjs) rides on the list the web reloads on every change.
-    return c.json({ chats: store.listChatsBySource({ archived }).map(withChildren), sideChat: sideChat(), privateShare: Boolean(privateShare()), nextStepReturns: nextStepReturns() === true });
+    const value = reusedList(`${archived ? 1 : 0}|${personId || ""}`, () => {
+      const childrenByParent = childChatsByParent(store);
+      const reads = listReads(store);
+      const withChildren = (chat) => publicChat(reads, chat, childrenByParent.get(chat.id));
+      if (personId) return { chats: store.listChatsForPerson(personId, { archived }).map(withChildren) };
+      // sideChat: the SIDE_CHAT switch (config.mjs) rides on the list the web reloads on every change.
+      return { chats: store.listChatsBySource({ archived }).map(withChildren), sideChat: sideChat(), privateShare: Boolean(privateShare()), nextStepReturns: nextStepReturns() === true, enterKey: enterKey() === "shiftEnter" ? "shiftEnter" : "enter" };
+    });
+    return c.json(value);
   });
 
   // Chats whose messages hold the sidebar's search text (db.mjs events_fts); the sidebar shows the
@@ -371,11 +405,24 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const repo = typeof body.repo === "string" ? body.repo : !sim ? defaultRepo() : null;
     if (repo && !isValidRepo(repo)) return { error: "unknown repo" };
     // «+» on a group's heading: the new chat starts in that group.
-    const groupId = typeof body.groupId === "string" && body.groupId ? body.groupId : null;
+    let groupId = typeof body.groupId === "string" && body.groupId ? body.groupId : null;
     if (groupId && !store.getGroup(groupId)) return { error: "unknown group" };
+    // A module's page may name a folder for its chats (openChat.folder): found by name, made once, so a
+    // module's chats sit together instead of filling the recent list.
+    const folder = typeof body.folder === "string" ? body.folder.trim().slice(0, 40) : "";
+    if (!groupId && folder && typeof body.module === "string" && /^[a-z][a-z0-9-]{1,31}$/.test(body.module)) {
+      groupId = (store.listGroups().find((g) => g.name === folder) || store.createGroup(folder)).id;
+    }
+    // A stronger model or a higher effort starts a chat only when the owner confirmed it by hand
+    // (model-policy.mjs); otherwise the chat opens on the default, Sonnet at «medium».
+    const asked = typeof body.model === "string" && body.model ? body.model : null;
+    const heavyOk = body.confirm === true;
+    const model = asked && (heavyOk || !isHeavyModel(asked)) ? asked : isHeavyModel(profile?.model) ? null : profile?.model || null;
+    const effort = effortOf(body.effort);
     return {
+      heavyOk: { model: Boolean(asked) && heavyOk && isHeavyModel(asked), effort: heavyOk && isHeavyEffort(effort) },
       fields: {
-        model: typeof body.model === "string" && body.model ? body.model : profile?.model || null,
+        model,
         // Default «خودکار» (owner 2026-10-21): «بدون پرسیدن» now really has no limits, so it is a choice.
         mode: CHAT_MODES.has(body.mode) ? body.mode : "auto",
         agent,
@@ -383,30 +430,37 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
         sim,
         caller: sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
       },
-      effort: effortOf(body.effort),
+      effort: heavyOk || !isHeavyEffort(effort) ? effort : null,
       repo: repo || null,
       groupId,
       // A module's page opened this chat (modules/<id>): it is the module's until the module is off.
       module: typeof body.module === "string" && /^[a-z][a-z0-9-]{1,31}$/.test(body.module) ? body.module : null,
+      // What the chat is about elsewhere (a module's task, …): chat_refs.
+      refs: Array.isArray(body.refs) ? body.refs : [],
     };
   };
   const createChatWith = (settings, title) => {
     const chat = store.createChat({ title, ...settings.fields });
     if (settings.effort) store.updateChat(chat.id, { effort: settings.effort });
+    if (settings.heavyOk?.model || settings.heavyOk?.effort) store.setKv(heavyKey(chat.id), settings.heavyOk);
     if (settings.repo) store.updateChat(chat.id, { repo: settings.repo });
     if (settings.groupId) store.updateChat(chat.id, { groupId: settings.groupId });
     if (settings.module) store.updateChat(chat.id, { module: settings.module });
+    if (settings.refs?.length) store.addChatRefs(chat.id, settings.refs);
     return store.getChat(chat.id);
   };
 
+  registerUploadRoutes(app, uploads, readJson);
+
   app.post("/api/chats", async (c) => {
     const body = await readJson(c);
-    const input = parseMessage(body);
+    const input = parseMessage(body, uploads);
     if (input.error) return c.json({ error: input.error }, 400);
     const settings = newChatSettings(body);
     if (settings.error) return c.json({ error: settings.error }, 400);
     const chat = createChatWith(settings, typeof body.title === "string" && body.title ? body.title : titleFrom(input.text));
-    const sent = await runner.send(chat.id, { ...input, ownerText: true, note: tagged(input.text, chat) });
+    // The page's id for the first message: its bubble gives way when the timeline holds that id.
+    const sent = await runner.send(chat.id, { ...input, clientId: clientIdOf(body), ownerText: true, note: tagged(input.text, chat) });
     notePdfs(store, chat.id, input.files);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
   });
@@ -581,6 +635,26 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     return c.text(text);
   });
 
+  // What a chat is about elsewhere (chat_refs), and the chats about each thing of one kind.
+  app.get("/api/chats/:id/refs", (c) => (store.getChat(c.req.param("id")) ? c.json({ refs: store.chatRefsOf(c.req.param("id")) }) : c.json({ error: "not found" }, 404)));
+  app.post("/api/chats/:id/refs", async (c) => {
+    if (!store.getChat(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const body = await readJson(c);
+    return c.json({ added: store.addChatRefs(c.req.param("id"), body?.refs) });
+  });
+  app.delete("/api/chats/:id/refs", (c) => {
+    if (!store.getChat(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const kind = String(c.req.query("kind") || "");
+    const ref = String(c.req.query("ref") || "");
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(kind) || !/^[\w.-]{1,80}$/.test(ref)) return c.json({ error: "kind or ref" }, 400);
+    return c.json({ removed: store.removeChatRef(c.req.param("id"), kind, ref) });
+  });
+  app.get("/api/chat-refs", (c) => {
+    const kind = String(c.req.query("kind") || "");
+    if (!/^[a-z][a-z0-9-]{1,31}$/.test(kind)) return c.json({ error: "kind" }, 400);
+    return c.json({ refs: store.chatsByRefKind(kind) });
+  });
+
   app.get("/api/chats/:id", async (c) => {
     const row = store.getChat(c.req.param("id"));
     if (!row) return c.json({ error: "not found" }, 404);
@@ -595,7 +669,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const { messages } = (await timelines.get(chat.id)).timeline;
     const usage = usageByModel(messages);
     const usageBilled = usageByModel(messages, { billed: true });
-    return c.json({ chat: { ...publicChat(store, chat, childChatsByParent(store).get(chat.id)), usage, usageBilled }, active: runner.isActive(chat.id) });
+    return c.json({ chat: { ...publicChat(store, chat, childChatsOf(store, chat.id)), usage, usageBilled }, active: runner.isActive(chat.id) });
   });
 
   // Context gauge (engine-agnostic): the last run's prompt tokens over the window.
@@ -618,6 +692,34 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (!last) return c.json({ available: false, used: 0, window, percent: 0 });
     const used = Number(last.usage.context) || 0;
     return c.json({ available: true, used, window, percent: Math.min(100, Math.round((used / window) * 100)), model: last.model || null });
+  });
+
+  // The quiet nudges under the composer (usage-advice.mjs): this install's day is far above its usual
+  // one, and a chat on a heavy model whose recent turns were light. The usage read is cached a few minutes.
+  let spendCache = { at: 0, value: null };
+  const spendNow = () => {
+    if (Date.now() - spendCache.at > 300_000) {
+      const since = new Date(Date.now() - 8 * 86_400_000).toISOString();
+      spendCache = { at: Date.now(), value: spendAdvice(store.usageRows(since)) };
+    }
+    return spendCache.value;
+  };
+  app.get("/api/chats/:id/advice", (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    if ((chat.caller || "owner") !== "owner" || runner.isActive(chat.id)) return c.json({ spend: null, model: null });
+    const events = store.db
+      .prepare("SELECT type, run_id AS runId, data FROM events INDEXED BY events_chat WHERE chat_id = ? AND type IN ('run.started','tool.started','usage') ORDER BY id DESC LIMIT 600")
+      .all(chat.id)
+      .map((e) => {
+        try {
+          return { ...e, data: JSON.parse(e.data) };
+        } catch {
+          return { ...e, data: {} };
+        }
+      });
+    const model = events.find((e) => e.type === "run.started")?.data?.model || chat.model;
+    return c.json({ spend: spendNow(), model: chatAdvice(events, { model }) });
   });
 
   // Permanent delete: only an archived owner chat that is not running (owner 2026-10-20: the archive
@@ -667,12 +769,23 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       patch.groupId = body.groupId;
     }
     if (CHAT_MODES.has(body.mode)) patch.mode = body.mode;
+    // A colleague's conversation: his «بدون پرسیدن» on the page is the full-access grant, any other
+    // mode ends it (colleague-access.mjs).
+    if (patch.mode && !chat.parent_chat_id && colleagueCaller(chat.caller)) {
+      if (patch.mode === "agent") grantFullAccess(store, chat.id, { why: "از صفحهٔ چت" });
+      else endFullAccess(store, chat.id);
+    }
     // A chat's repo changes here only until its worktree exists (the first run makes it); after
     // that it moves with POST /api/chats/:id/folder.
     if ("repo" in body) {
       if (chat.worktree_path) return c.json({ error: "this chat already works in its own worktree; move it with /folder" }, 409);
       if (body.repo && !isValidRepo(body.repo)) return c.json({ error: "unknown repo" }, 400);
       patch.repo = body.repo || null;
+    }
+    // A stronger model or a higher effort is a second, explicit confirmation (model-policy.mjs).
+    if (body.confirm !== true) {
+      const need = needsConfirm({ model: typeof body.model === "string" ? body.model : null, effort: "effort" in body ? effortOf(body.effort) : null });
+      if (need.length) return c.json({ error: "confirm_required", needs: need }, 409);
     }
     if (typeof body.model === "string") {
       patch.model = body.model || null;
@@ -686,6 +799,13 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       }
     }
     if ("effort" in body) patch.effort = effortOf(body.effort);
+    if (typeof body.model === "string" || "effort" in body) {
+      const ok = { ...(store.getKv(heavyKey(chat.id)) || {}) };
+      if (typeof body.model === "string") ok.model = isHeavyModel(body.model);
+      if ("effort" in body) ok.effort = isHeavyEffort(patch.effort);
+      if (ok.model || ok.effort) store.setKv(heavyKey(chat.id), ok);
+      else store.deleteKv(heavyKey(chat.id));
+    }
     if ("runsOn" in body) {
       if (body.runsOn !== null && !RUNS_ON.includes(body.runsOn)) return c.json({ error: "runsOn: host, container or null" }, 400);
       patch.runsOn = body.runsOn;
@@ -744,12 +864,12 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
     const body = await readJson(c);
-    const input = parseMessage(body);
+    const input = parseMessage(body, uploads);
     if (input.error) return c.json({ error: input.error }, 400);
     const intent = ["send", "queue", "steer", "force"].includes(body.intent) ? body.intent : "send";
     // The page's id for this message: a resend (its answer was lost to a restart or a 502) is
     // answered without storing the message again; a copy still in flight shares its answer.
-    const clientId = typeof body.clientId === "string" && CLIENT_ID.test(body.clientId) ? body.clientId : null;
+    const clientId = clientIdOf(body);
     const key = clientId && `${chat.id}:${clientId}`;
     if (clientId && store.userEventIdByClientId?.(chat.id, clientId)) return c.json({ delivered: "duplicate" });
     if (key && sendingByClientId.has(key)) {
@@ -1013,7 +1133,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (!sideChat()) return c.json({ error: "side chat is off (SIDE_CHAT)" }, 404);
     if (parent.side_of) return c.json({ error: "a side chat cannot have a side chat" }, 400);
     const body = await readJson(c);
-    const input = parseMessage(body);
+    const input = parseMessage(body, uploads);
     if (input.error) return c.json({ error: input.error }, 400);
     // Titled by the question, not by the quote it may start with.
     const asked = input.text.split("\n").filter((line) => !line.startsWith(">")).join("\n").trim();
@@ -1026,6 +1146,8 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       sideOf: parent.id,
     });
     if (parent.effort) store.updateChat(chat.id, { effort: parent.effort });
+    const parentOk = store.getKv(heavyKey(parent.id));
+    if (parentOk) store.setKv(heavyKey(chat.id), parentOk);
     // Changes files unless the owner turned «اجازهٔ تغییر فایل» off for this side chat (literal false).
     setSideAllowEdits(store, chat.id, body?.allowEdits !== false);
     const sent = await runner.send(chat.id, { ...input, ownerText: true, note: tagged(input.text, chat) });
@@ -1061,28 +1183,9 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (note.length > SUGGEST_NOTE_MAX) return c.json({ error: `note is longer than ${SUGGEST_NOTE_MAX} characters` }, 400);
     // "" = the owner picked «خودکار» on the card; absent = the suggested model.
     const model = typeof body.model === "string" ? body.model.slice(0, 200) : row.model || "";
-    const profile = store.getAgentProfile?.(DEFAULT_AGENT);
-    const chat = store.createChat({
-      title: row.title,
-      model: model || profile?.model || null,
-      agent: DEFAULT_AGENT,
-      provider: normalizeProvider(splitModel(model)?.provider || profile?.provider),
-    });
-    if (row.repo) store.updateChat(chat.id, { repo: row.repo });
-    // A chat started from a suggestion of the Telegram inbox holds a colleague's words: it carries the
-    // Telegram-origin marker itself (telegram-inbox.mjs), so every check that reads the chat's own row
-    // (knowledge auto-trust, the owner chat tools, the ledger) treats it as such, not only chat-origin's walk.
-    if (row.from_chat_id && isInboxOrigin(store, row.from_chat_id)) markInboxOrigin(store, chat.id, "suggest");
-    // Claimed before the run starts: a double click starts one chat, not two.
-    if (!settleSuggestion(store, row.id, "started", chat.id)) {
-      store.deleteChat(chat.id);
-      return c.json({ error: "already started" }, 409);
-    }
-    // A colleague chain's handoff (handoff.mjs): its text is theirs (the Telegram-origin marker keeps
-    // the owner's instruction files out of reach), and each finished run reports back there.
-    if (handoffStarted(store, row.id, chat.id)) markInboxOrigin(store, chat.id, "handoff");
-    const sent = await runner.send(chat.id, { text: withOwnerNote(row.prompt, note, body.notePosition), images: [] });
-    return c.json({ chat: publicChat(store, store.getChat(chat.id)), suggestion: publicSuggestion(store.getSuggestion(row.id)), ...sent }, 201);
+    const out = await startSuggestedChat({ store, runner, row, model, note, notePosition: body.notePosition });
+    if (!out) return c.json({ error: "already started" }, 409);
+    return c.json({ chat: publicChat(store, out.chat), suggestion: publicSuggestion(store.getSuggestion(row.id)), ...out.sent }, 201);
   });
 
   app.post("/api/suggestions/:id/dismiss", (c) => {
@@ -1299,7 +1402,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     const held = store.getKv(proposalKey(c.req.param("pid")));
     if (!chat || !held || held.target !== chat.id) return c.json({ error: "not found" }, 404);
     store.deleteKv(proposalKey(c.req.param("pid")));
-    if (held.peerChatId) store.setKv(routeKey(held.peerChatId), chat.id);
+    if (held.peerChatId) store.setKv(routeKey(held.peerChatId), { target: chat.id, dest: chat.id });
     store.appendEvent(chat.id, null, "tg.note", { kind: "proposal_done", name: held.from?.name || "", chatId: held.dest });
     return c.json(await deliverPeer({ store, runner, chatId: chat.id, message: held.message, from: held.from, by: held.by }), 202);
   });
@@ -1338,9 +1441,17 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (!chat) return c.json({ error: "not found" }, 404);
     const limit = Math.min(Math.floor(Number(c.req.query("limit"))) || 40, 500);
     const entry = await timelines.get(chat.id);
-    const page = olderPage(entry.timeline, String(c.req.query("before") || ""), limit);
+    const page = olderPage(entry.timeline, String(c.req.query("before") || ""), limit, chat.id);
     if (!page) return c.json({ error: "message not found" }, 404);
     return c.json(page);
+  });
+
+  // A tool result a page left out for its size (timeline-cache.mjs liteMessages), when its card opens.
+  app.get("/api/chats/:id/tool-result", async (c) => {
+    const chat = store.getChat(c.req.param("id"));
+    if (!chat) return c.json({ error: "not found" }, 404);
+    const found = toolResult((await timelines.get(chat.id)).timeline, String(c.req.query("callId") || ""));
+    return found ? c.json(found) : c.json({ error: "tool call not found" }, 404);
   });
 
   // Open a Cursor `task` (زیرایجنت) transcript as a hidden child chat.
@@ -1379,8 +1490,10 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
         wake?.();
       };
       store.bus.on(`chat:${chat.id}`, onEvent);
+      const unwatch = watchChat(chat.id);
       stream.onAbort(() => {
         store.bus.off(`chat:${chat.id}`, onEvent);
+        unwatch();
         wake?.();
       });
       try {
@@ -1403,6 +1516,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
         }
       } finally {
         store.bus.off(`chat:${chat.id}`, onEvent);
+        unwatch();
       }
     });
   });
@@ -1502,8 +1616,11 @@ async function readJson(c) {
 
 // A page's message id: a short plain token (crypto.randomUUID or its fallback).
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const clientIdOf = (body) => (typeof body.clientId === "string" && CLIENT_ID.test(body.clientId) ? body.clientId : null);
 
-function parseMessage(body) {
+function parseMessage(raw, uploads) {
+  const body = uploads ? uploads.fill(raw) : raw;
+  if (body.error) return { error: body.error };
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) return { error: "text required" };
   if (text.length > MAX_TEXT) return { error: "text too long" };
@@ -1515,10 +1632,9 @@ function parseMessage(body) {
     }
   }
   // A picture Claude cannot take inline (over ~5 MB, or a type like HEIC) is kept as a file instead.
-  const inline = (image) => IMAGE_TYPES.has(image.mimeType) && image.data.length <= MAX_IMAGE_BASE64;
-  const images = all.filter(inline);
-  const asFiles = all.filter((image) => !inline(image)).map((image, i) => ({ name: `image-${i + 1}.${image.mimeType.slice(6).replace(/[^a-z0-9]+/gi, "") || "img"}`, mimeType: image.mimeType, data: image.data }));
-  const parsed = parseFiles(asFiles.length && (body.files == null || Array.isArray(body.files)) ? [...(body.files || []), ...asFiles] : body.files);
+  const images = all.filter((image) => IMAGE_TYPES.has(image.mimeType) && image.data.length <= MAX_IMAGE_BASE64).slice(0, MAX_INLINE_IMAGES);
+  const asFiles = all.filter((image) => !images.includes(image)).map((image, i) => ({ name: image.name || `image-${i + 1}.${image.mimeType.slice(6).replace(/[^a-z0-9]+/gi, "") || "img"}`, mimeType: image.mimeType, data: image.data }));
+  const parsed = parseFiles(asFiles.length && (body.files == null || Array.isArray(body.files)) ? [...(body.files || []), ...asFiles] : body.files, { maxFiles: MAX_FILES + asFiles.length });
   if (parsed.error) return { error: parsed.error };
   return { text, images: images.map(({ data, mimeType }) => ({ data, mimeType })), ...(parsed.files.length ? { files: parsed.files } : {}) };
 }
@@ -1527,6 +1643,44 @@ const titleFrom = autoTitle;
 
 // Peer-call child chats (ask_agent/delegate) grouped by parent, newest first, capped per parent so
 // long-lived chats do not flood the sidebar nest.
+// The sidebar list asks the same few things of every chat: on 2026-10-28 that was ~10 queries per
+// chat, ~0.4 s for 745 chats with every other request waiting, on each list reload. Here each is read
+// once for the whole list: the per-chat kv keys by prefix, the agent profiles and the reminders.
+const LIST_KV_PREFIXES = ["kept:", "fast:", "resolved:", "motherof:", "side-edits:"];
+function listReads(store) {
+  if (!store.kvWithPrefix || !store.nextNoteAtAll) return store;
+  const byPrefix = new Map();
+  const byKey = new Map();
+  const profiles = new Map();
+  let notes = null;
+  return Object.assign(Object.create(store), {
+    getKv(key) {
+      const prefix = LIST_KV_PREFIXES.find((p) => String(key).startsWith(p));
+      if (prefix) {
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, store.kvWithPrefix(prefix));
+        return byPrefix.get(prefix).get(key) ?? null;
+      }
+      if (!byKey.has(key)) byKey.set(key, store.getKv(key));
+      return byKey.get(key);
+    },
+    getAgentProfile(id) {
+      if (!profiles.has(id)) profiles.set(id, store.getAgentProfile(id));
+      return profiles.get(id);
+    },
+    nextNoteAt(chatId) {
+      notes ||= store.nextNoteAtAll();
+      return notes.get(chatId) ?? null;
+    },
+  });
+}
+
+// One chat's children, shaped like a childChatsByParent entry (undefined when it has none).
+function childChatsOf(store, chatId, { perParent = 30 } = {}) {
+  if (!store.listChildChatsOf) return childChatsByParent(store, { perParent }).get(chatId);
+  const list = store.listChildChatsOf(chatId, perParent);
+  return list.length ? list : undefined;
+}
+
 function childChatsByParent(store, { perParent = 30 } = {}) {
   const map = new Map();
   for (const child of store.listChildChatsAll?.() || []) {

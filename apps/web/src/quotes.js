@@ -35,6 +35,14 @@ export function withQuotes(quotes, text) {
   return blocks.join("\n\n");
 }
 
+/** What goes to the server for a typed message (attachments.js attachmentPayload) and its quotes: a
+ * new object, so `typed.typed` stays for the box when the send fails (2026-10-29: deleting it from the
+ * same object lost a new chat's text on a 504 during a restart). */
+export function sendBody(typed, quotes) {
+  const { typed: text, ...body } = typed;
+  return quotes?.length ? { ...body, text: withQuotes(quotes, text) } : body;
+}
+
 /** One folded line for the composer chip. */
 export function quotePreview(text, max = 90) {
   const line = String(text || "").replace(/\s+/g, " ").trim();

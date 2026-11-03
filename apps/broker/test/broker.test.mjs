@@ -405,3 +405,17 @@ test("shell tools offer an optional step title", () => {
     assert.ok(!schema.required.includes("description"), `${name}: the title is optional`);
   }
 });
+
+// 2026-10-28: on a colleague install without ssh__griffin, ssh_exec must point at the sandbox (same
+// server, same egress) instead of a bare «not set» that agents read as «no access to my own host».
+test("ssh_exec without the platform key points the agent at its own sandbox", async () => {
+  const sshRun = async () => { throw new Error("secret ssh__griffin is not set (Settings → Secrets)"); };
+  const tools = createTools({ site: { ...TEST_SITE, tools: { ssh: true } }, kube: createKube({ vault, clusters: TEST_SITE.clusters, sshRun }), vault, sshRun });
+  await assert.rejects(tools.ssh_exec.execute({ host: "192.0.2.185", command: "curl -s https://ifconfig.me" }), (error) => {
+    assert.match(error.message, /debug_exec, host sandbox/);
+    assert.match(error.message, /api\.ipify\.org/);
+    return true;
+  });
+  const other = createTools({ site: { ...TEST_SITE, tools: { ssh: true } }, kube: createKube({ vault, clusters: TEST_SITE.clusters, sshRun }), vault, sshRun: async () => { throw new Error("ssh 1.2.3.4: exit 255"); } });
+  await assert.rejects(other.ssh_exec.execute({ host: "1.2.3.4", command: "true" }), /exit 255/);
+});

@@ -19,6 +19,7 @@ import { ownMessengerChat } from "../db.mjs";
 import { PERSONA } from "../persona.mjs";
 import { ensureGlobal, ensureMother, isGlobalChat, joinThread, motherChatId, migrateTelegramV2, migrateWatchEnables, motherInfo, syncMotherNames, watching } from "./mother.mjs";
 import { createDesk } from "./desk.mjs";
+import { isWatched } from "../viewers.mjs";
 
 // Bridges messenger channels (Telegram/Bale bots; Telegram account) to Griffin chats: incoming
 // messages become runs, finished runs and ask_owner questions go back to the linked messenger chat.
@@ -26,11 +27,13 @@ import { createDesk } from "./desk.mjs";
 // final text — only send_to_person reaches the colleague; ask_owner confirmations go to the Owner's
 // Telegram bot so they are unmistakable — not buried in the owner's own Saved Messages.
 const PARTS_TTL_MS = 10 * 60_000;
+// A question asked in a chat open in the browser waits this long there before it also goes to Telegram.
+const OWNER_ASK_WAIT_MS = 3 * 60_000;
 // /chats on the bot: buttons per page, and how much of the picked chat's last answer is shown.
 const CHAT_MENU_SIZE = 8;
 const CHAT_LAST_MAX = 1500;
 
-export function createIntegrations({ store, runner, timelines = null, asks, network = null, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, pendingWork = () => 0, burstMs = 0, telegramApp = () => null, ownerJobApprovals = () => false, telegramBotApi: telegramBotApiRaw = "", inbox = null, sendFiles = () => true, modelChoices = null, log = console }) {
+export function createIntegrations({ store, runner, timelines = null, asks, network = null, peerAuth = null, publicUrl = "", fetchImpl = fetch, telegramProxy = null, channelFactories = {}, login = null, pendingWork = () => 0, burstMs = 0, watched = isWatched, ownerAskWaitMs = OWNER_ASK_WAIT_MS, telegramApp = () => null, ownerJobApprovals = () => false, telegramBotApi: telegramBotApiRaw = "", inbox = null, sendFiles = () => true, modelChoices = null, log = console }) {
   const channels = new Map(); // integrationId -> channel
   const partsHeld = new Map(); // `${integrationId}:${externalChat}` -> { total, parts, at, timer, args } (receivePeerAgent)
   // Each ask_owner gets a short id embedded in Telegram callback_data so buttons cannot
@@ -962,7 +965,10 @@ export function createIntegrations({ store, runner, timelines = null, asks, netw
 
   // Owner-rooted ask_owner in a chat with no messenger link (i.e. the web UI): mirror the question
   // to the Owner's Telegram so approval reaches them even when no browser tab is open. Answering in
-  // either place settles the one run (asks settles once by chatId).
+  // either place settles the one run (asks settles once by chatId). When that chat is open in a
+  // browser right now, the card in the chat is the question: Telegram gets it only if it is still
+  // open after ownerAskWaitMs (a colleague 2026-10-24: «وقتی دارم اینجا کار می‌کنم چرا باید
+  // سؤالاتش رو بره توی سیو مسیج تلگرام بپرسه؟»).
   function deliverOwnerAsk(chatId, question, { from = "", sourceChatId = chatId } = {}) {
     // A link to the chat that asked: the owner decides with the whole context one tap away,
     // not from a two-line summary.
@@ -977,22 +983,27 @@ export function createIntegrations({ store, runner, timelines = null, asks, netw
     const ownerId = ownerChatOn(bot);
     const account = [...channels.entries()].find(([, ch]) => ch.kind === "telegram_account");
     const fail = (where) => (error) => log.error?.(`[integrations] owner-ask ${where}: ${error.message}`);
-    if (bot && ownerId) {
-      ensureBotPaired(bot.id, ownerId);
-      markOwnerTarget(tagged.askId, bot.id, ownerId);
-      bot.channel
-        .deliver(ownerId, { question: tagged })
-        .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, sent, tagged))
-        .catch(fail("bot"));
-    } else if (account) {
-      markOwnerTarget(tagged.askId, account[0], "me");
-      account[1]
-        .deliver("me", { question: tagged })
-        .then((sent) => recordAskDelivery(chatId, account[0], "me", sent, tagged))
-        .catch(fail("account"));
-    } else {
-      log.error?.("[integrations] owner-ask: no telegram channel to reach Owner");
-    }
+    const send = () => {
+      if (bot && ownerId) {
+        ensureBotPaired(bot.id, ownerId);
+        markOwnerTarget(tagged.askId, bot.id, ownerId);
+        bot.channel
+          .deliver(ownerId, { question: tagged })
+          .then((sent) => recordAskDelivery(chatId, bot.id, ownerId, sent, tagged))
+          .catch(fail("bot"));
+      } else if (account) {
+        markOwnerTarget(tagged.askId, account[0], "me");
+        account[1]
+          .deliver("me", { question: tagged })
+          .then((sent) => recordAskDelivery(chatId, account[0], "me", sent, tagged))
+          .catch(fail("account"));
+      } else {
+        log.error?.("[integrations] owner-ask: no telegram channel to reach Owner");
+      }
+    };
+    if (!watched(chatId) && !watched(sourceChatId)) return send();
+    // Answered (or the run ended) in the meantime: clearQuestion has dropped it from pendingAsks.
+    setTimeout(() => pendingAsks.has(tagged.askId) && send(), ownerAskWaitMs).unref?.();
   }
 
   const onEvent = (chatId, event) => {

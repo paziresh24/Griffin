@@ -54,10 +54,25 @@ test("a success with nothing in it is an error, never a silent finished run", ()
   assert.equal(resultFailure({ subtype: "success", result: "" }), null); // no usage: not judged
 });
 
+test("a token renewal race is its own code, not a refused login", () => {
+  const raw = "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute";
+  const error = resultFailure({ subtype: "success", is_error: true, result: raw });
+  assert.equal(error.code, "oauth_refresh_busy");
+  assert.doesNotMatch(error.message, /پذیرفته نشد/);
+});
+
 test("a refused login says what to do, in Persian", () => {
   const error = resultFailure({ subtype: "success", is_error: true, result: "Failed to authenticate. API Error: 401" });
   assert.match(error.message, /ورود یا کلید Claude پذیرفته نشد/);
   assert.match(error.message, /401/);
+  assert.equal(error.code, "auth_failed");
+});
+
+// Mr. Khajavi 2026-10-29: claude-5's login had expired; the runner never moved its runs because the
+// error carried no code.
+test("an expired OAuth login is a refused login the runner can act on", () => {
+  const error = resultFailure({ subtype: "success", is_error: true, result: "OAuth session expired and could not be refreshed. Please run /login" });
+  assert.equal(error.code, "auth_failed");
 });
 
 test("Griffin's MCP server connected with no tools is a problem", () => {

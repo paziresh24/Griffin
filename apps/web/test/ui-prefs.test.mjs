@@ -107,3 +107,29 @@ test("repoChipsAlways: on in Griffin's preset, off in Karsara's; a copy saved be
   assert.equal(ui.presetOf("karsara").flags.repoChipsAlways, false);
   assert.equal(ui.resolvePrefs({ rev: ui.PREFS_REV, flags: { repoChipsAlways: true } }, "griffin").flags.repoChipsAlways, true);
 });
+
+test("every switch holds: a flag whose preset changed once is not sent back to the preset by the switch itself", async () => {
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push(JSON.parse(init?.body || "null"));
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  };
+  for (const { key } of ui.FLAGS) {
+    const was = ui.uiFlag(key);
+    await ui.setUiPrefs({ flags: { [key]: !was } });
+    assert.equal(ui.uiFlag(key), !was, `${key} flipped`);
+    assert.equal(sent.at(-1).flags[key], !was, `${key} saved`);
+    assert.equal(sent.at(-1).rev, ui.PREFS_REV);
+    assert.equal(JSON.parse(store.get("griffin.ui")).rev, ui.PREFS_REV, "the next load does not migrate this copy");
+    assert.equal(ui.resolvePrefs(JSON.parse(store.get("griffin.ui")), "griffin").flags[key], !was, `${key} survives a reload`);
+    await ui.setUiPrefs({ flags: { [key]: was } });
+    assert.equal(ui.uiFlag(key), was, `${key} back`);
+  }
+});
+
+test("a preset as the starting point arrives whole", async () => {
+  await ui.setUiPrefs({ flags: ui.presetOf("karsara").flags });
+  for (const { key, karsara } of ui.FLAGS) assert.equal(Boolean(ui.uiFlag(key)), karsara, key);
+  await ui.setUiPrefs({ flags: ui.presetOf("griffin").flags });
+  for (const { key, griffin } of ui.FLAGS) assert.equal(Boolean(ui.uiFlag(key)), griffin, key);
+});

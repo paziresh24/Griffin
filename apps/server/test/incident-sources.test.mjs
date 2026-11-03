@@ -233,3 +233,39 @@ test("tool catalog: listed for owner chats, write tools never for a colleague ch
   for (const name of ["incident_sources", "incident_source_set", "incident_assign", "incident_suggest"]) assert.ok(APP_TOOL_NAMES.includes(name), name);
   for (const name of ["incident_source_set", "incident_assign", "incident_suggest"]) assert.ok(PEER_NEVER_TOOLS.includes(name), name);
 });
+
+test("Uptime Kuma webhook: down fires a critical per monitor, up resolves it, pending and the Test button are ignored", () => {
+  const kuma = (status, extra = {}) => ({ heartbeat: { monitorID: 7, status, msg: status === 0 ? "timeout of 48000ms exceeded" : "200 - OK", time: "2026-10-27 06:12:03.123" }, monitor: { id: 7, name: "profile-app api", url: "https://www.example.com/api/x", type: "http" }, msg: "[profile-app api] [🔴 Down]", ...extra });
+  const [down] = webhookItems(kuma(0));
+  assert.deepEqual([down.status, down.item.alertname, down.item.severity, down.item.member, down.item.labels.instance], ["firing", "profile-app api", "critical", "-", "https://www.example.com/api/x"]);
+  assert.equal(down.item.startsAt, "2026-10-27T06:12:03.123Z");
+  assert.equal(webhookItems(kuma(1))[0].status, "resolved");
+  assert.equal(webhookItems(kuma(3))[0].status, "resolved", "maintenance closes it");
+  assert.deepEqual(webhookItems(kuma(2)), [], "pending is not down yet");
+  assert.deepEqual(webhookItems({ heartbeat: null, monitor: null, msg: "Uptime Kuma Testing" }), []);
+  assert.equal(webhookItems({ ...kuma(0), heartbeat: { status: 0, msg: "x", time: "garbage" } })[0].item.startsAt, null);
+});
+
+test("a Kuma webhook source: down → critical incident, up → resolved after grace", async () => {
+  const t = setup();
+  const hook = t.sources.add({ kind: "webhook", name: "Uptime Kuma", id: "uptime-kuma" });
+  const collect = createCollector({ sources: t.sources, secrets: t.secrets, now: t.now });
+  const intake = createIntake({ incidents: t.incidents, fetchAlerts: collect, now: t.now, log: { error() {} } });
+  await intake.poll();
+  const body = (status) => ({ heartbeat: { status, msg: "m", time: "2026-10-25 08:00:00" }, monitor: { name: "search", url: "https://s.example" } });
+  const push = (b) => {
+    for (const st of ["firing", "resolved"]) {
+      const items = webhookItems(b).filter((e) => e.status === st).map((e) => e.item);
+      if (items.length) t.sources.push(hook, { status: st, items });
+    }
+  };
+  push(body(0));
+  const [opened] = await intake.poll();
+  // The store was empty, so this first incident is the intake's baseline; on a live install it is "opened".
+  assert.deepEqual([opened.incident.key, opened.incident.severity, opened.incident.source_id], ["uptime-kuma|search|", "critical", "uptime-kuma"]);
+  push(body(1));
+  t.advance(6 * 60_000);
+  await intake.poll();
+  t.advance(6 * 60_000);
+  assert.deepEqual((await intake.poll()).map((c) => c.kind), ["resolved"]);
+});

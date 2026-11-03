@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { it } from "node:test";
-import { createAsks, ownerAnswers } from "../src/asks.mjs";
+import { createAsks, ownerAnswers, toolChoiceQuestion } from "../src/asks.mjs";
 
 // Two children c1, c2 of root r, both asking the owner at once.
 function setup() {
@@ -173,4 +173,22 @@ it("a card answered before its own question waits for exactly that one, even whi
   assert.equal(asks.isWaiting("c1"), true);
   asks.cancel("c1");
   await other;
+});
+
+it("an approval's literal command travels beside its question, not inside it (card «جزئیات فنی»)", async () => {
+  const { asks, events } = setup();
+  const approval = asks.confirm("c2", { question: "اجرای یک دستور در ترمینال: چرخاندن کلید. اجازه می‌دهید؟", detail: "set -e\nssh root@h 'bash -s'" });
+  await tick();
+  const [open] = asks.list();
+  assert.equal(open.question, "اجرای یک دستور در ترمینال: چرخاندن کلید. اجازه می‌دهید؟");
+  assert.equal(open.detail, "set -e\nssh root@h 'bash -s'");
+  assert.equal(events.find((e) => e.type === "tool.started")?.data.args.detail, open.detail, "the mirrored card carries it");
+  assert.equal(events.find((e) => e.type === "ask.pending")?.data.detail, open.detail);
+  asks.answer("r", { answer: "بله", askId: open.id });
+  assert.equal((await approval).answer, "بله");
+});
+
+it("a tool name in a question is the agent's own choice; a secret key name is not a tool", () => {
+  assert.equal(toolChoiceQuestion({ question: "با kube_secret بخوانم یا kube_exec؟" }), true);
+  assert.equal(toolChoiceQuestion({ question: "توکن owner-secrets/gitlab__token را می‌توانید بدهید؟" }), false);
 });

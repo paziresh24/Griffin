@@ -482,9 +482,55 @@ test("chat picker: a model of another provider moves the chat; effort is stored 
     let body = await patch({ model: "", effort: "nonsense" });
     assert.equal(body.chat.provider, "openai");
     assert.equal(body.chat.effort, null);
-    body = await patch({ model: "claude:opus", effort: "max" });
+    // A stronger model or a higher effort is refused until the owner confirms it a second time.
+    const refused = await app.request(`/api/chats/${created.chat.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude:opus", effort: "max" }) });
+    assert.equal(refused.status, 409);
+    assert.deepEqual((await refused.json()).needs, ["model", "effort"]);
+    assert.equal(store.getChat(created.chat.id).provider, "openai");
+    body = await patch({ model: "claude:opus", effort: "max", confirm: true });
     assert.equal(store.getChat(created.chat.id).provider, "claude");
     assert.equal(body.chat.effort, "max");
+    assert.deepEqual(store.getKv(`heavyok:${created.chat.id}`), { model: true, effort: true });
+    // A new chat that asks for them without confirm opens on the defaults.
+    const plain = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin", model: "claude:opus", effort: "high" }))).json();
+    await until(() => !store.runningRuns().length);
+    assert.notEqual(plain.chat.effort, "high");
+    assert.notEqual(plain.chat.model, "claude:opus");
+  } finally {
+    cleanup();
+  }
+});
+
+test("advice: an idle owner chat answers with null nudges when there is nothing to say", async () => {
+  const { app, store, cleanup } = setup([{ type: "text-delta", text: "ok" }]);
+  try {
+    const created = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin" }))).json();
+    await until(() => !store.runningRuns().length);
+    const res = await app.request(`/api/chats/${created.chat.id}/advice`);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { spend: null, model: null });
+    assert.equal((await app.request("/api/chats/nope/advice")).status, 404);
+  } finally {
+    cleanup();
+  }
+});
+
+test("advice: an Opus chat of light turns is told to try Sonnet; a heavy-tool one is not", async () => {
+  const { app, store, cleanup } = setup([{ type: "text-delta", text: "ok" }]);
+  try {
+    const created = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin" }))).json();
+    await until(() => !store.runningRuns().length);
+    const id = created.chat.id;
+    const light = (n) => {
+      store.appendEvent(id, `r${n}`, "run.started", { model: "opus" });
+      store.appendEvent(id, `r${n}`, "usage", { output_tokens: 300 });
+    };
+    for (const n of [1, 2, 3]) light(n);
+    const body = await (await app.request(`/api/chats/${id}/advice`)).json();
+    assert.equal(body.model?.suggest, "sonnet");
+    for (let i = 0; i < 6; i++) store.appendEvent(id, "r4", "tool.started", { name: "Bash" });
+    store.appendEvent(id, "r4", "run.started", { model: "opus" });
+    assert.equal((await (await app.request(`/api/chats/${id}/advice`)).json()).model, null);
   } finally {
     cleanup();
   }

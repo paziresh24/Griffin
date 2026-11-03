@@ -80,5 +80,7 @@
   "ایجنت‌ها با این فکر می‌کنند و جواب می‌دهند. کلید رمزنگاری‌شده روی همین سرور می‌ماند و جایی نمایش داده نمی‌شود.": "Agents think and answer with this. The key stays encrypted on this server and is never shown.",
   "نام (اختیاری، مثلاً {engine} شخصی)": "Name (optional, e.g. personal {engine})",
   "ایجنت اصلی از این موتور استفاده کند": "Let the main agent use this engine",
-  "مدل پیش‌فرض این موتور": "This engine's default model"
+  "مدل پیش‌فرض این موتور": "This engine's default model",
+  "✓ (فقط پیام کوچک)": "✓ (small messages only)",
+  "سرورهای این VPN درخواست‌های بزرگ Claude را قطع می‌کنند؛ چت‌های طولانی با «اتصال قطع شد» می‌مانند. اگر این سرور بدون VPN به Claude می‌رسد، api.anthropic.com و platform.claude.com را در «همیشه مستقیم (بدون VPN)» بنویسید، یا سرور دیگری اضافه کنید.": "This VPN's servers cut large Claude requests; long chats stop with “connection dropped”. If this server reaches Claude without the VPN, put api.anthropic.com and platform.claude.com under “always direct (no VPN)”, or add another server."
 }

@@ -3,7 +3,7 @@ import { AlertTriangle, Archive, Check, Cpu, Globe, History, Loader2, Palette, P
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { Group, Item } from "./SettingsParts.jsx";
-import { tr } from "./Setup.jsx";
+import { tr } from "../fill.js";
 import { locale, num, t } from "../i18n.js";
 
 const ICON = { ok: Check, warn: AlertTriangle, error: XCircle };
@@ -36,7 +36,7 @@ export function DoctorSection({ bare = false } = {}) {
 
   const apply = async (fix) => {
     if (fix.manual) {
-      window.location.hash = fix.id === "wizard" ? "/setup/engine" : "/settings";
+      window.location.hash = fix.id === "wizard" ? "/setup/engine" : "/settings/connections"; // «ورود دوباره»
       return;
     }
     setBusy(fix.id);
@@ -124,6 +124,11 @@ function BackupsGroup() {
           </button>
         }
       />
+      {s.offsite ? <Item
+        icon={Archive}
+        title={s.offsite.configured ? t("بیرون از سرور: {url}", { url: s.offsite.url }) : t("بیرون از سرور: تنظیم نشده")}
+        subtitle={s.offsite.sending ? t("در حال فرستادن…") : s.offsite.last ? (s.offsite.last.ok ? t("آخرین: {at} · {mb} مگابایت تازه", { at: new Date(s.offsite.last.at).toLocaleString(), mb: Math.round((s.offsite.last.added || 0) / 1024 ** 2) }) : t("خطا: {error}", { error: s.offsite.last.error })) : s.offsite.configured ? t("با بکاپ بعدی فرستاده می‌شود") : t("BACKUP_S3_URL و سکرت‌های backup/… در تنظیمات")}
+      /> : null}
     </Group>
   );
 }

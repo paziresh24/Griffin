@@ -10,5 +10,7 @@ export default defineConfig({
   server: {
     proxy: { "/api": { target: "http://127.0.0.1:3100", changeOrigin: false } },
   },
-  build: { outDir: "dist", chunkSizeWarningLimit: 2000 },
+  // es2022: i18n.js waits for the English strings with a top-level await (Chrome/Edge/Firefox 89+,
+  // Safari 15+).
+  build: { outDir: "dist", target: ["es2022", "chrome89", "edge89", "firefox89", "safari15"], chunkSizeWarningLimit: 2000 },
 });

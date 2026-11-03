@@ -6,7 +6,7 @@ import { sidePaths } from "../side.js";
 import { GriffinRuntime } from "../runtime.jsx";
 import { isRtl, num, t } from "../i18n.js";
 import { Thread } from "./Thread.jsx";
-import { submitMode, useTouchPrimary } from "../touch.js";
+import { shiftEnterSends, submitMode, useTouchPrimary } from "../touch.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 
 // The side panel sits on the reading end's far side: left in RTL, right in LTR.
@@ -172,7 +172,8 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-              const sends = submitMode(touch) === "enter" ? !e.shiftKey : e.ctrlKey || e.metaKey;
+              const mode = submitMode(touch);
+              const sends = mode === "enter" ? !e.shiftKey : mode === "none" ? shiftEnterSends(touch, e) : e.ctrlKey || e.metaKey;
               if (sends) {
                 e.preventDefault();
                 send();

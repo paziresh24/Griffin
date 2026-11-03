@@ -56,9 +56,8 @@ test("the foot holds the profile menu, Settings and feedback; log out is in the 
   assert.match(foot, aria("منوی پروفایل"));
   assert.match(foot, /PROFILE_ITEMS\.map/);
   assert.doesNotMatch(side, /UsageBadge|MenuRow/);
-  const settings = src("components/Settings.jsx");
-  assert.match(settings, /id: "agents"/);
-  assert.match(settings, /<UsageBadge open \/>/);
+  assert.match(src("settings-map.js"), /id: "agents"/);
+  assert.match(src("components/Settings.jsx"), /<UsageBadge open \/>/);
   assert.doesNotMatch(src("App.jsx"), /UsageBadge/, "token usage left the chat header");
   const code = (text) => text.split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
   for (const file of ["components/Sidebar.jsx", "components/Peers.jsx", "tab-title.js"]) assert.doesNotMatch(code(src(file)), /همتا/, file);

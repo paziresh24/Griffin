@@ -16,7 +16,7 @@ import { DirBlock } from "./DirBlock.jsx";
 import { Dialog } from "radix-ui";
 import { filesLine, rewindChoices, textBackToBox } from "../rewind.js";
 import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor, useRunAccount } from "./Controls.jsx";
-import { agentMeta, writeSetting } from "../brand.js";
+import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
 import { locale, num, t, isRtl } from "../i18n.js";
 import { toast } from "sonner";
@@ -30,7 +30,7 @@ import { QuoteChip, QuotedText } from "./QuoteChip.jsx";
 import { ChatRecord, ComposerAssist, FastSwitch, MentionBackdrop, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
 import { NoteRow, PersonAvatar, PersonName } from "./Telegram.jsx";
 import { isNoReply, motherName, peerFrame, reminderFrame, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
-import { submitMode, useTouchPrimary } from "../touch.js";
+import { shiftEnterSends, submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
 import { holdReload } from "../new-version.js";
@@ -38,12 +38,13 @@ import { HomeNotes, ScheduledPeek, SendLater } from "./Notes.jsx";
 import { QueuePeek } from "./QueuePeek.jsx";
 import { TasksPeek } from "./TasksPeek.jsx";
 import { inPeek, queueDropped, queueLabel, queueRemoved } from "../queue-peek.js";
+import { UsageAdvice } from "./UsageAdvice.jsx";
 import { UsageRing } from "./ComposerStats.jsx";
 import { WhyButton, WhyFlag, WhyPanel } from "./Why.jsx";
 import { phaseLabel } from "../run-phase.js";
 import { answerItems, chapterAnchor } from "../chat-tools.js";
 import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./ChatTools.jsx";
-import { tr } from "./Setup.jsx";
+import { tr } from "../fill.js";
 import { useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
 import { MessageBoundary } from "../boundary.js";
 import { escCancels } from "../keys.js";
@@ -57,6 +58,9 @@ const plugins = { code };
 // Code blocks stay compact: copy only. Tables keep download (CSV) and fullscreen — a wide table is
 // unreadable inside the chat column.
 const controls = { code: { copy: true, download: false }, table: { copy: true, download: true, fullscreen: true } };
+// One array for every answer: Streamdown skips re-parsing only when shikiTheme is the same object,
+// so a fresh literal re-rendered every message's markdown on each streamed token.
+const shikiTheme = ["github-light", "github-dark"];
 
 export function Thread({
   header,
@@ -83,8 +87,9 @@ export function Thread({
   earlier = 0, // messages before the first one held (a long chat opens with its last page only)
   onLoadEarlier = null,
 }) {
+  const chatContext = useMemo(() => ({ chatId, readOnly }), [chatId, readOnly]);
   return (
-    <ChatContext.Provider value={{ chatId, readOnly }}>
+    <ChatContext.Provider value={chatContext}>
     <ThreadPrimitive.Root data-griffin-chat="" className="flex h-full min-h-0 flex-col">
       {header}
       {readOnly ? null : <SelectionActions canSide={canSide} />}
@@ -167,7 +172,9 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   // New chat page: the box is docked at the bottom like in a chat; the owner's
   // board — or, with nothing on it, the welcome and suggestions — fills the page above it. The
   // side chat (compact) keeps its composer in the middle.
-  const showHero = fresh && !readOnly;
+  // The first message on its way replaces the page with its bubble.
+  const sending = useAuiState((s) => s.thread.messages.length > 0);
+  const showHero = fresh && !readOnly && !sending;
   // «کارهای منتظر شما و در جریان» off (ui-prefs.js): Karsara's centred home page — the blurb, the
   // setup card and the composer in the middle, no board.
   const karsara = useLook() === "karsara";
@@ -841,7 +848,7 @@ function MarkdownText({ text, status, compact = false }) {
   const dir = chatDir(text);
   return (
     <div className={`sd-block ${compact ? "leading-7" : "g-answer leading-8"} [&_pre]:my-2`} dir={dir}>
-      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={["github-light", "github-dark"]}>
+      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={shikiTheme}>
         {text}
       </Streamdown>
     </div>
@@ -1095,8 +1102,7 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
     }
   };
   const openSttSettings = () => {
-    writeSetting("griffin.settings.section", "chat");
-    window.location.hash = "/settings";
+    window.location.hash = "/settings/chat";
   };
   const start = async () => {
     if (sttStatus.broken) {
@@ -1317,9 +1323,19 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   // Only quotes in the box (a reply with nothing typed): the composer itself cannot send an empty
   // box, so Enter (Ctrl+Enter on a phone) sends them here; Ctrl/⌘+Shift+Enter sends them «فوری».
   const onInputKey = (event) => {
-    if (event.key !== "Enter" || event.nativeEvent?.isComposing || !quotesOnly || hasAttached) return;
+    if (event.key !== "Enter" || event.nativeEvent?.isComposing) return;
+    // ENTER_KEY=shiftEnter: the library's Enter is off, so Shift+Enter sends the box from here.
+    if (shiftEnterSends(touch, event) && !quotesOnly) {
+      if (!composerText.trim() && !hasAttached) return;
+      event.preventDefault();
+      event.currentTarget?.closest("form")?.requestSubmit();
+      return;
+    }
+    if (!quotesOnly || hasAttached) return;
+    const shiftSends = shiftEnterSends(touch, event);
+    if (submitMode(touch) === "none" && !shiftSends && !(event.shiftKey && (event.ctrlKey || event.metaKey))) return;
     const force = event.shiftKey && (event.ctrlKey || event.metaKey);
-    if (!force && (event.shiftKey || (submitMode(touch) === "ctrlEnter" && !(event.ctrlKey || event.metaKey)))) return;
+    if (!force && !shiftSends && (event.shiftKey ||(submitMode(touch) === "ctrlEnter" && !(event.ctrlKey || event.metaKey)))) return;
     event.preventDefault();
     sendQuotes(force && running);
   };
@@ -1415,6 +1431,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
   const nonClaude = flags.nonClaudeHint && runAccount && runAccount.split("-")[0] !== "claude" ? <div className="kc-note px-3 pb-2">{t("ابزارها و تصویر ممکن است کامل کار نکنند")}</div> : null;
   // «حالت سریع کنار مدل» / «حلقهٔ مصرف»: readouts at the end of the bar under the box (the
   // server-resources gauge that sat here is gone: its alerts are at the bottom of the sidebar).
+  const advice = !compact ? <UsageAdvice chatId={chatId} running={running} onModelChange={onModelChange} /> : null;
   const barEnd = (
     <>
       {flags.fastChip ? <FastToggle /> : null}
@@ -1430,6 +1447,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
         {/* Even in the side panel: a waiting message is not in its thread. */}
         <QueuePeek chatId={chatId} onEdit={takeBack} />
         <TasksPeek chatId={chatId} />
+        {advice}
         <ComposerPrimitive.Root className="composer-box g-composer relative z-[1] rounded-xl border bg-card focus-within:border-primary/60">
           {quotes.length ? (
             <div className="flex flex-col gap-1 px-2 pt-2">
@@ -1487,6 +1505,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     {flags.scheduledPeek ? <ScheduledPeek chatId={chatId} /> : null}
     <QueuePeek chatId={chatId} onEdit={takeBack} />
     <TasksPeek chatId={chatId} />
+    {advice}
     <ComposerPrimitive.Root ref={rootRef} className="composer-box g-composer relative z-[1] rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
       {quotes.length ? (
         <div className="flex flex-col gap-1 px-2 pt-2">
@@ -1562,6 +1581,7 @@ function ComposerImage() {
   return (
     <AttachmentPrimitive.Root className="relative ms-3 mt-3 inline-block size-16 overflow-hidden rounded-lg border">
       <AttachmentThumb />
+      <UploadBar />
       <AttachmentPrimitive.Remove className="absolute end-0.5 top-0.5 rounded-full bg-background/80 p-0.5">
         <X className="size-3" />
       </AttachmentPrimitive.Remove>
@@ -1574,15 +1594,31 @@ function ComposerImage() {
 function ComposerAttachment() {
   const image = useAuiState((s) => isImageAttachment(s.attachment));
   const name = useAuiState((s) => s.attachment?.name || "");
+  const progress = useAuiState((s) => (s.attachment?.status?.type === "running" ? s.attachment.status.progress : null));
   if (image) return <ComposerImage />;
   return (
-    <AttachmentPrimitive.Root className="g-file-chip relative ms-3 mt-3 inline-flex h-9 max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-lg border px-2 text-xs" title={name}>
+    <AttachmentPrimitive.Root className="g-file-chip relative ms-3 mt-3 inline-flex h-9 max-w-[calc(100%-1.5rem)] items-center gap-1.5 overflow-hidden rounded-lg border px-2 text-xs" title={name}>
       <FileText className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate" dir="ltr">{name}</span>
+      {progress != null ? <span className="shrink-0 text-muted-foreground">{t("{fa}٪", { fa: progress.toLocaleString(locale) })}</span> : null}
+      <UploadBar />
       <AttachmentPrimitive.Remove className="shrink-0 rounded-full p-0.5 hover:bg-muted" aria-label={t("حذف این فایل")}>
         <X className="size-3" />
       </AttachmentPrimitive.Remove>
     </AttachmentPrimitive.Root>
+  );
+}
+
+// How far an attached file has reached the server, along the foot of its chip. One that failed is
+// marked red: its reason was said as a toast, and the message waits until it is removed.
+function UploadBar() {
+  const status = useAuiState((s) => s.attachment?.status);
+  if (status?.type === "incomplete") return <span className="absolute inset-x-0 bottom-0 h-1 bg-bad" aria-hidden />;
+  if (status?.type !== "running") return null;
+  return (
+    <span className="absolute inset-x-0 bottom-0 h-1 bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={status.progress} aria-label={t("آپلود فایل")}>
+      <span className="block h-full bg-primary transition-[width] duration-200" style={{ width: `${status.progress}%` }} />
+    </span>
   );
 }
 

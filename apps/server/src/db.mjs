@@ -111,6 +111,17 @@ CREATE TABLE IF NOT EXISTS thread_links (
   PRIMARY KEY (chat_id, integration_id, external_chat)
 );
 CREATE INDEX IF NOT EXISTS thread_links_peer ON thread_links(integration_id, external_chat);
+-- What a chat is about in another system (a Board task, …): a module that opens a chat for a thing says so.
+-- One chat may point at several things and one thing at several chats. kind = «board-app-task», ref = its id there.
+CREATE TABLE IF NOT EXISTS chat_refs (
+  chat_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (chat_id, kind, ref)
+);
+CREATE INDEX IF NOT EXISTS chat_refs_ref ON chat_refs(kind, ref);
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -398,7 +409,76 @@ export function indexSearchStep(db, { chunk = 100 } = {}) {
   return upto < ceiling;
 }
 
-export function openStore(file, { seedProvider } = {}) {
+// One step of joining the streamed pieces stored before appendEvent coalesced them (2026-10-29:
+// 6.7M of .46's 7.1M rows were text/thinking pieces of a few characters). In events (cursor, cursor +
+// chunk], back-to-back text (or thinking) rows of one chat and run — nothing else of that chat
+// between them, data only { text } — become the first row with their texts joined; the rest go.
+// The fold appends such pieces verbatim and the message search joins a run's text the same way, so
+// what every chat shows and finds is unchanged. A run still going is left alone. ONE short
+// transaction (1000 ids: the server's own writes wait for it); the cursor and ceiling (the newest
+// event when it began) are kv. True while some remain.
+export function compactStreamStep(db, { chunk = 1000 } = {}) {
+  const kv = (key) => db.prepare("SELECT value FROM kv WHERE key = ?").get(key)?.value;
+  const setKv = db.prepare("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  if (kv("compact:ceiling") == null) setKv.run("compact:ceiling", JSON.stringify(db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get().id));
+  const ceiling = JSON.parse(kv("compact:ceiling"));
+  const cursor = JSON.parse(kv("compact:cursor") ?? "0");
+  if (cursor >= ceiling) return false;
+  const upto = Math.min(ceiling, cursor + chunk);
+  const running = new Set(db.prepare("SELECT id FROM runs WHERE status = 'running'").all().map((r) => r.id));
+  const update = db.prepare("UPDATE events SET data = ? WHERE id = ?");
+  const remove = db.prepare("DELETE FROM events WHERE id = ?");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = db.prepare("SELECT id, chat_id, run_id, type, data FROM events WHERE id > ? AND id <= ? ORDER BY chat_id, id").all(cursor, upto);
+    let group = null; // { chat, run, type, first, texts, extra }
+    const close = () => {
+      if (group && group.extra.length) {
+        update.run(JSON.stringify({ text: group.texts.join("") }), group.first);
+        for (const id of group.extra) remove.run(id);
+      }
+      group = null;
+    };
+    for (const row of rows) {
+      let text = null;
+      if ((row.type === "text" || row.type === "thinking") && row.run_id && !running.has(row.run_id)) {
+        try {
+          const data = JSON.parse(row.data);
+          if (data && typeof data.text === "string" && Object.keys(data).length === 1) text = data.text;
+        } catch {}
+      }
+      if (text == null) {
+        close();
+        continue;
+      }
+      if (group && group.chat === row.chat_id && group.run === row.run_id && group.type === row.type) {
+        group.texts.push(text);
+        group.extra.push(row.id);
+      } else {
+        close();
+        group = { chat: row.chat_id, run: row.run_id, type: row.type, first: row.id, texts: [text], extra: [] };
+      }
+    }
+    close();
+    setKv.run("compact:cursor", JSON.stringify(upto));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  db.exec("PRAGMA wal_checkpoint(PASSIVE)");
+  return upto < ceiling;
+}
+// The joining above has nothing left to do (or never needs to start on an empty install).
+export function compactStreamDone(db) {
+  const value = (key) => db.prepare("SELECT value FROM kv WHERE key = ?").get(key)?.value;
+  return value("compact:ceiling") != null && JSON.parse(value("compact:cursor") ?? "0") >= JSON.parse(value("compact:ceiling"));
+}
+
+// Longest held text/thinking piece before it is written (see appendEvent).
+const COALESCE_MAX_CHARS = 64 * 1024;
+
+export function openStore(file, { seedProvider, coalesceMs = Number(process.env.GRIFFIN_EVENT_COALESCE_MS) || 0 } = {}) {
   const db = new DatabaseSync(file);
   // run id -> {model, provider} of its run.started (a run never changes either); see usageRows.
   // ponytail: process-wide memo capped at 50 000 runs, oldest dropped.
@@ -659,6 +739,15 @@ export function openStore(file, { seedProvider } = {}) {
       WHERE c.parent_chat_id IS NOT NULL
       ORDER BY c.created_at DESC
       LIMIT 1000`),
+    // One chat's own children, as childChatsWithStatus gives them, for that chat's page alone.
+    childChatsOf: db.prepare(`
+      SELECT c.*, r.status AS run_status, r.started_at AS run_started_at
+      FROM chats c
+      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
+      WHERE c.parent_chat_id = ?
+      ORDER BY c.created_at DESC
+      LIMIT ?`),
+    countChildChats: db.prepare("SELECT count(*) AS n FROM chats WHERE parent_chat_id = ?"),
     touchChat: db.prepare("UPDATE chats SET updated_at = ? WHERE id = ?"),
     setAgent: db.prepare("UPDATE chats SET agent_id = ? WHERE id = ?"),
     setAgentsWorked: db.prepare("UPDATE chats SET agents_worked = ? WHERE id = ?"),
@@ -709,6 +798,15 @@ export function openStore(file, { seedProvider } = {}) {
     return lo;
   };
 
+  const pendingEvents = new Map(); // chatId -> { runId, type, text, at, timer }: see appendEvent
+  const insertEvent = (...args) => store._insertEventRow(...args);
+  const writePending = (chatId) => {
+    const held = pendingEvents.get(chatId);
+    if (!held) return;
+    pendingEvents.delete(chatId);
+    clearTimeout(held.timer);
+    insertEvent(chatId, held.runId, held.type, { text: held.text }, held.at);
+  };
   const store = {
     db,
     bus,
@@ -919,6 +1017,7 @@ export function openStore(file, { seedProvider } = {}) {
       for (const sql of [
         "DELETE FROM integration_links WHERE chat_id = ?",
         "DELETE FROM thread_links WHERE chat_id = ?",
+        "DELETE FROM chat_refs WHERE chat_id = ?",
         "DELETE FROM shares WHERE chat_id = ?",
         "DELETE FROM private_shares WHERE chat_id = ?",
         "DELETE FROM media WHERE chat_id = ?",
@@ -953,6 +1052,40 @@ export function openStore(file, { seedProvider } = {}) {
       return q.childChatsWithStatus.all().map((row) => ({ ...row }));
     },
 
+    // One parent's children (newest first, at most `limit`), with `total` like childChatsByParent's
+    // lists: opening a chat no longer reads every child chat of the install (~1000 rows, 50-70 ms).
+    listChildChatsOf(parentId, limit = 30) {
+      const list = q.childChatsOf.all(String(parentId), limit).map((row) => ({ ...row }));
+      return Object.assign(list, { total: q.countChildChats.get(String(parentId)).n });
+    },
+
+    /** Point a chat at things elsewhere. Input is cleaned: kind like a module id, ref a plain id, a short title; the same ref twice is one. */
+    addChatRefs(chatId, refs) {
+      const insert = db.prepare("INSERT OR IGNORE INTO chat_refs (chat_id, kind, ref, title, created_at) VALUES (?, ?, ?, ?, ?)");
+      let added = 0;
+      for (const r of Array.isArray(refs) ? refs.slice(0, 20) : []) {
+        const kind = String(r?.kind || "");
+        const ref = String(r?.ref || "");
+        if (!/^[a-z][a-z0-9-]{1,31}$/.test(kind) || !/^[\w.-]{1,80}$/.test(ref)) continue;
+        added += insert.run(String(chatId), kind, ref, String(r?.title || "").replace(/\s+/g, " ").trim().slice(0, 200), new Date().toISOString()).changes;
+      }
+      return added;
+    },
+    /** Take one ref off a chat; the chat and its other refs stay. Returns how many went (0 or 1). */
+    removeChatRef(chatId, kind, ref) {
+      return db.prepare("DELETE FROM chat_refs WHERE chat_id = ? AND kind = ? AND ref = ?").run(String(chatId), String(kind), String(ref)).changes;
+    },
+    /** What one chat points at: [{ kind, ref, title }], oldest first. */
+    chatRefsOf(chatId) {
+      return db.prepare("SELECT kind, ref, title FROM chat_refs WHERE chat_id = ? ORDER BY created_at, rowid").all(String(chatId)).map((r) => ({ ...r }));
+    },
+    /** For one kind: { ref: [{ id, title, archived, updatedAt }] } — the chats about each thing, newest first. */
+    chatsByRefKind(kind) {
+      const out = {};
+      const rows = db.prepare("SELECT r.ref, r.title AS ref_title, c.id, c.title, c.archived, c.updated_at FROM chat_refs r JOIN chats c ON c.id = r.chat_id WHERE r.kind = ? ORDER BY c.updated_at DESC").all(String(kind));
+      for (const r of rows) (out[r.ref] ||= []).push({ id: r.id, title: r.title, archived: r.archived ? 1 : 0, updatedAt: r.updated_at, refTitle: r.ref_title });
+      return out;
+    },
     /** The chats a module owns (chats.module), archived ones too: id, title, group. */
     listModuleChats(moduleId) {
       return db.prepare("SELECT id, title, group_id, archived FROM chats WHERE module = ?").all(String(moduleId)).map((row) => ({ ...row }));
@@ -1126,8 +1259,37 @@ export function openStore(file, { seedProvider } = {}) {
         .slice(-limit);
     },
 
+    // Streamed text and thinking arrive a few characters per event — 94% of the 7.1M rows on .46
+    // (2026-10-29), folded one by one on every cold open. With coalesceMs, back-to-back pieces of one
+    // chat, run and kind become one row (the fold appends them verbatim either way): written when
+    // coalesceMs has passed since the first, before any other event of that chat, and before any
+    // read through the store (flushPendingEvents), so order and reads stay as they were. A held
+    // piece is returned without an id; only these two kinds are ever held.
     appendEvent(chatId, runId, type, data = {}) {
-      const at = now();
+      if (coalesceMs > 0 && (type === "text" || type === "thinking") && typeof data?.text === "string" && Object.keys(data).length === 1) {
+        const held = pendingEvents.get(chatId);
+        if (held && held.runId === (runId ?? null) && held.type === type && held.text.length < COALESCE_MAX_CHARS) {
+          held.text += data.text;
+          return { id: null, runId, type, data, at: held.at };
+        }
+        if (held) writePending(chatId);
+        if (runId && type === "text") q.runShown.run(runId); // the doctor's «showed something», at once
+        const at = now();
+        const timer = setTimeout(() => writePending(chatId), coalesceMs);
+        timer.unref?.();
+        pendingEvents.set(chatId, { runId: runId ?? null, type, text: data.text, at, timer });
+        return { id: null, runId, type, data, at };
+      }
+      if (pendingEvents.has(chatId)) writePending(chatId);
+      return insertEvent(chatId, runId, type, data, now());
+    },
+
+    // Writes every held text/thinking piece now (see appendEvent).
+    flushPendingEvents() {
+      for (const chatId of [...pendingEvents.keys()]) writePending(chatId);
+    },
+
+    _insertEventRow(chatId, runId, type, data = {}, at = now()) {
       const info = q.insertEvent.run(chatId, runId, type, JSON.stringify(data), at);
       const event = { id: Number(info.lastInsertRowid), runId, type, data, at };
       if (runId) {
@@ -1428,6 +1590,9 @@ export function openStore(file, { seedProvider } = {}) {
     },
 
     // Nothing left for the backfill (index.mjs starts no worker then).
+    compactStreamDone() {
+      return compactStreamDone(db);
+    },
     searchBackfillDone() {
       return searchBackfillDone(db);
     },
@@ -1475,6 +1640,15 @@ export function openStore(file, { seedProvider } = {}) {
       inboxChanged(key);
     },
 
+    /** Every kv entry whose key starts with `prefix` (full key -> value), read in one query. */
+    kvWithPrefix(prefix) {
+      const values = new Map();
+      for (const row of db.prepare("SELECT key, value FROM kv WHERE key >= ? AND key < ?").iterate(prefix, `${prefix}￿`)) {
+        values.set(row.key, JSON.parse(row.value));
+      }
+      return values;
+    },
+
     // --- notes («بعداً»): the owner's own message, kept until it is run ---
 
     createNote({ text, chatId = null, options = null, runAt = null }) {
@@ -1495,6 +1669,12 @@ export function openStore(file, { seedProvider } = {}) {
     /** When this chat's next timed note or reminder runs (the sidebar's clock), or null. */
     nextNoteAt(chatId) {
       return db.prepare("SELECT MIN(run_at) AS at FROM notes WHERE status = 'open' AND run_at IS NOT NULL AND chat_id = ?").get(chatId)?.at || null;
+    },
+
+    /** nextNoteAt of every chat that has one, in one query: chatId -> run_at. */
+    nextNoteAtAll() {
+      const rows = db.prepare("SELECT chat_id, MIN(run_at) AS at FROM notes WHERE status = 'open' AND run_at IS NOT NULL AND chat_id IS NOT NULL GROUP BY chat_id").all();
+      return new Map(rows.map((row) => [row.chat_id, row.at]));
     },
 
     /** Open and failed notes: timed ones by run_at, then untimed ones newest first. */
@@ -2176,9 +2356,19 @@ export function openStore(file, { seedProvider } = {}) {
     },
 
     close() {
+      store.flushPendingEvents();
       db.close();
     },
   };
+  // Every read and write through the store first writes the held pieces, so nothing it sees or
+  // changes (a rewind, a chat's delete) misses them. Cheap: one Map size test when nothing is held.
+  for (const [name, fn] of Object.entries(store)) {
+    if (typeof fn !== "function" || name === "appendEvent" || name === "flushPendingEvents" || name === "_insertEventRow") continue;
+    store[name] = function (...args) {
+      if (pendingEvents.size) store.flushPendingEvents();
+      return fn.apply(this, args);
+    };
+  }
 
   store.seedAgentProfiles({ provider: seedProvider });
   for (const profile of store.listAgentProfiles()) registerAgent(profile);

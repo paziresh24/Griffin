@@ -90,3 +90,24 @@ export function useModuleRows(moduleId, pageId, values, nonce = 0) {
   }, [moduleId, pageId, query, nonce]);
   return state;
 }
+
+const BADGES_MS = 60_000;
+
+/** The numbers beside module menu entries ({ "<module>:<page>": n }), asked again every minute and when the owner comes back to the tab. */
+export function useModuleBadges(enabled = true) {
+  const [badges, setBadges] = useState({});
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let stopped = false;
+    const read = () => api("/api/modules/badges").then((d) => { if (!stopped) setBadges(d?.badges || {}); }, () => {});
+    read();
+    const timer = setInterval(() => { if (document.visibilityState !== "hidden") read(); }, BADGES_MS);
+    document.addEventListener("visibilitychange", read);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", read);
+    };
+  }, [enabled]);
+  return badges;
+}

@@ -53,6 +53,8 @@ export function engineAlerts(data, now = Date.now()) {
       out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:limited`, level: "warn", text: t("یکی از اکانت‌های شما به سقف مصرف رسیده است"), detail: t("حساب {name} به سقف مصرف {window} رسیده و {v} دوباره کار می‌کند. {meanwhile}", { name: e.name, window, v: e.until ? t("ساعت {clock}", { clock: clock(e.until, now) }) : t("بعد از باز شدن سقف"), meanwhile }) });
     } else if (e.state === "credit") {
       out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:credit`, level: "warn", text: t("اعتبار یکی از اکانت‌های شما تمام شده است"), detail: t("اعتبار (Credit) حساب {name} تمام شده؛ تا شارژ نشود آخر صف می‌ماند. {replace}", { name: e.name, replace: meanwhile.replace(t("تا آن موقع"), t("فعلاً")) }) });
+    } else if (e.state === "auth") {
+      out.push({ key: `engine:${e.id}`, sig: `engine:${e.id}:auth`, level: "warn", text: t("ورود یکی از اکانت‌های شما منقضی شده است"), detail: t("ورود یا کلید حساب {name} پذیرفته نشد و کاری به آن نمی‌رود؛ در تنظیمات ← موتورها دوباره وارد شوید. {replace}", { name: e.name, replace: meanwhile.replace(t("تا آن موقع"), t("فعلاً")) }) });
     }
   }
   return out;

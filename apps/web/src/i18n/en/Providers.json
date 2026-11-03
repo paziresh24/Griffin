@@ -97,5 +97,7 @@
   "حساب Z.ai": "Z.ai account",
   "پیش‌فرض شد": "Made default",
   "گفتگوهای تازه، گفتگوهای «خودکار» و ایجنت‌ها از این به بعد اول با این موتور کار می‌کنند.": "New chats, \"auto\" chats and agents now try this engine first.",
-  "ورود قبلی تمام شده بود؛ صفحهٔ ورود تازه باز شد. وارد شو و کد تازه را بگذار.": "The earlier sign-in had ended; a new sign-in page opened. Sign in and paste the new code."
+  "ورود قبلی تمام شده بود؛ صفحهٔ ورود تازه باز شد. وارد شو و کد تازه را بگذار.": "The earlier sign-in had ended; a new sign-in page opened. Sign in and paste the new code.",
+  "ورود منقضی": "Sign-in expired",
+  "ورود یا کلید این حساب پذیرفته نشد؛ کاری به آن نمی‌رود تا دوباره وارد شوید یا «تست» قبول شود.": "This account's sign-in or key was refused; no work goes to it until you sign in again or «Test» passes."
 }

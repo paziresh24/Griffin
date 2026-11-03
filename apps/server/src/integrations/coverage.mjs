@@ -2,6 +2,7 @@ import { OWNER } from "../persona.mjs";
 import { classify, guardTools } from "../guard.mjs";
 import { teamWriteVerdict } from "../handoff.mjs";
 import { OWNER_NAME } from "../owner.mjs";
+import { knowledgeAutoApprove } from "../knowledge.mjs";
 
 // A colleague's Telegram chat (caller "team"): the /agent commands, the owner's web note, end_agent
 // for the pre-v2 threads, and the hard gate on dangerous / irreversible tool calls (in code, not prompt).
@@ -55,13 +56,18 @@ export function createEndAgentTool({ onEnd }) {
 // guard.mjs classify, plus handoff.mjs teamWriteVerdict) is refused outright: the chain only reads
 // and hands such work to the owner's own chats (owner 2026-10-21).
 export const TEAM_MUTATING = new Set(["telegram_send", "knowledge_write", "knowledge_edit", "knowledge_delete"]);
+// Knowledge on auto-approve (owner 2026-11-01): a colleague chain's knowledge_write no longer asks
+// him. Edit and delete still do (and knowledge.mjs refuses them on live notes outside his chats).
+const teamMutating = () => (knowledgeAutoApprove() ? new Set([...TEAM_MUTATING].filter((name) => name !== "knowledge_write")) : TEAM_MUTATING);
 
 export { isDestructiveShell, isDestructiveSql, isYes } from "../guard.mjs";
 
 // For every chat of a chain rooted in a colleague's Telegram chat (index.mjs): the coverage chat
 // itself passes peerChat, its subtasks do not. verdictOf: the install's (modules first, then classify).
-export function guardTeamTools(tools, { chatId, asks, store = null, peerChat = null, verdictOf = classify, allowPass = null } = {}) {
-  const writes = guardTools(tools, {
+// writes:false — the conversation has the owner's full access (colleague-access.mjs): only the
+// messages to other people and knowledge writes still ask him.
+export function guardTeamTools(tools, { chatId, asks, store = null, peerChat = null, verdictOf = classify, allowPass = null, writes: fence = true } = {}) {
+  const writes = !fence ? tools : guardTools(tools, {
     chatId,
     asks,
     store,
@@ -75,7 +81,7 @@ export function guardTeamTools(tools, { chatId, asks, store = null, peerChat = n
     asks,
     store,
     caller: COVERAGE_CALLER,
-    extra: TEAM_MUTATING,
+    extra: teamMutating(),
     verdictOf: () => null,
     allowPass: (name, args) => {
       if (name !== "telegram_send" || !peerChat) return false;

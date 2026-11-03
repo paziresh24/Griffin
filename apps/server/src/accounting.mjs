@@ -14,6 +14,8 @@
 import crypto from "node:crypto";
 import { agentId } from "./network.mjs";
 import { usageParts } from "./token-usage.mjs";
+import { costOf, priceOf } from "./pricing.mjs";
+import { genv } from "./env.mjs";
 
 export const REPORT_DAYS = 14;
 const DAY = 86_400_000;
@@ -36,6 +38,12 @@ const addParts = (into, p) => {
 };
 // Tokens that load an account: a cache read is cheap for a plan, the rest is not.
 export const fresh = (p) => num(p?.total) - num(p?.cacheRead);
+
+// USD at list price of one { last24h, last7d } pair of a model: what the install reported, else priced here from the parts.
+const costPair = (model, v) => ({ last24h: num(v?.cost?.last24h ?? costOf(v?.last24h, model)), last7d: num(v?.cost?.last7d ?? costOf(v?.last7d, model)) });
+const sumCost = (list) => list.reduce((a, c) => ({ last24h: a.last24h + c.last24h, last7d: a.last7d + c.last7d }), { last24h: 0, last7d: 0 });
+// An install's cost: its reported total, else the sum over its models.
+const installCost = (r) => (r.usage?.cost ? { last24h: num(r.usage.cost.last24h), last7d: num(r.usage.cost.last7d) } : sumCost(Object.entries(r.usage?.byModel || {}).map(([m, v]) => costPair(m, v))));
 
 // The account behind a key: Anthropic names its organization on every API answer
 // (anthropic-organization-id). A subscription token gets no profile (email): 403 on the profile
@@ -85,6 +93,11 @@ export function buildReport({ rows = [], accounts = [], install = "", owner = ""
   const last7d = empty();
   const byAccount = {};
   const byModel = {};
+  const cost = { last24h: 0, last7d: 0 };
+  const addCost = (into, usd, age) => {
+    if (age <= 7 * DAY) into.last7d += usd;
+    if (age <= DAY) into.last24h += usd;
+  };
   for (const row of rows) {
     const at = Date.parse(row.at);
     if (Number.isNaN(at) || at > t + 60_000) continue;
@@ -95,8 +108,12 @@ export function buildReport({ rows = [], accounts = [], install = "", owner = ""
     const age = t - at;
     const account = str(row.provider || "unknown", 40);
     const model = str(row.model || "unknown", 60);
-    byAccount[account] ||= { last24h: empty(), last7d: empty() };
-    byModel[model] ||= { last24h: empty(), last7d: empty() };
+    byAccount[account] ||= { last24h: empty(), last7d: empty(), cost: { last24h: 0, last7d: 0 } };
+    byModel[model] ||= { last24h: empty(), last7d: empty(), cost: { last24h: 0, last7d: 0 } };
+    const usd = costOf(p, row.model);
+    addCost(cost, usd, age);
+    addCost(byAccount[account].cost, usd, age);
+    addCost(byModel[model].cost, usd, age);
     if (age <= 7 * DAY) {
       addParts(last7d, p);
       addParts(byAccount[account].last7d, p);
@@ -128,7 +145,7 @@ export function buildReport({ rows = [], accounts = [], install = "", owner = ""
       windowsAt: validIso(a.windowsAt),
       limit: a.limit && validIso(a.limit.until) ? { at: validIso(a.limit.at), until: validIso(a.limit.until) } : null,
     })),
-    usage: { last24h, last7d, days: [...days.values()], byAccount, byModel },
+    usage: { last24h, last7d, cost, days: [...days.values()], byAccount, byModel },
   };
 }
 
@@ -169,7 +186,10 @@ export function cleanReport(raw, now = new Date()) {
     for (const k of Object.keys(o)) o[k] = Math.max(0, num(p?.[k]));
     return o;
   };
-  const pair = (x) => ({ last24h: cleanParts(x?.last24h), last7d: cleanParts(x?.last7d) });
+  const usd = (v) => Math.max(0, Math.min(1e7, num(v)));
+  // `cost` (USD at list price) comes from installs of this version on; older ones report none and the hub prices their parts itself.
+  const cleanCost = (c) => (c && typeof c === "object" ? { last24h: usd(c.last24h), last7d: usd(c.last7d) } : null);
+  const pair = (x) => ({ last24h: cleanParts(x?.last24h), last7d: cleanParts(x?.last7d), cost: cleanCost(x?.cost) });
   const map = (m, max) => Object.fromEntries(Object.entries(m && typeof m === "object" ? m : {}).slice(0, max).map(([k, v]) => [str(k, 60), pair(v)]));
   const u = raw.usage || {};
   return {
@@ -195,6 +215,7 @@ export function cleanReport(raw, now = new Date()) {
     usage: {
       last24h: cleanParts(u.last24h),
       last7d: cleanParts(u.last7d),
+      cost: cleanCost(u.cost),
       days: (Array.isArray(u.days) ? u.days : []).slice(-REPORT_DAYS).map((d) => ({ date: str(d?.date, 10), ...cleanParts(d) })),
       byAccount: map(u.byAccount, 20),
       byModel: map(u.byModel, 40),
@@ -209,75 +230,112 @@ export function cleanReport(raw, now = new Date()) {
  */
 export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) {
   const t = now.getTime();
+  // A report older than a day says nothing about now (an install off, or one that moved to a new
+  // name and reports there): listed, but not counted into accounts or totals — its history would be
+  // counted twice once the same install reports under its new name.
+  const current = reports.filter((r) => t - Date.parse(r.at) <= DAY);
   // Claude logins seen anywhere, each a node to group.
   const logins = [];
-  for (const r of reports) {
+  for (const r of current) {
     for (const a of r.accounts || []) {
       if (a.kind !== "claude" || !a.fingerprint || a.enabled === false) continue;
-      const use = r.usage?.byAccount?.[a.id] || { last24h: empty(), last7d: empty() };
-      logins.push({ install: r.install, owner: r.owner, accountId: a.id, fingerprint: a.fingerprint, org: a.org || null, email: a.email, windows: a.windows, windowsAt: a.windowsAt, limit: a.limit, use, reportAt: r.at });
+      const use = { ...(r.usage?.byAccount?.[a.id] || { last24h: empty(), last7d: empty() }) };
+      // An install of an older version reports no cost per account: split its cost by the account's share of its tokens.
+      if (!use.cost) {
+        const total = installCost(r);
+        const share = (k) => (num(r.usage?.[k]?.total) ? num(use[k]?.total) / num(r.usage[k].total) : 0);
+        use.cost = { last24h: total.last24h * share("last24h"), last7d: total.last7d * share("last7d") };
+      }
+      logins.push({ install: r.install, owner: r.owner, accountId: a.id, fingerprint: a.fingerprint, org: a.org || null, email: a.email ? a.email.toLowerCase() : null, windows: a.windows, windowsAt: a.windowsAt, limit: a.limit, use, reportAt: r.at });
     }
   }
-  // Union-find: same account (organization id), same fingerprint, same owner-given name, same email,
-  // or, for reports without the id, the same weekly reset.
+  // Union-find. The account id (organization) and the email name an account; two groups that name
+  // different ones are never joined, whatever else they share (2026-10-27: a folder login's
+  // fingerprint was the same on every install, and five accounts became one through it).
   const label = (l) => (l.org && labels[l.org]) || labels[l.fingerprint] || null;
   const parent = logins.map((_, i) => i);
+  const ident = logins.map((l) => ({ orgs: new Set(l.org ? [l.org] : []), emails: new Set(l.email ? [l.email] : []), guessed: false }));
   const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  const join = (a, b) => {
-    parent[find(a)] = find(b);
+  const meets = (a, b) => [...a].some((x) => b.has(x));
+  const canJoin = (a, b) => {
+    if (a.orgs.size && b.orgs.size) return meets(a.orgs, b.orgs);
+    if (a.emails.size && b.emails.size) return meets(a.emails, b.emails);
+    return true;
   };
+  const join = (i, j, guessed = false) => {
+    const a = find(i);
+    const b = find(j);
+    if (a === b || !canJoin(ident[a], ident[b])) return;
+    parent[a] = b;
+    for (const o of ident[a].orgs) ident[b].orgs.add(o);
+    for (const e of ident[a].emails) ident[b].emails.add(e);
+    ident[b].guessed ||= ident[a].guessed || guessed;
+  };
+  const pairs = (same, guessed = false) => {
+    for (let i = 0; i < logins.length; i += 1) for (let j = i + 1; j < logins.length; j += 1) if (same(logins[i], logins[j])) join(i, j, guessed);
+  };
+  // What names the account first, then the same token, then — for logins that name nothing — the
+  // same weekly reset (the window is the account's own).
+  pairs((a, b) => (a.org && a.org === b.org) || (a.email && a.email === b.email) || (label(a) && label(a) === label(b)));
+  // A fingerprint seen on logins of different accounts is no token's (an older install's folder-login
+  // marker): it joins nothing.
+  const fpAccounts = new Map();
+  logins.forEach((l, i) => {
+    const r = find(i);
+    if (!ident[r].orgs.size && !ident[r].emails.size) return;
+    if (!fpAccounts.has(l.fingerprint)) fpAccounts.set(l.fingerprint, new Set());
+    fpAccounts.get(l.fingerprint).add(r);
+  });
+  pairs((a, b) => a.fingerprint === b.fingerprint && a.fingerprint !== "login" && (fpAccounts.get(a.fingerprint)?.size || 0) <= 1);
   const weeklyReset = (l) => {
     const r = l.windows?.seven_day?.resetsAt ? Date.parse(l.windows.seven_day.resetsAt) : NaN;
     return Number.isFinite(r) && r > t ? r : null;
   };
-  for (let i = 0; i < logins.length; i += 1) {
-    for (let j = i + 1; j < logins.length; j += 1) {
-      const a = logins[i];
-      const b = logins[j];
-      if (a.org && b.org) {
-        if (a.org === b.org) join(i, j);
-        continue;
-      }
-      const named = label(a) && label(a) === label(b);
-      const ra = weeklyReset(a);
-      const rb = weeklyReset(b);
-      if (a.fingerprint === b.fingerprint || named || (a.email && a.email === b.email) || (ra && rb && Math.abs(ra - rb) <= SAME_RESET_MS)) join(i, j);
-    }
-  }
+  pairs((a, b) => {
+    const ra = weeklyReset(a);
+    const rb = weeklyReset(b);
+    return Boolean(ra && rb && Math.abs(ra - rb) <= SAME_RESET_MS);
+  }, true);
   const groups = new Map();
   logins.forEach((l, i) => {
     const root = find(i);
     if (!groups.has(root)) groups.set(root, []);
     groups.get(root).push(l);
   });
-  const accounts = [...groups.values()].map((members) => {
+  const accounts = [...groups.entries()].map(([root, members]) => {
     const fingerprints = [...new Set(members.map((m) => m.fingerprint))].sort();
     const org = members.map((m) => m.org).find(Boolean) || null;
-    const name = members.map(label).find(Boolean) || members.map((m) => m.email).find(Boolean) || null;
+    const email = members.map((m) => m.email).find(Boolean) || null;
+    const name = members.map(label).find(Boolean) || email;
     // The newest windows any member saw stand for the account.
     const seen = members.filter((m) => m.windows && m.windowsAt).sort((x, y) => Date.parse(y.windowsAt) - Date.parse(x.windowsAt))[0] || null;
     const last24h = empty();
     const last7d = empty();
+    const cost = { last24h: 0, last7d: 0 };
     for (const m of members) {
       addParts(last24h, m.use.last24h);
       addParts(last7d, m.use.last7d);
+      cost.last24h += num(m.use.cost?.last24h);
+      cost.last7d += num(m.use.cost?.last7d);
     }
     const limited = members.filter((m) => m.limit && Date.parse(m.limit.until) > t).map((m) => ({ install: m.install, until: m.limit.until }));
-    const key = org || fingerprints[0];
+    const key = org || email || fingerprints[0];
     return {
       key,
       name,
       org,
+      email,
       fingerprints,
-      // Joined by a guess (same weekly reset), not by the account id or a name.
-      inferred: !(org && members.every((m) => m.org === org)) && fingerprints.length > 1 && !(name && members.every((m) => label(m) === name)),
+      // Joined by a guess (same weekly reset), not by the account id, the email or a name.
+      inferred: ident[root].guessed,
       windows: seen?.windows || null,
       windowsAt: seen?.windowsAt || null,
       limited,
       last24h,
       last7d,
+      cost,
       installs: members
-        .map((m) => ({ install: m.install, owner: m.owner, accountId: m.accountId, fingerprint: m.fingerprint, last24h: m.use.last24h, last7d: m.use.last7d }))
+        .map((m) => ({ install: m.install, owner: m.owner, accountId: m.accountId, fingerprint: m.fingerprint, last24h: m.use.last24h, last7d: m.use.last7d, cost: m.use.cost }))
         .sort((x, y) => fresh(y.last7d) - fresh(x.last7d)),
     };
   });
@@ -286,16 +344,38 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
     a.title = a.name || `اکانت ${i + 1} (${a.key.slice(0, 8)})`;
   });
 
-  const totals = { last24h: empty(), last7d: empty() };
-  for (const r of reports) {
+  const totals = { last24h: empty(), last7d: empty(), cost: { last24h: 0, last7d: 0 } };
+  // Per model across the fleet (the same model reported under one name by every install).
+  const fleetModels = new Map();
+  for (const r of current) {
     addParts(totals.last24h, r.usage.last24h);
     addParts(totals.last7d, r.usage.last7d);
+    const c = installCost(r);
+    totals.cost.last24h += c.last24h;
+    totals.cost.last7d += c.last7d;
+    for (const [model, v] of Object.entries(r.usage.byModel || {})) {
+      if (!fleetModels.has(model)) fleetModels.set(model, { model, last24h: empty(), last7d: empty(), cost: { last24h: 0, last7d: 0 } });
+      const f = fleetModels.get(model);
+      addParts(f.last24h, v.last24h);
+      addParts(f.last7d, v.last7d);
+      const mc = costPair(model, v);
+      f.cost.last24h += mc.last24h;
+      f.cost.last7d += mc.last7d;
+    }
   }
+  const models = [...fleetModels.values()]
+    .map((f) => {
+      const price = priceOf(f.model);
+      return { ...f, label: price?.label || null, weight: price ? price.weight : null, priced: Boolean(price) };
+    })
+    .filter((f) => f.last7d.total || f.last24h.total)
+    .sort((x, y) => y.cost.last7d - x.cost.last7d || fresh(y.last7d) - fresh(x.last7d));
   const accountOf = new Map();
   for (const a of accounts) for (const m of a.installs) accountOf.set(`${m.install}|${m.accountId}`, a.title);
   const installs = reports
     .map((r) => {
       const age = t - Date.parse(r.at);
+      const counted = age <= DAY;
       return {
         install: r.install,
         owner: r.owner,
@@ -307,22 +387,30 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
         stale: age > STALE_MS,
         last24h: r.usage.last24h,
         last7d: r.usage.last7d,
+        cost: installCost(r),
         days: r.usage.days,
-        share24h: fresh(totals.last24h) ? fresh(r.usage.last24h) / fresh(totals.last24h) : 0,
-        share7d: fresh(totals.last7d) ? fresh(r.usage.last7d) / fresh(totals.last7d) : 0,
+        share24h: counted && fresh(totals.last24h) ? fresh(r.usage.last24h) / fresh(totals.last24h) : 0,
+        share7d: counted && fresh(totals.last7d) ? fresh(r.usage.last7d) / fresh(totals.last7d) : 0,
         accounts: Object.entries(r.usage.byAccount || {})
-          .map(([id, v]) => ({ id, account: accountOf.get(`${r.install}|${id}`) || null, kind: (r.accounts || []).find((a) => a.id === id)?.kind || id.split("-")[0], last24h: v.last24h, last7d: v.last7d }))
+          .map(([id, v]) => ({ id, account: accountOf.get(`${r.install}|${id}`) || null, kind: (r.accounts || []).find((a) => a.id === id)?.kind || id.split("-")[0], last24h: v.last24h, last7d: v.last7d, cost: v.cost || { last24h: 0, last7d: 0 } }))
           .filter((a) => a.last7d.total)
           .sort((x, y) => fresh(y.last7d) - fresh(x.last7d)),
         models: Object.entries(r.usage.byModel || {})
-          .map(([model, v]) => ({ model, last24h: v.last24h, last7d: v.last7d }))
+          .map(([model, v]) => ({ model, label: priceOf(model)?.label || null, last24h: v.last24h, last7d: v.last7d, cost: costPair(model, v) }))
           .filter((m) => m.last7d.total)
-          .sort((x, y) => fresh(y.last7d) - fresh(x.last7d))
-          .slice(0, 6),
+          .sort((x, y) => y.cost.last7d - x.cost.last7d || fresh(y.last7d) - fresh(x.last7d))
+          .slice(0, 12),
       };
     })
     .sort((x, y) => fresh(y.last7d) - fresh(x.last7d));
-  return { at: now.toISOString(), totals, accounts, installs };
+  // The plans are flat-rate: what one account costs a week (Max 200$/month ≈ 50$/week), so the list-price
+  // total can be read against what is actually paid.
+  const perAccountUsd = Number(genv("ACCOUNTING_PLAN_WEEK_USD", "")) || 50;
+  // Only accounts the owner named or that report an email are the paid plans; the unnamed ones are stray logins
+  // (one install each), not extra subscriptions. ACCOUNTING_PLAN_ACCOUNTS sets the count outright.
+  const paid = Number(genv("ACCOUNTING_PLAN_ACCOUNTS", "")) || accounts.filter((a) => a.name || a.email).length;
+  const plan = { accounts: paid, perAccountUsd, weeklyUsd: paid * perAccountUsd };
+  return { at: now.toISOString(), totals, models, plan, accounts, installs };
 }
 
 const fmt = (n) => {
@@ -336,46 +424,94 @@ export const tokens = fmt;
 const pctOf = (x) => `${Math.round(x * 100)}٪`;
 const whoOf = (i) => (i.owner ? `${i.owner} (${i.install})` : i.install);
 
+// A moment as the owner reads it: Tehran time, «امروز/فردا ساعت ۰۴:۳۰» or the weekday — never UTC.
+const TEHRAN = "Asia/Tehran";
+const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
+const clockOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const weekdayOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, weekday: "long" });
+const dateOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, weekday: "long", day: "numeric", month: "long" });
+export function whenFa(iso, now = new Date()) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const days = Math.round((Date.parse(dayOf.format(t)) - Date.parse(dayOf.format(now))) / DAY);
+  const day = days === 0 ? "امروز" : days === 1 ? "فردا" : days === -1 ? "دیروز" : Math.abs(days) < 7 ? weekdayOf.format(t) : dateOf.format(t);
+  return `${day} ساعت ${clockOf.format(t)}`;
+}
+
+// The installs on one account, their logins of it summed: who used it, not which slot.
+function byInstall(members, pick = (m) => fresh(m.last7d)) {
+  const out = new Map();
+  for (const m of members) {
+    const o = out.get(m.install) || { install: m.install, owner: m.owner, tokens: 0 };
+    o.tokens += pick(m);
+    out.set(m.install, o);
+  }
+  return [...out.values()].sort((x, y) => y.tokens - x.tokens);
+}
+// «اکانت x@y» for a named account; an unnamed one's title already says «اکانت N (…)».
+const accountOf = (a) => (a.name ? `اکانت ${a.name}` : a.title);
+const names = (list, max = 5) => {
+  const shown = list.slice(0, max).map((i) => i.owner || i.install);
+  return list.length > max ? `${shown.join("، ")} و ${list.length - max} نصب دیگر` : shown.join("، ");
+};
+
 /**
- * What the owner should hear about now: plan windows running out, a limit hit, an install spending
- * far more than its usual, one install eating a shared account, an install gone quiet.
- * Every alert has a stable key (one message per key per cooldown).
+ * What the owner should hear about now: plan windows running out, an account that is full, an
+ * install spending far more than its usual, one install eating a shared account, an install gone quiet.
+ * Every alert has a stable key (one message per key per cooldown); one account is one message, not one
+ * per install on it (2026-10-27: one full account came as eight messages, in UTC).
  */
 export function fleetAlerts(fleet, { weeklyWarn = 80, weeklyCrit = 95, sessionWarn = 90, spikeFactor = 3, spikeFloor = 3e6, shareWarn = 0.5, shareFloor = 1e7, now = new Date() } = {}) {
   const t = now.getTime();
   const out = [];
+  const near = (a, b) => Boolean(a && b) && Math.abs(Date.parse(a) - Date.parse(b)) <= 10 * 60_000;
   for (const a of fleet.accounts) {
     const live = a.windowsAt && t - Date.parse(a.windowsAt) < 6 * 3600_000;
-    const week = live ? a.windows?.seven_day : null;
-    if (week && (!week.resetsAt || Date.parse(week.resetsAt) > t) && week.percent >= weeklyWarn) {
+    const ahead = (w) => (w?.resetsAt && Date.parse(w.resetsAt) > t ? w : null);
+    const week = live ? ahead(a.windows?.seven_day) : null;
+    const session = live ? ahead(a.windows?.five_hour) : null;
+    // Full: one message per account and reopening time, naming who sits on it.
+    const untils = [...new Set(a.limited.map((l) => l.until))];
+    const all = byInstall(a.installs);
+    for (const until of untils) {
+      const hit = new Set(a.limited.filter((l) => l.until === until).map((l) => l.install));
+      const which = near(until, ahead(a.windows?.seven_day)?.resetsAt) ? "سقف هفتگی" : near(until, ahead(a.windows?.five_hour)?.resetsAt) ? "سقف ۵ ساعتهٔ" : "سقف";
+      out.push({
+        key: `limit:${a.key}:${until}`,
+        level: "critical",
+        account: a.title,
+        text: `${which} ${accountOf(a)} پر شده و تا ${whenFa(until, now)} جواب نمی‌دهد. ${all.length} نصب از این اکانت استفاده می‌کنند (${names(all)})؛ ${hit.size >= all.length ? "همه" : `${hit.size} تا`} به آن خورده‌اند و تا آن موقع با اکانت دیگرِ خودشان کار می‌کنند، یا اگر ندارند منتظر می‌مانند.`,
+      });
+    }
+    if (week && week.percent >= weeklyWarn && !untils.some((u) => near(u, week.resetsAt))) {
       const level = week.percent >= weeklyCrit ? "critical" : "warning";
-      out.push({ key: `weekly:${a.key}:${level}:${week.resetsAt || ""}`, level, account: a.title, text: `سقف هفتگی ${a.title} به ${week.percent}٪ رسید${week.resetsAt ? ` (ریست ${week.resetsAt})` : ""}. پرمصرف‌ترین در ۷ روز: ${a.installs.slice(0, 3).map((m) => `${m.owner || m.install} ${fmt(fresh(m.last7d))}`).join("، ")}` });
+      const top = all.slice(0, 3).map((i) => `${i.owner || i.install} ${fmt(i.tokens)}`).join("، ");
+      out.push({ key: `weekly:${a.key}:${level}:${week.resetsAt}`, level, account: a.title, text: `${week.percent}٪ سقف هفتگی ${accountOf(a)} مصرف شده؛ ${whenFa(week.resetsAt, now)} صفر می‌شود. بیشترین مصرف این ۷ روز: ${top}` });
     }
-    const session = live ? a.windows?.five_hour : null;
-    if (session && (!session.resetsAt || Date.parse(session.resetsAt) > t) && session.percent >= sessionWarn) {
-      out.push({ key: `session:${a.key}:${session.resetsAt || ""}`, level: "warning", account: a.title, text: `سقف ۵ ساعتهٔ ${a.title} به ${session.percent}٪ رسید${session.resetsAt ? ` (ریست ${session.resetsAt})` : ""}.` });
-    }
-    for (const l of a.limited) {
-      out.push({ key: `limit:${a.key}:${l.install}:${l.until}`, level: "critical", account: a.title, text: `${a.title} روی ${l.install} به سقف خورد تا ${l.until}؛ کارهای آن نصب روی موتور دیگر می‌رود یا منتظر می‌ماند.` });
+    if (session && session.percent >= sessionWarn && !untils.some((u) => near(u, session.resetsAt))) {
+      out.push({ key: `session:${a.key}:${session.resetsAt}`, level: "warning", account: a.title, text: `${session.percent}٪ سقف ۵ ساعتهٔ ${accountOf(a)} مصرف شده؛ ${whenFa(session.resetsAt, now)} باز می‌شود.` });
     }
     const shared24 = fresh(a.last24h);
-    if (a.installs.length >= 2 && shared24 >= shareFloor) {
-      for (const m of a.installs) {
-        const share = fresh(m.last24h) / shared24;
-        if (share >= shareWarn) out.push({ key: `share:${a.key}:${m.install}:${now.toISOString().slice(0, 10)}`, level: "warning", account: a.title, install: m.install, text: `${m.owner || m.install} در ۲۴ ساعت گذشته ${pctOf(share)} از مصرف ${a.title} را برده (${fmt(fresh(m.last24h))} از ${fmt(shared24)}، ${a.installs.length} نصب روی این اکانت).` });
+    const users = byInstall(a.installs, (m) => fresh(m.last24h));
+    if (users.length >= 2 && shared24 >= shareFloor) {
+      for (const m of users) {
+        const share = m.tokens / shared24;
+        if (share >= shareWarn) out.push({ key: `share:${a.key}:${m.install}:${now.toISOString().slice(0, 10)}`, level: "warning", account: a.title, install: m.install, text: `${m.owner || m.install} در ۲۴ ساعت گذشته ${pctOf(share)} از مصرف ${accountOf(a)} را داشته (${fmt(m.tokens)} از ${fmt(shared24)}؛ ${users.length} نصب روی این اکانت هستند).` });
       }
     }
   }
   for (const i of fleet.installs) {
+    if (i.stale) {
+      if (t - Date.parse(i.reportAt) < 7 * DAY) out.push({ key: `stale:${i.install}:${i.reportAt}`, level: "info", install: i.install, text: `از ${whoOf(i)} از ${whenFa(i.reportAt, now)} گزارش مصرفی نرسیده (نصب خاموش است، اسمش عوض شده یا به شبکه وصل نیست).` });
+      // Its numbers are old: no spike from them.
+      continue;
+    }
     const today = fresh(i.last24h);
     // The usual day: the six days before the last 24 hours.
     const before = (i.days || []).slice(-8, -1);
     const usual = before.length ? before.reduce((s, d) => s + fresh(d), 0) / before.length : 0;
     if (today >= spikeFloor && today >= spikeFactor * Math.max(usual, 1)) {
-      out.push({ key: `spike:${i.install}:${now.toISOString().slice(0, 10)}`, level: "warning", install: i.install, text: `مصرف ${whoOf(i)} در ۲۴ ساعت گذشته ${fmt(today)} توکن بود؛ ${usual ? `${(today / usual).toFixed(1)} برابر روز معمولش (${fmt(usual)})` : "روزهای قبل تقریباً صفر بود"}.` });
-    }
-    if (i.stale && t - Date.parse(i.reportAt) < 7 * DAY) {
-      out.push({ key: `stale:${i.install}:${i.reportAt}`, level: "info", install: i.install, text: `از ${whoOf(i)} از ${i.reportAt} گزارش مصرفی نرسیده (نصب خاموش است یا به شبکه وصل نیست).` });
+      out.push({ key: `spike:${i.install}:${now.toISOString().slice(0, 10)}`, level: "warning", install: i.install, text: `مصرف ${whoOf(i)} در ۲۴ ساعت گذشته ${fmt(today)} توکن بود؛ ${usual ? `${(today / usual).toFixed(1)} برابر میانگین روزانهٔ هفتهٔ قبلش (${fmt(usual)})` : "روزهای قبل تقریباً صفر بود"}.` });
     }
   }
   return out;
@@ -403,7 +539,11 @@ export function createAccounting({ store, network = null, supportHost = () => ""
     const list = kv(KV_INSTALLS, []);
     if (!list.includes(r.install)) store.setKv(KV_INSTALLS, [...list, r.install].slice(-200));
   }
-  const reports = () => kv(KV_INSTALLS, []).map((host) => kv(KV_REPORT(host), null)).filter((r) => r?.install && r.usage);
+  // A report older than a week is an install gone (or renamed): off the page.
+  const reports = () =>
+    kv(KV_INSTALLS, [])
+      .map((host) => kv(KV_REPORT(host), null))
+      .filter((r) => r?.install && r.usage && now().getTime() - Date.parse(r.at) <= 7 * DAY);
   const labels = () => kv(KV_LABELS, {});
   const fleet = () => aggregateFleet(reports(), { labels: labels(), now: now() });
 
@@ -438,7 +578,7 @@ export function createAccounting({ store, network = null, supportHost = () => ""
       if (notify) {
         const icon = (a) => (a.level === "critical" ? "🔴" : "🟠");
         try {
-          await notify(`💳 مصرف اکانت‌ها\n${due.map((a) => `${icon(a)} ${a.text}`).join("\n")}`);
+          await notify(`💳 مصرف اکانت‌های Claude\n${due.map((a) => `${icon(a)} ${a.text}`).join("\n")}`);
         } catch (error) {
           log.error?.(`[accounting] alert not sent: ${error.message}`);
         }
@@ -458,7 +598,9 @@ export function createAccounting({ store, network = null, supportHost = () => ""
       const report = cleanReport(body?.report, now());
       if (!report) return c.json({ error: "bad report" }, 400);
       // A member reports for itself only: the token it holds was made for its own address.
-      if (`net-${agentId(report.install)}`.slice(0, 41) !== who.userId) return c.json({ error: "report for another install" }, 403);
+      // (or the one it moved from: the token stays named after its old address, network.memberIs)
+      const same = network?.memberIs ? await network.memberIs(who.userId, report.install) : `net-${agentId(report.install)}`.slice(0, 41) === who.userId;
+      if (!same) return c.json({ error: "report for another install" }, 403);
       keep(report, who.label);
       check().catch((e) => log.error?.(`[accounting] check: ${e.message}`));
       return c.json({ ok: true });

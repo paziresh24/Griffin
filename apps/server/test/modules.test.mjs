@@ -174,10 +174,14 @@ test("a module's tables are its own: only CREATE … IF NOT EXISTS on mod_<id>_*
     export default (api) => {
       api.migrate("1", "CREATE TABLE IF NOT EXISTS mod_tix_items (id INTEGER PRIMARY KEY, title TEXT); CREATE INDEX IF NOT EXISTS mod_tix_t ON mod_tix_items (title)");
       api.migrate("1", "CREATE TABLE IF NOT EXISTS mod_tix_again (id INTEGER)");
+      api.migrate("2", "ALTER TABLE mod_tix_items ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+      api.migrate("2", "ALTER TABLE mod_tix_items ADD COLUMN again TEXT");
       api.db.run("INSERT INTO mod_tix_items (title) VALUES (?)", "a");
       api.kv.set("seen", api.db.all("SELECT * FROM mod_tix_items").length);
     };`);
   put(dir, "evil", {}, 'export default (api) => api.migrate("1", "DROP TABLE chats");');
+  put(dir, "evil3", {}, 'export default (api) => api.migrate("1", "ALTER TABLE chats ADD COLUMN x TEXT");');
+  put(dir, "evil4", {}, 'export default (api) => api.migrate("1", "ALTER TABLE mod_evil4_t DROP COLUMN x");');
   put(dir, "evil2", {}, 'export default (api) => api.migrate("1", "CREATE TABLE IF NOT EXISTS chats2 (id TEXT)");');
   const s = store();
   const host = await createModuleHost({ dir, store: s, enabled: "all", log: quiet });
@@ -186,6 +190,10 @@ test("a module's tables are its own: only CREATE … IF NOT EXISTS on mod_<id>_*
   assert.throws(() => s.db.prepare("SELECT 1 FROM mod_tix_again").get(), /no such table/);
   assert.match(host.status().find((x) => x.id === "evil").error, /only CREATE/);
   assert.match(host.status().find((x) => x.id === "evil2").error, /only CREATE/);
+  assert.match(host.status().find((x) => x.id === "evil3").error, /only CREATE/);
+  assert.match(host.status().find((x) => x.id === "evil4").error, /only CREATE/);
+  assert.equal(s.db.prepare("SELECT url FROM mod_tix_items").get().url, "");
+  assert.throws(() => s.db.prepare("SELECT again FROM mod_tix_items").get(), /no such column/);
 });
 
 test("the routes: list, a page's rows with the query, an action", async () => {
@@ -206,6 +214,24 @@ test("the routes: list, a page's rows with the query, an action", async () => {
   assert.equal((await app.request("/api/modules/tix/actions/open", { method: "POST", body: "{}" })).status, 400);
   assert.equal((await app.request("/api/modules/nope/pages/all/data")).status, 404);
   assert.equal((await app.request("/api/modules/tix/actions/missing", { method: "POST" })).status, 404);
+});
+
+test("a page's badge: a source answering { count } is read by /api/modules/badges; a failing or numberless one is left out; an unregistered one stops the module", async () => {
+  const dir = tmp();
+  const page = (id, badge) => ({ id, title: id, kind: "list", source: "rows", badge, fields: [{ key: "t", primary: true }] });
+  put(dir, "tix", { pages: [page("a", "n_ok"), page("b", "n_bad"), page("c", "n_text")] }, `export default (api) => {
+    api.source("rows", () => []);
+    api.source("n_ok", () => ({ count: 3 }));
+    api.source("n_bad", () => { throw new Error("down"); });
+    api.source("n_text", () => ({ count: "many" }));
+  };`);
+  put(dir, "lost", { pages: [page("a", "nope")] }, 'export default (api) => api.source("rows", () => []);');
+  const host = await createModuleHost({ dir, store: store(), enabled: "all", log: quiet });
+  assert.deepEqual(host.ids(), ["tix"]);
+  assert.match(host.status().find((x) => x.id === "lost").error, /badge reads source «nope»/);
+  const app = new Hono();
+  host.routes(app);
+  assert.deepEqual(await (await app.request("/api/modules/badges")).json(), { badges: { "tix:a": 3 } });
 });
 
 test("mr-explainer (the first real module): rows, the button, the overview tool, its agent", async () => {
@@ -281,6 +307,42 @@ test("plan: blocked when the requirement is missing, or the module and what it n
   assert.equal(both.ok, true);
   assert.deepEqual(both.disable, ["mod-d"]);
   assert.equal(planSwitch(world(mf("mod-x", { requires: { modules: ["mod-y"] } }), mf("mod-y", { conflicts: ["mod-x"] })), new Set(), "mod-x", true).ok, false);
+});
+
+test("a module's chat folder: chats it made before are moved in once, only the ones in no folder, and nothing is made when there are none", async () => {
+  const dir = tmp();
+  put(dir, "helpdesk", { title: "میز کمک", presets: ["griffin"], chatFolder: "میز کمک" }, "export default () => {}");
+  put(dir, "other", { title: "دیگر", presets: ["griffin"] }, "export default () => {}"); // names no folder: left alone
+  const s = store();
+  const host = await createModuleHost({ dir, store: s, enabled: "", product: "griffin", log: quiet });
+  assert.equal(parseManifest({ id: "aa", title: "aa", chatFolder: "پوشه" }, "aa").chatFolder, "پوشه");
+  assert.equal(parseManifest({ id: "aa", title: "aa" }, "aa").chatFolder, "");
+  assert.deepEqual(host.adoptChats(), {}); // no chats: no folder
+  assert.deepEqual(s.listGroups(), []);
+
+  const a = s.createChat({ title: "درخواست ۱" });
+  const b = s.createChat({ title: "درخواست ۲" });
+  const kept = s.createChat({ title: "درخواست ۳" });
+  const plain = s.createChat({ title: "عادی" });
+  const mine = s.createGroup("کارهای من");
+  const foreign = s.createChat({ title: "دیگر" });
+  s.updateChat(a.id, { module: "helpdesk" });
+  s.updateChat(b.id, { module: "helpdesk", archived: 1 });
+  s.updateChat(kept.id, { module: "helpdesk", groupId: mine.id }); // the owner's own placing stays
+  s.updateChat(foreign.id, { module: "other" });
+  const flagKey = "mod:helpdesk:foldered";
+  s.deleteKv(flagKey);
+  assert.deepEqual(host.adoptChats(), { helpdesk: 2 });
+  const folder = s.listGroups().find((g) => g.name === "میز کمک");
+  assert.ok(folder);
+  assert.deepEqual([a.id, b.id].map((id) => s.getChat(id).group_id), [folder.id, folder.id]);
+  assert.equal(s.getChat(kept.id).group_id, mine.id);
+  assert.equal(s.getChat(plain.id).group_id, null);
+  assert.equal(s.getChat(foreign.id).group_id, null);
+  // once: a chat the owner takes out of the folder later is not pulled back
+  s.updateChat(a.id, { groupId: null });
+  assert.deepEqual(host.adoptChats(), {});
+  assert.equal(s.getChat(a.id).group_id, null);
 });
 
 test("switching a module off moves its chats into a folder «ماژول …»; switching on puts them back", async () => {
@@ -423,6 +485,54 @@ test("a module reads only the MCP servers its module.json declares", async () =>
   assert.throws(() => parseManifest({ id: "tix", title: "T", requires: { mcp: ["bad name"] } }, "tix"), /requires\.mcp/);
 });
 
+test("a stdio MCP server reaches its module as command, args and its own env; http as url and headers", async () => {
+  const dir = tmp();
+  const entries = { local: { type: "stdio", command: "/bin/sh", args: ["-c", "exec srv"], env: { K: "v" } }, web: { type: "http", url: "https://w/mcp", headers: { a: "b" } } };
+  const seen = {};
+  const servers = { get: (n) => entries[n] || null };
+  put(dir, "both", { requires: { mcp: ["local", "web"] } }, 'export default (api) => { globalThis.__mcpSeen = { local: api.mcpServer("local"), web: api.mcpServer("web") }; }');
+  const host = await createModuleHost({ dir, store: store(), enabled: "all", mcpServers: servers, log: quiet });
+  assert.deepEqual(host.ids(), ["both"]);
+  Object.assign(seen, globalThis.__mcpSeen);
+  delete globalThis.__mcpSeen;
+  assert.deepEqual(seen.local, { type: "stdio", url: "", headers: {}, command: "/bin/sh", args: ["-c", "exec srv"], env: { K: "v" } });
+  assert.deepEqual(seen.web, { type: "http", url: "https://w/mcp", headers: { a: "b" } });
+});
+
+test("chat actions: declared with a view, and shown only while the module's MCP servers are set", async () => {
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", chatActions: [{ id: "go", label: "برو" }] }, "xx"), /needs a view/);
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", chatActions: [{ id: "go", view: "v" }] }, "xx"), /needs a label/);
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", chatActions: [{ id: "Go!", label: "l", view: "v" }] }, "xx"), /chat action id/);
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", chatActions: [{ id: "a", label: "l", view: "v" }, { id: "a", label: "m", view: "v" }] }, "xx"), /share an id/);
+  assert.deepEqual(parseManifest({ id: "xx", title: "xx", chatActions: [{ id: "to_list", label: "ببر", view: "new-task" }] }, "xx").chatActions, [{ id: "to_list", label: "ببر", icon: "puzzle", view: "new-task" }]);
+  assert.deepEqual(parseManifest({ id: "xx", title: "xx" }, "xx").chatActions, []);
+  const dir = tmp();
+  put(dir, "needs", { requires: { mcp: ["svc"] }, chatActions: [{ id: "go", label: "برو", icon: "list-plus", view: "form" }] }, "export default () => {}");
+  put(dir, "plain", { chatActions: [{ id: "go", label: "برو", view: "form" }] }, "export default () => {}");
+  let set = false;
+  const host = await createModuleHost({ dir, store: store(), enabled: "all", mcpServers: { get: (n) => (set && n === "svc" ? { url: "https://svc/mcp" } : null) }, log: quiet });
+  const actionsOf = (id) => host.list().find((m) => m.id === id).chatActions;
+  assert.deepEqual(actionsOf("needs"), [], "hidden while the server is not set");
+  assert.equal(actionsOf("plain").length, 1);
+  set = true;
+  assert.deepEqual(actionsOf("needs"), [{ id: "go", label: "برو", icon: "list-plus", view: "form" }]);
+});
+
+test("selection actions: same rules as chat actions, shown only while the module's MCP servers are set", async () => {
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", selectionActions: [{ id: "go", label: "برو" }] }, "xx"), /selection action «go» needs a view/);
+  assert.throws(() => parseManifest({ id: "xx", title: "xx", selectionActions: [{ id: "a", label: "l", view: "v" }, { id: "a", label: "m", view: "v" }] }, "xx"), /two selection actions share an id/);
+  assert.deepEqual(parseManifest({ id: "xx", title: "xx" }, "xx").selectionActions, []);
+  const dir = tmp();
+  put(dir, "sel", { requires: { mcp: ["svc"] }, selectionActions: [{ id: "to_list", label: "به فهرست", icon: "list-plus", view: "form" }], chatActions: [{ id: "chat_go", label: "برو", view: "form" }] }, "export default () => {}");
+  let set = false;
+  const host = await createModuleHost({ dir, store: store(), enabled: "all", mcpServers: { get: (n) => (set && n === "svc" ? { url: "https://svc/mcp" } : null) }, log: quiet });
+  const mod = () => host.list().find((m) => m.id === "sel");
+  assert.deepEqual([mod().selectionActions, mod().chatActions], [[], []]);
+  set = true;
+  assert.deepEqual(mod().selectionActions, [{ id: "to_list", label: "به فهرست", icon: "list-plus", view: "form" }]);
+  assert.equal(mod().chatActions.length, 1);
+});
+
 test("a module asks the small model only if its module.json declares requires.ai", async () => {
   const dir = tmp();
   put(dir, "asks", { requires: { ai: true } }, 'export default async (api) => { if ((await api.complete("q")) !== "a:q") throw new Error("wrong answer"); }');
@@ -472,4 +582,137 @@ test("the real modules own real config keys", async () => {
   const keys = new Set(CONFIG_SCHEMA.map((c) => c.key));
   const host = await createModuleHost({ dir: REAL, store: store(), enabled: "", product: "griffin", log: quiet });
   for (const key of Object.keys(host.configOwners())) assert.ok(keys.has(key), `${key} is not a core setting`);
+});
+
+test("a module with mcpOnly has a market card only where its MCP server is set", async () => {
+  const dir = tmp();
+  put(dir, "gateway", { title: "Gateway", mcpOnly: true, requires: { mcp: ["my-gateway"] }, pages: [{ id: "list", title: "Servers", icon: "radar", kind: "list", source: "rows", fields: [{ key: "title", label: "Name", primary: true }] }] }, "export default () => {}");
+  const mk = (servers) => createModuleHost({ dir, store: store(), enabled: "", product: "griffin", mcpServers: { get: (n) => servers[n] }, log: quiet });
+  assert.ok(!(await mk({})).market().some((m) => m.id === "gateway"));
+  const card = (await mk({ "my-gateway": { url: "x" } })).market().find((m) => m.id === "gateway");
+  assert.ok(card && card.enabled === false);
+  assert.deepEqual(card.nav.map((n) => n.title), ["Servers"]);
+});
+
+// --- onStop: a module that is switched off, or did not start, lets go of what it started ------------
+
+test("onStop: switching a module off runs its stop callbacks (last first); switching it on again starts it once more, not twice", async () => {
+  const dir = tmp();
+  const log = [];
+  globalThis.__stopLog = log;
+  put(dir, "ticker", { presets: ["griffin"] }, `
+    export default function register(api) {
+      globalThis.__stopLog.push("start");
+      api.onStop(() => globalThis.__stopLog.push("first"));
+      api.onStop(async () => { throw new Error("boom"); });
+      api.onStop(() => globalThis.__stopLog.push("last"));
+    }`);
+  const errors = [];
+  const host = await createModuleHost({ dir, store: store(), enabled: "ticker", log: { log() {}, error: (m) => errors.push(m) } });
+  assert.deepEqual(log, ["start"]);
+  await host.apply("ticker", false);
+  assert.deepEqual(log, ["start", "last", "first"], "reverse order; a callback that throws does not stop the others");
+  assert.ok(errors.some((e) => /onStop failed: boom/.test(e)));
+  await host.apply("ticker", false); // already off: nothing runs twice
+  assert.deepEqual(log, ["start", "last", "first"]);
+  await host.apply("ticker", true);
+  assert.deepEqual(log, ["start", "last", "first", "start"]);
+  await host.stop();
+  assert.deepEqual(log.slice(-2), ["last", "first"]);
+  await host.stop();
+  assert.equal(log.length, 6, "stop callbacks run once");
+  delete globalThis.__stopLog;
+});
+
+test("onStop: a module whose start fails afterwards is stopped, so it leaves no timer behind", async () => {
+  const dir = tmp();
+  globalThis.__stopLog = [];
+  put(dir, "half", {}, `
+    export default function register(api) {
+      api.onStop(() => globalThis.__stopLog.push("stopped"));
+      api.tool("undeclared", { execute() {} });
+    }`);
+  const host = await createModuleHost({ dir, store: store(), enabled: "half", log: quiet });
+  assert.deepEqual(host.ids(), []);
+  assert.match(host.status().find((m) => m.id === "half").error, /not declared/);
+  assert.deepEqual(globalThis.__stopLog, ["stopped"]);
+  delete globalThis.__stopLog;
+});
+
+test("a module may read its settings while it registers: the owner's value, else the default", async () => {
+  const dir = tmp();
+  globalThis.__cfgSeen = [];
+  put(dir, "cfg", { config: [{ key: "EVERY", description: "d", default: "5" }] }, `
+    export default function register(api) { globalThis.__cfgSeen.push(api.config("EVERY")); }`);
+  const s = store();
+  await createModuleHost({ dir, store: s, enabled: "cfg", log: quiet });
+  assert.deepEqual(globalThis.__cfgSeen, ["5"], "the default");
+  s.setKv("mod:cfg:config", { EVERY: "9" });
+  await createModuleHost({ dir, store: s, enabled: "cfg", log: quiet });
+  assert.deepEqual(globalThis.__cfgSeen, ["5", "9"], "what the owner set on the module's card");
+  delete globalThis.__cfgSeen;
+});
+
+// --- api.jobs: a module keeps its own scheduled jobs, only with requires.jobs ---------------------
+
+function fakeJobs() {
+  const all = new Map();
+  let n = 0;
+  return {
+    all,
+    get: (id) => all.get(id) || null,
+    create: (input) => {
+      const job = { id: `j${++n}`, enabled: true, ...input };
+      all.set(job.id, job);
+      return job;
+    },
+    remove: (id) => all.delete(id),
+  };
+}
+const JOBS_MODULE = `
+  export default function register(api) {
+    globalThis.__jobsApi = api.jobs;
+  }`;
+
+test("api.jobs: ensure makes a job once, remembers it, and makes it again after it was deleted", async () => {
+  const dir = tmp();
+  put(dir, "nightly", { requires: { jobs: true } }, JOBS_MODULE);
+  const jobs = fakeJobs();
+  await createModuleHost({ dir, store: store(), enabled: "nightly", jobs: () => jobs, log: quiet });
+  const spec = { key: "nightly-a", name: "شبانه", prompt: "کار کن", cron: "0 3 * * *" };
+  const first = globalThis.__jobsApi.ensure(spec);
+  assert.equal(first.created, true);
+  const job = jobs.get(first.id);
+  assert.deepEqual([job.triggerType, job.trigger, job.agent, job.mode, job.promptChatId], ["schedule", { cron: "0 3 * * *" }, "griffin", "auto", "owner"]);
+  assert.deepEqual(globalThis.__jobsApi.ensure(spec), { id: first.id, created: false }, "a second call makes nothing");
+  assert.equal(jobs.all.size, 1);
+  assert.deepEqual(globalThis.__jobsApi.status("nightly-a"), { id: first.id, enabled: true });
+  jobs.remove(first.id); // the person deleted it on the jobs page
+  assert.equal(globalThis.__jobsApi.status("nightly-a"), null);
+  assert.equal(globalThis.__jobsApi.ensure(spec).created, true);
+  assert.equal(globalThis.__jobsApi.remove("nightly-a"), true);
+  assert.equal(jobs.all.size, 0);
+  assert.equal(globalThis.__jobsApi.remove("nightly-a"), false);
+  delete globalThis.__jobsApi;
+});
+
+test("api.jobs: refused without requires.jobs, with a bad key or an empty spec, and where the install has no jobs", async () => {
+  const dir = tmp();
+  put(dir, "plain", {}, JOBS_MODULE);
+  await createModuleHost({ dir, store: store(), enabled: "plain", jobs: () => fakeJobs(), log: quiet });
+  assert.throws(() => globalThis.__jobsApi.ensure({ key: "x", name: "n", prompt: "p", cron: "0 3 * * *" }), /does not declare requires.jobs/);
+  const dir2 = tmp();
+  put(dir2, "nightly", { requires: { jobs: true } }, JOBS_MODULE);
+  await createModuleHost({ dir: dir2, store: store(), enabled: "nightly", jobs: () => fakeJobs(), log: quiet });
+  assert.throws(() => globalThis.__jobsApi.ensure({ key: "Bad Key", name: "n", prompt: "p", cron: "0 3 * * *" }), /job key/);
+  assert.throws(() => globalThis.__jobsApi.ensure({ key: "ok", name: "n", prompt: "", cron: "0 3 * * *" }), /needs name, prompt and cron/);
+  await createModuleHost({ dir: dir2, store: store(), enabled: "nightly", log: quiet });
+  assert.throws(() => globalThis.__jobsApi.ensure({ key: "ok", name: "n", prompt: "p", cron: "0 3 * * *" }), /jobs are not available/);
+  delete globalThis.__jobsApi;
+});
+
+test("the manifest: requires.jobs is off unless the module says true", () => {
+  assert.equal(parseManifest({ id: "tix", title: "T" }, "tix").requires.jobs, false);
+  assert.equal(parseManifest({ id: "tix", title: "T", requires: { jobs: true } }, "tix").requires.jobs, true);
+  assert.equal(parseManifest({ id: "tix", title: "T", requires: { jobs: "yes" } }, "tix").requires.jobs, false);
 });

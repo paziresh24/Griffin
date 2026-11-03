@@ -115,7 +115,8 @@ export function createMikrotikTools({ vault, routers = DEFAULT_ROUTERS, connect 
     const read = async (key) => readSecret({ projectId: from.project, path: from.path, name: from[key] });
     try {
       // Read one at a time: three parallel reads on a cold token raced the login and came back 404.
-      const host = await read("host");
+      // Routers with a fixed address only keep user/password in Infisical.
+      const host = config.host || await read("host");
       const user = await read("user");
       const password = await read("password");
       const port = from.port ? await read("port") : null;

@@ -3,11 +3,13 @@
 // with quick_check, then gzipped. Nothing here runs on the server's event loop.
 import { parentPort, workerData } from "node:worker_threads";
 import { DatabaseSync, backup } from "node:sqlite";
-import { createReadStream, createWriteStream, rmSync, statSync } from "node:fs";
+import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 
-const { src, tmp, dest } = workerData;
+// keep: where to leave the checked copy for the off-site run (backup-offsite.mjs); empty = drop it.
+const { src, tmp, dest, keep } = workerData;
 const dropTmp = () => { for (const f of [tmp, `${tmp}-wal`, `${tmp}-shm`, `${tmp}-journal`]) rmSync(f, { force: true }); };
 try {
   const live = new DatabaseSync(src, { readOnly: true });
@@ -28,6 +30,10 @@ try {
 
   await pipeline(createReadStream(tmp), createGzip({ level: 6 }), createWriteStream(dest, { mode: 0o600 }));
   const rawBytes = statSync(tmp).size;
+  if (keep) {
+    mkdirSync(dirname(keep), { recursive: true, mode: 0o700 });
+    renameSync(tmp, keep);
+  }
   dropTmp();
   parentPort.postMessage({ ok: true, bytes: statSync(dest).size, rawBytes, chats, events });
 } catch (error) {

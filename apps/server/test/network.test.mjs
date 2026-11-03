@@ -375,6 +375,12 @@ test("a member whose public name moved is followed to the new name, token and al
   hosts["new-b.example.org"] = b2;
   moved.add("old-b.example.org");
   bName = "new-b.example.org";
+  // What B sends from its new name still carries the token A made for its old one: A knows it is B
+  // (the old name redirects there), and only for that name.
+  const oldUser = `net-${agentId("old-b.example.org")}`;
+  assert.equal(await a.n.memberIs(oldUser, "new-b.example.org"), true);
+  assert.equal(await a.n.memberIs(oldUser, "c.example.org"), false);
+  assert.equal(await a.n.memberIs(`net-${agentId("c.example.org")}`, "new-b.example.org"), false);
   await a.n.refresh();
   for (let i = 0; i < 10; i++) await settle();
   const urls = a.n.connected().map((x) => x.url);

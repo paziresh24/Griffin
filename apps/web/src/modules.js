@@ -3,14 +3,23 @@ import { t } from "./i18n.js";
 // are on and what their pages look like (module.json); this file and ModulePage.jsx draw them. A
 // module adds a page without a line of React.
 
-const ROUTE = /^#\/m\/([a-z0-9-]{2,32})\/([a-z0-9-]{1,40})$/;
+// An optional third part is the page's argument (which server, which center): "#/m/<module>/<page>/<arg>".
+const ROUTE = /^#\/m\/([a-z0-9-]{2,32})\/([a-z0-9-]{1,40})(?:\/([A-Za-z0-9_.-]{1,80}))?$/;
 
-export const modulePath = (moduleId, pageId) => `/m/${moduleId}/${pageId}`;
+export const modulePath = (moduleId, pageId, arg) => `/m/${moduleId}/${pageId}${arg ? `/${arg}` : ""}`;
 
-/** "#/m/<module>/<page>" -> { module, page }, else null. */
+// What a chat can point at (chat_refs): where each kind opens. The Board page opens the task whose id is its argument.
+const REF_PAGES = { "board-app-task": ["board-app", "sprint"] };
+/** The link that opens a chat's ref in its module, or null (unknown kind, or an id the router would not carry). */
+export function refHref(kind, ref) {
+  const page = REF_PAGES[kind];
+  return page && /^[A-Za-z0-9_.-]{1,80}$/.test(String(ref || "")) ? `#${modulePath(page[0], page[1], ref)}` : null;
+}
+
+/** "#/m/<module>/<page>[/<arg>]" -> { module, page, arg? }, else null. */
 export function parseModuleRoute(hash) {
   const m = ROUTE.exec(String(hash || ""));
-  return m ? { module: m[1], page: m[2] } : null;
+  return m ? { module: m[1], page: m[2], ...(m[3] ? { arg: m[3] } : {}) } : null;
 }
 
 // The words a module.json shows (titles, labels, hints) are Persian keys like any other UI text;
@@ -32,12 +41,49 @@ export function translateManifest(value) {
   return out;
 }
 
+/** The chat buttons of the enabled modules (module.json chatActions), each with its module. */
+export function moduleChatActions(modules) {
+  return (modules || []).flatMap((mod) => (mod.chatActions || []).map((action) => ({ module: mod, action })));
+}
+
+/** The selection-menu items of the enabled modules (module.json selectionActions), each with its module. */
+export function moduleSelectionActions(modules) {
+  return (modules || []).flatMap((mod) => (mod.selectionActions || []).map((action) => ({ module: mod, action })));
+}
+
+/** What a selection item hands its module's screen: the selected text, trimmed and bounded. */
+export const selectionForModule = (text, max = 4000) => {
+  const s = String(text || "").trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+};
+
+/**
+ * What a chat button hands its module's screen: the last messages of the chat as plain text,
+ * oldest first — the owner's words and the assistant's answers (its text parts, no tool output or
+ * reasoning). Bounded, so a long chat is not sent whole.
+ */
+export function chatDigest(messages, { max = 30, chars = 1500, total = 20000 } = {}) {
+  const out = [];
+  for (const m of messages || []) {
+    let text = "";
+    if (m?.role === "user") text = String(m.text || "");
+    else if (m?.role === "assistant") text = (m.parts || []).filter((p) => p?.type === "text").map((p) => p.text || "").join("\n");
+    else continue;
+    text = text.trim();
+    if (text) out.push({ role: m.role, text: text.length > chars ? `${text.slice(0, chars - 1)}…` : text });
+  }
+  const last = out.slice(-max);
+  let size = last.reduce((n, m) => n + m.text.length, 0);
+  while (last.length > 1 && size > total) size -= last.shift().text.length;
+  return last;
+}
+
 /** The sidebar entries: one per page of every enabled module. */
 export function moduleNavItems(modules) {
   const items = [];
   for (const mod of modules || []) {
     for (const page of mod.pages || []) {
-      if (page.kind === "builtin") continue; // the core sections (NAV_ITEMS) draw themselves
+      if (page.kind === "builtin" || page.hidden) continue; // the core sections (NAV_ITEMS) draw themselves; a hidden page is only reached by a link
       items.push({ id: `m:${mod.id}:${page.id}`, label: page.title, icon: page.icon, path: modulePath(mod.id, page.id), module: mod.id, page: page.id });
     }
   }

@@ -34,16 +34,25 @@ export function claudeLimitCode(message, limit = null) {
   if (limit || isClaudePlanLimit(message) || isCreditError(message)) return "plan_limit";
   return AUTO_FALLBACK_TEXT.test(String(message || "")) ? ENGINE_UNAVAILABLE : null;
 }
-// Whether auto mode moves the run: exactly Griffin's match before this change (8d4b48b), no more
-// and no less, whatever the code says.
-export const autoMovesOn = (message, limit = null) => Boolean(limit) || AUTO_FALLBACK_TEXT.test(String(message || "")) || isCreditError(message);
+// Whether auto mode moves the run: Griffin's match since 8d4b48b, and every spent plan. Without the
+// latter «You've hit your weekly limit» with no rate_limit_event stayed on the spent account and the
+// chat stopped (2026-11-01, «Platform HA»).
+export const autoMovesOn = (message, limit = null) => Boolean(limit) || AUTO_FALLBACK_TEXT.test(String(message || "")) || isClaudePlanLimit(message) || isCreditError(message);
 
 // The rerun's note after a same-model move between accounts that could not keep the session.
 export const accountMoveNote = (hop, done = null) =>
-  `(سیستم) سقف پلن حساب ${hop.from} پر شد و همین مدل روی حساب ${hop.account} ادامه می‌دهد، ولی جلسهٔ قبلی به این حساب نرسید: گفت‌وگوی قبلی را نمی‌بینی و اجرای قبلی ممکن است بخشی از کار را کرده باشد. پیش از تکرار هر کار بیرونی وضعیت را بررسی کن.` + doneLines(done);
+  `(سیستم) ${hop.why === "auth" ? `ورود حساب ${hop.from} پذیرفته نشد` : `سقف پلن حساب ${hop.from} پر شد`} و همین مدل روی حساب ${hop.account} ادامه می‌دهد، ولی جلسهٔ قبلی به این حساب نرسید: گفت‌وگوی قبلی را نمی‌بینی و اجرای قبلی ممکن است بخشی از کار را کرده باشد. پیش از تکرار هر کار بیرونی وضعیت را بررسی کن.` + doneLines(done);
 
 // Z.ai says when it resets: «Your limit will reset at 2026-10-13 18:00:00» (Inferred: Beijing time).
-export function resetFromText(text) {
+// Claude: «You've hit your weekly limit · resets Nov 3, 2am (UTC)», the next such date.
+export function resetFromText(text, now = Date.now()) {
+  const c = String(text || "").match(/resets ([A-Z][a-z]{2}) (\d{1,2}), (\d{1,2})(?::(\d{2}))?(am|pm) \(UTC\)/);
+  if (c) {
+    const hour = (Number(c[3]) % 12) + (c[5] === "pm" ? 12 : 0);
+    const year = new Date(now).getUTCFullYear();
+    const at = (y) => Date.parse(`${c[1]} ${c[2]} ${y} ${hour}:${c[4] || "00"}:00 UTC`);
+    return Number.isFinite(at(year)) ? (at(year) > now ? at(year) : at(year + 1)) : null;
+  }
   const m = String(text || "").match(/reset at (\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/i);
   if (!m) return null;
   const at = Date.parse(`${m[1]}T${m[2].length === 5 ? `${m[2]}:00` : m[2]}+08:00`);
@@ -160,13 +169,15 @@ export const saidWait = (selected) => Array.isArray(selected) && selected[0] ===
 // its plan limit), so a limit moves the chat by itself. ask: a limited account is NOT skipped —
 // the chat stays on its own engine (and hits the limit again, which asks again) until the owner
 // says yes on the card, which pins the chat to the engine he chose.
-export function pickRoute(list, { usable, enabled, keyed = () => true, ask = false, kindOf = (id) => id }) {
+// broken(id): the account's login was refused — no waiting brings it back, so even ask mode moves on.
+export function pickRoute(list, { usable, enabled, keyed = () => true, ask = false, kindOf = (id) => id, broken = () => false }) {
   if (ask) {
     const home = list.find((c) => enabled(c.provider) && keyed(c.provider));
     // The same model on another usable account is not a switch: taken without asking.
     if (home && !usable(home.provider)) {
       const alt = list.find((c) => usable(c.provider) && sameModelAccount(home, c, kindOf));
       if (alt) return alt;
+      if (broken(home.provider)) return list.find((c) => usable(c.provider)) || home;
     }
     return home || list.find((c) => enabled(c.provider)) || list[0] || null;
   }

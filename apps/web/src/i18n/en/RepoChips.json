@@ -19,5 +19,12 @@
   "این گفتگو در این گروه ساخته می‌شود": "This chat will be created in this group",
   "بیرون از گروه بساز": "Create outside the group",
   "محیط اجرا: کپسول": "Runs on: capsule",
-  "کپسول": "Capsule"
+  "کپسول": "Capsule",
+  "تسک بورد: {title}": "Board task: {title}",
+  "جستجو در کارهای بورد": "Search Board tasks",
+  "کاری پیدا نشد.": "No task found.",
+  "جدا کردن این تسک از گفتگو": "Unlink this task from the chat",
+  "اتصال این گفتگو به یک تسک بورد": "Link this chat to a Board task",
+  "تسک": "Task",
+  "در حال بارگذاری…": "Loading…"
 }

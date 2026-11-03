@@ -68,7 +68,7 @@ export const FLAGS = [
   { key: "modelLabels", area: t("کادر پیام"), label: t("نام نسخهٔ مدل‌ها"), hint: t("مثل «Opus 5.5»، و مدلی که اجرا می‌شود به‌جای «خودکار»."), griffin: true, karsara: true },
   { key: "repoChipsAlways", area: t("کادر پیام"), label: t("چیپ‌های بالای کادر همیشه پیدا"), hint: t("سرور، ریپو و شاخه همیشه بالای کادر دیده می‌شوند. خاموش: فقط وقتی موس روی کادر است یا در آن می‌نویسید."), griffin: true, karsara: false },
   { key: "repoCapsule", area: t("کادر پیام"), label: t("چیپ «کپسول»"), hint: t("محیط اجرا «کپسول» نامیده می‌شود و worktree فقط بعد از ساخت شاخه."), griffin: false, karsara: true },
-  { key: "settingsList", area: t("تنظیمات"), label: t("فهرست تنظیمات کارسرا"), hint: t("بدون گروه، «وضعیت» اول، هر بار از «وضعیت» باز می‌شود."), griffin: false, karsara: true },
+  { key: "settingsList", area: t("تنظیمات"), label: t("تنظیمات همیشه از «وضعیت» باز شود"), hint: t("خاموش: از آخرین بخشی که دیده‌اید باز می‌شود."), griffin: false, karsara: true },
   { key: "setupFlat", area: t("تنظیمات"), label: t("ویزارد راه‌اندازی ساده"), hint: t("کارت‌های تخت، بدون آیکون‌های تزئینی."), griffin: false, karsara: true },
 ];
 const FLAG_KEYS = FLAGS.map((f) => f.key);
@@ -178,7 +178,7 @@ function set(next) {
   state = next;
   if (!next) return;
   if (typeof document !== "undefined") document.documentElement.dataset.look = next.look;
-  write(CACHE, JSON.stringify(next));
+  write(CACHE, JSON.stringify({ ...next, rev: PREFS_REV })); // what was resolved is current: the next load must not migrate it
   for (const listener of listeners) listener();
 }
 
@@ -230,13 +230,12 @@ async function loadFromServer(request) {
 /** The user's own choice: a look and/or flags, saved for every device. */
 export function setUiPrefs(patch) {
   const current = snapshot();
-  const next = resolvePrefs({ look: patch.look || current.look, flags: { ...current.flags, ...(patch.flags || {}) } }, installLook);
+  // This revision: without it the flags of CHANGED_AT read as a copy from before they changed, and a
+  // switch of theirs went straight back to the preset (2026-11-01: «یه سری از دکمه‌هاش کار نمیکنن»).
+  const next = resolvePrefs({ look: patch.look || current.look, flags: { ...current.flags, ...(patch.flags || {}) }, rev: PREFS_REV }, installLook);
   set(next);
   return api("/api/ui-prefs", { method: "PUT", body: { look: next.look, flags: next.flags, rev: PREFS_REV } }).catch(() => {});
 }
-
-/** A preset as a starting point: its look and all its flags. */
-export const applyPreset = (look) => setUiPrefs(presetOf(look));
 
 /** "Back to the install's default": nothing of the user's stays; the install's preset applies (and follows it). */
 export function resetUiPrefs() {

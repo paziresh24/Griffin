@@ -4,10 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createMcpServers } from "../src/mcp-servers.mjs";
-import { createMcpOauth } from "../src/mcp-oauth.mjs";
+import { MCP_OAUTH_CALLBACK, callbackUrl, createMcpOauth, registerMcpOauthCallback } from "../src/mcp-oauth.mjs";
+import { createApp } from "../src/app.mjs";
+import { createAuth } from "../src/auth.mjs";
+import { openStore } from "../src/db.mjs";
+import { createRunner } from "../src/runner.mjs";
 import { createSecretStore } from "../src/secrets.mjs";
 
-const REDIRECT = "https://g.example/api/mcp-oauth/callback";
+const REDIRECT = "https://g.example/api/public/mcp-oauth/callback";
 
 function setup() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcpo-"));
@@ -65,8 +69,43 @@ test("ensureFresh renews a token about to expire, leaves a fresh one, and reject
   await oauth.ensureFresh();
   assert.equal(mcp.get("tracker").headers.Authorization, "Bearer at-2");
   await assert.rejects(oauth.start({ name: "tracker", redirectUri: "https://x/evil" }), /redirect/);
+  await assert.rejects(oauth.start({ name: "tracker", redirectUri: "https://g.example/api/mcp-oauth/callback" }), /redirect/, "the old, session-only path is not handed out any more");
   mcp.save({ name: "local", server: { type: "stdio", command: "npx" } });
   await assert.rejects(oauth.start({ name: "local", redirectUri: REDIRECT }), /http\/sse/);
   oauth.forget("tracker");
   assert.equal(oauth.status("tracker").signedIn, false);
+});
+
+test("the callback is public: a browser without a Griffin session finishes the sign-in; state still binds it", async () => {
+  const { mcp, oauth, secrets } = setup();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcpo-app-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const runner = createRunner({ store, sdk: {}, agentOptions: () => ({}), log: {} });
+  const app = createApp({ store, runner, auth: createAuth({ dataDir: dir, store }), extraRoutes: (api) => registerMcpOauthCallback(api, oauth) });
+  try {
+    assert.equal(callbackUrl("https://g.example/some/page"), REDIRECT);
+    assert.ok(MCP_OAUTH_CALLBACK.startsWith("/api/public/"));
+    // no cookie, no token: the rest of the API still says no
+    assert.equal((await app.request("http://localhost/api/chats")).status, 401);
+    const { url } = await oauth.start({ name: "tracker", redirectUri: REDIRECT });
+    const state = new URL(url).searchParams.get("state");
+    // a made-up state is refused (page, not a token), and does not spend the real one
+    const forged = await app.request(`http://localhost${MCP_OAUTH_CALLBACK}?state=forged&code=c`);
+    assert.equal(forged.status, 200);
+    assert.match(await forged.text(), /ورود انجام نشد/);
+    assert.equal(mcp.get("tracker").headers?.Authorization, undefined);
+    const done = await app.request(`http://localhost${MCP_OAUTH_CALLBACK}?state=${encodeURIComponent(state)}&code=the-code`);
+    assert.equal(done.status, 200);
+    assert.match(await done.text(), /ورود انجام شد/);
+    assert.equal(done.headers.get("cache-control"), "no-store");
+    assert.equal(mcp.get("tracker").headers.Authorization, "Bearer at-1");
+    // the same state twice: refused
+    assert.match(await (await app.request(`http://localhost${MCP_OAUTH_CALLBACK}?state=${encodeURIComponent(state)}&code=x`)).text(), /ورود انجام نشد/);
+    // the old path is still behind the session
+    assert.equal((await app.request(`http://localhost/api/mcp-oauth/callback?state=x&code=y`)).status, 401);
+    assert.ok(secrets);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

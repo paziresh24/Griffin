@@ -16,7 +16,7 @@ const GIT_ALLOWED = new Set(["status", "diff", "log", "show", "add", "rm", "mv",
 // Options that make git read or write outside the worktree, run programs, or switch branches.
 const GIT_REFUSED = /^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--upload-pack|--receive-pack|--ext-diff|--output|--config-env|--template|--super-prefix)(=|$)/;
 
-function git(args, cwd, { input, timeout = 60_000 } = {}) {
+function git(args, cwd, { input, timeout = 60_000, who = gitIdentity() } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile(
       "git",
@@ -28,11 +28,12 @@ function git(args, cwd, { input, timeout = 60_000 } = {}) {
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: "0",
-          // Commits carry the owner's git identity when set, else the assistant's own name (persona.mjs).
-          GIT_AUTHOR_NAME: gitIdentity().name,
-          GIT_AUTHOR_EMAIL: gitIdentity().email,
-          GIT_COMMITTER_NAME: gitIdentity().name,
-          GIT_COMMITTER_EMAIL: gitIdentity().email,
+          // Commits carry the GitLab user that pushes them (the install's token, `author` below), else the
+          // owner's git identity when set, else the assistant's own name (persona.mjs).
+          GIT_AUTHOR_NAME: who.name,
+          GIT_AUTHOR_EMAIL: who.email,
+          GIT_COMMITTER_NAME: who.name,
+          GIT_COMMITTER_EMAIL: who.email,
           // No repo hooks (husky etc.) run inside the app container.
           GIT_CONFIG_COUNT: "2",
           GIT_CONFIG_KEY_0: "safe.directory",
@@ -53,7 +54,10 @@ function git(args, cwd, { input, timeout = 60_000 } = {}) {
 
 const clip = (text, max = 60_000) => (text.length > max ? `${text.slice(0, max)}\n… (${text.length - max} more characters cut)` : text);
 
-export function createRepoChatTools({ dir, repo, branch, push }) {
+// `author` (optional): async () => {name, email} of the GitLab user the pushes go out as. Owner
+// 2026-10-29: Platform's author watch flagged pushes made with a person's token whose commits said
+// «Kian» — the persona name. The broker re-makes such commits at push time too (repos.mjs).
+export function createRepoChatTools({ dir, repo, branch, push, author = null }) {
   const root = path.resolve(dir);
   let realRoot = root;
   try {
@@ -175,20 +179,24 @@ export function createRepoChatTools({ dir, repo, branch, push }) {
         if (!GIT_ALLOWED.has(list[0])) throw new Error(`git ${list[0]} is not allowed here (allowed: ${[...GIT_ALLOWED].join(", ")})`);
         const refused = list.find((a) => GIT_REFUSED.test(a));
         if (refused) throw new Error(`git option ${refused} is not allowed here`);
+        // A commit is made by whoever pushes it; its name is not the model's to pick.
+        if (list[0] === "commit" && list.some((a) => /^--author(=|$)/.test(a))) throw new Error("git commit --author is not allowed: commits carry the identity of the GitLab user that pushes them");
         // Paths given to add/rm/mv/restore stay inside the worktree.
         if (["add", "rm", "mv", "restore"].includes(list[0])) for (const arg of list.slice(1)) if (!arg.startsWith("-")) inside(arg);
-        return { ...where, output: clip(await git(list, root)) };
+        const who = list[0] === "commit" && author ? await Promise.resolve().then(author).catch(() => null) : null;
+        return { ...where, output: clip(await git(list, root, who?.name && who?.email ? { who } : {})) };
       },
     },
 
     repo_push: {
-      description: `Push this chat's branch (${branch}) of ${repo} to GitLab (never another branch, never force). Commit first with repo_git. With mrTitle it also opens a Draft merge request to the default branch (or returns the one already open); merging stays with a person.`,
+      description: `Push this chat's branch (${branch}) of ${repo} to GitLab (never another branch, never force). Commit first with repo_git. With mrTitle it also opens a Draft merge request to the default branch (or returns the one already open); merging stays with a person. toDefault pushes the commits straight onto the default branch (fast-forward, never force) — only where this install allows it for the project (it is refused otherwise) and only when the project owner asked for it.`,
       inputSchema: {
         type: "object",
-        properties: { mrTitle: { type: "string", maxLength: 200 }, mrDescription: { type: "string", maxLength: 20000 } },
+        properties: { mrTitle: { type: "string", maxLength: 200 }, mrDescription: { type: "string", maxLength: 20000 }, toDefault: { type: "boolean" } },
         additionalProperties: false,
       },
       async execute(args = {}) {
+        if (args?.toDefault === true) return push({ repo, branch, toDefault: true });
         return push({ repo, branch, ...(args?.mrTitle ? { mrTitle: String(args.mrTitle), mrDescription: String(args.mrDescription || "") } : {}) });
       },
     },
@@ -204,5 +212,5 @@ export function repoRules({ repo, branch, dir, moved = null }) {
 This chat works on the repo «${repo}» in its own git worktree ${dir} on branch ${branch} (nothing else touches it).
 Read and change files with repo_list / repo_read / repo_search / repo_edit / repo_write; commit with repo_git; push with repo_push (only this branch — the answer has the merge-request link).
 Run builds and tests in the sandbox, which sees the same path: debug_exec {host:"sandbox", command:"cd ${dir} && …"}.
-Never push to or change the default branch; say what you changed and give the branch / MR link.${switched}`;
+Never push to or change the default branch (unless the project owner asked for direct pushes: repo_push toDefault, which this install refuses for any project it does not allow); say what you changed and give the branch / MR link.${switched}`;
 }

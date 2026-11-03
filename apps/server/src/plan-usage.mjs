@@ -18,6 +18,8 @@ function window(entry) {
   return { percent, resetsAt };
 }
 
+const LIMIT_KINDS = { session: { id: "five_hour", label: "session" }, weekly_all: { id: "seven_day", label: "weekly" } };
+
 /**
  * SDKControlGetUsageResponse -> plan limit rows. `available: false` carries the reason in plain
  * words (API key / third-party provider sessions have no plan limits).
@@ -42,6 +44,18 @@ export function parsePlanUsage(raw) {
     const name = typeof scoped?.display_name === "string" ? scoped.display_name.slice(0, 40) : "";
     if (!name || rows.some((r) => r.model === name)) continue;
     add(`model:${name}`, "weekly_model", scoped, name);
+  }
+  // The same windows as a list (0-100 in `percent`). A plan without a window simply has no such
+  // entry (Ultra has no five_hour, 2026-10-30); a row comes from here only if the fields above gave none.
+  for (const item of Array.isArray(limits.limits) ? limits.limits : []) {
+    const kind = LIMIT_KINDS[item?.kind];
+    if (kind) {
+      if (!rows.some((r) => r.id === kind.id)) add(kind.id, kind.label, item);
+      continue;
+    }
+    const scope = item?.scope?.model?.display_name ?? item?.scope?.surface?.display_name;
+    const name = item?.kind === "weekly_scoped" && typeof scope === "string" ? scope.slice(0, 40) : "";
+    if (name && !rows.some((r) => r.model === name)) add(`model:${name}`, "weekly_model", item, name);
   }
   if (!rows.length) return { available: false, plan, reason: "Claude Code returned no limit windows" };
   return { available: true, plan, rows };

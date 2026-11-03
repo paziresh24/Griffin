@@ -313,6 +313,7 @@
   "نویسنده:": "Author:",
   "همه ({toLocaleString} نفر)": "All ({toLocaleString} people)",
   "{toLocaleString} از {toLocaleString2} مورد": "{toLocaleString} of {toLocaleString2} items",
+  "فیلترها": "Filters",
   "پاک کردن فیلترها": "Clear filters",
   "در حال خواندن": "Reading",
   "{v} MR {label} نیست.": "{v} has no {label} MR.",
@@ -351,5 +352,11 @@
   "بازبین: {join}": "Reviewer: {join}",
   "{fa} مورد به رسیدگی نیاز دارد": "{fa} need attention",
   "{fa} مورد آمادهٔ مرج است": "{fa} ready to merge",
-  "{fa} MR؛ چیزی منتظر شما نیست.": "{fa} MRs; nothing is waiting for you."
+  "{fa} MR؛ چیزی منتظر شما نیست.": "{fa} MRs; nothing is waiting for you.",
+  "پیش‌فرض این نصب: {v}": "This install's default: {v}",
+  "پیش‌فرض ({effective})": "Default ({effective})",
+  "ری‌استارت گریفین{v}": "Restart Griffin{v}",
+  " ({activeRuns} ران در جریان)": " ({activeRuns} runs in progress)",
+  "ربات‌ها و اکانت تلگرامی که دستیار از آن‌ها پیام می‌گیرد.": "The bots and the Telegram account the assistant gets messages from.",
+  "بازخورد و درخواست پشتیبانی که از نصب همکاران (و همین‌جا) رسیده، با تصویر صفحه و جزئیات.": "Feedback and support requests from other installs (and this one), with a screenshot and details."
 }

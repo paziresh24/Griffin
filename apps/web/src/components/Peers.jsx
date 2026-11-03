@@ -9,6 +9,8 @@ import { clockLabel, exactTime } from "../elapsed.js";
 import { NetworkSection } from "./Network.jsx";
 import { activeClients, initial, lastSeen, openAgents, peerList, taskTitle } from "../peers-list.js";
 
+import { askConfirm } from "../dialog.jsx";
+
 // External agents (MCP now, A2A later): a short list of colleagues (peers-list.js); a row opens
 // what that colleague's agent asked for, what it may use and its device tokens. The agents' network
 // and the irreversible-call audit are tabs of their own.
@@ -342,7 +344,7 @@ function ClientRow({ userId, client, onChange }) {
   const revoked = Boolean(client.revoked_at);
   const expired = client.expires_at && new Date(client.expires_at) < new Date();
   const revoke = async () => {
-    if (!window.confirm(t("توکن «{label}» باطل شود؟ آن دستگاه دیگر وصل نمی‌شود.", { label: client.label }))) return;
+    if (!(await askConfirm(t("توکن «{label}» باطل شود؟ آن دستگاه دیگر وصل نمی‌شود.", { label: client.label })))) return;
     try {
       await api(`/api/peers/${userId}/clients/${client.id}`, { method: "DELETE" });
       onChange();

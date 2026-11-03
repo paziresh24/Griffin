@@ -42,6 +42,9 @@ export function parseManifest(raw, dirName) {
     // true = the module may ask the install's small model one question at a time (api.complete): a
     // summary, a label. The text it sends leaves the server like a chat's does, so it says so here.
     ai: raw.requires?.ai === true,
+    // true = the module may keep scheduled jobs of the install (api.jobs.ensure / status / remove): only ones it
+    // names itself, each made once and only after the person said yes on the module's page.
+    jobs: raw.requires?.jobs === true,
   };
   const badMcp = requires.mcp.find((n) => !/^[\w.-]{1,64}$/.test(n));
   if (badMcp) throw fail(id, `requires.mcp «${badMcp}» is not a server name`);
@@ -92,7 +95,7 @@ export function parseManifest(raw, dirName) {
     if (!str(p.title, 60)) throw fail(id, `page «${pageId}» needs a title`);
     if (p.kind === "builtin") {
       if (!/^\/[a-z0-9-]{1,40}$/.test(str(p.route, 41))) throw fail(id, `page «${pageId}» needs a route like /telegram`);
-      return { id: pageId, title: str(p.title, 60), icon: str(p.icon, 30) || "puzzle", kind: "builtin", route: p.route, fields: [], actions: [], filters: [], groupBy: null, search: false };
+      return { id: pageId, title: str(p.title, 60), icon: str(p.icon, 30) || "puzzle", kind: "builtin", route: p.route, fields: [], actions: [], filters: [], groupBy: null, search: false, hidden: false };
     }
     if (!NAME.test(str(p.source, 40))) throw fail(id, `page «${pageId}» needs a source`);
     const fields = (Array.isArray(p.fields) ? p.fields : []).map((f) => {
@@ -120,7 +123,12 @@ export function parseManifest(raw, dirName) {
     // web). The rows, actions and guards stay the list's; a build without the file shows the list.
     const view = p.view === undefined ? "" : str(p.view, 40);
     if (view && !NAME.test(view.replace(/-/g, "_"))) throw fail(id, `page «${pageId}» view «${view}» is not a-z, 0-9, dashes`);
-    return { id: pageId, title: str(p.title, 60), icon: str(p.icon, 30) || "puzzle", kind: p.kind, source: p.source, fields, actions, filters, groupBy, search: Boolean(p.search), view };
+    // Optional: a source of the module that answers { count } — the number drawn as a badge beside the page's menu entry.
+    const badge = p.badge === undefined ? "" : str(p.badge, 40);
+    if (badge && !NAME.test(badge)) throw fail(id, `page «${pageId}» badge «${badge}» is not a source name`);
+    return { id: pageId, title: str(p.title, 60), icon: str(p.icon, 30) || "puzzle", kind: p.kind, source: p.source, fields, actions, filters, groupBy, search: Boolean(p.search), view, badge,
+      // true = no sidebar entry: the page is only opened from a link of another page of the module (a detail page).
+      hidden: p.hidden === true };
   });
   const pageIds = pages.map((p) => p.id);
   if (new Set(pageIds).size !== pageIds.length) throw fail(id, "two pages share an id");
@@ -143,6 +151,9 @@ export function parseManifest(raw, dirName) {
   const category = CATEGORIES.has(raw.category) ? raw.category : "other";
   const icon = str(raw.icon, 30) || pages[0]?.icon || "puzzle";
   const choice = provides.length ? str(raw.choice, 160) : "";
+  // The chat folder the module's chats live in (its page asks for it with openChat.folder); chats it made
+  // before are moved there once (host.adoptChats).
+  const chatFolder = str(raw.chatFolder, 40);
 
   // Core settings that belong to this module (owner 2026-10-20: «تنظیماتش یکپارچه بشه»): the
   // marketplace shows them on the module's card, and Settings → پیکربندی/ظاهر no longer does.
@@ -157,5 +168,25 @@ export function parseManifest(raw, dirName) {
   const badFlag = settings.flags.find((k) => !/^[a-z][A-Za-z0-9]{1,39}$/.test(k));
   if (badFlag) throw fail(id, `settings.flags «${badFlag}» must be camelCase`);
 
-  return { id, version: str(raw.version, 20) || "0.0.0", title, description: str(raw.description, 400), maintainer: str(raw.maintainer, 80), builtin, presets, requires, provides, conflicts, sets, switchNote: risk, agents, tools, pages, config, settings, category, icon, choice };
+  // Buttons a module puts on chats, each opening the module's own screen for that chat
+  // (modules/<id>/web/<view>.jsx) in a dialog; what the screen does after that goes through the
+  // module's actions like any page. Shown only while every requires.mcp server is set (host.list).
+  // chatActions: on every chat's header; the screen gets the chat's recent messages.
+  // selectionActions: in the menu over text selected in an answer; the screen gets that text.
+  const buttons = (field, what) => {
+    const list = (Array.isArray(raw[field]) ? raw[field] : []).map((a) => {
+      const actionId = str(a?.id, 40);
+      if (!NAME.test(actionId)) throw fail(id, `${what} id «${actionId}» is not a-z, 0-9, underscores`);
+      if (!str(a.label, 40)) throw fail(id, `${what} «${actionId}» needs a label`);
+      const view = str(a.view, 40);
+      if (!view || !NAME.test(view.replace(/-/g, "_"))) throw fail(id, `${what} «${actionId}» needs a view (modules/${id}/web/<view>.jsx)`);
+      return { id: actionId, label: str(a.label, 40), icon: str(a.icon, 30) || "puzzle", view };
+    });
+    if (new Set(list.map((a) => a.id)).size !== list.length) throw fail(id, `two ${what}s share an id`);
+    return list;
+  };
+  const chatActions = buttons("chatActions", "chat action");
+  const selectionActions = buttons("selectionActions", "selection action");
+
+  return { id, version: str(raw.version, 20) || "0.0.0", title, description: str(raw.description, 400), maintainer: str(raw.maintainer, 80), builtin, presets, requires, provides, conflicts, sets, switchNote: risk, mcpOnly: raw.mcpOnly === true && requires.mcp.length > 0, agents, tools, pages, config, settings, category, icon, choice, chatFolder, chatActions, selectionActions };
 }

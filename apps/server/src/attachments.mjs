@@ -154,10 +154,10 @@ const keptFile = ({ name, mimeType, data }) => ({ name, mimeType, data, kept: tr
  * strict: the old rule (Telegram's colleague files: that chat has no file tools to open a kept
  * one) — only inline files, anything else refused.
  */
-export function parseFiles(raw, { strict = false } = {}) {
+export function parseFiles(raw, { strict = false, maxFiles = MAX_FILES } = {}) {
   if (raw == null) return { files: [] };
   if (!Array.isArray(raw)) return { error: "فایل‌های پیوست باید فهرست باشند" };
-  if (raw.length > MAX_FILES) return { error: `بیش از ${MAX_FILES} فایل نمی‌شود پیوست کرد` };
+  if (raw.length > maxFiles) return { error: `بیش از ${MAX_FILES} فایل نمی‌شود پیوست کرد` };
   const files = [];
   let pdfBytes = 0;
   let pdfPagesTotal = 0;

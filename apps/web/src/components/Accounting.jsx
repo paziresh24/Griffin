@@ -12,6 +12,8 @@ import { num, t } from "../i18n.js";
 
 // Tokens that load a plan: a cache read is cheap, the rest is not (accounting.mjs fresh).
 const fresh = (p) => Number(p?.total || 0) - Number(p?.cacheRead || 0);
+// USD at API list price (apps/server/src/pricing.mjs): the one scale for Opus, Sonnet, Haiku, cache and output.
+const usd = (n) => `$${Math.round(Number(n) || 0).toLocaleString("en-US")}`;
 const pct = (x) => `${num(Math.round((x || 0) * 100))}%`;
 const WINDOW_LABELS = { five_hour: t("۵ ساعته"), seven_day: t("هفتگی"), seven_day_opus: t("هفتگی Opus"), seven_day_sonnet: t("هفتگی Sonnet") };
 const LEVEL = { critical: "border-red-500/40 bg-red-500/8", warning: "border-amber-500/40 bg-amber-500/8", info: "border-border bg-muted/40" };
@@ -78,8 +80,9 @@ function AccountCard({ account, onSaved }) {
           </p>
         </div>
         <div className="text-end text-xs">
-          <div><bdi className="ltr font-semibold">{formatTokens(fresh(account.last24h))}</bdi> <span className="text-muted-foreground">{t("۲۴ ساعت")}</span></div>
-          <div><bdi className="ltr">{formatTokens(fresh(account.last7d))}</bdi> <span className="text-muted-foreground">{t("۷ روز")}</span></div>
+          <div><bdi className="ltr font-semibold">{usd(account.cost?.last24h)}</bdi> <span className="text-muted-foreground">{t("۲۴ ساعت")}</span></div>
+          <div><bdi className="ltr">{usd(account.cost?.last7d)}</bdi> <span className="text-muted-foreground">{t("۷ روز")}</span></div>
+          <div className="text-[11px] text-muted-foreground"><bdi className="ltr">{formatTokens(fresh(account.last7d))}</bdi> {t("تازه")} · <bdi className="ltr">{formatTokens(account.last7d?.total)}</bdi> {t("با کش")}</div>
         </div>
       </div>
       {windows.length ? (
@@ -105,10 +108,44 @@ function AccountCard({ account, onSaved }) {
         {account.installs.map((m) => (
           <div key={`${m.install}|${m.accountId}`} className="flex items-center gap-2 px-3 py-1.5">
             <span className="min-w-0 flex-1 truncate">{m.owner || m.install}</span>
-            <bdi className="ltr text-muted-foreground">{formatTokens(fresh(m.last24h))} / {formatTokens(fresh(m.last7d))}</bdi>
-            <span className="w-10 text-end text-muted-foreground">{pct(fresh(account.last7d) ? fresh(m.last7d) / fresh(account.last7d) : 0)}</span>
+            <bdi className="ltr text-muted-foreground">{usd(m.cost?.last24h)} / {usd(m.cost?.last7d)}</bdi>
+            <span className="w-10 text-end text-muted-foreground">{pct(account.cost?.last7d ? (m.cost?.last7d || 0) / account.cost.last7d : 0)}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// Per model over the fleet: price weight («ضریب» = output price relative to Sonnet 5.5), the tokens as a
+// plan sees them (fresh) and as the API counts them (with cache), and the list-price cost.
+function ModelTable({ models, totalCost }) {
+  if (!models?.length) return null;
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold">{t("مصرف به تفکیک مدل")}</h3>
+      <div className="scrollbar-thin overflow-x-auto rounded-2xl border bg-card">
+        <table className="w-full text-xs">
+          <thead className="text-muted-foreground">
+            <tr>
+              {[t("مدل"), t("ضریب"), t("تازه، ۷ روز"), t("با کش، ۷ روز"), t("خروجی، ۷ روز"), t("هزینه ۲۴ ساعت"), t("هزینه ۷ روز"), t("سهم")].map((h) => <th key={h} className="px-3 py-2 text-start font-medium">{h}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {models.map((m) => (
+              <tr key={m.model}>
+                <td className="px-3 py-2"><bdi className="ltr font-medium">{m.model}</bdi>{m.label ? <span className="text-muted-foreground"> · {m.label}</span> : <span className="text-muted-foreground"> · {t("بدون قیمت")}</span>}</td>
+                <td className="px-3 py-2"><bdi className="ltr">{m.weight == null ? "—" : `×${m.weight}`}</bdi></td>
+                <td className="px-3 py-2"><bdi className="ltr">{formatTokens(fresh(m.last7d))}</bdi></td>
+                <td className="px-3 py-2"><bdi className="ltr">{formatTokens(m.last7d?.total)}</bdi></td>
+                <td className="px-3 py-2"><bdi className="ltr">{formatTokens(m.last7d?.output)}</bdi></td>
+                <td className="px-3 py-2"><bdi className="ltr">{usd(m.cost?.last24h)}</bdi></td>
+                <td className="px-3 py-2"><bdi className="ltr font-semibold">{usd(m.cost?.last7d)}</bdi></td>
+                <td className="px-3 py-2">{pct(totalCost ? (m.cost?.last7d || 0) / totalCost : 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -129,18 +166,28 @@ export function AccountingSection() {
     }
   };
   if (!data) return <Loader2 className="size-4 animate-spin text-muted-foreground" />;
-  const { totals, accounts = [], installs = [], alerts = [], history = [] } = data;
+  const { totals, models = [], plan, accounts = [], installs = [], alerts = [], history = [] } = data;
+  const weekUsd = totals?.cost?.last7d || 0;
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
         <div className="rounded-xl border bg-card px-3 py-2">
           <div className="text-[11px] text-muted-foreground">{t("همهٔ نصب‌ها، ۲۴ ساعت")}</div>
-          <bdi className="ltr text-sm font-semibold">{formatTokens(fresh(totals?.last24h))}</bdi>
+          <bdi className="ltr text-sm font-semibold">{usd(totals?.cost?.last24h)}</bdi>
+          <div className="text-[11px] text-muted-foreground"><bdi className="ltr">{formatTokens(fresh(totals?.last24h))}</bdi> {t("تازه")} · <bdi className="ltr">{formatTokens(totals?.last24h?.total)}</bdi> {t("با کش")}</div>
         </div>
         <div className="rounded-xl border bg-card px-3 py-2">
           <div className="text-[11px] text-muted-foreground">{t("همهٔ نصب‌ها، ۷ روز")}</div>
-          <bdi className="ltr text-sm font-semibold">{formatTokens(fresh(totals?.last7d))}</bdi>
+          <bdi className="ltr text-sm font-semibold">{usd(weekUsd)}</bdi>
+          <div className="text-[11px] text-muted-foreground"><bdi className="ltr">{formatTokens(fresh(totals?.last7d))}</bdi> {t("تازه")} · <bdi className="ltr">{formatTokens(totals?.last7d?.total)}</bdi> {t("با کش")}</div>
         </div>
+        {plan?.weeklyUsd ? (
+          <div className="rounded-xl border bg-card px-3 py-2">
+            <div className="text-[11px] text-muted-foreground">{t("هزینهٔ پلن‌ها در هفته")}</div>
+            <bdi className="ltr text-sm font-semibold">{usd(plan.weeklyUsd)}</bdi>
+            <div className="text-[11px] text-muted-foreground">{t("{n} اکانت × {usd}؛ مصرف ≈ {x} برابر", { n: plan.accounts.toLocaleString(locale), usd: usd(plan.perAccountUsd), x: (weekUsd / plan.weeklyUsd).toFixed(1) })}</div>
+          </div>
+        ) : null}
         <div className="rounded-xl border bg-card px-3 py-2">
           <div className="text-[11px] text-muted-foreground">{t("نصب‌هایی که گزارش داده‌اند")}</div>
           <span className="text-sm font-semibold">{num(installs.length)}</span>
@@ -149,7 +196,7 @@ export function AccountingSection() {
           <RefreshCw className={`size-3.5 ${busy ? "animate-spin" : ""}`} /> {t("تازه کردن")}
         </button>
       </div>
-      <p className="text-xs text-muted-foreground">{t("Anthropic ایمیل اکانت را به توکن اشتراک نمی‌دهد؛ اکانت‌ها با شناسهٔ سازمانشان در Anthropic یکی می‌شوند. اسم یا ایمیل هر اکانت را یک بار با مداد کنار اسمش بگذارید. توکن‌ها بدون خواندن از کش شمرده شده‌اند (کش برای سقف پلن ارزان است). هر نصب هر ۱۵ دقیقه از دیتابیس خودش گزارش می‌دهد.")}</p>
+      <p className="text-xs text-muted-foreground">{t("اکانت‌ها با ایمیل یا شناسهٔ اکانتشان در Anthropic یکی می‌شوند؛ اکانتی که فقط با توکن وصل است ایمیل ندارد و می‌توانید با مداد اسمش را بگذارید. «تازه» توکن بدون خواندن از کش است؛ «با کش» همان چیزی است که API و ابزارهایی مثل ccusage می‌شمارند. هزینه با قیمت لیست API حساب می‌شود (خواندن از کش، نوشتن در کش، خروجی و ورودی هرکدام با نرخ خودشان؛ ضریب = قیمت خروجی نسبت به Sonnet). پلن‌ها ثابت‌اند، پس هزینه مقیاس مقایسه است، نه صورتحساب. هر نصب هر ۱۵ دقیقه از دیتابیس خودش گزارش می‌دهد؛ گزارشِ قدیمی‌تر از یک روز در جمع‌ها و اکانت‌ها حساب نمی‌شود.")}</p>
 
       {alerts.length ? (
         <div className="space-y-2">
@@ -157,6 +204,8 @@ export function AccountingSection() {
           {alerts.map((a) => <div key={a.key} className={`rounded-xl border px-3 py-2 text-sm ${LEVEL[a.level] || LEVEL.info}`}>{a.text}</div>)}
         </div>
       ) : null}
+
+      <ModelTable models={models} totalCost={weekUsd} />
 
       <div className="space-y-3">
         <h3 className="text-sm font-semibold">{t("اکانت‌های Claude")}</h3>
@@ -169,7 +218,7 @@ export function AccountingSection() {
           <table className="w-full text-xs">
             <thead className="text-muted-foreground">
               <tr>
-                {[t("نصب"), t("اکانت"), t("۲۴ ساعت"), t("۷ روز"), t("سهم ۷ روز"), t("۱۴ روز"), t("آخرین گزارش")].map((h) => <th key={h} className="px-3 py-2 text-start font-medium">{h}</th>)}
+                {[t("نصب"), t("اکانت"), t("مدل‌ها"), t("۲۴ ساعت"), t("۷ روز"), t("سهم ۷ روز"), t("۱۴ روز"), t("آخرین گزارش")].map((h) => <th key={h} className="px-3 py-2 text-start font-medium">{h}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -181,12 +230,17 @@ export function AccountingSection() {
                   </td>
                   <td className="px-3 py-2">
                     {i.accounts.slice(0, 3).map((a) => (
-                      <div key={a.id} className="whitespace-nowrap">{a.account || a.id} <bdi className="ltr text-muted-foreground">{formatTokens(fresh(a.last7d))}</bdi></div>
+                      <div key={a.id} className="whitespace-nowrap">{a.account || a.id} <bdi className="ltr text-muted-foreground">{usd(a.cost?.last7d)}</bdi></div>
                     ))}
                   </td>
-                  <td className="px-3 py-2"><bdi className="ltr">{formatTokens(fresh(i.last24h))}</bdi></td>
-                  <td className="px-3 py-2"><bdi className="ltr">{formatTokens(fresh(i.last7d))}</bdi></td>
-                  <td className="px-3 py-2">{pct(i.share7d)}</td>
+                  <td className="px-3 py-2">
+                    {i.models.slice(0, 3).map((m) => (
+                      <div key={m.model} className="whitespace-nowrap"><bdi className="ltr">{m.model}</bdi> <bdi className="ltr text-muted-foreground">{usd(m.cost?.last7d)}</bdi></div>
+                    ))}
+                  </td>
+                  <td className="px-3 py-2"><bdi className="ltr">{usd(i.cost?.last24h)}</bdi></td>
+                  <td className="px-3 py-2"><div><bdi className="ltr font-semibold">{usd(i.cost?.last7d)}</bdi></div><div className="text-[11px] text-muted-foreground"><bdi className="ltr">{formatTokens(fresh(i.last7d))} / {formatTokens(i.last7d?.total)}</bdi></div></td>
+                  <td className="px-3 py-2">{pct(weekUsd ? (i.cost?.last7d || 0) / weekUsd : 0)}</td>
                   <td className="px-3 py-2"><Spark days={i.days} /></td>
                   <td className="whitespace-nowrap px-3 py-2 text-muted-foreground" title={exactTime(i.reportAt)}>{exactTime(i.reportAt)}{i.stale ? ` (${t("قطع")})` : ""}</td>
                 </tr>

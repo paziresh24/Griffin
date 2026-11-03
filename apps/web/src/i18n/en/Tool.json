@@ -54,6 +54,7 @@
   "حذف فایل": "Delete file",
   "خاموش": "off",
   "خروجی BIND آروان": "Arvan BIND export",
+  "قواعد فایروال آروان": "Arvan firewall rules",
   "خطا": "Error",
   "خلاصهٔ ترافیک NSIN": "NSIN traffic summary",
   "خلاصه‌ای نبود؛ ساب‌چت را باز کن.": "No summary; open the subchat.",
@@ -212,5 +213,8 @@
   "نرفت: شما در گفتگو بودید یا پاسخ‌ها خاموش است": "Not sent: you were in the conversation or replies are off",
   "نرفت: {error}": "Not sent: {error}",
   "نرفت": "Not sent",
-  "برداشتن واکنش": "remove reaction"
+  "برداشتن واکنش": "remove reaction",
+  "نتیجه نیامد.": "The result did not load.",
+  "تلاش دوباره": "Try again",
+  "بارگذاری…": "Loading…"
 }

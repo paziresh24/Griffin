@@ -330,7 +330,25 @@ export async function readHttpSource(source, { secrets, fetchImpl = fetch } = {}
 }
 
 /** A webhook body → push items. Alertmanager/Grafana webhook ({alerts:[…]}) or a plain {title, status, severity}. */
+// Kuma's heartbeat time is UTC without a zone ("2026-10-27 06:12:03.123").
+const kumaTime = (t) => {
+  const d = t ? new Date(/[zZ+]/.test(String(t)) ? String(t) : `${String(t).replace(" ", "T")}Z`) : null;
+  return d && Number.isFinite(d.getTime()) ? d.toISOString() : null;
+};
+
 export function webhookItems(body) {
+  // Uptime Kuma's webhook notification (JSON): {heartbeat: {status, msg, time}, monitor: {name, url, …}, msg}.
+  // status 0 = down, 1 = up, 2 = pending (retrying, not yet down), 3 = maintenance. Its «Test» button
+  // sends heartbeat/monitor null with only msg — that is not an alert. (2026-10-27: Kuma alerts went to
+  // the pager and OnCall only; the owner relayed them to Nova by hand.)
+  if (body && "heartbeat" in body && "monitor" in body) {
+    const hb = body.heartbeat;
+    const mon = body.monitor;
+    if (!hb || !mon?.name || hb.status === 2) return [];
+    const where = mon.url && mon.url !== "https://" ? mon.url : mon.hostname || "";
+    const labels = { monitor: String(mon.name).slice(0, 200), ...(mon.type ? { job: String(mon.type) } : {}), ...(where ? { instance: String(where).slice(0, 200) } : {}) };
+    return [{ status: hb.status === 0 ? "firing" : "resolved", item: { alertname: String(mon.name).slice(0, 120), member: "-", severity: "critical", summary: String(hb.msg || body.msg || "").slice(0, 300), labels, startsAt: kumaTime(hb.time) } }];
+  }
   if (Array.isArray(body?.alerts)) {
     return body.alerts.map((a) => {
       const g = normalizeGeneric(a, "x");

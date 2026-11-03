@@ -42,5 +42,15 @@
   "فقط به {name} می‌رسد": "Only {name} sees this",
   "به {name} بگویید — برای {person} فرستاده نمی‌شود": "Tell {name} — this is not sent to {person}",
   "به {name} بگویید…": "Tell {name}…",
-  "به {name} بگویید… (مثلاً: جواب خانم رضایی را بده)": "Tell {name}… (e.g. reply to Ms. Rezaei)"
+  "به {name} بگویید… (مثلاً: جواب خانم رضایی را بده)": "Tell {name}… (e.g. reply to Ms. Rezaei)",
+  "مدل {model}": "Model {model}",
+  "تلاش {effort}": "Effort {effort}",
+  "عوض کردن مدل وسط گفتگو یک بار کل گفتگو را بدون کش پردازش می‌کند و هزینه دارد. ادامه می‌دهی؟": "Switching the model mid-chat reprocesses the whole chat without cache once, which costs tokens. Continue?",
+  "{what} از سهمیهٔ پلن بیشتر مصرف می‌کند. مطمئنی که این گفتگو با آن اجرا شود؟ (سوییچ وسط گفتگو یک بار کل آن را بدون کش پردازش می‌کند.)": "{what} uses more of the plan quota. Are you sure this chat should run with it? Switching mid-chat also reprocesses the whole chat without cache once.",
+  "پیام": "Message",
+  "تأیید": "Confirm",
+  "باشه": "OK",
+  "ادامه": "Continue",
+  "انصراف": "Cancel",
+  "بله، اجرا شود": "Yes, run it"
 }

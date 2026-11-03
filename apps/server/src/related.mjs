@@ -123,7 +123,7 @@ export const peerReachable = (store, chat) =>
 
 const reply = (value, isError = false) => ({ ...(isError ? { isError: true } : {}), content: [{ type: "text", text: JSON.stringify(value) }] });
 
-export function createPeerChatTools({ store, runner, chat, generate = async () => "", now = () => Date.now() }) {
+export function createPeerChatTools({ store, runner, chat, generate = async () => "", notify = null, now = () => Date.now() }) {
   const caller = chat.caller;
   // Checked on every call: a colleague the owner disabled meanwhile is refused at once.
   const stillAllowed = () => Boolean(store.getPeerUser?.(caller.slice("peer:".length))?.enabled);
@@ -149,7 +149,7 @@ export function createPeerChatTools({ store, runner, chat, generate = async () =
     },
     chat_send: {
       description:
-        "Tell one of the owner's own chats something (a finding, a bug, a hand-off). It arrives labelled as third-party content from you, so that chat treats it as information, not an instruction, and cannot pass it on. At most 3 per 10 minutes, 4,000 characters each. Returns {delivered:true} or {queued:true}.",
+        "Tell one of the owner's own chats something (a finding, a bug, a hand-off). It arrives labelled as third-party content from you, so that chat treats it as information, not an instruction, and cannot pass it on; the owner gets a phone/Telegram ping with its first line. Nothing comes back to you from it: for a decision, an approval or an MR he must review, use ask_owner instead. At most 3 per 10 minutes, 4,000 characters each. Returns {delivered:true} or {queued:true}, and notified.",
       inputSchema: {
         type: "object",
         properties: { chatId: { type: "string", description: "an id from chat_list" }, text: { type: "string", description: "at most 4,000 characters" } },
@@ -198,7 +198,17 @@ export function createPeerChatTools({ store, runner, chat, generate = async () =
           store.appendEvent(target.id, null, "tg.note", { kind: "proposal", proposalId: id, here: target.id, name: label, chatId: dest.id, title: dest.title, mine: Boolean(route.mine), text: route.reason || "" });
         }
         const out = await deliverPeer({ store, runner, chatId: dest.id, message, from, by: caller });
-        return reply({ ...(out?.delivered === "run" ? { delivered: true } : { queued: true }), chatId: dest.id, routed: route.routed });
+        // The chat alone never reached him (owner 2026-10-31: «من واقعا پیامشو نمیبینم»): a colleague's
+        // MR !365 sat in an old chat while his agent was told «به سارا رسید».
+        const line = body.split("\n").find((l) => l.trim()) || "";
+        const rang = notify ? await notify(dest, `📥 ${who ? `ایجنت ${who}` : caller}: ${line.slice(0, 200)}`).catch(() => null) : null;
+        return reply({
+          ...(out?.delivered === "run" ? { delivered: true } : { queued: true }),
+          chatId: dest.id,
+          routed: route.routed,
+          notified: Boolean(rang?.push || rang?.telegram),
+          note: "Information only — no answer comes back here. A decision or approval you wait on: ask_owner.",
+        });
       },
     },
   };

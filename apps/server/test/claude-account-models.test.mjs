@@ -41,8 +41,8 @@ test("listModels asks Claude Code once, and falls back to the aliases when it do
 });
 
 test("account: email and plan from a full login, nothing to name for a setup-token, none for an API key", async () => {
-  assert.deepEqual(accountFromStatus(JSON.stringify({ loggedIn: true, email: "a@b.c", subscriptionType: "max", authMethod: "claude.ai" })), { email: "a@b.c", name: null, plan: "max", method: "claude.ai" });
-  assert.deepEqual(accountFromStatus({ loggedIn: true, authMethod: "oauth_token" }), { email: null, name: null, plan: null, method: "oauth_token" });
+  assert.deepEqual(accountFromStatus(JSON.stringify({ loggedIn: true, email: "a@b.c", subscriptionType: "max", authMethod: "claude.ai", orgId: "66e950a2-0000-4000-8000-000000000000" })), { email: "a@b.c", name: null, plan: "max", method: "claude.ai", org: "66e950a2-0000-4000-8000-000000000000" });
+  assert.deepEqual(accountFromStatus({ loggedIn: true, authMethod: "oauth_token" }), { email: null, name: null, plan: null, method: "oauth_token", org: null });
   assert.equal(accountFromStatus({ loggedIn: false }), null);
   assert.equal(accountFromStatus("not json"), null);
   let calls = 0;

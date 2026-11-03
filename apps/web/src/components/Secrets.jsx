@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KeyRound, Loader2, Plus, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { Group, Item } from "./SettingsParts.jsx";
 import { BRAND } from "../brand.js";
 import { locale, t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 // Settings → Secrets: Griffin's own encrypted store ("app": engine keys and anything the app uses)
 // and the tools broker's vault ("tools": GitLab, Kubernetes, SSH …). A value goes in and never comes
@@ -16,7 +17,7 @@ export function SecretsSection() {
   useEffect(() => { load(); }, []);
 
   const remove = async (scope, name) => {
-    if (!window.confirm(t("«{name}» پاک شود؟ ابزار یا موتوری که از آن استفاده می‌کند از کار می‌افتد.", { name }))) return;
+    if (!(await askConfirm(t("«{name}» پاک شود؟ ابزار یا موتوری که از آن استفاده می‌کند از کار می‌افتد.", { name })))) return;
     try {
       await api(`/api/secrets?scope=${scope}&name=${encodeURIComponent(name)}`, { method: "DELETE" });
       load();
@@ -31,11 +32,12 @@ export function SecretsSection() {
 
   return (
     <div className="space-y-6">
-      {form ? <SecretForm initial={form} onDone={() => { setForm(null); load(); }} /> : null}
+      {/* Keyed: another row's «تنظیم» opens that secret, not the one already in the form. */}
+      {form ? <SecretForm key={`${form.scope}:${form.name}:${form.at}`} initial={form} onDone={() => { setForm(null); load(); }} /> : null}
 
       <Group
         title={t("سکرت‌های ابزارها (کارگزار)")}
-        action={<button type="button" onClick={() => setForm({ scope: "tools", name: "" })} className="press inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted"><Plus className="size-3.5" /> {t("افزودن")}</button>}
+        action={<button type="button" onClick={() => setForm({ scope: "tools", name: "", at: Date.now() })} className="press inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted"><Plus className="size-3.5" /> {t("افزودن")}</button>}
       >
         {data.tools.error ? <Item icon={Wrench} title={t("کارگزار ابزارها در دسترس نیست")} subtitle={data.tools.error} /> : null}
         {data.tools.items.map((i) => (
@@ -46,7 +48,7 @@ export function SecretsSection() {
             subtitle={[i.source === "openbao" ? t("در OpenBao") : t("در گاوصندوق کارگزار"), i.last4 ? `…${i.last4}` : "", i.updatedAt ? new Date(i.updatedAt).toLocaleString(locale) : ""].filter(Boolean).join(" · ")}
             trailing={
               <>
-                <button type="button" onClick={() => setForm({ scope: "tools", name: i.name, fixed: true })} className="press rounded-lg border px-2 py-1 text-xs">{t("عوض کردن")}</button>
+                <button type="button" onClick={() => setForm({ scope: "tools", name: i.name, fixed: true, at: Date.now() })} className="press rounded-lg border px-2 py-1 text-xs">{t("عوض کردن")}</button>
                 <button type="button" onClick={() => remove("tools", i.name)} className="press rounded-lg p-1.5 text-muted-foreground hover:bg-bad/10 hover:text-bad" aria-label={t("حذف")}><Trash2 className="size-4" /></button>
               </>
             }
@@ -57,14 +59,14 @@ export function SecretsSection() {
             key={c.name}
             title={c.name}
             subtitle={t("تنظیم نشده — {note}", { note: t(c.note) })}
-            trailing={<button type="button" onClick={() => setForm({ scope: "tools", name: c.name, fixed: true })} className="press rounded-lg border px-2 py-1 text-xs">{t("تنظیم")}</button>}
+            trailing={<button type="button" onClick={() => setForm({ scope: "tools", name: c.name, fixed: true, at: Date.now() })} className="press rounded-lg border px-2 py-1 text-xs">{t("تنظیم")}</button>}
           />
         ))}
       </Group>
 
       <Group
         title={t("سکرت‌های خود {name}", { name: BRAND.name })}
-        action={<button type="button" onClick={() => setForm({ scope: "app", name: "" })} className="press inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted"><Plus className="size-3.5" /> {t("افزودن")}</button>}
+        action={<button type="button" onClick={() => setForm({ scope: "app", name: "", at: Date.now() })} className="press inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted"><Plus className="size-3.5" /> {t("افزودن")}</button>}
       >
         {data.app.length ? data.app.map((i) => (
           <Item
@@ -74,7 +76,7 @@ export function SecretsSection() {
             subtitle={[i.note, i.last4 ? `…${i.last4}` : "", i.updatedAt ? new Date(i.updatedAt).toLocaleString(locale) : ""].filter(Boolean).join(" · ")}
             trailing={
               <>
-                <button type="button" onClick={() => setForm({ scope: "app", name: i.name, fixed: true })} className="press rounded-lg border px-2 py-1 text-xs">{t("عوض کردن")}</button>
+                <button type="button" onClick={() => setForm({ scope: "app", name: i.name, fixed: true, at: Date.now() })} className="press rounded-lg border px-2 py-1 text-xs">{t("عوض کردن")}</button>
                 <button type="button" onClick={() => remove("app", i.name)} className="press rounded-lg p-1.5 text-muted-foreground hover:bg-bad/10 hover:text-bad" aria-label={t("حذف")}><Trash2 className="size-4" /></button>
               </>
             }
@@ -105,8 +107,14 @@ function SecretForm({ initial, onDone }) {
       setBusy(false);
     }
   };
+  // The form sits at the top of the page and the buttons that open it run far below: bring it to the eye.
+  const box = useRef(null);
+  useEffect(() => {
+    box.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    box.current?.querySelector(initial.fixed ? "textarea" : "input")?.focus({ preventScroll: true });
+  }, [initial.fixed]);
   return (
-    <div className="space-y-3 rounded-2xl border bg-card p-4">
+    <div ref={box} className="space-y-3 rounded-2xl border bg-card p-4">
       <p className="text-sm font-medium">{initial.scope === "tools" ? t("سکرت ابزار") : t("سکرت {name}", { name: BRAND.name })}</p>
       <input className={field} dir="ltr" value={name} disabled={initial.fixed} onChange={(e) => setName(e.target.value)} placeholder="name (e.g. gitlab__token)" />
       <textarea className={`${field} min-h-24 font-mono`} dir="ltr" value={value} onChange={(e) => setValue(e.target.value)} placeholder="value" autoComplete="off" spellCheck={false} />

@@ -418,3 +418,68 @@ test("a page never starts after a run that is still going", async () => {
     cleanup();
   }
 });
+
+// A run that read a big file and drew a chart: the page comes without the file's text (its card is
+// folded in the work log) and the card fetches it when opened; the chart, an error and a small result
+// stay whole (2026-10-28: a 40-message page weighed 4.8 MB, ~90% of it tool results).
+test("a page leaves big folded tool results behind; the card fetches each one whole", async () => {
+  const { store, app, cleanup } = setup();
+  try {
+    const chat = store.createChat({ title: "big results", mode: "agent" });
+    store.appendEvent(chat.id, null, "user", { text: "بخوان" });
+    const runId = store.startRun(chat.id);
+    store.appendEvent(chat.id, runId, "run.started", { model: "m" });
+    const big = "x".repeat(20_000);
+    const mcp = (value) => ({ value: { content: [{ type: "text", text: JSON.stringify(value) }] } });
+    const done = (callId, name, result) => {
+      store.appendEvent(chat.id, runId, "tool.started", { callId, name, args: { path: "a" } });
+      store.appendEvent(chat.id, runId, "tool.done", { callId, name, args: { path: "a" }, result });
+    };
+    done("c-big", "repo_read", mcp({ content: big, source: "gitlab api", attempts: [{ path: "x", ok: true }] }));
+    done("c-small", "repo_list", mcp({ files: ["a"] }));
+    done("c-chart", "visualize", mcp({ chartId: "ch1", spec: big }));
+    done("c-error", "kube_logs", { status: "error", error: { message: big } });
+    store.appendEvent(chat.id, runId, "text", { text: "تمام" });
+    store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+
+    const whole = await (await app.request(`/api/chats/${chat.id}/timeline`)).json();
+    const page = await (await app.request(`/api/chats/${chat.id}/timeline?limit=40`)).json();
+    const parts = (timeline) => Object.fromEntries(timeline.messages.flatMap((m) => m.parts || []).filter((p) => p.type === "tool").map((p) => [p.callId, p]));
+    const full = parts(whole.timeline);
+    const lite = parts(page.timeline);
+    assert.deepEqual(lite["c-big"].result, { value: { lazy: { chat: chat.id, bytes: JSON.stringify(full["c-big"].result).length }, source: "gitlab api", attempts: [{ path: "x", ok: true }] } });
+    assert.deepEqual(lite["c-small"], full["c-small"]);
+    assert.deepEqual(lite["c-chart"], full["c-chart"]);
+    assert.deepEqual(lite["c-error"], full["c-error"]);
+    assert.ok(JSON.stringify(page).length < 70_000, "the big file stayed behind");
+    // The whole timeline (scripts, shared pages) is unchanged.
+    assert.equal(full["c-big"].result.value.content[0].text.length > 20_000, true);
+
+    const fetched = await (await app.request(`/api/chats/${chat.id}/tool-result?callId=c-big`)).json();
+    assert.deepEqual(fetched, { status: "success", result: full["c-big"].result });
+    assert.equal((await app.request(`/api/chats/${chat.id}/tool-result?callId=nope`)).status, 404);
+    assert.equal((await app.request(`/api/chats/no-such-chat/tool-result?callId=c-big`)).status, 404);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an older page leaves big tool results behind too", async () => {
+  const { store, app, cleanup } = setup();
+  try {
+    const chat = manyTurns(store, 3);
+    store.appendEvent(chat.id, null, "user", { text: "بخوان" });
+    const runId = store.startRun(chat.id);
+    store.appendEvent(chat.id, runId, "run.started", { model: "m" });
+    store.appendEvent(chat.id, runId, "tool.started", { callId: "old-big", name: "Read", args: {} });
+    store.appendEvent(chat.id, runId, "tool.done", { callId: "old-big", name: "Read", args: {}, result: { value: "y".repeat(30_000) } });
+    store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
+    for (let i = 0; i < 6; i += 1) store.appendEvent(chat.id, null, "user", { text: `بعدی ${i}` });
+    const tail = await (await app.request(`/api/chats/${chat.id}/timeline?limit=3`)).json();
+    const older = await (await app.request(`/api/chats/${chat.id}/timeline/older?before=${encodeURIComponent(tail.timeline.messages[0].id)}&limit=40`)).json();
+    const part = older.messages.flatMap((m) => m.parts || []).find((p) => p.callId === "old-big");
+    assert.deepEqual(part.result, { value: { lazy: { chat: chat.id, bytes: JSON.stringify({ value: "y".repeat(30_000) }).length } } });
+  } finally {
+    cleanup();
+  }
+});

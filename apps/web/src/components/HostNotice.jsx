@@ -96,10 +96,7 @@ export function HostNotice() {
   const danger = alerts.some((a) => a.level === "danger");
   const openEngines = () => {
     setOpen(false);
-    try {
-      localStorage.setItem("griffin.settings.section", "providers");
-    } catch { /* storage blocked: Settings opens on its first section */ }
-    window.location.hash = "/settings";
+    window.location.hash = "/settings/providers";
   };
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>

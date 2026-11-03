@@ -6,6 +6,7 @@ import { api, navigate } from "../api.js";
 import { TASKS_LABEL, endedLabel, pollMs, recentEnded, runningChildren, runningFor, taskKind, taskTitle, visibleTasks } from "../tasks-peek.js";
 import { ChatChildrenContext } from "./Tool.jsx";
 import { t } from "../i18n.js";
+import { askConfirm } from "../dialog.jsx";
 
 const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
 
@@ -79,7 +80,7 @@ export function TasksPeek({ chatId }) {
   };
 
   const stop = async (task) => {
-    if (!window.confirm(t("«{taskTitle}» متوقف شود؟", { taskTitle: taskTitle(task) }))) return;
+    if (!(await askConfirm(t("«{taskTitle}» متوقف شود؟", { taskTitle: taskTitle(task) })))) return;
     setBusy(task.id);
     try {
       await api(`/api/chats/${chatId}/tasks/${encodeURIComponent(task.id)}/stop`, { method: "POST" });
@@ -92,7 +93,7 @@ export function TasksPeek({ chatId }) {
   };
 
   const stopAgent = async (child) => {
-    if (!window.confirm(t("«{title}» متوقف شود؟", { title: child.title }))) return;
+    if (!(await askConfirm(t("«{title}» متوقف شود؟", { title: child.title })))) return;
     setBusy(child.id);
     try {
       await api(`/api/chats/${child.id}/cancel`, { method: "POST" });

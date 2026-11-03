@@ -8,6 +8,8 @@ import { textDir } from "../dir.js";
 import { AgentGlyph } from "./Controls.jsx";
 import { accountLabel } from "./Providers.jsx";
 
+import { askConfirm } from "../dialog.jsx";
+
 // The engines/models an agent runs on, in order: the first one that is switched on, has a key and is
 // not at its plan limit runs; the rest are fallbacks (a second Claude account, then GLM, …).
 function ModelPriority({ agent, busy, onSave }) {
@@ -166,7 +168,7 @@ export function AgentsPage({ onBack, embedded = false }) {
   };
 
   const removeAgent = async (agent) => {
-    if (!window.confirm(t("ایجنت «{name}» حذف شود؟ گفتگوهای قبلی‌اش می‌مانند.", { name: agent.label }))) return;
+    if (!(await askConfirm(t("ایجنت «{name}» حذف شود؟ گفتگوهای قبلی‌اش می‌مانند.", { name: agent.label })))) return;
     setBusy(true);
     try {
       await api(`/api/agents/${agent.id}`, { method: "DELETE" });
