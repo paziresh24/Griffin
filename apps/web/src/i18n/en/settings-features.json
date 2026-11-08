@@ -64,7 +64,7 @@
   "مدل Fable": "Fable model",
   "Fable در فهرست مدل‌ها، بعد از Opus می‌آید؛ اگر طرح Claude شما آن را دارد.": "Fable appears in the model list after Opus, if your Claude plan includes it.",
   "پخش گفتگوها بین اکانت‌ها": "Spread chats across accounts",
-  "هر گفتگوی تازه روی اکانتی شروع می‌شود که بیشترین سهم مانده را دارد و همان‌جا می‌ماند؛ فقط وقتی اکانتش پر شود یا از ۸۵٪ بگذرد و اکانت دیگری خیلی خالی‌تر باشد جابه‌جا می‌شود. خاموش: ترتیب ثابت قبلی.": "Each new chat starts on the account with the most quota left and stays there; it moves only when that account fills or passes 85% while another is much emptier. Off: the old fixed order.",
+  "هر گفتگوی تازه و هر کار کوتاه (اسم چت، پیش‌نویس، بازبین) روی اکانت سالمی می‌رود که بیشترین سهم مانده را دارد؛ گفتگو همان‌جا می‌ماند و فقط وقتی اکانتش پر شود یا از ۸۵٪ بگذرد و اکانت دیگری خیلی خالی‌تر باشد جابه‌جا می‌شود. سهم هر اکانت هر ۱۵ دقیقه بدون مصرف توکن خوانده می‌شود. خاموش: ترتیب ثابت قبلی.": "Each new chat and each short job (chat titles, drafts, reviewers) goes to the healthy account with the most quota left; a chat stays there and moves only when that account fills or passes 85% while another is much emptier. Each account's quota is read every 15 minutes without spending tokens. Off: the old fixed order.",
   "نگهبان توکن اکانت‌ها": "Account token keeper",
   "قفل تمدیدی را که از پردازهٔ مرده جا مانده برمی‌دارد و توکن را چند دقیقه پیش از تمام شدن تمدید می‌کند، تا اجراها با خطای «another Claude Code process is refreshing it» نخوابند.": "Clears a refresh lock left by a dead process and renews the token minutes before it expires, so runs do not stall on «another Claude Code process is refreshing it».",
   "قفل پوشهٔ داده": "Lock the data folder",
@@ -138,8 +138,8 @@
   "برای سایت‌های فیلترشده، مثل http://host:port یا socks5://host:port. خالی: مستقیم با IP سرور.": "For filtered sites, like http://host:port or socks5://host:port. Empty: direct, from the server's IP.",
   "اندازهٔ صفحهٔ مرورگر زنده": "Live browser screen size",
   "مثل 1440x900.": "Like 1440x900.",
-  "فاصلهٔ بکاپ (ساعت)": "Backup interval (hours)",
-  "از کل پایگاه داده. پیش‌فرض ۶؛ ۰ یعنی خاموش.": "Of the whole database. The default is 6; 0 turns it off.",
+  "ساعت بکاپ شبانه": "Nightly backup hour",
+  "از کل پایگاه داده، هر شب به وقت سرور (GRIFFIN_TZ). ۰ تا ۲۳؛ پیش‌فرض ۵؛ off یعنی خاموش.": "Of the whole database, every night, server time (GRIFFIN_TZ). 0 to 23; the default is 5; off turns it off.",
   "تعداد بکاپ‌های نگه‌داشته": "Backups to keep",
   "پیش‌فرض ۸. جدا از این، آخرین بکاپ هر روز تا ۷ روز می‌ماند.": "The default is 8. Apart from these, each day's last backup stays for 7 days.",
   "پوشهٔ بکاپ‌ها": "Backup folder",
@@ -169,5 +169,8 @@
   "کلید ارسال پیام": "Send key",
   "اینتر: اینتر می‌فرستد و شیفت+اینتر خط بعد می‌رود. شیفت+اینتر: شیفت+اینتر می‌فرستد و اینتر فقط می‌رود خط بعد. روی گوشی لمسی همیشه اینتر خط بعد است.": "Enter: Enter sends and Shift+Enter adds a new line. Shift+Enter: Shift+Enter sends and Enter only adds a new line. On a touch phone Enter is always a new line.",
   "اینتر": "Enter",
-  "شیفت+اینتر": "Shift+Enter"
+  "شیفت+اینتر": "Shift+Enter",
+  "عضو تازهٔ شبکهٔ ایجنت‌ها": "New member of the agents' network",
+  "نصبی که روی دامنه‌های شرکت سلام می‌کند: خودکار فوراً عضو می‌شود؛ با تأیید مالک غیرفعال می‌ماند و کارت «منتظر شما» می‌آید. عضوهای فعلی دست نمی‌خورند.": "An install on a company domain that says hello: Automatic makes it a member at once; Owner's approval keeps it disabled and raises a «Waiting for you» card. Current members are not touched.",
+  "با تأیید مالک": "Owner's approval"
 }

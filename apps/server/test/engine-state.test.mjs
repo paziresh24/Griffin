@@ -14,6 +14,7 @@ const NOW = Date.parse("2026-10-18T12:00:00Z");
 test("out of credit is told apart from a plan limit", () => {
   assert.ok(isCreditError("Credit balance is too low to access the Anthropic API"));
   assert.ok(isCreditError('{"error":{"code":"insufficient_quota"}}'));
+  assert.ok(isCreditError("Claude Code can't use your Claude subscription, usually because a payment is past due · Pay or renew at https://claude.ai/settings/billing"));
   assert.ok(!isCreditError("You've hit your weekly limit · resets 3pm"));
   assert.ok(!isCreditError("Error in foo.js:402"));
   // A run that hits it moves on instead of failing in place.

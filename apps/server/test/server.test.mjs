@@ -470,6 +470,28 @@ test("chats list and chat get include ask_agent children with live run status", 
   }
 });
 
+test("chat picker: a held chat shows the model and effort that run, not the stored ones", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-held-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  try {
+    const app = createApp({ store, runner: { isActive: () => false, send: async () => ({}) }, heldToDefaults: (_, provider) => provider === "claude" });
+    store.updateAgentProfile("griffin", { provider: "claude", model: "sonnet" });
+    const old = store.createChat({ title: "old", agent: "griffin", model: "opus" });
+    store.updateChat(old.id, { effort: "high" });
+    const read = async () => (await (await app.request(`/api/chats/${old.id}`)).json()).chat;
+    let chat = await read();
+    assert.deepEqual([chat.model, chat.effort], ["sonnet", "medium"]);
+    // Stored as it was: confirming it by hand is what makes it run, and then the picker says so.
+    assert.equal(store.getChat(old.id).model, "opus");
+    await app.request(`/api/chats/${old.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "opus", effort: "high", confirm: true }) });
+    chat = await read();
+    assert.deepEqual([chat.model, chat.effort], ["opus", "high"]);
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("chat picker: a model of another provider moves the chat; effort is stored and validated", async () => {
   const { store, app, cleanup } = setup([{ type: "text-delta", text: "ok" }]);
   try {

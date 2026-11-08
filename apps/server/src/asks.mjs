@@ -73,7 +73,11 @@ const inputSchema = {
     question: {
       type: "string",
       description:
-        "One short question in everyday Persian, the way you would ask a colleague out loud: who wants what, what you would do, OK? — e.g. «خانم X می‌خوان … ؛ برای این کار باید روی گیت‌وی یه route اضافه کنم. اوکیه؟». No table/column/pod/tool names, IDs or JSON; the detail lives in the chat link.",
+        "One short question in everyday Persian, the way you would ask a colleague out loud: who wants what, what you would do, OK? — e.g. «خانم X می‌خوان … ؛ برای این کار باید روی گیت‌وی یه route اضافه کنم. اوکیه؟». No table/column/pod/tool names, IDs or JSON; the detail goes in `detail` or lives in the chat link.",
+    },
+    detail: {
+      type: "string",
+      description: "What the owner must see before deciding, in full: the draft, table or data that would go out. Only the owner sees it (up to 4000 characters).",
     },
     options: {
       type: "array",
@@ -103,7 +107,7 @@ const inputSchema = {
 
 const requesterSchema = {
   ...inputSchema,
-  properties: Object.fromEntries(Object.entries(inputSchema.properties).filter(([key]) => key !== "audience")),
+  properties: Object.fromEntries(Object.entries(inputSchema.properties).filter(([key]) => key !== "audience" && key !== "detail")),
 };
 
 // «با kube_secret بخوانم یا kube_exec؟» is the agent's call, never a person's. 2026-10-06: a
@@ -120,6 +124,12 @@ const TOOL_CHOICE_REFUSAL = {
   isError: true,
   content: [{ type: "text", text: "انتخاب ابزار یا مسیر کار با خودت است، نه با آدم‌ها — بهترین گزینه را بزن و ادامه بده؛ اگر واقعاً مانعی هست، همان مانع را در جواب نهایی بگو." }],
 };
+
+// Told at the moment it matters: 2026-11-05 the owner answered «first show me», and the agent wrote the
+// payslip as its text, which went to the requester while the owner heard nothing.
+const PEER_ASK_NOTE =
+  "Your text reaches the requester as soon as your turn ends, and the owner is not told about it. Text from before this question does not reach them, so write the answer in full. " +
+  "If the owner wants to see something first, do not write it: ask_owner again with it in `detail`, and write it only after they agree.";
 
 const OPS_ASK_MS = 30 * 60_000;
 
@@ -221,7 +231,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
     // inherit a yes), the model applies the owner's real answer through the guarded call or asks a
     // genuinely different question.
     const prior = settled.get(target);
-    if (NAG_MS && audience === OWNER && args.via !== "guard" && args.via !== "plan" && args.via !== "elicit" && prior && Date.now() - prior.at < NAG_MS && similar(question, prior.question)) {
+    if (NAG_MS && audience === OWNER && args.via !== "guard" && args.via !== "plan" && args.via !== "elicit" && !args.detail && prior && Date.now() - prior.at < NAG_MS && similar(question, prior.question)) {
       const mins = Math.max(1, Math.round((Date.now() - prior.at) / 60_000));
       log?.log?.(`[ask] ${target.slice(0, 8)} nag guard: similar question answered ${mins}m ago — refusing the duplicate`);
       return Promise.resolve({
@@ -263,13 +273,15 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
 
     // Mirror the question onto the root chat so AskCard appears where the owner is looking.
     // started and done share one callId, so the mirrored card closes when it is answered. An MCP
-    // server's question (via "elicit") has no tool call of its own: its card is made the same way.
+    // server's question (via "elicit") has no tool call of its own: its card is made the same way, and
+    // so is one a tool asks inside its own call (ownCard: request_full_access showed only its spinner,
+    // the buttons were on the main page alone; a colleague's owner sat waiting, 2026-11-05).
     const link = args.via === "elicit" && typeof args.link === "string" && /^https?:\/\//i.test(args.link) ? args.link : null;
-    if (store && (target !== chatId || args.via === "elicit")) {
+    if (store && (target !== chatId || args.via === "elicit" || args.ownCard)) {
       const started = store.appendEvent(target, null, "tool.started", {
         callId: `peer-ask-${item.id}`,
         name: ASK_TOOL,
-        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id, ...(detail ? { detail } : {}), ...(link ? { link } : {}), ...(args.header ? { header: String(args.header).slice(0, 40) } : {}) },
+        args: { question, options: args.options, multiSelect: args.multiSelect, audience, askId: item.id, ...(args.via ? { via: args.via } : {}), ...(detail ? { detail } : {}), ...(link ? { link } : {}), ...(args.header ? { header: String(args.header).slice(0, 40) } : {}) },
         fromChatId: chatId,
       });
       mirrorIds.push(started.id);
@@ -390,7 +402,8 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
           if (toolChoiceQuestion(args)) return TOOL_CHOICE_REFUSAL;
           const audience = audienceFor(store?.getChat?.(chatId), args || {});
           const answer = await enqueue(chatId, question, { ...(args || {}), audience });
-          return { content: [{ type: "text", text: JSON.stringify(answer) }] };
+          const toPeer = audience === OWNER && answer?.answered && String(store?.getChat?.(chatId)?.caller).startsWith("peer:");
+          return { content: [{ type: "text", text: JSON.stringify(toPeer ? { ...answer, note: PEER_ASK_NOTE } : answer) }] };
         },
       };
     },
@@ -484,12 +497,15 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
     // Any question only the owner answers is open on this chain — not just the queue head: a
     // colleague's clarification ahead of it must not hide an approval waiting for him.
     ownerWaiting(chatId) {
+      // The chat list asks this for every row; with nothing open no row needs its root looked up.
+      if (!pending.size) return false;
       const target = targetOf(chatId);
       return Boolean(pending.get(target)?.some((item) => ownerAnswers(store, { audience: item.audience, rootChatId: target })));
     },
 
     // Who may answer the question currently open on this chain (null when none is open).
     audienceOf(chatId) {
+      if (!pending.size) return null;
       return pending.get(targetOf(chatId))?.[0]?.audience || null;
     },
 

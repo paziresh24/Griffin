@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { capabilityMap, subagentBrief, CAPABILITY_FAMILIES } from "../src/capability-map.mjs";
 import { subagentHook } from "../src/providers/claude.mjs";
+import { buildRules } from "../src/prompt.mjs";
 
 // The tools an owner chat had on 2026-11-02 (manifest of chat 05128c5d), plus the specialists' and
 // a colleague chain's own: every one must belong to a family, so none shows up as a bare name.
@@ -21,6 +22,13 @@ test("the map has only the families this run has, names them all, and tells the 
   assert.match(map, /Two browsers:/);
   assert.match(map, /later — wake THIS chat/);
   assert.doesNotMatch(map, /mikrotik|arvan_|telegram_/);
+});
+
+test("the rules say browser_* is Playwright and a scripted test runs in the sandbox, not in Bash", () => {
+  const rules = buildRules({ tools: ["browser_open"] });
+  assert.match(rules, /this IS your Playwright/);
+  assert.match(rules, /debug_exec \{host:"sandbox"\}, never Bash/);
+  assert.match(capabilityMap(["browser_open"]), /driven by Playwright/);
 });
 
 test("a run with only the sandbox browser is told the owner's Chrome is out of reach", () => {

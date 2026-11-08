@@ -52,7 +52,7 @@ test("quote edit: a quote edited while its send was on the way stays for the nex
 
 test("quote edit: the chip opens an editor; leaving it keeps the edit, cancel does not, Esc is the editor's", () => {
   const chip = src("components/QuoteChip.jsx");
-  assert.match(src("components/Thread.jsx"), /<QuoteChip key=\{q\.id\}/);
+  assert.match(src("components/Thread.jsx"), /<QuoteList chatId=\{chatId\} quotes=\{quotes\}/);
   assert.match(chip, /aria-label=\{t\("ویرایش این نقل‌قول: \{text\}", \{ text: quotePreview\(quote\.text\) \}\)\}/, "the chip's label keeps the quote text");
   assert.match(chip, /aria-label=\{t\("متن نقل‌قول"\)\}/);
   assert.match(chip, /aria-label=\{t\("نظر دربارهٔ این بخش"\)\}/);

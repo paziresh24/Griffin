@@ -10,5 +10,22 @@ export function ownerView(profile) {
   return { name: profile?.name || "Owner", photo: photo || iconUrl(), isPhoto: Boolean(photo) };
 }
 
+// The last answer, for the first paint of the next visit (the footer's name otherwise pops in).
+const CACHE = "griffin.profile.v1";
+export function readProfileCache() {
+  try {
+    return JSON.parse(localStorage.getItem(CACHE) || "null");
+  } catch {
+    return null;
+  }
+}
+export function writeProfileCache(profile) {
+  try {
+    localStorage.setItem(CACHE, JSON.stringify(profile));
+  } catch {
+    /* blocked or full: the footer just waits for the server next time */
+  }
+}
+
 // Settings saved a name: the sidebar shows it at once, without waiting for its next ask.
 export const profileChanged = (profile) => window.dispatchEvent(new CustomEvent(PROFILE_EVENT, { detail: profile }));

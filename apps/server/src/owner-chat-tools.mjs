@@ -35,7 +35,7 @@ const SEND_TEXT_MAX = 18_000;
 export const NOTIFY_WINDOW_MS = 60_000;
 // All owner chats together: a handful of rings a minute at most.
 export const NOTIFY_GLOBAL_MAX = 5;
-const NOTIFY_MAX = 500;
+const NOTIFY_MAX = 3000;
 // The head every chat_send message starts with; the receiver's hop is read back from it.
 export const sendHead = (title, hop) => `${CHAT_SEND_PREFIX}${cleanLabel(title, 80) || "بی‌نام"}» [hop ${hop}]: `;
 const HOP_RE = /^پیام از چت «[^«»]*» \[hop (\d+)\]: /;

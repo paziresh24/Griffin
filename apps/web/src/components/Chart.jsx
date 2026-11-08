@@ -140,6 +140,8 @@ function VegaView({ spec, height, maximized = false, onView }) {
   // Light/dark and the skin both change the colours read by vegaConfig(); either one redraws.
   const look = () => `${isDark()}:${document.documentElement.dataset.look || ""}`;
   const [theme, setTheme] = useState(look);
+  // The chart's place while vega loads and draws: the thread does not jump by a chart's height.
+  const [drawn, setDrawn] = useState(false);
 
   useEffect(() => {
     const observer = new MutationObserver(() => setTheme(look()));
@@ -173,6 +175,7 @@ function VegaView({ spec, height, maximized = false, onView }) {
         }
         onView?.(view);
         setError(null);
+        setDrawn(true);
         resizeObserver = new ResizeObserver(() => {
           try {
             view.resize().runAsync();
@@ -194,7 +197,7 @@ function VegaView({ spec, height, maximized = false, onView }) {
   }, [spec, height, maximized, theme, onView]);
 
   if (error) return <p className="ltr text-xs text-bad">{error}</p>;
-  return <div ref={ref} className="ltr w-full min-w-0" />;
+  return <div ref={ref} className="ltr w-full min-w-0" style={drawn ? undefined : { minHeight: "min(20rem, 70vw)" }} />;
 }
 
 function DataTable({ datasets }) {

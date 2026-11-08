@@ -27,7 +27,7 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export function agentNameError(label) {
   const name = nameOf(label);
   if (!name) return "the name is empty";
-  if (NOT_A_NAME.test(String(label))) return "a name has no punctuation, quotes or line breaks";
+  if (NOT_A_NAME.test(String(label))) return "نام نمی‌تواند علامت نگارشی، گیومه یا پرانتز یا چند خط داشته باشد";
   if ([...graphemes.segment(name)].length > MAX_AGENT_NAME) return `a name is at most ${MAX_AGENT_NAME} characters`;
   if (isProductName(name)) return "the product's name is not the assistant's name";
   return null;

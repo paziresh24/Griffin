@@ -47,7 +47,8 @@ export function BrowserButton({ open, exists, onClick }) {
 
 const MOD = (e) => (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
 
-export function BrowserPanel({ chatId, exists, onClose, standalone = false }) {
+// embedded: a tab of the chat's pane (ChatPane.jsx), which holds its width and its close.
+export function BrowserPanel({ chatId, exists, onClose, standalone = false, embedded = false }) {
   const [width, setWidth] = useState(() => read(WIDTH_KEY, 620));
   const [dragging, setDragging] = useState(false);
   const [state, setState] = useState(null);
@@ -151,8 +152,8 @@ export function BrowserPanel({ chatId, exists, onClose, standalone = false }) {
   const isWide = typeof window !== "undefined" && window.innerWidth >= 768;
 
   return (
-    <aside className={standalone ? "browser-panel flex h-dvh w-full flex-col bg-background" : "browser-panel fixed inset-0 z-40 flex flex-col bg-background md:relative md:inset-auto md:z-auto md:shrink-0 md:border-s"} style={{ width: isWide && !standalone ? width : undefined }} aria-label={t("مرورگر این چت")}>
-      {standalone ? null : <div
+    <aside className={embedded ? "browser-panel flex min-h-0 w-full flex-1 flex-col bg-background" : standalone ? "browser-panel flex h-dvh w-full flex-col bg-background" : "browser-panel fixed inset-0 z-40 flex flex-col bg-background md:relative md:inset-auto md:z-auto md:shrink-0 md:border-s"} style={{ width: isWide && !standalone && !embedded ? width : undefined }} aria-label={t("مرورگر این چت")}>
+      {standalone || embedded ? null : <div
         role="separator"
         aria-orientation="vertical"
         title={t("کشیدن برای تغییر پهنا")}
@@ -185,9 +186,9 @@ export function BrowserPanel({ chatId, exists, onClose, standalone = false }) {
             <ExternalLink className="size-4" />
           </a>
         )}
-        <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={onClose} title={standalone ? t("برگشت به چت") : t("بستن (مرورگر چت می‌ماند)")}>
+        {embedded ? null : <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={onClose} title={standalone ? t("برگشت به چت") : t("بستن (مرورگر چت می‌ماند)")}>
           <X className="size-4" />
-        </button>
+        </button>}
       </header>
       {status === "on" ? (
         <div className="scrollbar-thin flex min-w-0 items-end gap-0.5 overflow-x-auto border-b bg-muted/50 px-2 pt-1.5" dir="ltr">

@@ -34,6 +34,7 @@ test("subscriptionToJSON tolerates a subscription with no toJSON (plain object)"
 
 test("pushSupportIssue names the missing piece instead of a generic failure", () => {
   assert.match(pushSupportIssue({}), /Service Worker/);
+  assert.match(pushSupportIssue({ isSecureContext: false }), /HTTPS/); // plain http hides the worker: name the real cause
   assert.match(pushSupportIssue({ serviceWorker: {} }), /Web Push/);
   assert.match(pushSupportIssue({ serviceWorker: {}, PushManager: function () {} }), /اعلان/);
   assert.match(
@@ -44,4 +45,27 @@ test("pushSupportIssue names the missing piece instead of a generic failure", ()
     pushSupportIssue({ serviceWorker: {}, PushManager: function () {}, Notification: function () {}, isSecureContext: true }),
     null,
   );
+});
+
+test("showPushNudge: only where push can work, not subscribed, not refused, not snoozed", async () => {
+  const { showPushNudge, PUSH_NUDGE_LATER_MS } = await import("../src/push.js");
+  const base = { issue: null, permission: "default", subscribed: false, laterAt: "", now: 1_000_000_000_000 };
+  assert.equal(showPushNudge(base), true);
+  assert.equal(showPushNudge({ ...base, issue: "no https" }), false);
+  assert.equal(showPushNudge({ ...base, subscribed: true }), false);
+  assert.equal(showPushNudge({ ...base, permission: "denied" }), false);
+  assert.equal(showPushNudge({ ...base, laterAt: String(base.now - 1000) }), false);
+  assert.equal(showPushNudge({ ...base, laterAt: String(base.now - PUSH_NUDGE_LATER_MS - 1) }), true);
+});
+
+test("enablePush subscribes and posts, or stops when permission is refused", async () => {
+  const { enablePush } = await import("../src/push.js");
+  const calls = [];
+  const api = async (path, opts) => (calls.push([path, opts?.method || "GET"]), path === "/api/push/key" ? { publicKey: "aGk" } : {});
+  const sub = { toJSON: () => ({ endpoint: "https://push.example/1", keys: { p256dh: "P", auth: "A" } }) };
+  const serviceWorker = { ready: Promise.resolve({ pushManager: { subscribe: async () => sub } }) };
+  assert.equal(await enablePush({ api, Notification: { requestPermission: async () => "denied" }, serviceWorker }), "refused");
+  assert.deepEqual(calls, []);
+  assert.equal(await enablePush({ api, Notification: { requestPermission: async () => "granted" }, serviceWorker }), "granted");
+  assert.deepEqual(calls, [["/api/push/key", "GET"], ["/api/push/subscribe", "POST"]]);
 });

@@ -36,7 +36,7 @@ test("only «فضای کار» and the search stay fixed; the pages scroll with 
     const list = body.slice(body.indexOf("<nav "), body.indexOf("</nav>"));
     assert.match(head, /placeholder=(\{t\()?"جستجوی گفتگوها"/, file);
     assert.match(head, /\{nav\??\.top\}/, file);
-    assert.match(list, /\{nav\??\.sections\}/, file);
+    assert.match(list, /\{query\.trim\(\) \? null : nav\??\.sections\}/, file);
   }
   assert.match(side, /sections: <SidebarNav /);
   const nav = src("ui-prefs.js");
@@ -69,11 +69,11 @@ test("a group's «+» is gone in the archive; the owner's name and photo sit at 
   assert.match(side, /src=\{owner\.photo\}/);
 });
 
-test("the sidebar is on the right of the RTL page and the side chat on the left", () => {
+test("the sidebar is on the right of the RTL page and the chat pane on the left", () => {
   const app = src("App.jsx");
   assert.match(fs.readFileSync(new URL("../index.html", import.meta.url), "utf8"), /<html[^>]*dir="rtl"/);
   assert.doesNotMatch(app, /flex-row-reverse/);
-  assert.ok(app.indexOf("<Sidebar") < app.indexOf("<main ") && app.indexOf("<main ") < app.indexOf("<SidePanel"), "sidebar, chat, side chat in the RTL row");
+  assert.ok(app.indexOf("<Sidebar") < app.indexOf("<main ") && app.indexOf("<main ") < app.indexOf("<ChatPane"), "sidebar, chat, the chat pane in the RTL row");
   assert.match(app, /absolute inset-y-0 start-0/, "the phone drawer opens from the right (start) edge");
   const header = app.slice(app.indexOf("<header"), app.indexOf("</header>"));
   assert.ok(header.indexOf('aria-label={t("منو")}') < header.indexOf("<h1"), "the menu button is first in the RTL row, on the right");

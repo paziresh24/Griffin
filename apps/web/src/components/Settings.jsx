@@ -26,7 +26,7 @@ import { SttSection } from "./PlanLimits.jsx";
 import { AgentsPage } from "./Agents.jsx";
 import { AppearanceSection } from "./Appearance.jsx";
 import { ModulesSection } from "./Modules.jsx";
-import { pushSupportIssue, subscriptionToJSON, urlBase64ToUint8Array } from "../push.js";
+import { enablePush, pushSupportIssue } from "../push.js";
 import { setUiPrefs, useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
 import { FIRST_SECTION, linkedSection, pageOf, pagesFor, searchSettings, sectionId, settingsIndex } from "../settings-map.js";
 import { blockedBy, featureDepth, featureOf, featureOn, featureValue } from "../settings-features.js";
@@ -359,15 +359,11 @@ function PushSection() {
   const enable = async () => {
     setStatus("busy");
     try {
-      if ((await Notification.requestPermission()) !== "granted") {
+      if ((await enablePush({ api })) !== "granted") {
         toast.error(t("اجازهٔ اعلان داده نشد"));
         setStatus("off");
         return;
       }
-      const { publicKey } = await api("/api/push/key");
-      const registration = await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
-      await api("/api/push/subscribe", { method: "POST", body: subscriptionToJSON(subscription) });
       toast.success(t("اعلان‌ها روشن شد"));
       setStatus("on");
     } catch (error) {
@@ -482,7 +478,7 @@ function IntegrationRow({ integration, onChange }) {
     }
   };
   const remove = async () => {
-    if (!(await askConfirm(t("«{name}» حذف شود؟ گفتگوهای ساخته‌شده در گریفین می‌مانند.", { name: integration.name })))) return;
+    if (!(await askConfirm(t("«{name}» حذف شود؟ گفتگوهای ساخته‌شده در گریفین می‌مانند.", { name: integration.name }), { danger: true, yes: t("حذف") }))) return;
     await api(`/api/integrations/${integration.id}`, { method: "DELETE" }).catch((e) => toast.error(e.message));
     onChange();
   };
@@ -643,7 +639,10 @@ function ProfileSection() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    api("/api/profile").then((p) => (setProfile(p), setName(p.typedName || "")), (e) => toast.error(e.message));
+    api("/api/profile").then((p) => (setProfile(p), setName(p.typedName || "")), (e) => {
+      toast.error(e.message);
+      setProfile({ failed: true });
+    });
   }, []);
   const save = async (event) => {
     event.preventDefault();
@@ -660,7 +659,20 @@ function ProfileSection() {
       setBusy(false);
     }
   };
-  const changed = profile && name.trim() !== (profile.typedName || "");
+  const changed = profile && !profile.failed && name.trim() !== (profile.typedName || "");
+  if (!profile) {
+    return (
+      <section>
+        <h3 className="mb-2 px-1 text-xs font-medium text-muted-foreground">{t("نام شما در منو")}</h3>
+        <div className="flex items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm" role="status" aria-label={t("در حال بارگذاری…")}>
+          <span className="size-10 shrink-0 animate-pulse rounded-full bg-muted" aria-hidden />
+          <span className="h-9 min-w-0 flex-1 animate-pulse rounded-xl bg-muted/70" aria-hidden />
+          <span className="h-9 w-16 shrink-0 animate-pulse rounded-full bg-muted/70" aria-hidden />
+        </div>
+        <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>
+      </section>
+    );
+  }
   return (
     <section>
     <h3 className="mb-2 px-1 text-xs font-medium text-muted-foreground">{t("نام شما در منو")}</h3>

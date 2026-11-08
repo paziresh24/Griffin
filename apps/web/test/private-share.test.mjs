@@ -43,5 +43,5 @@ test("wiring: the runtime, the thread, the entry page and the share menu know th
   // Off, the private part shows only to close shares left from when it was on; no invite form.
   assert.match(read("components/Share.jsx"), /<PrivateShares chatId=\{chatId\} canInvite=\{privateShare\} \/>/);
   assert.match(read("components/Share.jsx"), /if \(!canInvite && !shares\?\.length\) return null;/);
-  assert.match(read("api.js"), /privateShare: active\.privateShare === true/);
+  assert.match(read("api.js"), /const privateShare = active\.privateShare === true/);
 });

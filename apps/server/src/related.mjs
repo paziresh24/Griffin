@@ -200,8 +200,9 @@ export function createPeerChatTools({ store, runner, chat, generate = async () =
         const out = await deliverPeer({ store, runner, chatId: dest.id, message, from, by: caller });
         // The chat alone never reached him (owner 2026-10-31: «من واقعا پیامشو نمیبینم»): a colleague's
         // MR !365 sat in an old chat while his agent was told «به سارا رسید».
-        const line = body.split("\n").find((l) => l.trim()) || "";
-        const rang = notify ? await notify(dest, `📥 ${who ? `ایجنت ${who}` : caller}: ${line.slice(0, 200)}`).catch(() => null) : null;
+        // The whole request, not its first line cut at 200 characters: the bot splits anything over 4096.
+        const line = body.trim().length > 3000 ? `${body.trim().slice(0, 3000)}…` : body.trim();
+        const rang = notify ? await notify(dest, `📥 ${who ? `ایجنت ${who}` : caller}: ${line}`).catch(() => null) : null;
         return reply({
           ...(out?.delivered === "run" ? { delivered: true } : { queued: true }),
           chatId: dest.id,

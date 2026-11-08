@@ -17,7 +17,7 @@ export const SELF_MGMT_TOOLS = [
 // The agents' network (network.mjs): the owner's chats and the colleague mother chats (agent ↔ agent
 // goes there, not to Telegram). Not self-management, so a caller quota may list them; a peer's chain
 // still gets none (a quota row decides).
-export const NETWORK_TOOL_NAMES = ["network_agents", "network_ask", "network_reply", "network_connect"];
+export const NETWORK_TOOL_NAMES = ["network_agents", "network_ask", "network_reply", "network_connect", "network_send_file"];
 
 // A colleague's request (peer:*) runs with the agent's whole tool set (owner 2026-10-24: «سهمیه دیگه
 // چیه اصن حذفش کن» — he approved the connection, he will not think about tools again); the approval

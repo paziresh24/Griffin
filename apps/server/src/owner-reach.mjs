@@ -17,7 +17,7 @@ export const REACH_WINDOW_MS = 48 * 3_600_000;
 const OWNER_WROTE_WINDOW_MS = 6 * 3_600_000;
 
 // The tools whose successful call puts something in front of the owner.
-export const REACH_TOOLS = new Set(["ask_owner", "request_full_access", "handoff_to_owner", "owner_task", "tell_owner", "notify_owner", "chat_send", "forward_to_chat"]);
+export const REACH_TOOLS = new Set(["ask_owner", "request_full_access", "request_owner_chat", "handoff_to_owner", "owner_task", "tell_owner", "notify_owner", "chat_send", "forward_to_chat"]);
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const ZW = "[\\u200c\\s]?";
@@ -71,6 +71,12 @@ export function ownerClaim(text) {
   if (!re) return null;
   const m = re.exec(String(text || ""));
   return m ? m[0].trim() : null;
+}
+
+/** «منتظر شما» in a mother chat's report: it waits there unread, so nothing is really waiting on him. */
+export function waitingOnOwner(text) {
+  const m = /منتظر\s(?:(?:تصمیم|جواب|پاسخ|تأیید|تایید|نظر)\s)?شما/u.exec(String(text || ""));
+  return m ? m[0] : null;
 }
 
 /** The conversation rooted at rootChatId put something in front of the owner now. */
@@ -135,6 +141,15 @@ export function unbackedSendError(phrase) {
     `کاری که دسترسی او را می‌خواهد → اول request_full_access؛ تصمیمی که فقط او می‌گیرد → اول ask_owner با یک سؤال ساده و گزینه‌ها؛ ` +
     `بعد همین پیام را بفرست. اگر لازم نیست به او برسد، آن جمله را بردار و بدون آن بفرست.`
   );
+}
+
+/** The engine message that sends a mother chat's report back once when it waits on the owner unasked. */
+export function unaskedWaitNudge(phrase) {
+  return [
+    `[تذکر سیستمی — از طرف هیچ آدمی نیست؛ به آن جواب نده] گزارشت می‌گوید «${phrase}»، ولی این متن به ${OWNER.nameFa} نمی‌رسد و چیزی از این گفتگو به او نرسیده است.`,
+    `هر موردی که واقعاً به او نیاز دارد را همین حالا برسان: request_full_access برای کاری که دسترسی می‌خواهد، request_owner_chat برای کاری که ورود به یک سرور می‌خواهد، ask_owner با یک سؤال ساده و گزینه‌ها برای تصمیم. بقیه را خودت انجام بده یا از گزارش بردار.`,
+    "بعد گزارش را کوتاه از نو بنویس.",
+  ].join("\n");
 }
 
 /** The engine message that sends a colleague-facing answer back once (runner.mjs, ownerClaimLeg). */

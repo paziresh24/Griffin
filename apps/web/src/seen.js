@@ -281,13 +281,20 @@ export function lookAt(state, chatId, updatedAt, visible) {
   state.pending = false;
 }
 
+function subscribeSeen(onChange) {
+  listeners.add(onChange);
+  return () => listeners.delete(onChange);
+}
+
+/** One chat's read mark: a row redraws only when its own mark changes, not on every chat opened. */
+export function useSeenOf(chatId) {
+  return useSyncExternalStore(subscribeSeen, () => seenOf(chatId), () => null);
+}
+
 /** Re-render hook: returns a version counter that bumps on every markSeen / markUnread. */
 export function useSeenVersion() {
   return useSyncExternalStore(
-    (onChange) => {
-      listeners.add(onChange);
-      return () => listeners.delete(onChange);
-    },
+    subscribeSeen,
     () => version,
     () => version,
   );

@@ -95,9 +95,10 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
   let bytes = 0;
   const dropped = new Map(); // chatId -> how often it was dropped, so a fold under way then is not stored
 
-  // The folded object is kept beside its JSON (the next refresh folds onto it) and measured at
-  // about twice the JSON on the heap, hence three times the body.
-  const size = (entry) => entry.body.length * 3 + (entry.packed?.length || 0);
+  // The folded object is measured at about twice its JSON on the heap; the JSON itself (only the
+  // full-timeline answer makes it) counts once more when it exists. Until then the JSON's size is
+  // estimated from the events folded in.
+  const size = (entry) => (entry.full ? entry.full.length * 3 : entry.approx * 2) + (entry.packed?.length || 0);
 
   function forget(chatId) {
     const entry = entries.get(chatId);
@@ -123,8 +124,10 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
     const startedIn = dropped.get(chatId) || 0;
     const cached = entries.get(chatId);
     let timeline = cached?.timeline || emptyTimeline();
+    let approx = cached?.approx || 0;
     for (;;) {
       const events = store.eventsAfter(chatId, timeline.lastEventId, pageSize);
+      for (const event of events) approx += (JSON.stringify(event.data)?.length || 0) + 64;
       if (events.length) timeline = foldEvents(events, timeline);
       if (events.length < pageSize) break;
       await yieldToLoop();
@@ -133,7 +136,19 @@ export function createTimelineCache({ store, maxBytes = 256 * 1024 * 1024, pageS
       keep(chatId, cached);
       return cached;
     }
-    const entry = { timeline, rev, body: Buffer.from(JSON.stringify({ timeline, rev })), packed: null, packing: null, kept: 0 };
+    // The whole timeline as JSON is made only when something asks for all of it (scripts, guest
+    // pages): stringifying a big chat on every new event kept the one thread busy for hundreds of ms
+    // each time while every page asks only for its tail (owner 2026-11-07: chats opened after 1–6 s).
+    const entry = {
+      timeline, rev, approx, full: null, packed: null, packing: null, kept: 0,
+      get body() {
+        if (!this.full) {
+          this.full = Buffer.from(JSON.stringify({ timeline, rev }));
+          if (entries.get(chatId) === this) keep(chatId, this);
+        }
+        return this.full;
+      },
+    };
     // The gzipped body is made on first use, off the main thread, and kept with the entry.
     // The last `limit` messages (timeline.earlier = how many come before them): what a big chat's
     // first open needs; the rest is fetched page by page (olderPage). Big tool results stay behind

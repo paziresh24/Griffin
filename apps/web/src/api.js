@@ -5,7 +5,7 @@ import { emptyTimeline } from "@griffin/timeline";
 import { createTimelineMemo } from "./timeline-memo.js";
 import { keepOpen } from "./stream-keeper.js";
 import { catchUpTimeline, openTimeline, PAGE } from "./timeline-stream.js";
-import { readChatsCache, writeChatsCache } from "./chats-cache.js";
+import { keepSameRows, readChatsCache, writeChatsCache } from "./chats-cache.js";
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -44,6 +44,13 @@ export async function apiPiece(path, piece, signal) {
 export const INBOX_EVENT = "griffin:inbox";
 
 // Chat list, refreshed whenever the server says something changed.
+// One reload per burst, and never more often than this: each reload is a full list (a few hundred KB on
+// a busy install) to build on the server and to parse and diff here.
+const LIST_MIN_GAP_MS = 1500;
+// The whole list as last read, for what picks a chat (the «@» list, «فرستادن به…»); before the first
+// read, the last visit's newest ones.
+let lastList = null;
+export const listedChats = () => lastList || readChatsCache()?.chats || [];
 export function useChats() {
   const [state, setState] = useState(() => {
     // The last list seen shows at once; the server's answer replaces it (chats-cache.js).
@@ -53,32 +60,64 @@ export function useChats() {
   useEffect(() => {
     let alive = true;
     let retryTimer = null;
+    let inFlight = false;
+    let againAfter = false;
+    let lastLoad = 0;
+    let archiveStamp = null; // the archive as last read (active list's archiveStamp); null: not read yet
     const load = async () => {
       clearTimeout(retryTimer);
-      // The three reads go out together, but the list is drawn as soon as the first arrives: the
-      // archive and the groups are the slow ones and no longer hold the sidebar back.
+      // A change while a read is on its way: one more read when it lands, not two lists racing.
+      if (inFlight) {
+        againAfter = true;
+        return;
+      }
+      inFlight = true;
+      lastLoad = Date.now();
+      // The list is drawn as soon as it arrives; the groups go out with it.
       const activeRead = api("/api/chats");
       // The owner's chat groups ride along: a group change emits the same list event.
-      const archivedRead = api("/api/chats?archived=1").catch(() => null);
       const groupsRead = api("/api/groups").catch(() => null);
       try {
         const active = await activeRead;
         if (!alive) return;
+        lastList = active.chats;
         setNextStepReturns(active.nextStepReturns === true);
         setEnterKey(active.enterKey);
-        setState((s) => ({ ...s, chats: active.chats, sideChat: active.sideChat !== false, privateShare: active.privateShare === true, loading: false, failed: false }));
+        // Rows that did not change keep their objects, and an unchanged list its array: nothing redraws for them.
+        setState((s) => {
+          const chats = keepSameRows(s.chats, active.chats);
+          const sideChat = active.sideChat !== false;
+          const privateShare = active.privateShare === true;
+          return chats === s.chats && sideChat === s.sideChat && privateShare === s.privateShare && !s.loading && !s.failed ? s : { ...s, chats, sideChat, privateShare, loading: false, failed: false };
+        });
         window.dispatchEvent(new Event(INBOX_EVENT));
         freshenRemembered(active.chats);
+        // The archive is the slowest read and rarely changes: only when the list says it did.
+        const stamp = active.archiveStamp ?? null;
+        const archivedRead = !stamp || stamp !== archiveStamp ? api("/api/chats?archived=1").catch(() => null) : null;
         const [archived, groups] = await Promise.all([archivedRead, groupsRead]);
         if (!alive) return;
+        if (archived) archiveStamp = stamp;
         // A failed archive or groups read keeps the last list: an empty one would drop a chosen group silently.
-        setState((s) => ({ ...s, archived: archived ? archived.chats : s.archived, groups: groups ? groups.groups || [] : s.groups, looseAt: groups ? groups.looseAt ?? null : s.looseAt }));
+        setState((s) => {
+          const nextArchived = archived ? keepSameRows(s.archived, archived.chats) : s.archived;
+          const nextGroups = groups ? groups.groups || [] : s.groups;
+          const sameGroups = JSON.stringify(nextGroups) === JSON.stringify(s.groups);
+          const looseAt = groups ? groups.looseAt ?? null : s.looseAt;
+          return nextArchived === s.archived && sameGroups && looseAt === s.looseAt ? s : { ...s, archived: nextArchived, groups: sameGroups ? s.groups : nextGroups, looseAt };
+        });
         writeChatsCache(active.chats, groups ? groups.groups || [] : null, undefined, groups ? groups.looseAt ?? null : undefined);
       } catch {
         // A read that failed is not an empty list: say so, and try again until it works.
         if (alive) {
           setState((s) => ({ ...s, loading: false, failed: true }));
           retryTimer = setTimeout(load, 4000);
+        }
+      } finally {
+        inFlight = false;
+        if (againAfter && alive) {
+          againAfter = false;
+          loadSoon();
         }
       }
     };
@@ -87,9 +126,9 @@ export function useChats() {
     // A run starting, a title, a group change… often come as a burst of «chats» events: one reload
     // for the burst, not three lists per event.
     let soon = null;
-    const loadSoon = () => {
-      if (!soon) soon = setTimeout(() => { soon = null; load(); }, 400);
-    };
+    function loadSoon() {
+      if (!soon) soon = setTimeout(() => { soon = null; load(); }, Math.max(400, lastLoad + LIST_MIN_GAP_MS - Date.now()));
+    }
     // A stream the browser gave up on (a 502 during a deploy) is reopened (stream-keeper.js).
     const keeper = keepOpen({
       open: () => {
@@ -210,23 +249,74 @@ export function useTimeline(chatId) {
   return { timeline: remembered?.timeline || EMPTY, connection: remembered ? "refreshing" : "loading", reconnect, loadOlder };
 }
 
+// The last answer per path, for the whole page. The composer is mounted anew for every chat: its repo
+// chip and model name used to start empty each time and pop in (owner 2026-11-05: «یهو لود میشه»). A hook
+// now draws the last answer at once and asks again behind it; pickers asking together share one request.
+const polled = new Map(); // path -> { data, at, asking }
+const POLL_FRESH_MS = 15_000; // an answer this young is not asked for again by the next mount
+// These three survive a reload too (the composer's repo, model and effort): harmless lists, like the chat cache.
+const KEPT_POLLS = ["/api/repos", "/api/agents", "/api/models?provider=all"];
+const keptPollKey = (path) => `griffin.polled.v1:${path}`;
+function polledEntry(path) {
+  if (!polled.has(path)) {
+    let data = null;
+    if (KEPT_POLLS.includes(path)) {
+      try {
+        data = JSON.parse(localStorage.getItem(keptPollKey(path)) || "null");
+      } catch {
+        data = null;
+      }
+    }
+    polled.set(path, { data, at: 0, asking: null });
+  }
+  return polled.get(path);
+}
+function askPolled(path) {
+  const entry = polledEntry(path);
+  entry.asking ||= api(path)
+    .then((value) => {
+      entry.data = value;
+      entry.at = Date.now();
+      if (KEPT_POLLS.includes(path)) {
+        try {
+          localStorage.setItem(keptPollKey(path), JSON.stringify(value));
+        } catch {
+          /* storage full or blocked: the next visit just asks first */
+        }
+      }
+      return value;
+    })
+    .finally(() => {
+      entry.asking = null;
+    });
+  return entry.asking;
+}
+/** At the app's start: the composer's lists are in hand before any composer needs them. */
+export function preloadPolls() {
+  for (const path of KEPT_POLLS) askPolled(path).catch(() => {});
+}
+
 export function usePolling(path, intervalMs) {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => (path ? polledEntry(path).data : null));
   useEffect(() => {
     // No path: nothing to ask (a hook that only one skin needs).
     if (!path) return setData(null);
     let alive = true;
     let timer;
+    const entry = polledEntry(path);
+    if (entry.data) setData(entry.data);
     const tick = async () => {
       try {
-        const value = await api(path);
+        const value = await askPolled(path);
         if (alive) setData(value);
       } catch {
         if (alive) setData((d) => d && { ...d, stale: true });
       }
       if (alive) timer = setTimeout(tick, intervalMs);
     };
-    tick();
+    const age = Date.now() - entry.at;
+    if (age < Math.min(intervalMs, POLL_FRESH_MS)) timer = setTimeout(tick, intervalMs - age);
+    else tick();
     return () => {
       alive = false;
       clearTimeout(timer);

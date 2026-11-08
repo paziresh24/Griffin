@@ -202,6 +202,8 @@
   "مسیردهی صندوق تلگرام": "Route the Telegram inbox",
   "واکنش روی پیام": "React to a message",
   "پرسش از شما": "Question for you",
+  "درخواست دسترسی کامل": "Asking for full access",
+  "درخواست چت با دسترسی شما": "Asking for a chat with your access",
   "مشورت با مدل دیگر": "Consult another model",
   "پرسش": "Question",
   "به جواب نرسید: {error}": "No answer: {error}",

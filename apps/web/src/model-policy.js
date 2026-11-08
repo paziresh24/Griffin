@@ -6,3 +6,4 @@ export const isHeavyModel = (id) => {
   return /opus|fable|^claude/.test(name);
 };
 export const isHeavyEffort = (effort) => ["high", "xhigh", "max"].includes(effort);
+export const DEFAULT_EFFORT = "medium";

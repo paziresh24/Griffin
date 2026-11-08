@@ -16,7 +16,29 @@ const GIT_ALLOWED = new Set(["status", "diff", "log", "show", "add", "rm", "mv",
 // Options that make git read or write outside the worktree, run programs, or switch branches.
 const GIT_REFUSED = /^(-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--upload-pack|--receive-pack|--ext-diff|--output|--config-env|--template|--super-prefix)(=|$)/;
 
-function git(args, cwd, { input, timeout = 60_000, who = gitIdentity() } = {}) {
+// A repo's own config can make git run a program (core.fsmonitor on `git status`, a filter or diff
+// driver, gpg.program, sshCommand, credential helpers) or pull in another file. A checkout anyone
+// else can write (a chat's worktree, the sandbox's mount) could plant one, so git refuses to work in
+// a repo whose local or worktree config sets any of these (security audit 2026-10-29). Our own
+// core.hooksPath override (command scope) wins over a local one, so that one is left alone.
+const PLANTED = /^(core\.(fsmonitor|sshcommand|pager|editor|askpass|alternaterefscommand|gitproxy)|sequence\.editor|diff\.external|(diff|merge|filter)\..+\.(textconv|command|driver|clean|smudge|process)|credential(\..+)?\.helper|gpg\.(.+\.)?program|include\.path|includeif\..+\.path|uploadpack\..+|receivepack\..+|remote\..+\.(uploadpack|receivepack|proxy)|protocol\.(.+\.)?allow|url\..+\.(insteadof|pushinsteadof)|http\.(.+\.)?proxy)$/i;
+export function plantedGitConfig(listing) {
+  const bad = [];
+  for (const line of String(listing).split("\n")) {
+    const [scope, name] = line.trim().split(/\s+/);
+    if ((scope === "local" || scope === "worktree") && name && PLANTED.test(name)) bad.push(name);
+  }
+  return bad;
+}
+
+async function git(args, cwd, options = {}) {
+  const listing = await rawGit(["config", "--list", "--name-only", "--show-scope", "--includes"], cwd, { timeout: 20_000 });
+  const bad = plantedGitConfig(listing);
+  if (bad.length) throw new Error(`this repo's git config sets ${bad.join(", ")}, which would run a program here; remove it from .git/config first`);
+  return rawGit(args, cwd, options);
+}
+
+function rawGit(args, cwd, { input, timeout = 60_000, who = gitIdentity() } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile(
       "git",

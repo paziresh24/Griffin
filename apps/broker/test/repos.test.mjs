@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRepoTools } from "../src/repos.mjs";
+import { createRepoTools, plantedGitConfig, run as runGit } from "../src/repos.mjs";
+import { execFileSync } from "node:child_process";
 
 const vault = { item: async () => "tok-123" };
 
@@ -170,4 +171,16 @@ test("git_push re-makes the branch's unpushed commits as the token's user", asyn
   const blind = createRepoTools({ vault, host: "https://gitlab.example.com/", root, fetchImpl: async () => new Response("", { status: 403 }) });
   assert.match((await blind.git_push.execute({ repo: "app", branch: "nova/ab12cd34" })).authorCheck, /could not be read/);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("the broker's git refuses a repo whose own config would run a program (core.fsmonitor), before running it", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "broker-planted-"));
+  const marker = `${dir}-pwned`;
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  const ok = await runGit(["status", "--porcelain"], { cwd: dir, env: process.env, timeout: 20_000 });
+  assert.equal(ok.stdout, "");
+  execFileSync("git", ["config", "core.fsmonitor", `touch ${marker}; false`], { cwd: dir });
+  await assert.rejects(runGit(["status", "--porcelain"], { cwd: dir, env: process.env, timeout: 20_000 }), /core\.fsmonitor/);
+  assert.equal(fs.existsSync(marker), false);
+  assert.deepEqual(plantedGitConfig("local\tcore.hookspath\nlocal\tfilter.a.clean\nglobal\tfilter.lfs.clean"), ["filter.a.clean"]);
 });

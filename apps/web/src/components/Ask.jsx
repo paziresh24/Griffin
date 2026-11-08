@@ -62,7 +62,9 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
         <CircleHelp className="g-ask-icon mt-0.5 size-4 shrink-0 text-primary" />
         <p className="min-w-0 flex-1 font-medium" dir="auto">{args.question}</p>
       </div>
-      {typeof args.detail === "string" && args.detail ? (
+      {typeof args.detail === "string" && args.detail && !args.via ? (
+        <pre className="mx-3 mt-1.5 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 font-sans text-xs" dir="auto">{args.detail}</pre>
+      ) : typeof args.detail === "string" && args.detail ? (
         <details className="mx-3 mt-1.5 text-xs text-muted-foreground">
           <summary className="cursor-pointer select-none">{t("جزئیات فنی")}</summary>
           <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono" dir="ltr">{args.detail}</pre>

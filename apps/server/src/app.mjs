@@ -1,7 +1,8 @@
+import { stallMiddleware } from "./stall.mjs";
 import { readBuildCommit, readChangelog } from "./build-commit.mjs";
 import { handoffDismissed } from "./handoff.mjs";
 import { startSuggestedChat } from "./suggest-start.mjs";
-import { colleagueCaller, endFullAccess, grantFullAccess } from "./colleague-access.mjs";
+import { colleagueCaller, endFullAccess, grantFullAccess, pageGrantNote } from "./colleague-access.mjs";
 import { COVERAGE_CALLER, coverageOwnerNote } from "./integrations/coverage.mjs";
 import { isGlobalChat, motherInfo } from "./integrations/mother.mjs";
 import { createTimelineCache, olderPage, toolResult } from "./timeline-cache.mjs";
@@ -13,7 +14,7 @@ import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { DEFAULT_PROVIDER, normalizeProvider, PROVIDERS } from "./providers/index.mjs";
 import { EFFORTS, effortOf, splitModel } from "./providers/ids.mjs";
 import { chatAdvice, spendAdvice } from "./usage-advice.mjs";
-import { heavyKey, isHeavyEffort, isHeavyModel, needsConfirm } from "./model-policy.mjs";
+import { heavyKey, isHeavyEffort, isHeavyModel, needsConfirm, shownChoice } from "./model-policy.mjs";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -111,7 +112,7 @@ let live = null;
 let bootCommit;
 const runningCommit = () => (bootCommit === undefined ? (bootCommit = readBuildCommit()) : bootCommit);
 
-export function createApp({ store, runner, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, folderSwitch = null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", uploadsDir = join(tmpdir(), `griffin-uploads-${process.pid}`), movedHosts = [], publicUrl = "", onNoteRun = null, sideChat = () => true, privateShare = () => false, guestTelegram = null, onGuestActivity = null, nextStepReturns = () => false, enterKey = () => "enter", searchMessages = () => false, iconVersion = () => "", buildCommit = runningCommit(), sessionRecheckMs = 60_000, updates = null, previews = null, mentionNote = () => "" }) {
+export function createApp({ store, runner, heldToDefaults = () => false, timelines = createTimelineCache({ store }), isValidRepo = () => false, defaultRepo = () => null, folderSwitch = null, asks, models = async () => [], usage = async () => ({ providers: [] }), extraRoutes, auth, version = "dev", uploadsDir = join(tmpdir(), `griffin-uploads-${process.pid}`), movedHosts = [], publicUrl = "", onNoteRun = null, sideChat = () => true, privateShare = () => false, guestTelegram = null, onGuestActivity = null, nextStepReturns = () => false, enterKey = () => "enter", searchMessages = () => false, iconVersion = () => "", buildCommit = runningCommit(), sessionRecheckMs = 60_000, updates = null, previews = null, mentionNote = () => "" }) {
   const app = new Hono();
   const sendingByClientId = new Map(); // "<chatId>:<clientId>" -> the send still in flight
   const uploads = createUploads(uploadsDir);
@@ -124,6 +125,9 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       return "";
     }
   };
+
+  // What each stall of the event loop was serving (stall.mjs).
+  app.use("*", stallMiddleware);
 
   // Live previews of apps (previews.mjs): /p/<token>/… is proxied to the sandbox, and answered before
   // anything else (the old-name redirect below included) because the preview host may be that name.
@@ -153,6 +157,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     });
   }
   live = {
+    heldToDefaults,
     suggestion: (id) => runner.suggestion?.(id) ?? null,
     limitResumeAt: (id) => runner.limitResumeAt?.(id) ?? null,
     fastState: (id) => runner.fastState?.(id) ?? null,
@@ -331,7 +336,7 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
       const withChildren = (chat) => publicChat(reads, chat, childrenByParent.get(chat.id));
       if (personId) return { chats: store.listChatsForPerson(personId, { archived }).map(withChildren) };
       // sideChat: the SIDE_CHAT switch (config.mjs) rides on the list the web reloads on every change.
-      return { chats: store.listChatsBySource({ archived }).map(withChildren), sideChat: sideChat(), privateShare: Boolean(privateShare()), nextStepReturns: nextStepReturns() === true, enterKey: enterKey() === "shiftEnter" ? "shiftEnter" : "enter" };
+      return { chats: store.listChatsBySource({ archived }).map(withChildren), ...(archived ? {} : { archiveStamp: store.archiveStamp?.() ?? null }), sideChat: sideChat(), privateShare: Boolean(privateShare()), nextStepReturns: nextStepReturns() === true, enterKey: enterKey() === "shiftEnter" ? "shiftEnter" : "enter" };
     });
     return c.json(value);
   });
@@ -771,7 +776,9 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (CHAT_MODES.has(body.mode)) patch.mode = body.mode;
     // A colleague's conversation: his «بدون پرسیدن» on the page is the full-access grant, any other
     // mode ends it (colleague-access.mjs).
+    let pageGrant = false;
     if (patch.mode && !chat.parent_chat_id && colleagueCaller(chat.caller)) {
+      pageGrant = patch.mode === "agent" && chat.mode !== "agent";
       if (patch.mode === "agent") grantFullAccess(store, chat.id, { why: "از صفحهٔ چت" });
       else endFullAccess(store, chat.id);
     }
@@ -829,7 +836,12 @@ export function createApp({ store, runner, timelines = createTimelineCache({ sto
     if (typeof body.provider === "string" && PROVIDERS.includes(body.provider)) {
       /* no-op: use PATCH /api/agents/:id */
     }
-    return c.json({ chat: publicChat(store, store.updateChat(chat.id, patch)) });
+    const updated = store.updateChat(chat.id, patch);
+    if (pageGrant) {
+      const name = motherInfo(store, chat.id)?.name;
+      await Promise.resolve(runner.send(chat.id, { text: name ? coverageOwnerNote(name, pageGrantNote()) : pageGrantNote(), from: { kind: "owner_web" }, intent: "queue" })).catch((error) => console.error(`[chats] page grant ${chat.id}: ${error.message}`));
+    }
+    return c.json({ chat: publicChat(store, updated) });
   });
 
   // Moving an open chat to another repo («تغییر پوشه» after a confirmation that says
@@ -1707,16 +1719,19 @@ function publicChat(store, chat, children = null) {
   if (!chat) return null;
   const agentId = chat.agent || DEFAULT_AGENT;
   const profile = store.getAgentProfile?.(agentId);
+  const provider = splitModel(chat.model)?.provider || profile?.provider || chat.provider || DEFAULT_PROVIDER;
+  const stored = { model: chat.model ?? profile?.model ?? null, effort: chat.effort || null };
+  const shown = live?.heldToDefaults?.(chat, provider) ? shownChoice(stored, (needsConfirm(stored).length && store.getKv(heavyKey(chat.id))) || {}) : stored;
   return {
     id: chat.id,
     title: chat.title,
-    model: chat.model ?? profile?.model ?? null,
-    effort: chat.effort || null,
+    model: shown.model,
+    effort: shown.effort,
     // Where its full Claude Code runs (config CLAUDE_HOST): only the owner's own chats have a terminal to place.
     ...(placeable(chat) ? { runsOn: { chosen: chat.runs_on || null, default: genv("CLAUDE_HOST", "off") === "off" ? "container" : "host", ...(runsFree(chat.mode) ? { bypass: true } : {}) } } : {}),
     mode: chat.mode,
     agent: agentId,
-    provider: splitModel(chat.model)?.provider || profile?.provider || chat.provider || DEFAULT_PROVIDER,
+    provider,
     agents: store.agentsWorked(chat),
     caller: chat.caller || "owner",
     source: chat.source || null,

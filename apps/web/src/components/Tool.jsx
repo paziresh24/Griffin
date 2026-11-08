@@ -7,6 +7,8 @@ import { targetLook, textDir } from "../dir.js";
 import { DirBlock } from "./DirBlock.jsx";
 import { api, navigate, useRoute } from "../api.js";
 import { AskCard } from "./Ask.jsx";
+import { ASKS_INSIDE, chatAsk } from "../ask.js";
+import { refreshInbox, useInbox } from "../inbox.js";
 import { buildEditDiff } from "../edit-diff.js";
 import { loadLazyResult } from "../lazy-result.js";
 import {
@@ -50,6 +52,7 @@ const TOOLS = {
   readTodos: { icon: ListChecks, label: t("خواندن برنامهٔ کار") },
   todo_write: { icon: ListChecks, label: t("برنامهٔ کار"), open: true },
   inbox_list: { icon: Inbox, label: t("کارهای منتظر صاحب") },
+  chat_plan: { icon: ListChecks, label: t("پلن"), subtitle: (a) => a.title },
   owner_task: { icon: ListChecks, label: t("دسترسی لازم"), subtitle: (a) => a.access || a.title, open: true },
   webSearch: { icon: Globe, label: t("جستجوی وب"), subtitle: (a) => a.searchTerm || a.query },
   webFetch: { icon: Globe, label: t("خواندن صفحهٔ وب"), subtitle: (a) => a.url },
@@ -222,6 +225,8 @@ const TOOLS = {
 
   // Griffin's own tools that had no row label: the English id stays the API name, the row says it in Persian.
   ask_owner: { icon: CircleHelp, label: t("پرسش از شما"), subtitle: (a) => a.question },
+  request_full_access: { icon: KeyRound, label: t("درخواست دسترسی کامل"), subtitle: (a) => a.why },
+  request_owner_chat: { icon: KeyRound, label: t("درخواست چت با دسترسی شما"), subtitle: (a) => a.title },
   ask_requester: { icon: CircleHelp, label: t("پرسش از درخواست‌کننده"), subtitle: (a) => a.question },
   visualize: { icon: Activity, label: t("رسم نمودار"), subtitle: (a) => a.title },
   end_agent: { icon: Check, label: t("پایان گفتگو") },
@@ -268,6 +273,7 @@ const TOOLS = {
   network_ask: { icon: Send, label: t("پرسش از ایجنت همکار"), subtitle: (a) => a.agent, open: true },
   network_reply: { icon: Send, label: t("جواب به ایجنت همکار"), subtitle: (a) => a.agent },
   network_connect: { icon: Users, label: t("وصل شدن به ایجنت همکار"), subtitle: (a) => a.url },
+  network_send_file: { icon: Users, label: t("فرستادن فایل به ایجنت همکار"), subtitle: (a) => String(a.path || "").split("/").pop() },
   peer_invite: { icon: Users, label: t("دعوت همکار به ایجنت‌ها"), subtitle: (a) => a.label || a.id, open: true },
   peer_connection: { icon: Network, label: t("وضعیت اتصال ایجنت همکار"), subtitle: (a) => a.user },
   mcp_server_list: { icon: Server, label: t("سرورهای MCP شما") },
@@ -320,8 +326,23 @@ export function shortTarget(value) {
   return text;
 }
 
+// A tool that asks from inside the server: its row, and while it waits the same card the home page shows.
+function InnerAskCard(props) {
+  const routeChat = useRoute();
+  const inbox = useInbox();
+  const waiting = props.status?.type === "running" || props.result === undefined;
+  const item = waiting ? chatAsk(inbox.items, routeChat) : null;
+  return (
+    <>
+      <GenericToolCard {...props} />
+      {item ? <AskCard args={{ question: item.question, options: item.options, multiSelect: item.multiSelect, detail: item.detail, via: item.via }} chatId={item.chatId} askId={item.askId} onDone={refreshInbox} /> : null}
+    </>
+  );
+}
+
 export function ToolCard(props) {
   if (props.toolName === "ask_owner" || props.toolName === "ask_requester") return <AskCard {...props} />;
+  if (ASKS_INSIDE.has(props.toolName)) return <InnerAskCard {...props} />;
   if (props.toolName === "visualize") return <ChartCard {...props} />;
   if (props.toolName === "preview_start") return <PreviewCard {...props} />;
   if (props.toolName === "ask_agent") return <PeerCard {...props} />;

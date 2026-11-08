@@ -318,7 +318,8 @@ test("memory is bounded: the least recently opened chat is dropped first", async
     const after = timelines.stats();
     assert.ok(after.bytes <= maxBytes);
     // b plus its gzipped copy no longer fits beside the other two: the oldest one made room
-    assert.ok(after.entries < 2 || after.bytes === before + packed.length);
+    // (its whole JSON is made only now, for the gzip, and replaces the estimate in the count)
+    assert.ok(after.entries < 2 || after.bytes >= before + packed.length - again.approx * 2);
     store.deleteChat(a.id);
     store.deleteChat(b.id);
     store.deleteChat(c.id);
@@ -479,6 +480,21 @@ test("an older page leaves big tool results behind too", async () => {
     const older = await (await app.request(`/api/chats/${chat.id}/timeline/older?before=${encodeURIComponent(tail.timeline.messages[0].id)}&limit=40`)).json();
     const part = older.messages.flatMap((m) => m.parts || []).find((p) => p.callId === "old-big");
     assert.deepEqual(part.result, { value: { lazy: { chat: chat.id, bytes: JSON.stringify({ value: "y".repeat(30_000) }).length } } });
+  } finally {
+    cleanup();
+  }
+});
+
+test("a tail page never stringifies the whole timeline", async () => {
+  const { store, timelines, cleanup } = setup();
+  try {
+    const { chat } = bigChat(store, 60);
+    const entry = await timelines.get(chat.id);
+    entry.tail(10);
+    assert.equal(entry.full, null);
+    assert.ok(entry.approx > 0);
+    assert.equal(JSON.parse(entry.body).timeline.messages.length, entry.timeline.messages.length);
+    assert.ok(entry.full, "made once asked for");
   } finally {
     cleanup();
   }

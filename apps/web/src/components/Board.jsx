@@ -120,7 +120,7 @@ function InboxCard({ item }) {
       {who ? <p className="mt-0.5 truncate text-xs text-muted-foreground" dir="auto">{who}</p> : null}
 
       {item.kind === "approval" || item.kind === "question" ? (
-        <AskCard args={{ question: item.question, options: item.options, multiSelect: item.multiSelect, detail: item.detail }} chatId={item.chatId} askId={item.askId} onDone={refreshInbox} />
+        <AskCard args={{ question: item.question, options: item.options, multiSelect: item.multiSelect, detail: item.detail, via: item.via }} chatId={item.chatId} askId={item.askId} onDone={refreshInbox} />
       ) : (
         <div className="mt-1.5 space-y-2">
           {item.kind === "telegram" ? (
@@ -249,7 +249,7 @@ function WorkingRow({ row }) {
         </span>
       </button>
       {row.stoppable ? (
-        <button type="button" onClick={() => request(`/api/chats/${chat.id}/cancel`, "POST", t("متوقف شد"))} className="g-icon-btn shrink-0 rounded-md p-2 text-muted-foreground hover:bg-bad/10 hover:text-bad pointer-coarse:min-h-11" aria-label={t("توقف")}>
+        <button type="button" onClick={() => request(`/api/chats/${chat.id}/cancel`, "POST", t("متوقف شد"))} className="g-icon-btn shrink-0 rounded-md p-2 text-muted-foreground hover:bg-bad/10 hover:text-bad pointer-coarse:min-h-11" aria-label={t("توقف")} title={t("توقف")}>
           <Square className="size-3.5" />
         </button>
       ) : null}

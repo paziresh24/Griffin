@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRepoChatTools } from "../src/repo-tools.mjs";
+import { createRepoChatTools, plantedGitConfig } from "../src/repo-tools.mjs";
 
 function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-repotools-"));
@@ -56,4 +56,24 @@ test("repo_git commits as the GitLab user the pushes go out as; --author is refu
   await blind.repo_git.execute({ args: ["commit", "--allow-empty", "-m", "c"] });
   assert.notEqual(String(execFileSync("git", ["log", "-1", "--format=%ae"], { cwd: dir })).trim(), "nouri@x.ir");
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a planted core.fsmonitor (or any program-running key) in the repo's config stops git before it runs", async () => {
+  const dir = repo();
+  const marker = path.join(dir, "..", `pwned-${path.basename(dir)}`);
+  const t = createRepoChatTools({ dir, repo: "app", branch: "griffin/ab12cd34", push: async () => ({ pushed: true }) });
+  assert.match((await t.repo_git.execute({ args: ["status"] })).output, /griffin\/ab12cd34|nothing to commit/);
+  execFileSync("git", ["config", "core.fsmonitor", `touch ${marker}; false`], { cwd: dir });
+  await assert.rejects(t.repo_git.execute({ args: ["status"] }), /core\.fsmonitor/);
+  assert.equal(fs.existsSync(marker), false, "the planted program never ran");
+});
+
+test("plantedGitConfig: only local/worktree program-running keys; a local hooksPath (husky) is fine", () => {
+  const listing = [
+    "local\tcore.repositoryformatversion", "local\tcore.hookspath", "local\tremote.origin.url",
+    "global\tfilter.lfs.clean", "local\tfilter.x.smudge", "worktree\tdiff.foo.textconv",
+    "local\tgpg.program", "local\tgpg.ssh.program", "local\tcredential.helper", "local\tinclude.path",
+    "local\turl.https://evil/.insteadof", "command\tcore.fsmonitor",
+  ].join("\n");
+  assert.deepEqual(plantedGitConfig(listing), ["filter.x.smudge", "diff.foo.textconv", "gpg.program", "gpg.ssh.program", "credential.helper", "include.path", "url.https://evil/.insteadof"]);
 });

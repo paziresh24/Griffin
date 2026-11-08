@@ -819,3 +819,38 @@ test("a refused login marks its account and retries the turn once on another", a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a kept agent is remade when someone else's words close the shell, and again on his yes", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-shell-held-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const sends = [];
+  const made = [];
+  const sdk = {
+    async create() {
+      made.push("create");
+      return makeAgent("agent-1", { sends });
+    },
+    async resume(id) {
+      made.push(`resume:${id}`);
+      return makeAgent(id, { sends });
+    },
+  };
+  let held = false;
+  const runner = createRunner({ store, sdk, agentOptions: async () => ({}), shellHeld: () => held, log: { error() {} } });
+  const chat = store.createChat({ title: "t" });
+  const turn = async (text) => {
+    const { runId } = await runner.send(chat.id, { text });
+    await until(() => store.eventsAfter(chat.id).some((e) => e.type === "run.finished" && e.runId === runId));
+  };
+  await turn("یک");
+  await turn("دو");
+  assert.deepEqual(made, ["create"]);
+  held = true;
+  await turn("سه");
+  assert.deepEqual(made, ["create", "resume:agent-1"], "closed: it does not keep the old shell");
+  held = false;
+  await turn("چهار");
+  assert.deepEqual(made, ["create", "resume:agent-1", "resume:agent-1"], "his yes: the next turn has the shell");
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

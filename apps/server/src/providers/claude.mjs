@@ -14,6 +14,7 @@ import { planModeRefusal } from "./plan-mode-guard.mjs";
 import { gitIdentityRefusal } from "./git-identity-guard.mjs";
 import { hostConfigDir, hostSpawner, hostTarget } from "./host-spawn.mjs";
 import { isLoginDirKey, loginDirOf, loginDirToken, mainConfigDir, relativizeSharedLinks } from "../claude-account-dir.mjs";
+import { loginGate, noteLogin } from "../claude-login-guard.mjs";
 import { genv } from "../env.mjs";
 import { syncMcpServers } from "../mcp-servers.mjs";
 import { agentSlug } from "../persona.mjs";
@@ -391,6 +392,7 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
   async function cliModels(timeoutMs) {
     const abort = new AbortController();
     try {
+      await loginGate(apiKey);
       const q = queryImpl({
         prompt: (async function* () {
           await new Promise((resolve) => abort.signal.addEventListener("abort", resolve));
@@ -499,6 +501,7 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
       let closed = null;
       let failure = null;
       try {
+        await loginGate(apiKey);
         for await (const msg of queryImpl({
           prompt: "Reply with: ok",
           options: { abortController: abort, model: resolveModel("haiku"), maxTurns: 1, tools: [], allowedTools: [], settingSources: [], strictMcpConfig: true, persistSession: false, systemPrompt: "Reply with: ok", env: claudeAuthEnv(apiKey), ...claudeExecutableOption() },
@@ -517,6 +520,8 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
     },
     // The plan windows this account's last run reported, as they came (routing reads them: account-balance.mjs).
     lastWindows: () => lastLimits.windows,
+    // When they were reported (ms), so a newer plan reading (account-load.mjs) can win over them.
+    lastWindowsAt: () => (lastLimits.at ? Date.parse(lastLimits.at) : 0),
     // Pro plan windows. A setup-token has no profile scope, so /usage returns no rate_limits;
     // every run's rate_limit_event carries them instead (unifiedWindows, utilization 0-1).
     async usage() {
@@ -543,6 +548,7 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
       const abort = new AbortController();
       let q = null;
       try {
+        await loginGate(apiKey);
         q = queryImpl({
           prompt: (async function* () {
             await new Promise((resolve) => abort.signal.addEventListener("abort", resolve));
@@ -583,6 +589,7 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
     async rewindFiles(sessionId, userMessageId, { cwd, dryRun = false, timeoutMs = 30_000 } = {}) {
       for (let tries = 0; ; tries += 1) {
         const abort = new AbortController();
+        await loginGate(apiKey);
         const q = queryImpl({
           prompt: (async function* () {
             await new Promise((resolve) => abort.signal.addEventListener("abort", resolve));
@@ -1405,6 +1412,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       if (keep) return sendKept({ message, sendOptions, run, finish, abort, mcp, queryOptions, checkpoint, me, closeMe, prev, bridge, getLimit: () => limit, setLimit: (value) => (limit = value), isSettled: () => settled, settings: { modelId, mode, effort: extras.effort || null, fast: Boolean(extras.fast), ...(host && hostLogin ? { login: hostLogin.expiresAt } : {}) } });
 
       async function attempt(resume) {
+        await loginGate(apiKey);
         const q = queryImpl({
           prompt: toPrompt(message, () => currentSessionId, checkpoint),
           options: queryOptions(resume),
@@ -1500,6 +1508,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             error: mcpDown ? { message: mcpDown } : thrownError(String(error?.message || error)),
           });
         } finally {
+          noteLogin(apiKey, "after run");
           started = true;
           me.done = true;
           closeMe();
@@ -1544,6 +1553,7 @@ export const ALWAYS_LOAD = [
   "subtasks",
   "list_agents",
   "owner_task",
+  "chat_plan",
   "knowledge_list",
   "knowledge_write",
   "telegram_send",
@@ -1825,6 +1835,16 @@ export function toPrompt(message, sessionId = () => "", uuid = null) {
 export async function claudeOneShot({ apiKey, model = "sonnet", prompt, cwd = "/tmp" }) {
   if (!apiKey) throw new Error("Anthropic API key missing");
   let text = "";
+  await loginGate(apiKey);
+  try {
+    text = await oneShotText(apiKey, model, prompt, cwd);
+  } catch (error) {
+    throw error?.code ? error : oneShotError(String(error?.message || error));
+  }
+  return text;
+}
+async function oneShotText(apiKey, model, prompt, cwd) {
+  let text = "";
   for await (const msg of query({
     prompt: inertText(prompt),
     options: {
@@ -1840,9 +1860,17 @@ export async function claudeOneShot({ apiKey, model = "sonnet", prompt, cwd = "/
     },
   })) {
     if (msg?.type === "result") {
-      if (msg.subtype !== "success" || msg.is_error) throw new Error(String(msg.result || msg.subtype).slice(0, 120));
+      if (msg.subtype !== "success" || msg.is_error) throw oneShotError(String(msg.result || msg.subtype));
       text = msg.result || "";
     }
   }
   return text;
+}
+// A one-shot's failure carries the same code a chat run would: a refused login is auth_failed, so the
+// caller can take the account out of routing and ask the next one (a colleague 2026-11-04: «ببر به بک‌لاگ»
+// showed «OAuth session expired and could not be refreshed» from a signed-out account, again and again).
+export function oneShotError(raw) {
+  const message = String(raw).slice(0, 120);
+  const code = AUTH_THROWN.test(raw) && !OAUTH_REFRESH_BUSY.test(raw) ? AUTH_FAILED_CODE : "";
+  return Object.assign(new Error(message), code ? { code } : {});
 }

@@ -23,7 +23,22 @@ const CHAT_BRANCH = /^[a-z0-9][a-z0-9-]{0,31}\/[A-Za-z0-9]{8}(-2)?$/;
 const pushToDefault = (env = process.env) =>
   new Set(String(env.GRIFFIN_PUSH_TO_DEFAULT || "").split(",").map((p) => p.trim().replace(/\.git$/, "")).filter((p) => PROJECT.test(p)));
 
-function run(args, { cwd, env, timeout, input }) {
+// A repo's own config can make git run a program (core.fsmonitor on `git status`, a filter or diff
+// driver, gpg.program, sshCommand, credential helpers) or pull in another file. A checkout anyone
+// else can write (a chat's worktree, the sandbox's mount) could plant one, so git refuses to work in
+// a repo whose local or worktree config sets any of these (security audit 2026-10-29). Our own
+// core.hooksPath override (command scope) wins over a local one, so that one is left alone.
+const PLANTED = /^(core\.(fsmonitor|sshcommand|pager|editor|askpass|alternaterefscommand|gitproxy)|sequence\.editor|diff\.external|(diff|merge|filter)\..+\.(textconv|command|driver|clean|smudge|process)|credential(\..+)?\.helper|gpg\.(.+\.)?program|include\.path|includeif\..+\.path|uploadpack\..+|receivepack\..+|remote\..+\.(uploadpack|receivepack|proxy)|protocol\.(.+\.)?allow|url\..+\.(insteadof|pushinsteadof)|http\.(.+\.)?proxy)$/i;
+export function plantedGitConfig(listing) {
+  const bad = [];
+  for (const line of String(listing).split("\n")) {
+    const [scope, name] = line.trim().split(/\s+/);
+    if ((scope === "local" || scope === "worktree") && name && PLANTED.test(name)) bad.push(name);
+  }
+  return bad;
+}
+
+function rawRun(args, { cwd, env, timeout, input }) {
   return new Promise((resolve, reject) => {
     const child = execFile("git", args, { cwd, env, timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(Object.assign(new Error(String(stderr || error.message).trim().slice(-800)), { code: error.code }));
@@ -33,7 +48,16 @@ function run(args, { cwd, env, timeout, input }) {
   });
 }
 
-// Pushes carry the token's own name (owner 2026-10-29): Platform's author watch flagged a dozen pushes
+export async function run(args, opts) {
+  if (args[0] !== "clone") {
+    const { stdout } = await rawRun(["config", "--list", "--name-only", "--show-scope", "--includes"], { cwd: opts.cwd, env: process.env, timeout: 20_000 });
+    const bad = plantedGitConfig(stdout);
+    if (bad.length) throw new Error(`this repo's git config sets ${bad.join(", ")}, which would run a program here; remove it from .git/config first`);
+  }
+  return rawRun(args, opts);
+}
+
+// Pushes carry the token's own name (owner 2026-10-29): an author watch flagged a dozen pushes
 // where the token was a person's and the commits said «Nova», «Kian», «Atlas» or mnajafi@localhost.
 // Before a push, the branch's commits that origin does not have yet are re-made with the token's user
 // as author and committer — same tree, message and dates, so the chat's worktree stays clean. Commits

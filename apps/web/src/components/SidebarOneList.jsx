@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useGradual } from "../gradual.js";
+import { readProfileCache, writeProfileCache } from "../profile.js";
 import { Popover } from "radix-ui";
 import {
   AlarmClock, Archive, BellRing, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronUp,
@@ -8,7 +10,7 @@ import {
 import { api, navigate, usePolling } from "../api.js";
 import { FeedbackBarButton, PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
 import { peoplePath } from "../inbox-people.js";
-import { isUnreadChat, markSeen, markUnread, seenOf, useSeenVersion } from "../seen.js";
+import { isUnreadChat, markSeen, markUnread, seenOf, useSeenOf, useSeenVersion } from "../seen.js";
 import { agentMeta, readSetting, writeSetting } from "../brand.js";
 import { textDir } from "../dir.js";
 import { SidebarSuggestions } from "./ChatTools.jsx";
@@ -188,10 +190,10 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
     showArchived ? { handle: null, slots: [] } : sectionDrag(section, { groupBy, groupsOrder: order, hasGroups: groups.length > 0, sectionKeys, onOrder: (keys) => setSectionOrder(groupBy, keys) });
 
 
-  const open = (id) => {
+  const open = useCallback((id) => {
     navigate(id);
     onClose?.();
-  };
+  }, [onClose]);
   // A new chat, in a group when it comes from that group's «+».
   const startChat = (groupId = null, options = {}) => {
     if (onNewChat) onNewChat(groupId, options);
@@ -230,7 +232,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
       {nav?.top}
 
       <nav className="scrollbar-thin mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {nav?.sections}
+        {query.trim() ? null : nav?.sections}
         <PeerChats chats={prepared.peers} activeId={activeId} onOpen={open} filtered={filter !== "all"} />
         <SidebarSuggestions refreshKey={chats} onNavigate={onClose} karsara={karsara} />
         {showArchived ? <p className="mt-3 px-2 text-xs text-muted-foreground">{t("بایگانی")}</p> : null}
@@ -360,7 +362,7 @@ export function UserMenu({ onNavigate }) {
   const setupMissing = useSetupMissing();
   const updateDot = useUpdateDot(); // «آپدیت فقط در تنظیمات»: a new release waits there
   // The owner's name and photo, replaced at once when Settings saves a typed name.
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(readProfileCache); // the last visit's name and photo, at once
   const [photoFailed, setPhotoFailed] = useState(false);
   useEffect(() => {
     let live = true;
@@ -371,10 +373,15 @@ export function UserMenu({ onNavigate }) {
         (p) => {
           if (!live) return;
           setProfile(p);
+          writeProfileCache(p);
           setPhotoFailed(false);
           if (again && p.telegramName && !p.photo) timer = setTimeout(() => ask(false), 8_000);
         },
-        () => live && again && (timer = setTimeout(() => ask(false), 8_000)),
+        () => {
+          if (!live) return;
+          setProfile((p) => p || {}); // no answer: «Owner» rather than the placeholder for good
+          if (again) timer = setTimeout(() => ask(false), 8_000);
+        },
       );
     ask(true);
     return () => {
@@ -415,7 +422,7 @@ export function UserMenu({ onNavigate }) {
               className={`size-6 shrink-0 ${owner.isPhoto ? "rounded-full object-cover" : ""}`}
               onError={owner.isPhoto ? onPhotoError : undefined}
             />
-            <span className="min-w-0 flex-1 truncate text-sm" dir="auto">{owner.name}</span>
+            <span className="min-w-0 flex-1 truncate text-sm" dir="auto">{profile ? owner.name : <span className="inline-block h-3 w-20 animate-pulse rounded bg-muted align-middle" aria-hidden />}</span>
             {setupMissing ? <span className="size-2 shrink-0 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : updateDot ? <span className="size-2 shrink-0 rounded-full bg-primary" role="img" aria-label={t("نسخهٔ تازه آماده است")} title={t("نسخهٔ تازه آماده است")} /> : null}
             <ChevronUp className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "opacity-70"}`} />
           </button>
@@ -516,7 +523,7 @@ function PeerChats({ chats, activeId, onOpen, filtered = false }) {
                 </a>
                 <ul>
                   {shown.map((chat) => (
-                    <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeId} onOpen={onOpen} />
+                    <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeOfRow(chat, activeId)} onOpen={onOpen} />
                   ))}
                 </ul>
               </div>
@@ -559,11 +566,11 @@ async function newGroup() {
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
 const deleteFailed = async (error) => (await askAlert(error?.status === 409 ? t("هنوز در حال کار است") : error?.message || t("حذف انجام نشد")));
 async function deleteForGood(chat) {
-  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title })))) return;
+  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }), { danger: true, yes: t("حذف") }))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).catch(deleteFailed);
 }
 async function deleteAllArchived(ids) {
-  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length })))) return;
+  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }), { danger: true, yes: t("حذف دائم") }))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } })
     .then(async (r) => { if (r.skipped?.length) (await askAlert(t("{length} گفتگو در حال کار بود و حذف نشد.", { length: r.skipped.length }))); })
     .catch(deleteFailed);
@@ -607,6 +614,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   if (!chats.length && !group) return null;
   // The chat on screen stays in sight even inside a folded group.
   const shown = folded ? chats.filter((c) => c.id === activeId) : chats;
+  const drawn = useGradual(shown, activeId);
   const rename = async () => {
     setMenu(false);
     const name = (await askPrompt(t("نام گروه"), group.name))?.trim();
@@ -614,7 +622,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   };
   const remove = async () => {
     setMenu(false);
-    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name })))) {
+    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name }), { danger: true, yes: t("حذف") }))) {
       api(`/api/groups/${group.id}`, { method: "DELETE" }).catch(groupFailed);
     }
   };
@@ -673,8 +681,8 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
         <div className="pt-1" />
       )}
       <ul>
-        {shown.map((chat) => (
-          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeId} onOpen={onOpen} groups={groups} />
+        {drawn.map((chat) => (
+          <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} activeId={activeOfRow(chat, activeId)} onOpen={onOpen} groups={groups} />
         ))}
       </ul>
     </div>
@@ -691,7 +699,11 @@ export function RepoNewChat({ repo, onNewChat, className }) {
   );
 }
 
-function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
+// A row needs the open chat only to mark one of its children: other rows stay as they are on a switch.
+const activeOfRow = (chat, activeId) => (chat.children?.some((child) => child.id === activeId) ? activeId : null);
+
+// Memoized: a list reload keeps unchanged rows' objects (chats-cache.js), so only the row that changed draws again.
+const ChatItem = memo(function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
   const [menu, setMenu] = useState(false);
   const [moving, setMoving] = useState(false); // the menu shows the group list instead
   const closeMenu = () => {
@@ -708,7 +720,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
     if (!group) return;
     await patch({ groupId: group.id });
   };
-  useSeenVersion(); // subscribe: a markSeen elsewhere (opening this chat) clears the badge live
+  useSeenOf(chat.id); // a markSeen elsewhere (opening this chat) clears the badge live
   const timeAgo = useFlag("timeAgo");
   const agents = chatAgents(chat);
   const children = Array.isArray(chat.children) ? chat.children : [];
@@ -871,7 +883,7 @@ function ChatItem({ chat, active, activeId, onOpen, groups = [] }) {
       ) : null}
     </li>
   );
-}
+});
 
 // Short, muted relative time for the chat list («۵ دقیقه», «۲ ساعت», «۳ روز»).
 function ago(stamp) {

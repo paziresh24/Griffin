@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ArrowUp, CornerDownLeft, History, PanelLeft, PanelRight, X } from "lucide-react";
 import { api, useTimeline } from "../api.js";
 import { textDir } from "../dir.js";
-import { sidePaths } from "../side.js";
+import { sideQuoteKey, sidePaths } from "../side.js";
+import { quoteStore, withQuotes } from "../quotes.js";
+import { QuoteList } from "./QuoteChip.jsx";
 import { GriffinRuntime } from "../runtime.jsx";
 import { isRtl, num, t } from "../i18n.js";
 import { Thread } from "./Thread.jsx";
@@ -44,10 +46,8 @@ export function SideChatButton({ open, onClick, count = 0 }) {
   );
 }
 
-export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onError, seed, onSeedConsumed }) {
-  const { open, activeId, sides } = state;
-
-  // Loaded with the parent (not only when open) so the header button can show how many there are.
+// Loaded with the parent (not only when open) so the top button can show how many there are.
+export function useSideChats(parentId, dispatch, again) {
   useEffect(() => {
     if (!parentId) return undefined;
     let alive = true;
@@ -57,18 +57,23 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
     return () => {
       alive = false;
     };
-  }, [open, parentId, dispatch]);
+  }, [again, parentId, dispatch]);
+}
+
+// embedded: a tab of the chat's pane (ChatPane.jsx); it holds the width, the open state and the close.
+export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onError, seed, onSeedConsumed, embedded = false }) {
+  const { activeId, sides } = state;
 
   // A seed (a quote from «به چت کناری») always lands on the fresh start screen.
   useEffect(() => {
     if (seed != null && activeId) dispatch({ type: "new" });
   }, [seed, activeId, dispatch]);
 
-  if (!open || !parentId) return null;
+  if (!parentId) return null;
   const active = sides.find((c) => c.id === activeId) || null;
 
   return (
-    <aside className="side-panel fixed inset-0 z-40 flex flex-col bg-background md:static md:z-auto md:w-[26rem] md:shrink-0 md:border-s" aria-label={t("چت کناری")} dir={isRtl ? "rtl" : "ltr"}>
+    <aside className={embedded ? "side-panel flex min-h-0 flex-1 flex-col bg-background" : "side-panel fixed inset-0 z-40 flex flex-col bg-background md:static md:z-auto md:w-[26rem] md:shrink-0 md:border-s"} aria-label={t("چت کناری")} dir={isRtl ? "rtl" : "ltr"}>
       <header className="flex min-w-0 items-center gap-1 border-b px-2 pb-2 pt-[max(env(safe-area-inset-top),0.5rem)]">
         <h2 className="min-w-0 flex-1 truncate px-1.5 text-sm font-medium" dir="auto">{active?.title || t("چت کناری")}</h2>
         {activeId ? (
@@ -76,9 +81,9 @@ export function SidePanel({ parentId, state, dispatch, settings, agentLabel, onE
             <History className="size-4" />
           </button>
         ) : null}
-        <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "close" })} title={t("بستن (چت کناری می‌ماند)")}>
+        {embedded ? null : <button type="button" className="g-icon-btn rounded-lg p-1.5 text-muted-foreground hover:bg-muted" onClick={() => dispatch({ type: "close" })} title={t("بستن (چت کناری می‌ماند)")}>
           <X className="size-4" />
-        </button>
+        </button>}
       </header>
       {activeId ? (
         <SideThread key={activeId} chat={active} chatId={activeId} settings={settings} agentLabel={agentLabel} onError={onError} />
@@ -110,9 +115,12 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
   const karsara = useLook() === "karsara";
   const simple = useFlag("sideChatSimple");
   const inputRef = useRef(null);
+  // «به چت کناری» puts the selection here as a quote card above the box (quotes.js), like the main
+  // chat's replies — not as raw «>» lines in the text.
+  const quoteKey = sideQuoteKey(parentId);
+  const quotes = useSyncExternalStore(quoteStore.subscribe, () => quoteStore.get(quoteKey));
   useEffect(() => {
     if (!seed) return;
-    setText(seed);
     onSeedConsumed?.();
     inputRef.current?.focus();
   }, [seed, onSeedConsumed]);
@@ -127,11 +135,13 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
   const [allowEdits, setAllowEdits] = useState(true);
   const send = async () => {
     const value = text.trim();
-    if (!value || sending) return;
+    if ((!value && !quotes.length) || sending) return;
+    const sent = quotes;
     setSending(true);
     try {
-      const { chat } = await api(sidePaths.create(parentId), { method: "POST", body: { text: value, images: [], allowEdits } });
+      const { chat } = await api(sidePaths.create(parentId), { method: "POST", body: { text: withQuotes(sent, value), images: [], allowEdits } });
       setText("");
+      quoteStore.removeSent(quoteKey, sent);
       dispatch({ type: "created", chat });
     } catch (error) {
       onError?.(error);
@@ -163,7 +173,9 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
         )}
       </div>
       <div className="px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2">
-        <div className="g-composer flex items-end gap-1 rounded-2xl border bg-card px-2 py-1.5 shadow-sm focus-within:border-primary/60">
+        <div className="g-composer rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
+          <QuoteList chatId={quoteKey} quotes={quotes} onDone={() => inputRef.current?.focus()} />
+          <div className="flex items-end gap-1 px-2 py-1.5">
           <textarea
             ref={inputRef}
             rows={1}
@@ -180,12 +192,13 @@ function SideStart({ parentId, sides, dispatch, onError, seed, onSeedConsumed })
               }
             }}
             aria-label={t("پیام چت کناری")}
-            placeholder={t("سؤال کناری‌ات را بنویس")}
+            placeholder={quotes.length ? t("دربارهٔ این بخش بپرس") : t("سؤال کناری‌ات را بنویس")}
             className="scrollbar-thin max-h-[45dvh] min-h-10 min-w-0 flex-1 resize-none bg-transparent px-1.5 py-2 leading-7 outline-none placeholder:text-muted-foreground"
           />
-          <button type="button" className={`g-send mb-0.5 flex shrink-0 items-center justify-center bg-primary text-primary-foreground disabled:opacity-30 ${karsara ? "size-8 rounded-lg" : "size-9 rounded-full"}`} onClick={send} disabled={sending || !text.trim()} title={t("ارسال")}>
+          <button type="button" className={`g-send mb-0.5 flex shrink-0 items-center justify-center bg-primary text-primary-foreground disabled:opacity-30 ${karsara ? "size-8 rounded-lg" : "size-9 rounded-full"}`} onClick={send} disabled={sending || (!text.trim() && !quotes.length)} title={t("ارسال")}>
             {karsara ? <CornerDownLeft className="size-4" /> : <ArrowUp className="size-5" />}
           </button>
+          </div>
         </div>
         <label className="mt-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
           <input type="checkbox" checked={allowEdits} onChange={(e) => setAllowEdits(e.target.checked)} className="accent-primary" />

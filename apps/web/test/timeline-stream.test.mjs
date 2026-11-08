@@ -240,7 +240,7 @@ test("loadOlder fetches the page before the oldest message held and prepends it"
   };
   const { shown, handle } = open(server);
   await flushPromises();
-  assert.match(calls[0], /timeline\?limit=40/);
+  assert.match(calls[0], /timeline\?limit=24/);
   assert.equal(shown.at(-1).timeline.earlier, 50);
   assert.equal(await handle.loadOlder(), true);
   const { timeline } = shown.at(-1);

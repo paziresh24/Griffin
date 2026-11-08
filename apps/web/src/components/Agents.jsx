@@ -157,6 +157,7 @@ export function AgentsPage({ onBack, embedded = false }) {
     try {
       const res = await api("/api/agents", { method: "POST", body });
       setCreating(false);
+      if (window.location.hash === "#/agents/new") window.location.hash = "/agents"; // a reload does not reopen the form
       load();
       setSelected(res.agent.id);
       toast.success(t("ایجنت «{name}» ساخته شد", { name: res.agent.label }));
@@ -168,7 +169,7 @@ export function AgentsPage({ onBack, embedded = false }) {
   };
 
   const removeAgent = async (agent) => {
-    if (!(await askConfirm(t("ایجنت «{name}» حذف شود؟ گفتگوهای قبلی‌اش می‌مانند.", { name: agent.label })))) return;
+    if (!(await askConfirm(t("ایجنت «{name}» حذف شود؟ گفتگوهای قبلی‌اش می‌مانند.", { name: agent.label }), { danger: true, yes: t("حذف") }))) return;
     setBusy(true);
     try {
       await api(`/api/agents/${agent.id}`, { method: "DELETE" });

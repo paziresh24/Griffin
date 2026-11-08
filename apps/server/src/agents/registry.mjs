@@ -49,7 +49,7 @@ export const CORE_TOOLS = [
 const SCHEDULER_TOOLS = ["ask_agent", "delegate", "subtasks", "visualize", "show_media", "knowledge_list", "knowledge_write"];
 
 /** What a person talking through a messenger bridge may use. */
-const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "web_search", "web_fetch", "knowledge_list", "end_agent", "peer_connection", "network_agents", "network_ask", "network_reply", "network_connect"];
+const TEAM_TOOLS = ["ask_agent", "delegate", "subtasks", "ask_owner", "ask_requester", "visualize", "show_media", "web_search", "web_fetch", "knowledge_list", "end_agent", "peer_connection", "network_agents", "network_ask", "network_reply", "network_connect", "network_send_file"];
 
 export const AGENTS = {
   griffin: {

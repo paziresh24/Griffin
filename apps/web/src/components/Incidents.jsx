@@ -485,7 +485,7 @@ function SourceCard({ source: s, onChanged }) {
             {s.enabled ? t("خاموش") : t("روشن")}
           </button>
           {builtin ? null : (
-            <button type="button" disabled={busy} onClick={async () => (await askConfirm(t("منبع «{name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.", { name: s.name }))) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
+            <button type="button" disabled={busy} onClick={async () => (await askConfirm(t("منبع «{name}» حذف شود؟ حادثه‌های بازش در خواندن بعدی بسته می‌شوند.", { name: s.name }), { danger: true, yes: t("حذف") })) && call(`/api/incidents/sources/${s.id}`, "DELETE")} className="press rounded-full border px-2 py-1 text-xs hover:bg-muted" aria-label={t("حذف")}>
               <Trash2 className="size-3.5" />
             </button>
           )}

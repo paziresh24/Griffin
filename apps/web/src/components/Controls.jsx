@@ -8,7 +8,8 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleHe
 import { api, usePolling } from "../api.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
-import { isRtl, num, t } from "../i18n.js";
+import { DEFAULT_EFFORT } from "../model-policy.js";
+import { isRtl, locale, num, t } from "../i18n.js";
 
 // The chat's mode, as Claude Desktop's mode menu. The three asking modes apply to Claude with full
 // Claude Code in the owner's chats; elsewhere they run like «بدون پرسیدن» (no asking).
@@ -466,7 +467,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
         >
           {bad.has(current) ? <BadKeyDot /> : null}
           {/* Karsara's chip has no sliding text: a swap caught mid-way left both names drawn over each other. */}
-          {karsara ? <span className="ltr min-w-0 truncate">{name}</span> : <SwapText text={name} className={model ? "ltr" : ""} />}
+          {!data || !agentData ? <span className="inline-block h-3 w-16 animate-pulse rounded bg-muted" aria-hidden /> : karsara ? <span className="ltr min-w-0 truncate">{name}</span> : <SwapText text={name} className={model ? "ltr" : ""} />}
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -632,7 +633,9 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
   const modelId = pinnedId || (runs.provider === account ? runs.model : "") || accounts.find((a) => a.id === account)?.defaultModel || "";
   const modelDefault = models.find((m) => m.provider === account && m.id === modelId)?.defaultEffort;
   const recommended = levels.includes(modelDefault) ? modelDefault : kind === "claude" ? "high" : "medium";
-  const applied = levels.includes(profile?.effort) ? profile.effort : recommended; // what runs with no choice here
+  // What runs with no choice here: a plain Claude login is held to the default (model-policy.mjs).
+  const plainClaude = kind === "claude" && !accounts.find((a) => a.id === account)?.endpoint;
+  const applied = plainClaude ? DEFAULT_EFFORT : levels.includes(profile?.effort) ? profile.effort : recommended;
   const current = levels.includes(effort) ? effort : applied;
   // Karsara offers effort only on its plain Claude login; a Claude-compatible endpoint (Z.ai, custom) has none.
   if (simple) return kind === "claude" ? <KarsaraEffort levels={levels} effort={levels.includes(effort) ? effort : ""} onChange={onChange} /> : null;

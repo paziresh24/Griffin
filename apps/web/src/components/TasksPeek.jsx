@@ -15,9 +15,13 @@ const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disab
  * agents Claude Code started in this chat that still run after its answer, each with its own stop.
  * Nothing shows when there are none (with the setting off the list is always empty).
  */
+// The last list seen per chat: a chat opened again shows its row at once instead of pushing the
+// thread up a moment later (owner 2026-11-07: «بین چت ها که سوییچ میشی پیاما میپرن»).
+const lastSeen = new Map();
+
 export function TasksPeek({ chatId }) {
-  const [tasks, setTasks] = useState([]);
-  const [ended, setEnded] = useState([]);
+  const [tasks, setTasks] = useState(() => lastSeen.get(chatId)?.tasks || []);
+  const [ended, setEnded] = useState(() => lastSeen.get(chatId)?.ended || []);
   const [output, setOutput] = useState(null); // { id, text, truncated } or { id, error }
   const [gone, setGone] = useState(() => new Set());
   const [busy, setBusy] = useState(null);
@@ -42,6 +46,7 @@ export function TasksPeek({ chatId }) {
         count = (data?.tasks?.length || 0) + (data?.ended?.length || 0);
         // The setting is off: asked once per chat, then never again.
         enabled = data?.enabled !== false || count > 0;
+        lastSeen.set(chatId, { tasks: data?.tasks || [], ended: data?.ended || [] });
         if (alive) {
           setTasks(data?.tasks || []);
           setEnded(data?.ended || []);
@@ -52,8 +57,8 @@ export function TasksPeek({ chatId }) {
       }
       if (alive && enabled) timer = setTimeout(load, pollMs(count));
     };
-    setTasks([]);
-    setEnded([]);
+    setTasks(lastSeen.get(chatId)?.tasks || []);
+    setEnded(lastSeen.get(chatId)?.ended || []);
     setOutput(null);
     setGone(new Set());
     load();

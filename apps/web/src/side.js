@@ -7,6 +7,9 @@ export const sidePaths = {
   list: (chatId) => `/api/chats/${chatId}/sides`,
 };
 
+// The quotes waiting in a side chat's start box (quotes.js quoteStore), one list per main chat.
+export const sideQuoteKey = (parentId) => `side:${parentId}`;
+
 // A very long selection is cut rather than dumping a whole answer into the input.
 export const SELECTION_QUOTE_MAX = 2000;
 

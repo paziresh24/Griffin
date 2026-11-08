@@ -1043,6 +1043,12 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       return q.listChats.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
     },
 
+    // Changes whenever the archive list would: the web reads that heavier list only then.
+    archiveStamp() {
+      const row = db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM chats WHERE archived = 1 AND side_of IS NULL AND sim = 0").get();
+      return `${row.n}|${row.at || ""}`;
+    },
+
     listChatsBySource({ archived = false } = {}) {
       return q.listChatsBySource.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
     },

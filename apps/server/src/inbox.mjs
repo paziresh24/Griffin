@@ -99,6 +99,7 @@ export function buildInbox({ store, asks, isActive = () => false }) {
       options: a.options || null,
       multiSelect: a.multiSelect,
       ...(a.detail ? { detail: a.detail } : {}),
+      ...(a.via ? { via: a.via } : {}),
       at: new Date(a.at).toISOString(),
     });
   }

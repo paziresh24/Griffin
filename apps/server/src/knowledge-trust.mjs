@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { isGlobalChat, motherInfo } from "./integrations/mother.mjs";
 import { thirdPartyKey } from "./related.mjs";
 import { telegramOriginKey } from "./db.mjs";
+import { telegramOrigin } from "./chat-origin.mjs";
 
 // Which chats may auto-trust the notes they wrote (GRIFFIN_KNOWLEDGE_AUTO_TRUST=1, knowledge.mjs
 // injectableNotes). The review gate exists against knowledge poisoning: text
@@ -31,7 +32,7 @@ export const SAFE_TOOLS = Object.freeze([
   // file names and files hold anyone's words: others' commits, vendored text), repo_git / repo_push (others' commits, remote answers),
   // related_chat_send, ask_agent, delegate, subtasks, feed_read, team_threads, incidents_*.
   "knowledge_write", "knowledge_list", "knowledge_edit", "knowledge_delete", "ask_owner", "visualize", "show_media", "chat_suggest",
-  "chat_dismiss_suggestion", "chat_chapter", "todo_write", "owner_task", "jobs_create",
+  "chat_dismiss_suggestion", "chat_chapter", "todo_write", "chat_plan", "owner_task", "jobs_create",
   "jobs_delete", "jobs_run", "agent_tools_list", "agent_tools_enable",
   "agent_tools_disable", "agent_settings_get", "agent_settings_set", "list_agents",
   "repo_edit", "repo_write",
@@ -42,6 +43,8 @@ export const TAINTING_ARGS = Object.freeze([["show_media", "url"], ["show_media"
 // A user message that is not the owner's own words: a colleague's chat_send «📥 محتوای شخص ثالث از …»,
 // anything marked third-party, or a hand-over from the requester's other conversation.
 export const THIRD_PARTY_MARK = "محتوای شخص ثالث";
+// His «برگردان» on request_shell (colleague-access.mjs): { upto: last event id at that moment, at }.
+export const shellYesKey = (chatId) => `shell-yes:${chatId}`;
 export const THIRD_PARTY_USER_PREFIXES = Object.freeze(["📥", "[همان درخواست‌کننده"]);
 // A hand-off another owner chat sent with chat_send (owner-chat-tools.mjs): that chat's agent wrote
 // it, maybe from content this chat never saw, so it taints like a colleague's text.
@@ -65,6 +68,22 @@ const TAINT_SQL = `
   LIMIT 1`;
 const TAINT_PARAMS = [...OWNER_FROM, ...TAINT_PREFIXES, THIRD_PARTY_MARK, ...SAFE_TOOLS, ...TAINTING_ARGS.flat()];
 
+// Senders whose words count as the owner's own for «بدون پرسیدن» (index.mjs ownerBypass): his web
+// composer, a line he wrote at the desk (desk.mjs owner_line) and a reminder his own chat set (later).
+const OWNER_SAID = ["owner_web", "owner_line", "reminder"];
+// A user message someone else wrote: a group member through a paired bot, a colleague's routed
+// Telegram message, a peer's chat_send, a forward. Tool output is not looked at here.
+const OTHERS_SQL = `
+  SELECT id FROM events
+  WHERE chat_id = ? AND id > ? AND type = 'user' AND (
+    (json_extract(data, '$.from') IS NOT NULL AND COALESCE(json_extract(data, '$.from.kind'), '') NOT IN (${OWNER_SAID.map(() => "?").join(", ")}))
+    OR ${TAINT_PREFIXES.map(() => "COALESCE(json_extract(data, '$.text'), '') LIKE ? || '%'").join(" OR ")}
+  )
+  ORDER BY id
+  LIMIT 1`;
+const OTHERS_PARAMS = [...OWNER_SAID, ...TAINT_PREFIXES];
+const WHO_WROTE = { peer: "ایجنت یک همکار", colleague: "یک همکار", incident: "یک هشدار خودکار", telegram: "تلگرام" };
+
 /**
  * isCleanChat(chatId): true only for an existing chat the owner started (not a colleague's,
  * a job's, a simulation, the global desk or a Telegram-linked one), whose parent / side-of chain is
@@ -77,6 +96,8 @@ export function createChatTrust({ store } = {}) {
   const taintCache = new Map(); // chatId -> { first: id | null, scanned: id }
   let taintStmt = null;
   let suggestionStmt = null;
+  let othersStmt = null;
+  const othersCache = new Map(); // chatId -> { hit: event id | false, scanned: id }
   const taintQuery = () => (taintStmt ||= store.db.prepare(TAINT_SQL));
   const suggestionOf = (id) =>
     (suggestionStmt ||= store.db.prepare("SELECT from_chat_id FROM suggestions WHERE started_chat_id = ? LIMIT 1")).get(id);
@@ -128,9 +149,66 @@ export function createChatTrust({ store } = {}) {
     return true;
   }
 
+  const othersAfter = (id, after) => (othersStmt ||= store.db.prepare(OTHERS_SQL)).get(id, after, ...OTHERS_PARAMS)?.id || false;
+
+  // Someone other than the owner wrote into this one chat. Once found, final.
+  function othersWrote(id) {
+    const known = othersCache.get(id);
+    if (known?.hit) return known.hit;
+    const lastId = store.lastEventId(id);
+    if (known && known.scanned === lastId) return false;
+    const hit = othersAfter(id, known ? known.scanned : 0);
+    othersCache.set(id, { hit, scanned: lastId });
+    return hit;
+  }
+
+  function wordsOf(eventId) {
+    const row = store.db.prepare("SELECT at, json_extract(data, '$.from.kind') kind, json_extract(data, '$.from.name') name FROM events WHERE id = ?").get(eventId);
+    const who = WHO_WROTE[row?.kind] || "شخص دیگری";
+    return `پیام ${who}${row?.name ? ` (${String(row.name).slice(0, 40)})` : ""}، ${String(row?.at || "").slice(0, 10)}`;
+  }
+
+  // Whose words hold the chat: { words, title } of the chat that has them, or null. The chat, or a
+  // chat it was made out of, holds someone else's message or was born from one. His yes covers this
+  // chat only, up to that moment: a chat made from it asks for itself, new words close it again.
+  function heldWhy(chatId, depth = 0) {
+    if (!chatId || depth > 10) return null;
+    const chat = store.getChat(String(chatId));
+    if (!chat) return null;
+    const mark = store.getKv?.(thirdPartyKey(chat.id));
+    const yes = depth === 0 ? store.getKv?.(shellYesKey(chat.id)) : null;
+    if (yes) {
+      if (mark && String(mark.at || "") > yes.at) return { words: "پیام یک همکار", title: chat.title };
+      const fresh = othersAfter(chat.id, yes.upto);
+      return fresh ? { words: wordsOf(fresh), title: chat.title } : null;
+    }
+    if (mark) return { words: "پیام یک همکار", title: chat.title };
+    const hit = othersWrote(chat.id);
+    if (hit) return { words: wordsOf(hit), title: chat.title };
+    if (depth === 0 && telegramOrigin(store, chat)) return { words: "پیام تلگرام کس دیگری", title: chat.title };
+    const suggestion = suggestionOf(chat.id);
+    for (const up of [chat.parent_chat_id, chat.side_of, store.getKv?.(`fork-of:${chat.id}`), suggestion?.from_chat_id]) {
+      const found = up ? heldWhy(up, depth + 1) : null;
+      if (found) return found;
+    }
+    return null;
+  }
+
   return {
     isCleanChat: (chatId) => (chatId ? cleanUntil(chatId, Infinity) : false),
     ownerRooted,
+    // «بدون پرسیدن» is for the owner's own words only (index.mjs ownerBypass, audit 2026-10-29): a chat
+    // that holds a group member's, a colleague's or a peer's message, or was born from one, runs with
+    // the guard, the reviewers and the file scope like «بپرس».
+    heldOthersWords: (chatId) => Boolean(heldWhy(chatId)),
+    // The same in plain Persian, for the question he answers.
+    heldReason(chatId) {
+      const found = heldWhy(chatId);
+      if (!found) return null;
+      const own = store.getChat(String(chatId))?.title === found.title;
+      return own ? `${found.words} در همین چت است` : `این چت از چت «${found.title}» ساخته شده و ${found.words} در آن است`;
+    },
+    allowShell: (chatId) => store.setKv(shellYesKey(String(chatId)), { upto: store.lastEventId(String(chatId)), at: new Date().toISOString() }),
     // Called by knowledge_write right after it saved `text` as <agent>/<file> in chat `chatId`.
     recordNote(agentId, file, chatId, text) {
       store.setKv(noteKey(agentId, file), { chat: String(chatId), event: store.lastEventId(chatId), sha: sha256(text) });

@@ -85,3 +85,21 @@ test("a chat's page lists its own children, newest first, with their total", asy
     done();
   }
 });
+
+test("the list carries a stamp that changes when the archive does, so the web reads the archive only then", async () => {
+  const { store, app, done } = setup();
+  try {
+    const chat = store.createChat({ title: "اول", mode: "agent" });
+    const stamp = async () => (await (await app.request("/api/chats")).json()).archiveStamp;
+    const empty = await stamp();
+    store.db.prepare("UPDATE chats SET archived = 1 WHERE id = ?").run(chat.id);
+    store.bus.emit("chats", { type: "updated", chatId: chat.id });
+    const one = await stamp();
+    assert.notEqual(one, empty, "archiving changes it");
+    store.bus.emit("chats", { type: "run", chatId: chat.id });
+    assert.equal(await stamp(), one, "another list event does not");
+    assert.equal((await (await app.request("/api/chats?archived=1")).json()).archiveStamp, undefined);
+  } finally {
+    done();
+  }
+});

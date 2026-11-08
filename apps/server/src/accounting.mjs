@@ -82,6 +82,12 @@ const hostOf = (url) => {
  * The report of this install. rows: [{ at, provider, model, usage }] (store.usageRows);
  * accounts: [{ id, kind, label, enabled, fingerprint, email, windows, windowsAt, limit }].
  */
+// An account that stopped working for a reason that is not a plan window: credit/payment («Credit
+// balance is too low», «payment is past due») or a login that expired (engine-state.mjs). Early
+// warning for the hub: a usage percentage never shows these (2026-11-07: a past-due account stopped
+// several installs and nobody knew).
+const cleanBroken = (b) => (b && (b.state === "credit" || b.state === "auth") && validIso(b.since) ? { state: b.state, since: validIso(b.since) } : null);
+
 export function buildReport({ rows = [], accounts = [], install = "", owner = "", assistant = "", product = "", commit = null, now = new Date() }) {
   const t = now.getTime();
   const days = new Map();
@@ -144,6 +150,7 @@ export function buildReport({ rows = [], accounts = [], install = "", owner = ""
       windows: cleanWindows(a.windows),
       windowsAt: validIso(a.windowsAt),
       limit: a.limit && validIso(a.limit.until) ? { at: validIso(a.limit.at), until: validIso(a.limit.until) } : null,
+      broken: cleanBroken(a.broken),
     })),
     usage: { last24h, last7d, cost, days: [...days.values()], byAccount, byModel },
   };
@@ -211,6 +218,7 @@ export function cleanReport(raw, now = new Date()) {
       windows: cleanWindows(a?.windows),
       windowsAt: validIso(a?.windowsAt),
       limit: a?.limit && validIso(a.limit.until) ? { at: validIso(a.limit.at), until: validIso(a.limit.until) } : null,
+      broken: cleanBroken(a?.broken),
     })),
     usage: {
       last24h: cleanParts(u.last24h),
@@ -246,7 +254,7 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
         const share = (k) => (num(r.usage?.[k]?.total) ? num(use[k]?.total) / num(r.usage[k].total) : 0);
         use.cost = { last24h: total.last24h * share("last24h"), last7d: total.last7d * share("last7d") };
       }
-      logins.push({ install: r.install, owner: r.owner, accountId: a.id, fingerprint: a.fingerprint, org: a.org || null, email: a.email ? a.email.toLowerCase() : null, windows: a.windows, windowsAt: a.windowsAt, limit: a.limit, use, reportAt: r.at });
+      logins.push({ install: r.install, owner: r.owner, accountId: a.id, fingerprint: a.fingerprint, org: a.org || null, email: a.email ? a.email.toLowerCase() : null, windows: a.windows, windowsAt: a.windowsAt, limit: a.limit, broken: a.broken || null, use, reportAt: r.at });
     }
   }
   // Union-find. The account id (organization) and the email name an account; two groups that name
@@ -319,6 +327,7 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
       cost.last7d += num(m.use.cost?.last7d);
     }
     const limited = members.filter((m) => m.limit && Date.parse(m.limit.until) > t).map((m) => ({ install: m.install, until: m.limit.until }));
+    const broken = members.filter((m) => m.broken).map((m) => ({ install: m.install, state: m.broken.state, since: m.broken.since }));
     const key = org || email || fingerprints[0];
     return {
       key,
@@ -331,6 +340,7 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
       windows: seen?.windows || null,
       windowsAt: seen?.windowsAt || null,
       limited,
+      broken,
       last24h,
       last7d,
       cost,
@@ -483,10 +493,35 @@ export function fleetAlerts(fleet, { weeklyWarn = 80, weeklyCrit = 95, sessionWa
         text: `${which} ${accountOf(a)} پر شده و تا ${whenFa(until, now)} جواب نمی‌دهد. ${all.length} نصب از این اکانت استفاده می‌کنند (${names(all)})؛ ${hit.size >= all.length ? "همه" : `${hit.size} تا`} به آن خورده‌اند و تا آن موقع با اکانت دیگرِ خودشان کار می‌کنند، یا اگر ندارند منتظر می‌مانند.`,
       });
     }
+    // Stopped for credit/payment or an expired login: one message per account and kind, naming the installs.
+    for (const state of ["credit", "auth"]) {
+      const hit = (a.broken || []).filter((b) => b.state === state && t - Date.parse(b.since) < 2 * DAY);
+      if (!hit.length) continue;
+      const since = hit.map((b) => b.since).sort()[0];
+      out.push({
+        key: `broken:${a.key}:${state}:${since.slice(0, 13)}`,
+        level: "critical",
+        account: a.title,
+        text: `${accountOf(a)} ${state === "credit" ? "اعتبار یا پرداختش تمام شده («payment is past due» یا «credit balance»)" : "نشست ورودش منقضی شده و تمدید نمی‌شود"}؛ روی ${hit.length} نصب خراب است (${names(byInstall(a.installs).filter((i) => hit.some((b) => b.install === i.install)))}). باید پرداخت یا دوباره ورود شود؛ تا آن موقع چت‌ها با اکانت دیگر می‌روند.`,
+      });
+    }
     if (week && week.percent >= weeklyWarn && !untils.some((u) => near(u, week.resetsAt))) {
       const level = week.percent >= weeklyCrit ? "critical" : "warning";
       const top = all.slice(0, 3).map((i) => `${i.owner || i.install} ${fmt(i.tokens)}`).join("، ");
       out.push({ key: `weekly:${a.key}:${level}:${week.resetsAt}`, level, account: a.title, text: `${week.percent}٪ سقف هفتگی ${accountOf(a)} مصرف شده؛ ${whenFa(week.resetsAt, now)} صفر می‌شود. بیشترین مصرف این ۷ روز: ${top}` });
+    }
+    // Early: at this pace the week fills before it resets (a 7-day window; needs a day of data and 30%
+    // used, or an early burst reads as a forecast). Said once per window, below the 80% line.
+    if (week && week.percent >= 30 && week.percent < weeklyWarn && !untils.some((u) => near(u, week.resetsAt))) {
+      const start = Date.parse(week.resetsAt) - 7 * DAY;
+      const done = (t - start) / (7 * DAY);
+      if (done >= 1 / 7 && done < 1) {
+        const rate = week.percent / done; // projected % at reset
+        if (rate >= 100) {
+          const fullAt = new Date(start + (100 / week.percent) * (t - start)).toISOString();
+          out.push({ key: `forecast:${a.key}:${week.resetsAt}`, level: "warning", account: a.title, text: `با روند فعلی، سقف هفتگی ${accountOf(a)} حدود ${whenFa(fullAt, now)} پر می‌شود، پیش از ریست (${whenFa(week.resetsAt, now)}). الان ${week.percent}٪ مصرف شده.` });
+        }
+      }
     }
     if (session && session.percent >= sessionWarn && !untils.some((u) => near(u, session.resetsAt))) {
       out.push({ key: `session:${a.key}:${session.resetsAt}`, level: "warning", account: a.title, text: `${session.percent}٪ سقف ۵ ساعتهٔ ${accountOf(a)} مصرف شده؛ ${whenFa(session.resetsAt, now)} باز می‌شود.` });

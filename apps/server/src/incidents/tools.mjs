@@ -50,6 +50,7 @@ export function incidentPrompt(view) {
   if (view.summary) lines.push(`- متن آلارم: ${view.summary.slice(0, 400)}`);
   if (t.cause) lines.push(`- تشخیص اتاق عملیات: ${t.cause}${t.impact ? ` — اثر: ${t.impact}` : ""}${t.action ? ` — پیشنهاد: ${t.action}` : ""}`);
   lines.push("", "اول incident_history را ببین، علت را با شاهد پیدا کن، اگر رفع روشن و برگشت‌پذیر است انجامش بده و زنده تأیید کن. نتیجه را با incident_update روی همین حادثه ثبت کن.");
+  if (view.severity === "critical") lines.push("این حادثه critical است و این گفتگو خودکار و بدون منتظر ماندن برای کلیک شروع شده: سریع کار کن ولی فقط ایمن. فقط اقدام برگشت‌پذیر و محدود (ری‌استارت سرویس بی‌حالت، rollback به نسخهٔ قبلی سالم، برگرداندن تنظیم تازه‌تغییرکرده). هر چیز برگشت‌ناپذیر (حذف داده/PVC، نوشتن روی داده، دست زدن به اپ همکار) فقط با ask_owner. اگر ایمن‌ترین اقدام روشن نیست، فقط تشخیص و گزارش بده.");
   return lines.join("\n");
 }
 
@@ -62,6 +63,7 @@ export function createSourceTools({
   caller = "owner",
   builtins = {},
   baseUrl = () => "",
+  autoStart = null, // async (suggestionId) => chatId|null — starts a card at once (critical incidents, ops room only)
   fetchImpl = fetch,
   now = () => new Date(),
 }) {
@@ -223,6 +225,20 @@ export function createSourceTools({
         if (chatId && store.getChat(chatId)) store.appendEvent(chatId, null, "chat.suggested", { id: suggestion.id, title, tldr });
         incidents.setSuggestion(row.id, suggestion.id);
         incidents.log(row.id, "suggested", { suggestion: suggestion.id, by: chatId });
+        // A critical incident does not wait for a click: the chat starts now, with the safe-fix rules
+        // in its prompt (owner 2026-11-03: the section suggested serious problems but never began on them).
+        if (caller === "ops" && autoStart && v.severity === "critical") {
+          try {
+            const started = await autoStart(suggestion.id);
+            if (started) {
+              incidents.adoptSuggestion(suggestion.id, started);
+              incidents.log(row.id, "auto_started", { chat: started, suggestion: suggestion.id });
+              return ok({ ok: true, suggestion: suggestion.id, incident: row.id.slice(0, 8), startedChat: started });
+            }
+          } catch (error) {
+            incidents.log(row.id, "auto_start_failed", { error: String(error.message).slice(0, 200) });
+          }
+        }
         return ok({ ok: true, suggestion: suggestion.id, incident: row.id.slice(0, 8) });
       },
     },

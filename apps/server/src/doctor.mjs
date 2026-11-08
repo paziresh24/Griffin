@@ -3,10 +3,13 @@ import { kindOf } from "./providers/ids.mjs";
 import { CLAUDE_CODE_LOGIN } from "./providers/claude.mjs";
 import { isCreditError } from "./engine-state.mjs";
 import { resetFromText } from "./plan-fallback.mjs";
+import { maskText } from "./redact.mjs";
 
 // Self-check and self-repair. Born from a fresh install where a Claude subscription token went in
 // as an API key, health said ok, and every run finished empty. The doctor probes each engine for real, reads the last runs, and
 // knows a few safe fixes; heal() applies the ones that cannot make things worse on its own.
+// Every pass also tells the owner (owner 2026-11-05: «توانایی اعلام و در صورت امکان رفع خطاها»): what
+// broke and stayed broken for two passes, what it fixed by itself, and what came back.
 //
 // Titles are fixed Persian strings with {vars} (the web UI translates them); `detail` is raw text.
 
@@ -60,7 +63,19 @@ const PERSISTENT = new Set(["no_key", "bad_key", "region", "model"]);
 
 const isOAuth = (key) => String(key || "").startsWith("sk-ant-oat");
 
-export function createDoctor({ store, runner, providers, providerKey, providerConfig, openaiBaseUrl = () => "", engineIds, dataDir, integrations = null, backups = null, fetchImpl = globalThis.fetch, now = () => Date.now(), onProbe = () => {} }) {
+// Not a message: a long run may be waiting on him (the sweep handles a really stuck one), and a limit
+// mark clears itself with the next good probe.
+const QUIET_CHECK = /^(stuck$|limit:)/;
+const fillTitle = (title, vars = {}) => String(title).replace(/\{(\w+)\}/g, (all, key) => vars[key] ?? all);
+
+export function checkLine(check) {
+  const lines = [`${check.level === "error" ? "❌" : "⚠️"} ${fillTitle(check.title, check.vars)}`];
+  if (check.detail) lines.push(`   ${String(check.detail).slice(0, 200)}`);
+  if (check.fix && !check.fix.auto) lines.push(`   راه: ${fillTitle(check.fix.title, check.fix.vars)}`);
+  return lines.join("\n");
+}
+
+export function createDoctor({ store, runner, providers, providerKey, providerConfig, openaiBaseUrl = () => "", engineIds, dataDir, integrations = null, backups = null, fetchImpl = globalThis.fetch, now = () => Date.now(), onProbe = () => {}, notify = null }) {
   async function call(url, init, timeoutMs = 15_000) {
     try {
       const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
@@ -222,14 +237,14 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     } else if (runs.length) add({ id: "runs", title: "ران‌های اخیر سالم‌اند" });
 
     const stuck = stuckRuns();
-    if (stuck.length) add({ id: "stuck", level: "warn", title: "{count} ران بیش از ۴۵ دقیقه است در جریان است", vars: { count: stuck.length }, fix: { id: "cancel_stuck", title: "متوقف کردن ران‌های گیرکرده", auto: true } });
+    if (stuck.length) add({ id: "stuck", level: "warn", title: "{count} ران بیش از ۴۵ دقیقه است در جریان است", vars: { count: stuck.length }, fix: { id: "cancel_stuck", title: "متوقف کردن ران‌های گیرکرده" } });
 
     for (const i of integrations?.list?.() || []) {
       if (!i.enabled) continue;
       const state = i.status?.state;
       if (state === "error" || state === "unavailable" || state === "stopped") {
         const relogin = i.kind === "telegram_account" && /AUTH_KEY|SESSION|login/i.test(String(i.status?.error || ""));
-        add({ id: `integration:${i.id}`, level: "warn", title: "اتصال {name} وصل نیست ({state})", vars: { name: i.name, state }, detail: i.status?.error || null, fix: relogin ? { id: "relogin", title: "ورود دوباره در تنظیمات → اتصال‌ها", manual: true } : { id: `restart:${i.id}`, title: "وصل کردن دوباره" } });
+        add({ id: `integration:${i.id}`, level: "warn", title: "اتصال {name} وصل نیست ({state})", vars: { name: i.name, state }, detail: i.status?.error || null, fix: relogin ? { id: "relogin", title: "ورود دوباره در تنظیمات → اتصال‌ها", manual: true } : { id: `restart:${i.id}`, title: "وصل کردن دوباره", auto: true } });
       }
     }
 
@@ -269,10 +284,11 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
       return { ok: true, done: `limit mark cleared on ${a}` };
     }
     if (kind === "cancel_stuck") {
-      const stuck = stuckRuns();
-      for (const run of stuck) await runner.cancel(run.chat_id, { user: false }).catch(() => {});
-      await runner.sweepStale?.().catch(() => {});
-      return { ok: true, done: `${stuck.length} stuck run(s) cancelled` };
+      // Age alone is not stuck: a run waiting on the owner or still working is left alone, and only
+      // the sweep decides. Cancelling by age cut 15 runs in 3 days with «continues after the restart»
+      // although no restart followed, so a colleague's task just ended unanswered (2026-11-05).
+      const acted = (await runner.sweepStale?.().catch(() => [])) || [];
+      return { ok: true, done: `${acted.filter((a) => a.action === "cancelled").length} stuck run(s) cancelled` };
     }
     if (kind === "restart" && a && integrations) {
       integrations.update(a, { enabled: false });
@@ -287,14 +303,54 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     throw new Error(`unknown fix: ${fixId}`);
   }
 
-  // The fixes marked auto: an agent off a dead engine, back once it heals, and stuck runs.
+  // Tell him once: a problem after two passes (a probe or the VPN blips), «no engine at all» at once,
+  // and again only if it gets worse. A message that did not go out is tried on the next pass.
+  // ponytail: no reminder for what stays broken; add one if he misses a long-open problem.
+  async function announce(r, fixed) {
+    if (!notify) return;
+    const was = JSON.parse(store.getKv("doctor:open") || "{}");
+    const open = {};
+    const news = [];
+    for (const check of r.checks) {
+      if (check.level === "ok" || QUIET_CHECK.test(check.id)) continue;
+      const old = was[check.id]?.level === check.level ? was[check.id] : null;
+      const row = { level: check.level, line: checkLine(check), passes: (old?.passes || 0) + 1, told: Boolean(old?.told) };
+      open[check.id] = row;
+      if (!row.told && (row.passes >= 2 || check.id === "engines")) news.push(row);
+    }
+    const back = Object.entries(was).filter(([id, row]) => row.told && !open[id]).map(([, row]) => row);
+    const text = [
+      ...news.map((row) => row.line),
+      // A fix that did not take is no news: a connection still down is told as the problem it is.
+      ...fixed.filter(({ id }) => !open[id]).map(({ done }) => `🔧 خودکار انجام شد: ${done}`),
+      ...back.map((row) => `✅ درست شد: ${row.line.split("\n")[0].replace(/^\S+ /, "")}`),
+    ].join("\n");
+    let sent = !text;
+    if (text) {
+      try {
+        await notify(maskText(`🩺 سلامت گریفین\n${text}`));
+        sent = true;
+      } catch (error) {
+        console.error(`[doctor] announce: ${error?.message || error}`);
+      }
+    }
+    if (sent) for (const row of news) row.told = true;
+    // Unsent: what came back stays on the list, so it is said next time.
+    if (!sent) for (const [id, row] of Object.entries(was)) if (row.told && !open[id]) open[id] = row;
+    store.setKv("doctor:open", JSON.stringify(open));
+  }
+
+  // The fixes marked auto: an agent off a dead engine and back once it heals, a dropped connection.
   async function heal() {
     const r = await report();
     const applied = [];
+    const fixed = [];
     for (const check of r.checks) {
       if (!check.fix?.auto) continue;
       try {
-        applied.push((await fix(check.fix.id)).done);
+        const { done } = await fix(check.fix.id);
+        applied.push(done);
+        fixed.push({ id: check.id, done });
       } catch (error) {
         console.error(`[doctor] ${check.fix.id}: ${error.message}`);
       }
@@ -303,9 +359,10 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
       console.log(`[doctor] healed: ${applied.join("; ")}`);
       const log = JSON.parse(store.getKv("doctor:healed") || "[]");
       store.setKv("doctor:healed", JSON.stringify([...log, ...applied.map((done) => ({ at: r.at, done }))].slice(-50)));
-      return { ...(await report()), applied };
     }
-    return { ...r, applied };
+    const final = applied.length ? await report() : r;
+    await announce(final, fixed);
+    return { ...final, applied };
   }
 
   // Agent-facing: the owner's agent can look at its own health and repair it.

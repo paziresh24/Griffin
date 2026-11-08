@@ -90,6 +90,27 @@ it("the mirrored card opens and closes under one callId; ask.pending carries ask
   await approval;
 });
 
+it("a question a tool asks inside its own call gets its card in that same chat, and it closes", async () => {
+  const { asks, events } = setup();
+  const asked = asks.tool("r").execute({ ownCard: true, question: "دسترسی بدهم؟", options: [{ label: "بله" }] });
+  await tick();
+  const [open] = asks.list();
+  const started = events.find((e) => e.type === "tool.started" && e.data.args.askId === open.id);
+  assert.equal(started.id, "r");
+  assert.equal(started.data.name, "ask_owner");
+  assert.equal(started.data.args.question, "دسترسی بدهم؟");
+  asks.answer("r", { answer: "بله", askId: open.id });
+  await asked;
+  assert.ok(events.some((e) => e.type === "tool.done" && e.data.callId === started.data.callId));
+  // A plain ask_owner has its own tool call: no second card.
+  const plain = asks.tool("r").execute({ question: "دیگری؟" });
+  await tick();
+  const [second] = asks.list();
+  assert.ok(!events.some((e) => e.type === "tool.started" && e.data.args.askId === second.id));
+  asks.answer("r", { answer: "نه", askId: second.id });
+  await plain;
+});
+
 it("enqueue, settle and cancel each tell the board; a partial cancel closes just that question", async () => {
   const { asks, emitted, settledInfo } = setup();
   asks.tool("c1").execute({ question: "اول؟" });

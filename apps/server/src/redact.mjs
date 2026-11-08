@@ -14,7 +14,8 @@ const SQL_PASSWORD = /(\b(?:password|identified\s+by)\s+)('(?:[^']|'')*'|"(?:[^"
 
 // key=value / key: value / key 'value' assignments inside free text (shell commands, embedded
 // JSON) for the tools whose strings routinely carry credentials.
-const LITERAL_SECRET = /(\b(?:pass(word|wd)?|passwd|pw|secret|token|api[_-]?key|apikey|credential|psk)\b["']?\s*[:=]\s*["']?)([^"'\s,;}&]{3,})/gi;
+// The prefix: env style names (DB_PASSWORD=, REDIS_TOKEN=) have no word break before the secret word.
+const LITERAL_SECRET = /(\b(?:[\w-]*[_-])?(?:pass(word|wd)?|passwd|pw|secret(?:[_-]?key)?|access[_-]?key|token|api[_-]?key|apikey|credential|psk)\b["']?\s*[:=]\s*["']?)([^"'\s,;}&]{3,})/gi;
 
 // Secret-shaped text, masked in every string whatever the tool: a PEM private key block and a JWT.
 // 2026-09-26: an owner SSH private key read with infisical_get and 108 kube_secret results sat in
@@ -52,7 +53,7 @@ function remember(value) {
 }
 
 // Free-text masking only for tools whose args/results are known to embed credentials verbatim.
-const LITERAL_TOOLS = new Set(["debug_exec", "pg_query", "infisical_get", "infisical_upsert"]);
+const LITERAL_TOOLS = new Set(["debug_exec", "kube_exec", "pg_query", "infisical_get", "infisical_upsert"]);
 
 function maskString(value, { literals = false } = {}) {
   let out = value;

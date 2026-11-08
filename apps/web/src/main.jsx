@@ -9,7 +9,7 @@ import { guestToken } from "./guest.js";
 import "./styles.css";
 import "./karsara.css";
 import { applyDocumentLang } from "./i18n.js";
-import { BRAND, loadBrand } from "./brand.js";
+import { BRAND, applyCachedBrand, loadBrand } from "./brand.js";
 import { startVersionWatch } from "./new-version.js";
 import { watchErrors } from "./feedback.js";
 import { watchStaleChunks } from "./stale-chunks.js";
@@ -46,8 +46,9 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-// The assistant's name comes from the server; render once it is known (defaults on failure).
-loadBrand().finally(() => {
+// The assistant's name comes from the server: render with the last visit's at once, or on a first visit
+// once it is known (defaults on failure).
+const start = () => {
   // Before sign-in the tab names the install: the product title on a Karsara-look install, else the assistant.
   document.title = BRAND.title;
   createRoot(document.getElementById("root")).render(
@@ -65,4 +66,8 @@ loadBrand().finally(() => {
       )}
     </StrictMode>,
   );
-});
+};
+if (applyCachedBrand()) {
+  start();
+  loadBrand();
+} else loadBrand().finally(start);

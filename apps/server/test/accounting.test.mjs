@@ -7,11 +7,11 @@ const ago = (h) => new Date(NOW.getTime() - h * 3600_000).toISOString();
 const turn = (h, provider, input, output = 0, cacheRead = 0) => ({ at: ago(h), provider, model: "opus", usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead } });
 const weekReset = "2026-10-22T08:00:00.000Z";
 
-function report(install, owner, { fp, rows, reset = weekReset, weekly = 40, limit = null }) {
+function report(install, owner, { fp, rows, reset = weekReset, weekly = 40, limit = null, broken = null }) {
   return cleanReport(
     buildReport({
       rows,
-      accounts: [{ id: "claude", kind: "claude", enabled: true, fingerprint: fp, windows: [{ label: "هفتگی", percentage: weekly, resetAt: Date.parse(reset) }, { label: "۵ ساعته", percentage: 10, resetAt: Date.parse("2026-10-19T14:00:00Z") }], windowsAt: ago(0.2), limit }],
+      accounts: [{ id: "claude", kind: "claude", enabled: true, fingerprint: fp, windows: [{ label: "هفتگی", percentage: weekly, resetAt: Date.parse(reset) }, { label: "۵ ساعته", percentage: 10, resetAt: Date.parse("2026-10-19T14:00:00Z") }], windowsAt: ago(0.2), limit, broken }],
       install,
       owner,
       now: NOW,
@@ -64,7 +64,7 @@ test("alerts: weekly window, a limit hit, a spike, one install eating a shared a
   reports.push({ ...report("c.example.com", "ج", { fp: "cccccccccccc", rows: [], reset: "2026-10-25T00:00:00Z" }), at: ago(5) });
   const alerts = fleetAlerts(aggregateFleet(reports, { now: NOW }), { now: NOW });
   const kinds = alerts.map((a) => a.key.split(":")[0]).sort();
-  assert.deepEqual(kinds, ["limit", "share", "spike", "stale", "weekly"]);
+  assert.deepEqual(kinds, ["forecast", "limit", "share", "spike", "stale", "weekly"]); // forecast: account c used 40% of its week in 1.5 days
   assert.equal(alerts.find((a) => a.key.startsWith("weekly")).level, "critical");
 });
 
@@ -221,4 +221,34 @@ test("the report and the fleet carry cost per model, account and install, and a 
   const f2 = aggregateFleet([old], { now });
   assert.equal(f2.installs[0].cost.last24h, 29);
   assert.equal(Math.round(f2.accounts[0].cost.last24h), 29);
+});
+
+test("an account stopped by payment or an expired login is one early alert naming its installs", () => {
+  const broken = { state: "credit", since: ago(1) };
+  const mk = (install, owner, b) => report(install, owner, { fp: "bbbbbbbbbbbb", rows: [turn(1, "claude", 1e6)], broken: b });
+  const fleet = aggregateFleet([mk("a.example.org", "الف", broken), mk("b.example.org", "ب", broken), mk("c.example.org", "ج", null)], { now: NOW });
+  const alerts = fleetAlerts(fleet, { now: NOW }).filter((a) => a.key.startsWith("broken:"));
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].level, "critical");
+  assert.match(alerts[0].text, /روی 2 نصب خراب است/);
+  assert.ok(!/ج/.test(alerts[0].text.split("(").pop()));
+  const auth = aggregateFleet([mk("a.example.org", "الف", { state: "auth", since: ago(1) })], { now: NOW });
+  assert.match(fleetAlerts(auth, { now: NOW }).find((a) => a.key.startsWith("broken:")).text, /نشست ورودش منقضی/);
+  // an old mark (older than two days) is not news
+  const stale = aggregateFleet([mk("a.example.org", "الف", { state: "credit", since: ago(60) })], { now: NOW });
+  assert.equal(fleetAlerts(stale, { now: NOW }).filter((a) => a.key.startsWith("broken:")).length, 0);
+});
+
+test("forecast: the week will fill before its reset at the current pace, said once, below the 80% line", () => {
+  // 3.5 of 7 days gone, 60% used -> ~120% at reset
+  const reset = new Date(NOW.getTime() + 3.5 * 86_400_000).toISOString();
+  const r = (weekly, rs = reset) => report("a.example.org", "الف", { fp: "cccccccccccc", rows: [turn(1, "claude", 1e6)], weekly, reset: rs });
+  const hit = fleetAlerts(aggregateFleet([r(60)], { now: NOW }), { now: NOW }).filter((a) => a.key.startsWith("forecast:"));
+  assert.equal(hit.length, 1);
+  assert.match(hit[0].text, /پیش از ریست/);
+  // slow pace: no forecast; first day: no forecast; already past 80%: the normal alert speaks
+  assert.equal(fleetAlerts(aggregateFleet([r(40)], { now: NOW }), { now: NOW }).filter((a) => a.key.startsWith("forecast:")).length, 0);
+  const day1 = new Date(NOW.getTime() + 6.9 * 86_400_000).toISOString();
+  assert.equal(fleetAlerts(aggregateFleet([r(35, day1)], { now: NOW }), { now: NOW }).filter((a) => a.key.startsWith("forecast:")).length, 0);
+  assert.equal(fleetAlerts(aggregateFleet([r(85)], { now: NOW }), { now: NOW }).filter((a) => a.key.startsWith("forecast:")).length, 0);
 });

@@ -220,6 +220,40 @@ test("assign and suggest: the card's start assigns the chat; ops cards are cappe
   assert.match((await call(ops.incident_suggest, { id: over.id })).error, /daily cap/);
 });
 
+test("ops room: a critical incident's card starts its chat at once; warning and owner calls wait for a click", async () => {
+  const t = setup();
+  const started = [];
+  const autoStart = async (id) => {
+    const card = t.store.getSuggestion(id);
+    const chat = t.store.createChat({ title: card.title, agent: "griffin" });
+    t.store.settleSuggestion(id, "started", chat.id);
+    started.push(chat.id);
+    return chat.id;
+  };
+  const ops = createSourceTools({ store: t.store, incidents: t.incidents, sources: t.sources, chatId: null, caller: "ops", now: t.now, autoStart });
+  const crit = t.incidents.insert({ key: "prod|Down|", cluster: "prod", alertname: "Down", severity: "critical", members: ["-"], seenFrom: ["prod"] });
+  const r = await call(ops.incident_suggest, { id: crit.id });
+  assert.equal(r.error, null);
+  assert.equal(r.value.startedChat, started[0]);
+  assert.equal(t.incidents.get(crit.id).chat_id, started[0]);
+  assert.match(t.store.getSuggestion(r.value.suggestion).prompt, /خودکار/);
+
+  const warn = t.incidents.insert({ key: "prod|Slow|", cluster: "prod", alertname: "Slow", severity: "warning", members: ["-"], seenFrom: ["prod"] });
+  const w = await call(ops.incident_suggest, { id: warn.id });
+  assert.equal(w.value.startedChat, undefined);
+  assert.equal(started.length, 1);
+
+  const owner = createSourceTools({ store: t.store, incidents: t.incidents, sources: t.sources, chatId: null, caller: "owner", autoStart });
+  const crit2 = t.incidents.insert({ key: "prod|Down2|", cluster: "prod", alertname: "Down2", severity: "critical", members: ["-"], seenFrom: ["prod"] });
+  assert.equal((await call(owner.incident_suggest, { id: crit2.id })).value.startedChat, undefined);
+
+  const failing = createSourceTools({ store: t.store, incidents: t.incidents, sources: t.sources, chatId: null, caller: "ops", now: t.now, autoStart: async () => { throw new Error("boom"); } });
+  const crit3 = t.incidents.insert({ key: "prod|Down3|", cluster: "prod", alertname: "Down3", severity: "critical", members: ["-"], seenFrom: ["prod"] });
+  const f = await call(failing.incident_suggest, { id: crit3.id });
+  assert.equal(f.error, null);
+  assert.ok(f.value.suggestion);
+});
+
 test("webhook token is shown only where asked; secrets never", () => {
   const t = setup();
   const hook = t.sources.add({ kind: "webhook", name: "hook" });

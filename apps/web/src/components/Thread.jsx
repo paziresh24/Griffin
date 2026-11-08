@@ -1,5 +1,5 @@
 import { fallbackLabel } from "../fallback.js";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAui, useAuiEvent, useAuiState,
 } from "@assistant-ui/react";
@@ -7,7 +7,7 @@ import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
 import { motion } from "motion/react";
 import {
-  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, FileText, ImagePlus, ListTodo, Loader2, Mic, MicOff, Pencil, Plus, Quote, RotateCcw, Send, Sparkles, Square, StickyNote, X, Zap,
+  AlertCircle, Archive, ArrowDown, ArrowUp, Brain, Check, ChevronDown, Clock, Copy, CornerDownLeft, FileText, ImagePlus, Info, ListTodo, Loader2, Mic, MicOff, Network, Pencil, Plus, Quote, RotateCcw, Send, Sparkles, Square, StickyNote, Wrench, X, Zap,
 } from "lucide-react";
 import { ToolCard } from "./Tool.jsx";
 import { formatAnsweredAt, formatDuration, splitRun, toolProps, WorkLog } from "./Work.jsx";
@@ -23,10 +23,11 @@ import { toast } from "sonner";
 import { countProblem, dragHasFiles, formatBytes, isImageAttachment, overLimit } from "../attachments.js";
 import { api, navigate, reloadTimeline } from "../api.js";
 import { RESTORE_EVENT, editSend, retrySend, returnToBox, useRuntimeChat } from "../runtime.jsx";
-import { FAILED_LABEL, SENDING_LABEL, SENT_LABEL } from "../outbox.js";
+import { FAILED_LABEL, SENDING_LABEL } from "../outbox.js";
 import { parseQuoted, quoteStore } from "../quotes.js";
+import { statusLabel, statusTone, systemNote } from "../system-note.js";
 import { SelectionActions } from "./SelectionActions.jsx";
-import { QuoteChip, QuotedText } from "./QuoteChip.jsx";
+import { QuoteList, QuotedText } from "./QuoteChip.jsx";
 import { ChatRecord, ComposerAssist, FastSwitch, MentionBackdrop, FastToggle, ForkButton, useNextStep } from "./ComposerAssist.jsx";
 import { NoteRow, PersonAvatar, PersonName } from "./Telegram.jsx";
 import { isNoReply, motherName, peerFrame, reminderFrame, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
@@ -47,12 +48,76 @@ import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./C
 import { tr } from "../fill.js";
 import { useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
 import { MessageBoundary } from "../boundary.js";
+import { useAutosize } from "../autosize.js";
 import { escCancels } from "../keys.js";
 import { clockLabel, exactTime, fullAgo } from "../elapsed.js";
 import { answerTokens } from "../tokens-format.js";
 import { MentionPart } from "./Mention.jsx";
 
-const ChatContext = createContext({ chatId: null, readOnly: false });
+const ChatContext = createContext({ chatId: null, readOnly: false, settled: { current: true } });
+
+// A message that arrives into a thread already on screen fades in; the ones a chat opens with do not,
+// or every switch would fade the whole page.
+function useEntering() {
+  const { settled } = useContext(ChatContext);
+  return useRef(settled.current).current ? "msg-in" : "";
+}
+
+// The message just sent: the owner just sent, so the thread goes to its end (wherever he had scrolled)
+// and the bubble fades in while useGlide slides the conversation up to make room for it — one motion,
+// not the old page leaping up and a faint bubble crossing the chips (owner 2026-11-07: «انیمیشن ارسال
+// پیام خیلیی بده»).
+function riseFromComposer(bubble) {
+  const thread = bubble?.closest("[data-griffin-thread]");
+  if (!thread || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  thread.dispatchEvent(new CustomEvent("griffin:pin"));
+  bubble.animate([{ opacity: 0 }, { opacity: 0, offset: 0.3 }, { opacity: 1 }], { duration: 300, easing: "ease-out" }); // seen once above the chips
+}
+
+// What arrives at the end of a thread that sits at its end (a sent message, «در حال فکر کردن…», the
+// answer as it streams, a bar above the box) slides the conversation up instead of moving it in one
+// frame. The content is put at its new place and starts from where it was: one translate, carried
+// over when more comes mid-slide. Not on a chat's first draw, not when he has scrolled up to read.
+const GLIDE_MS = 260;
+function useGlide(viewport, content, settled) {
+  useLayoutEffect(() => {
+    const view = viewport.current;
+    const box = content.current;
+    if (!view || !box || typeof ResizeObserver === "undefined") return undefined;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return undefined;
+    let height = box.offsetHeight;
+    let pinned = true;
+    let glide = null;
+    const atEnd = () => view.scrollHeight - view.scrollTop - view.clientHeight < 8;
+    const onScroll = () => { pinned = atEnd(); };
+    const pin = () => { pinned = true; };
+    const offset = () => {
+      if (!glide || glide.playState !== "running") return 0;
+      const m = new DOMMatrixReadOnly(getComputedStyle(box).transform);
+      return m.m42;
+    };
+    const watch = new ResizeObserver(() => {
+      const next = box.offsetHeight;
+      const grew = next - height;
+      height = next;
+      if (grew <= 0 || !pinned || !settled.current) return;
+      const from = offset() + grew;
+      view.scrollTop = view.scrollHeight;
+      if (from > view.clientHeight) return; // a whole page arrived (older messages, a reload): no slide
+      glide?.cancel();
+      glide = box.animate([{ transform: `translateY(${from}px)` }, { transform: "none" }], { duration: GLIDE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+    });
+    watch.observe(box);
+    view.addEventListener("scroll", onScroll, { passive: true });
+    view.addEventListener("griffin:pin", pin);
+    return () => {
+      watch.disconnect();
+      glide?.cancel();
+      view.removeEventListener("scroll", onScroll);
+      view.removeEventListener("griffin:pin", pin);
+    };
+  }, [viewport, content, settled]);
+}
 
 const plugins = { code };
 // Code blocks stay compact: copy only. Tables keep download (CSV) and fullscreen — a wide table is
@@ -61,6 +126,21 @@ const controls = { code: { copy: true, download: false }, table: { copy: true, d
 // One array for every answer: Streamdown skips re-parsing only when shikiTheme is the same object,
 // so a fresh literal re-rendered every message's markdown on each streamed token.
 const shikiTheme = ["github-light", "github-dark"];
+// Streamdown's own buttons, in the page's language (one object, as above).
+const answerLabels = {
+  close: t("بستن"),
+  copied: t("کپی شد"),
+  copyCode: t("کپی کد"),
+  copyTable: t("کپی جدول"),
+  copyTableAsCsv: t("کپی جدول به‌صورت CSV"),
+  copyTableAsMarkdown: t("کپی جدول به‌صورت Markdown"),
+  copyTableAsTsv: t("کپی جدول به‌صورت TSV"),
+  downloadTable: t("دانلود جدول"),
+  downloadTableAsCsv: t("دانلود جدول به‌صورت CSV"),
+  downloadTableAsMarkdown: t("دانلود جدول به‌صورت Markdown"),
+  viewFullscreen: t("تمام‌صفحه"),
+  exitFullscreen: t("خروج از تمام‌صفحه"),
+};
 
 export function Thread({
   header,
@@ -87,7 +167,8 @@ export function Thread({
   earlier = 0, // messages before the first one held (a long chat opens with its last page only)
   onLoadEarlier = null,
 }) {
-  const chatContext = useMemo(() => ({ chatId, readOnly }), [chatId, readOnly]);
+  const settled = useRef(false); // the messages the chat opens with are on the page (useEntering)
+  const chatContext = useMemo(() => ({ chatId, readOnly, settled }), [chatId, readOnly]);
   return (
     <ChatContext.Provider value={chatContext}>
     <ThreadPrimitive.Root data-griffin-chat="" className="flex h-full min-h-0 flex-col">
@@ -181,11 +262,22 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
   const homeBoard = useFlag("homeBoard");
   const docked = showHero && !compact && homeBoard;
   const composerProps = { agentLabel, mode, model, agent, onModeChange, onModelChange, effort, onEffortChange, top: composerTop, compact, placeholder };
+  // A chat opens at its end in the frame it first draws, not at its top and then a jump down.
+  const { settled } = useContext(ChatContext);
+  const viewport = useRef(null);
+  const count = useAuiState((s) => s.thread.messages.length);
+  useLayoutEffect(() => {
+    if (settled.current || !count) return;
+    settled.current = true;
+    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+  }, [count, settled]);
+  const content = useRef(null);
+  useGlide(viewport, content, settled);
 
   return (
     // The hero has no messages to follow; a tall home-page board would be pulled to its bottom.
-    <ThreadPrimitive.Viewport data-griffin-thread="" autoScroll={!showHero} className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
-      <div className={`${showHero ? "" : "thread-in"} mx-auto flex w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && (!homeBoard || !board) ? "justify-center" : ""}`}>
+    <ThreadPrimitive.Viewport ref={viewport} data-griffin-thread="" autoScroll={!showHero} className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div ref={content} className={`mx-auto flex w-full ${karsara ? "max-w-3xl" : "max-w-5xl"} flex-1 flex-col px-3 pt-4 sm:px-6 ${showHero && (!homeBoard || !board) ? "justify-center" : ""}`}>
         {showHero ? (
           <WelcomeHero
             agent={agent}
@@ -197,7 +289,8 @@ function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles,
           />
         ) : (
           <>
-            {loading ? <ThreadSkeleton /> : null}
+            {/* The first message of a new chat is already there: no placeholders around its bubble. */}
+            {loading && !count ? <ThreadSkeleton /> : null}
             {earlier > 0 && onLoadEarlier ? <LoadEarlier earlier={earlier} onLoad={onLoadEarlier} /> : null}
             <MessageBoundary>
               <ThreadPrimitive.Messages components={{ UserMessage: SafeUserMessage, AssistantMessage: SafeAssistantMessage, SystemMessage: SafeSystemMessage }} />
@@ -513,7 +606,7 @@ function ReminderMessage({ framed }) {
   const [open, setOpen] = useState(false);
   const setAt = clockLabel(framed.setAt);
   return (
-    <MessagePrimitive.Root className="msg-in my-2 flex flex-col items-start">
+    <MessagePrimitive.Root className="my-2 flex flex-col items-start">
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="press flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground">
         <Clock className="size-3.5" />
         <span>{t("یادآور خودکار ایجنت")}</span>
@@ -525,6 +618,83 @@ function ReminderMessage({ framed }) {
           {framed.text}
         </div>
       ) : null}
+    </MessagePrimitive.Root>
+  );
+}
+
+// A message the server wrote for the agent (system-note.js): a card, not the owner's bubble — what
+// came back and its status, with what the agent was told folded behind «متن کامل».
+const TONE = { ok: "bg-ok/15 text-ok", bad: "bg-bad/15 text-bad", wait: "bg-signal/15 text-signal" };
+function StatusPill({ status }) {
+  const label = statusLabel(status);
+  return label ? <span className={`shrink-0 rounded-full px-1.5 py-px text-[11px] ${TONE[statusTone(status)] || "bg-muted"}`} title={status}>{label}</span> : null;
+}
+
+function NoteText({ text }) {
+  const [open, setOpen] = useState(false);
+  const long = text.split("\n").length > 5 || text.length > 360;
+  const dir = textDir(text) === "ltr" ? "ltr" : "rtl";
+  return (
+    <div className="relative">
+      <div className={`sd-block chat-text text-[13px] leading-6 [&_:is(h1,h2,h3,h4)]:my-1 [&_:is(h1,h2,h3,h4)]:text-sm [&_:is(h1,h2,h3,h4)]:font-semibold ${long && !open ? "max-h-[7.5rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_65%,transparent)]" : ""}`} dir={dir}>
+        {/* A report's lines are lines (markdown would join «نامعلوم/خطا: …» onto the summary). */}
+        <Streamdown dir={dir} BlockComponent={DirBlock}>{text.replace(/([^\n])\n(?=[^\n])/g, "$1  \n")}</Streamdown>
+      </div>
+      {long ? <button type="button" onClick={() => setOpen(!open)} className="press text-xs text-primary hover:underline">{open ? t("بستن") : t("نمایش کامل")}</button> : null}
+    </div>
+  );
+}
+
+function SystemNote({ note, at }) {
+  const [raw, setRaw] = useState(false);
+  const Icon = note.kind === "network" ? Network : note.kind === "subtasks" ? ListTodo : note.kind === "tool" ? Wrench : Info;
+  // Only an instruction to the agent: one folded line, like the agent's own reminder.
+  if (!note.text && !note.sections.length && !note.reason && !note.chatId) {
+    return (
+      <MessagePrimitive.Root className="my-2 flex flex-col items-start">
+        <button type="button" onClick={() => setRaw(!raw)} aria-expanded={raw} className="g-system-note press flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground" title={t("این پیام را سیستم برای ایجنت فرستاده، نه شما")}>
+          <Icon className="size-3.5" />
+          <span dir="auto">{note.title}</span>
+          <StatusPill status={note.status} />
+          <ChevronDown className={`size-3 transition-transform ${raw ? "rotate-180" : ""}`} />
+        </button>
+        {raw ? <div className="chat-text mt-1 max-h-[40dvh] max-w-[88%] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground scrollbar-thin" dir="auto">{note.raw}</div> : null}
+      </MessagePrimitive.Root>
+    );
+  }
+  return (
+    <MessagePrimitive.Root className="group my-3 flex flex-col items-start">
+      <div className="g-system-note w-full max-w-[92%] rounded-xl border bg-muted/25 px-3 py-2" title={t("این پیام را سیستم برای ایجنت فرستاده، نه شما")}>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+          <Icon className="size-3.5 shrink-0" />
+          <span className="min-w-0 font-medium text-foreground/85" dir="auto">{note.title}</span>
+          <StatusPill status={note.status} />
+          {note.queued ? <span>{t("در صف ماند تا آن ایجنت برگشت")}</span> : null}
+          <span className="ms-auto"><MessageTime at={at} /></span>
+        </div>
+        {note.reason ? <p className="mt-0.5 text-xs text-muted-foreground" dir="auto">{note.reason}</p> : null}
+        {note.sections.map((s, i) => (
+          <div key={i} className="mt-2 border-t pt-1.5 first:border-t-0">
+            <div className="mb-0.5 flex items-center gap-1.5 text-xs">
+              <span className="font-medium" dir="auto">{s.label}</span>
+              <StatusPill status={s.status} />
+              {s.chatId ? <a href={`#/c/${s.chatId}`} className="ms-auto text-muted-foreground hover:text-foreground hover:underline">{t("باز کردن")}</a> : null}
+            </div>
+            {s.text ? <NoteText text={s.text} /> : null}
+          </div>
+        ))}
+        {note.text ? <div className="mt-1"><NoteText text={note.text} /></div> : null}
+        {note.still ? <p className="mt-1.5 text-xs text-muted-foreground" dir="auto">{t("هنوز در کار: {v}", { v: note.still })}</p> : null}
+        <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
+          {note.chatId ? <a href={`#/c/${note.chatId}`} className="hover:text-foreground hover:underline">{t("باز کردن گفتگوی ساخت")}</a> : null}
+          {note.folded ? (
+            <button type="button" onClick={() => setRaw(!raw)} aria-expanded={raw} className="press inline-flex items-center gap-1 hover:text-foreground">
+              {t("متن کامل برای ایجنت")} <ChevronDown className={`size-3 transition-transform ${raw ? "rotate-180" : ""}`} />
+            </button>
+          ) : null}
+        </div>
+        {raw ? <div className="chat-text mt-1 max-h-[40dvh] overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-background/60 px-2.5 py-1.5 text-xs leading-5 text-muted-foreground scrollbar-thin" dir="auto">{note.raw}</div> : null}
+      </div>
     </MessagePrimitive.Root>
   );
 }
@@ -550,7 +720,8 @@ function UserMessage() {
   const framed = reminder ? reminderFrame(text) : null;
   const dir = chatDir(framed ? framed.text : text);
   // Replies to a part of an answer and «به چت جدید»: the quotes as cards, not raw «>» lines.
-  const quoted = useMemo(() => (colleague || ownerNote || reminder ? null : parseQuoted(text)), [text, colleague, ownerNote, reminder]);
+  const note = useMemo(() => (from ? null : systemNote(text)), [text, from]);
+  const quoted = useMemo(() => (colleague || ownerNote || reminder || note ? null : parseQuoted(text)), [text, colleague, ownerNote, reminder, note]);
   // A queued message that ran shows at its place with no label; one that never ran is muted.
   const label = queueLabel(custom);
   const dropped = queueDropped(custom);
@@ -561,45 +732,56 @@ function UserMessage() {
   const [busy, setBusy] = useState(false);
   const [rewindOpen, setRewindOpen] = useState(false);
   const rewind = () => setRewindOpen(true);
+  const entering = useEntering();
+  const root = useRef(null);
+  const rises = useRef(custom?.sendState === "sending");
+  useLayoutEffect(() => {
+    if (rises.current) riseFromComposer(root.current);
+    rises.current = false;
+  }, []);
   if ((waiting && !readOnly) || queueRemoved(custom)) return null;
   if (reminder) return <ReminderMessage framed={framed} />;
+  if (note) return <SystemNote note={note} at={createdAt} />;
   const peer = colleague && from.kind === "peer" ? peerFrame(text) : null;
   const shown = peer ? peer.text : colleague ? stripSender(text, from.name) : ownerNote ? stripOwnerFrame(text) : text;
 
+  // Until the reloaded timeline drops this message, it and what follows stay dimmed with a spinner:
+  // the server may take a while, and nothing used to show the click had done anything (owner 2026-11-07).
   const act = async (body) => {
     setBusy(true);
+    setRewindOpen(false);
+    let gone = false;
     try {
       const { files } = (await api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, ...body } })) || {};
       // Claude's file edits since that message (the owner's own chats): put back, or why not.
       if (files?.restored) toast.success(t("{n} فایل به حالت قبل از این پیام برگشت.", { n: num(files.restored) }));
       else if (files?.error) toast.error(t("فایل‌ها برنگشتند: {error}", { error: files.error }));
       else if (body.files === false) toast.success(t("گفتگو به پیش از این پیام برگشت."));
-      setEditing(null);
-      setRewindOpen(false);
       reloadTimeline();
       returnToBox(chatId, textBackToBox(body, text));
+      // Only the files went back: the conversation, this message included, stays.
+      gone = body.conversation !== false;
+      if (gone) setTimeout(() => { setBusy(false); setEditing(null); }, 15_000);
+      else setEditing(null);
     } catch (error) {
       toast.error(error.message || t("خطا"));
     } finally {
-      setBusy(false);
+      if (!gone) setBusy(false);
     }
   };
 
   if (editing != null) {
     return (
-      <MessagePrimitive.Root className="msg-in group my-3 flex w-full flex-col items-stretch">
+      <MessagePrimitive.Root className={`group my-3 flex w-full flex-col items-stretch ${busy ? "g-rewinding" : ""}`}>
         <div className="chat-text w-full rounded-2xl border bg-accent/40 p-2" dir={chatDir(editing)}>
-          <textarea
-            autoFocus
-            rows={Math.min(8, Math.max(2, editing.split("\n").length))}
+          <EditBox
             value={editing}
-            onChange={(e) => setEditing(e.target.value)}
-            className="w-full resize-y bg-transparent px-2 py-1 leading-7 outline-none"
+            onChange={setEditing}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) act({ text: editing }); if (e.key === "Escape") setEditing(null); }}
           />
           <div className="mt-1 flex items-center gap-2 px-1">
             <button type="button" disabled={busy || !editing.trim()} onClick={() => act({ text: editing })} className="press inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60">
-              {busy ? <Square className="size-3 animate-pulse" /> : <ArrowUp className="size-3" />} {t("ارسال دوباره")}
+              {busy ? <Loader2 className="size-3 animate-spin" /> : <ArrowUp className="size-3" />} {busy ? t("در حال ارسال…") : t("ارسال دوباره")}
             </button>
             <button type="button" onClick={() => setEditing(null)} className="press rounded-lg px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted">{t("انصراف")}</button>
           </div>
@@ -609,7 +791,7 @@ function UserMessage() {
   }
 
   return (
-    <MessagePrimitive.Root className="msg-in group my-3 flex flex-col items-start">
+    <MessagePrimitive.Root ref={root} className={`${custom?.sendState ? "" : entering} group my-3 flex flex-col items-start ${busy ? "g-rewinding g-rewinding-self" : ""}`}>
       {/* Only here: the person's localized name and photo come from the Telegram page's poller, which an
           ordinary chat must not start. The bubble keeps the stored name: the transcript was written with it. */}
       {colleague ? (
@@ -646,11 +828,12 @@ function UserMessage() {
       {custom?.files?.length ? <SentFiles files={custom.files} /> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
       {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} /> : null}
+      {busy ? <span className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" /> {t("در حال برگشت به اینجا…")}</span> : null}
       {rewindOpen ? <RewindDialog chatId={chatId} eventId={eventId} busy={busy} onRun={act} onClose={() => setRewindOpen(false)} /> : null}
       {/* Zero height: shown on hover under the bubble without moving the thread. items-start: it hangs
           below the line above (centred on a zero-height row it rose over the label/time above it). On a
           touch screen, where it always shows, it takes its height, so a wrapped line never overlaps. */}
-      <span className="mt-1 flex h-0 flex-wrap items-start gap-x-3 gap-y-1 overflow-visible whitespace-nowrap leading-4 pointer-coarse:h-auto">
+      <span className="g-msg-actions mt-1 flex h-0 flex-wrap items-start gap-x-3 gap-y-1 overflow-visible whitespace-nowrap leading-4 pointer-coarse:h-auto pointer-coarse:items-center">
         <MessageTime at={createdAt} />
         {links ? <CopyMessage text={shown} labeled /> : null}
         {canEdit && links ? (
@@ -666,6 +849,13 @@ function UserMessage() {
       </span>
     </MessagePrimitive.Root>
   );
+}
+
+// «ویرایش و ارسال دوباره»: as tall as the text, up to most of the screen.
+function EditBox({ value, onChange, onKeyDown }) {
+  const box = useRef(null);
+  useAutosize(box, value);
+  return <textarea ref={box} autoFocus rows={2} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} className="scrollbar-thin max-h-[60dvh] w-full resize-none bg-transparent px-2 py-1 leading-7 outline-none" />;
 }
 
 // Copy a message the owner (or a colleague) sent, as it reads in the bubble.
@@ -707,15 +897,19 @@ function SendState({ state, clientId }) {
       </span>
     );
   }
+  // On its way: a quiet mark that takes no height and shows only if it lasts, so a normal send moves
+  // nothing when the server's copy replaces the bubble a moment later. Failed (above) takes its row.
+  if (state !== "sending") return null;
   return (
-    <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-      {state === "sending" ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} {state === "sending" ? SENDING_LABEL : SENT_LABEL}
+    <span className="g-send-state mt-1 flex h-0 items-start gap-1 overflow-visible text-xs text-muted-foreground">
+      <Loader2 className="size-3 animate-spin" /> {SENDING_LABEL}
     </span>
   );
 }
 
 function AssistantMessage() {
   const { readOnly } = useContext(ChatContext);
+  const entering = useEntering();
   const run = useAuiState((s) => s.message.metadata?.custom?.run);
   const { work, answer } = useMemo(() => {
     const split = splitRun(run?.parts || []);
@@ -726,7 +920,7 @@ function AssistantMessage() {
   const running = run.status === "running";
   const textStatus = (part) => ({ type: running && part === run.parts.at(-1) ? "running" : "complete" });
   return (
-    <MessagePrimitive.Root className="msg-in group my-3">
+    <MessagePrimitive.Root className={`${entering} group my-3`}>
       <WorkLog
         run={run}
         parts={work}
@@ -848,7 +1042,7 @@ function MarkdownText({ text, status, compact = false }) {
   const dir = chatDir(text);
   return (
     <div className={`sd-block ${compact ? "leading-7" : "g-answer leading-8"} [&_pre]:my-2`} dir={dir}>
-      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={shikiTheme}>
+      <Streamdown dir={dir} BlockComponent={DirBlock} plugins={plugins} controls={controls} isAnimating={status?.type === "running"} shikiTheme={shikiTheme} translations={answerLabels}>
         {text}
       </Streamdown>
     </div>
@@ -1340,22 +1534,26 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     sendQuotes(force && running);
   };
   // «فوری» while the agent works: this message reaches it now instead of waiting in the queue.
-  const canForce = running && (composerText.trim() || hasAttached || quotes.length > 0);
+  const canForce = Boolean(composerText.trim() || hasAttached || quotes.length > 0);
   const forceSend = () => {
     if (quotesOnly && !hasAttached) sendQuotes(true);
     else aui.composer.send({ steer: true });
     focusInput();
   };
-  const forceButton = canForce ? (
+  // Its name only on hover (owner 2026-11-05), over the button so nothing moves; there from the start of
+  // the run, dim until there is something to send, so the box does not narrow in mid-sentence.
+  const forceButton = running ? (
     <button
       type="button"
       onClick={forceSend}
-      className={`g-force flex shrink-0 items-center justify-center gap-1 text-primary hover:bg-primary/10 ${karsara ? "h-8 rounded-md px-2 text-xs" : "h-9 rounded-full px-2.5 text-xs"}`}
-      title={touch ? t("فوری: همین حالا وسط کار به ایجنت برسد، نه بعد از آن") : `${t("فوری: همین حالا وسط کار به ایجنت برسد، نه بعد از آن")} (Ctrl+Shift+Enter)`}
+      disabled={!canForce}
+      className={`g-force group/force relative flex shrink-0 items-center justify-center text-primary hover:bg-primary/10 disabled:text-muted-foreground disabled:opacity-60 disabled:hover:bg-transparent ${karsara ? "size-8 rounded-md" : "size-9 rounded-full"}`}
       aria-label={t("ارسال فوری")}
     >
       <Zap className="size-4" />
-      <span>{t("فوری")}</span>
+      <span className="pointer-events-none absolute bottom-full end-0 z-10 mb-1.5 w-max max-w-64 rounded-md border bg-card px-2 py-1 text-start text-xs leading-5 text-foreground opacity-0 shadow-md transition-opacity group-hover/force:opacity-100 group-focus-visible/force:opacity-100 pointer-coarse:hidden" role="tooltip">
+        {t("فوری: همین حالا وسط کار به ایجنت برسد، نه بعد از آن (Ctrl+Shift+Enter)")}
+      </span>
     </button>
   ) : null;
   // A Telegram chat says who the box reaches (App.jsx): only the assistant, never the colleague.
@@ -1381,8 +1579,8 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       placeholder={placeholder}
       className={`scrollbar-thin relative z-[1] min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
         karsara
-          ? `max-h-[70dvh] px-1.5 py-2 text-start text-[15px] leading-7 ${hero ? "min-h-16" : "min-h-10"}`
-          : `max-h-[70dvh] min-h-10 flex-1 px-1 py-2 text-start ${hero ? "text-sm leading-6" : "leading-7"}`
+          ? `max-h-[50dvh] px-1.5 py-2 text-start text-[15px] leading-7 ${hero ? "min-h-16" : "min-h-10"}`
+          : "max-h-[50dvh] min-h-10 flex-1 px-1 py-2 text-start leading-7"
       }`}
     />
   );
@@ -1449,13 +1647,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
         <TasksPeek chatId={chatId} />
         {advice}
         <ComposerPrimitive.Root className="composer-box g-composer relative z-[1] rounded-xl border bg-card focus-within:border-primary/60">
-          {quotes.length ? (
-            <div className="flex flex-col gap-1 px-2 pt-2">
-              {quotes.map((q) => (
-                <QuoteChip key={q.id} chatId={chatId} quote={q} onDone={focusInput} />
-              ))}
-            </div>
-          ) : null}
+          <QuoteList chatId={chatId} quotes={quotes} onDone={focusInput} />
           <ComposerAssist inputRef={inputRef} next={next} />
       <MentionBackdrop inputRef={inputRef} />
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
@@ -1466,13 +1658,18 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               {ghost}
             </div>
             <DictateButton value={composerText} setText={setText} focus={focusInput} size="size-5" />
+            {running && canForce ? (
+              <ComposerPrimitive.Cancel className="g-icon-btn flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground" data-stop="" title={t("توقف")} aria-label={t("توقف")}>
+                <Square className="size-3.5 fill-current" />
+              </ComposerPrimitive.Cancel>
+            ) : null}
             {forceButton}
-            {running ? (
+            {running && !canForce ? (
               <ComposerPrimitive.Cancel className={KC_SEND} data-stop="" title={t("توقف")}>
                 <Square className="size-3.5 fill-current" />
               </ComposerPrimitive.Cancel>
             ) : quotesOnly ? (
-              <button type="button" onClick={sendQuotes} className={KC_SEND} title={t("ارسال نقل‌قول‌ها")} aria-label={t("ارسال")}>
+              <button type="button" onClick={() => sendQuotes()} className={KC_SEND} title={t("ارسال نقل‌قول‌ها")} aria-label={t("ارسال")}>
                 <CornerDownLeft className="size-4" />
               </button>
             ) : (
@@ -1507,17 +1704,11 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     <TasksPeek chatId={chatId} />
     {advice}
     <ComposerPrimitive.Root ref={rootRef} className="composer-box g-composer relative z-[1] rounded-2xl border bg-card shadow-sm focus-within:border-primary/60">
-      {quotes.length ? (
-        <div className="flex flex-col gap-1 px-2 pt-2">
-          {quotes.map((q) => (
-            <QuoteChip key={q.id} chatId={chatId} quote={q} onDone={() => inputRef.current?.focus()} />
-          ))}
-        </div>
-      ) : null}
+      <QuoteList chatId={chatId} quotes={quotes} onDone={focusInput} />
       <ComposerAssist inputRef={inputRef} next={next} />
           <MentionBackdrop inputRef={inputRef} />
       <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachment }} />
-      <div className={`flex items-end gap-1 px-2 ${hero ? "py-1.5" : "pb-2 pt-2"}`}>
+      <div className="flex items-end gap-1 px-2 py-2">
         {flags.nextGhost ? (
           <div className="grid min-w-0 flex-1 [&>*]:min-w-0 [&>*]:[grid-area:1/1]" onClick={(event) => event.target === event.currentTarget && focusInput()}>
             {input}
@@ -1525,8 +1716,15 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           </div>
         ) : input}
         <div className="mb-0.5 flex shrink-0 items-center gap-1">
+          {/* With something to send, the main button sends (it stays «در صف» or reaches the agent as usual)
+              and stop steps aside: a thumb going for send must not stop the run (phone walk 2026-11-05). */}
+          {running && canForce ? (
+            <ComposerPrimitive.Cancel data-stop="" className="g-icon-btn flex size-9 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground" title={t("توقف")} aria-label={t("توقف")}>
+              <Square className="size-3.5 fill-current" />
+            </ComposerPrimitive.Cancel>
+          ) : null}
           {forceButton}
-          {running ? (
+          {running && !canForce ? (
             <ComposerPrimitive.Cancel data-stop="" className="g-send flex size-9 items-center justify-center rounded-full bg-foreground text-background" title={t("توقف")}>
               {hero ? (
                 <span className="agent-dots agent-dots-on-dark" aria-hidden><i /><i /><i /></span>
@@ -1535,7 +1733,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
               )}
             </ComposerPrimitive.Cancel>
           ) : quotesOnly ? (
-            <button type="button" onClick={sendQuotes} className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground" title={t("ارسال نقل‌قول‌ها")}>
+            <button type="button" onClick={() => sendQuotes()} className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground" title={t("ارسال نقل‌قول‌ها")}>
               <ArrowUp className="size-5" />
             </button>
           ) : (
@@ -1549,12 +1747,6 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           )}
         </div>
       </div>
-      {running && !hero ? (
-        <div className="flex items-center gap-2 px-3 pb-2 text-xs text-primary">
-          <span className="agent-dots" aria-hidden><i /><i /><i /></span>
-          {canForce ? t("«فوری» پیام را همین حالا وسط کار به ایجنت می‌رساند") : t("پیام جدید وسط کار ارسال می‌شود")}
-        </div>
-      ) : null}
       {nonClaude}
     </ComposerPrimitive.Root>
     {/* Under the box: +, microphone and mode; model and effort at the far end. The box keeps its width for text. */}

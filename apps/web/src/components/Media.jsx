@@ -15,6 +15,9 @@ function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// A picture seen before keeps its place when its chat opens again, instead of pushing the thread as it loads.
+const imageSizes = new Map(); // url -> { width, height }
+
 // Renders any file a tool produced, by type. `media` = { mediaId, mimeType, name, bytes }.
 export function MediaView({ media, caption }) {
   const base = useApiBase();
@@ -27,7 +30,7 @@ export function MediaView({ media, caption }) {
   if (type.startsWith("image/")) {
     body = (
       <a href={url} target="_blank" rel="noreferrer">
-        <img src={url} alt={name} loading="lazy" className="max-h-[28rem] max-w-full rounded-md border bg-muted/40 object-contain" />
+        <img src={url} alt={name} loading="lazy" {...(imageSizes.get(url) || {})} onLoad={(e) => imageSizes.set(url, { width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })} className="h-auto max-h-[28rem] max-w-full rounded-md border bg-muted/40 object-contain" />
       </a>
     );
   } else if (type.startsWith("video/")) {

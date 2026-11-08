@@ -4,8 +4,9 @@
 // bring credit back.
 
 // An account with no money left: Anthropic's «Credit balance is too low», OpenAI-style
-// insufficient_quota, Payment Required (a 402 status is checked apart). Not a plan window: there is no reset to wait for.
-const CREDIT = /credit balance is too low|insufficient[ _-]?(credits?|balance|funds|quota)|out of (usage )?credits|payment required/i;
+// insufficient_quota, Payment Required (a 402 status is checked apart), a Claude subscription whose
+// payment is past due («Claude Code can't use your Claude subscription», 2026-11-07: it did not move on). Not a plan window: there is no reset to wait for.
+const CREDIT = /credit balance is too low|insufficient[ _-]?(credits?|balance|funds|quota)|out of (usage )?credits|payment required|can(?:'|’)t use your claude subscription|payment is past due|subscription[^.]{0,40}past due/i;
 export const isCreditError = (text) => CREDIT.test(String(text || ""));
 
 // A credit mark is tried again after this long (someone may have topped up); a run that hits it

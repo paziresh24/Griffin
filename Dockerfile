@@ -39,7 +39,14 @@ FROM ${NODE_SLIM} AS app
 # `git gc/maintenance --auto` behind (2026-10-27: 8,160 zombie git filled the broker's pids limit on
 # tabrizi, every spawn EAGAIN; 2-4k on every other install after two days).
 # restic: the off-machine copy of each backup to the person's own S3 bucket (backup-offsite.mjs).
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client python3 adb tini restic && rm -rf /var/lib/apt/lists/*
+# APT_MIRROR: CI's runners crawl to deb.debian.org (2026-11-05: 6 KB/s from a runner, every build timed out when
+# this layer missed the cache). Packages are signed, so a mirror cannot alter them; the image keeps the stock sources.
+ARG APT_MIRROR=
+RUN S=/etc/apt/sources.list.d/debian.sources && cp $S /tmp/debian.sources \
+  && { [ -z "$APT_MIRROR" ] || sed -i "s#http://deb.debian.org#$APT_MIRROR#" $S; } \
+  && apt-get -o Acquire::Retries=3 update \
+  && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates git openssh-client python3 adb tini restic \
+  && mv /tmp/debian.sources $S && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules

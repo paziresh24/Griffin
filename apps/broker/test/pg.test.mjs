@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createPgTools, parseCsv, toTable } from "../src/pg.mjs";
+import { createPgTools, parseCsv, readOnlyRefusal, toTable } from "../src/pg.mjs";
 
 test("CSV parsing handles quotes, commas, newlines and Persian text", () => {
   assert.deepEqual(parseCsv('id,name\n1,"a, b"\n2,"line1\nline2"\n3,"سلام ""دنیا"""\n'), [
@@ -57,4 +57,38 @@ test("a write in read-only mode explains how to proceed; bad names are rejected"
   await assert.rejects(pg_query.execute({ cluster: "prod", namespace: "ns", name: "db", sql: "update t set x=1" }), /rerun with write=true/);
   await assert.rejects(pg_query.execute({ cluster: "prod", namespace: "ns;id", name: "db", sql: "select 1" }), /invalid namespace/);
   await assert.rejects(pg_query.execute({ cluster: "prod", namespace: "ns", name: "db", database: "x y", sql: "select 1" }), /invalid database/);
+});
+
+test("a read is one plain statement: no way out of the read-only transaction or the database", () => {
+  for (const sql of [
+    "SELECT * FROM users LIMIT 5",
+    "select count(*) from t where note = 'begin; commit; set x' -- set role",
+    "WITH a AS (SELECT 1) SELECT * FROM a;",
+    "EXPLAIN SELECT 1",
+    "SHOW server_version",
+    "SELECT CASE WHEN x THEN 1 ELSE 0 END, \"offset\" FROM t",
+  ]) assert.equal(readOnlyRefusal(sql), null, sql);
+  for (const sql of [
+    "BEGIN READ WRITE",
+    "SELECT 1; INSERT INTO t VALUES (1)",
+    "SET default_transaction_read_only = off",
+    "  set session characteristics as transaction read write",
+    "SELECT set_config('default_transaction_read_only', 'off', false)",
+    "COPY (SELECT 1) TO PROGRAM 'id'",
+    "SELECT pg_read_file('/etc/passwd')",
+    "SELECT lo_import('/etc/passwd')",
+    "SELECT * FROM dblink('host=x', 'select 1') AS t(a int)",
+    "SELECT pg_terminate_backend(123)",
+    "DO $$ BEGIN PERFORM 1; END $$",
+    "ALTER SYSTEM SET x = 1",
+    "\\! id",
+  ]) assert.ok(readOnlyRefusal(sql), sql);
+});
+
+test("pg_query refuses a psql backslash command even with write=true", async () => {
+  const kube = fakeKube();
+  const tool = createPgTools({ kube }).pg_query;
+  await assert.rejects(() => tool.execute({ cluster: "prod", namespace: "team-a", name: "app-db", sql: "\\! id", write: true }), /backslash/);
+  await assert.rejects(() => tool.execute({ cluster: "prod", namespace: "team-a", name: "app-db", sql: "BEGIN READ WRITE" }), /transaction control/);
+  assert.equal(kube.calls.length, 0, "nothing reached the pod");
 });

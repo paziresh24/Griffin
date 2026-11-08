@@ -11,6 +11,31 @@ const MAX_ROWS = 500;
 const cluster = { type: "string", description: "cluster name from the site config" };
 
 // RFC 4180 CSV as psql --csv writes it.
+// The read path runs as postgres (superuser) with default_transaction_read_only, which the statement
+// itself could undo: BEGIN READ WRITE / SET / set_config, or step out of the database altogether with
+// COPY … PROGRAM, the server-file and large-object functions, dblink, or an admin function
+// (security audit 2026-10-29). A read is one statement without any of these; the rest is write=true.
+const READ_ONLY_DENY = [
+  [/^\s*(begin|start|commit|end|rollback|abort|savepoint|release|prepare|set|reset|discard)\b/i, "transaction control or SET"],
+  [/^\s*copy\b/i, "COPY"],
+  [/^\s*(do|call|execute|listen|unlisten|notify|load|alter|vacuum|analyze|cluster|reindex|checkpoint|lock|deallocate|refresh)\b/i, "a command that is not a query"],
+  [/\b(set_config|pg_notify|lo_\w+|dblink\w*|pg_read_\w+|pg_ls_\w+|pg_stat_file|pg_file_\w+|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_promote|pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_logical_\w+|pg_replication_\w+|pg_advisory\w*)\s*\(/i, "a server-side function"],
+];
+export function readOnlyRefusal(sql) {
+  // Words inside comments and string literals are not commands.
+  const bare = String(sql)
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .replace(/\$(\w*)\$[\s\S]*?\$\1\$/g, "''")
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .trim()
+    .replace(/;\s*$/, "");
+  if (bare.includes(";")) return "more than one statement";
+  if (bare.includes("\\")) return "a psql backslash command";
+  for (const [re, what] of READ_ONLY_DENY) if (re.test(bare)) return `${what} is not allowed in a read`;
+  return null;
+}
+
 export function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -104,6 +129,12 @@ export function createPgTools({ kube }) {
         if (!sql.trim() || sql.includes("\0")) throw new ToolInputError("sql is required");
         const timeout = Math.min(Math.max(Number(args.timeoutSeconds) || 60, 1), 600);
         const write = Boolean(args.write);
+        // psql runs a -c string that starts with a backslash as its own command (\\! is a shell in the pod).
+        if (/^\s*\\/.test(sql)) throw new ToolInputError("psql backslash commands are not allowed");
+        if (!write) {
+          const refusal = readOnlyRefusal(sql);
+          if (refusal) throw new ToolInputError(`${refusal} — a read runs one plain statement; for anything else rerun with write=true after the owner approves`);
+        }
 
         const primary = await primaryPod(clusterName, namespace, name);
         const psql = [

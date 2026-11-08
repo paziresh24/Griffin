@@ -10,6 +10,10 @@ import { SENDING_LABEL, SENT_LABEL } from "../outbox.js";
 import { QUEUE_WAITING_LABEL, editLossWarning, takeOutError, waitingQueued } from "../queue-peek.js";
 
 import { askConfirm } from "../dialog.jsx";
+import { systemNote } from "../system-note.js";
+
+// A system report waiting in the queue reads as its title, not its frame (system-note.js).
+const shownText = (text) => systemNote(text)?.title || text;
 
 const plainBtn = "press rounded-md border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50";
 
@@ -62,7 +66,7 @@ export function QueuePeek({ chatId, onEdit }) {
             {items.some((item) => item.sendState === "sending") ? <Loader2 className="size-3.5 shrink-0 animate-spin text-signal" /> : <ListTodo className="size-3.5 shrink-0 text-primary" />}
             <span className="shrink-0 text-foreground">{QUEUE_WAITING_LABEL}</span>
             <span className="min-w-0 flex-1 truncate" dir={textDir(first.text)}>
-              {first.text.split("\n").find((line) => line.trim()) || (first.files?.length ? first.files[0].name : first.images ? t("تصویر") : "")}
+              {shownText(first.text).split("\n").find((line) => line.trim()) || (first.files?.length ? first.files[0].name : first.images ? t("تصویر") : "")}
             </span>
             {items.length > 1 ? <span className="g-tag shrink-0 tabular-nums" dir="ltr">+{num(items.length - 1)}</span> : null}
             <ChevronDown className={`size-3.5 shrink-0 transition-transform duration-200 ${open ? "" : "rotate-180"}`} />
@@ -79,7 +83,7 @@ export function QueuePeek({ chatId, onEdit }) {
               >
                 {items.map((item) => (
                   <li key={item.key} className="g-note-item rounded-lg border px-2.5 py-1.5">
-                    <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px]" dir={textDir(item.text)}>{item.text}</p>
+                    <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px]" dir={textDir(item.text)}>{shownText(item.text)}</p>
                     {item.images ? (
                       <p className="mt-0.5 flex items-center gap-1 text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(item.images) })}</p>
                     ) : null}

@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 // Quoted selections waiting in a chat's composer («به گفتگو»): each is kept folded above the
 // input with the owner's note about it, and joins the message only when it is sent. Kept per
 // chat in the browser, like the draft.
@@ -113,7 +114,14 @@ function pageStorage() {
 
 export const quoteStore = createQuoteStore(pageStorage());
 
-// «به چت جدید»: the line naming the chat the quote came from (App.jsx newChatContextNote).
+// A quote sent to another chat (new or existing): the quote, the owner's words under it, then this line
+// naming the chat it came from, so the agent can read that chat when it needs more (chat_read).
+export function newChatContextNote(id, title = "") {
+  const name = String(title || "").replace(/\s+/g, " ").trim();
+  return t("این بخش از گفتگوی {v}(شناسهٔ {id}) است؛ اگر زمینهٔ بیشتری لازم شد، آن گفتگو را با chat_read بخوان.", { v: name ? `«${name}» ` : "", id });
+}
+
+// «به چت جدید»: the line naming the chat the quote came from (newChatContextNote).
 const ORIGIN_LINE = /^این بخش از گفتگوی (?:«([^»\n]*)» )?\(شناسهٔ ([\w-]+)\) است؛[^\n]*$/; // i18n-ignore
 
 /** A sent message read back for its bubble: [{ type: "quote", text } | { type: "text", text } |

@@ -228,7 +228,7 @@ function EngineCard({ p, presets, reload, canDefault = false, onToggle = null, s
     if ((r.state || (r.ok ? "ok" : null)) && (r.state || "ok") !== p.state) reload();
   };
   const remove = act(async () => {
-    if (!(await askConfirm(t("موتور «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) })))) return;
+    if (!(await askConfirm(t("موتور «{name}» و کلیدش حذف شود؟", { name: accountLabel(p) }), { danger: true, yes: t("حذف") }))) return;
     await api(`/api/providers/${p.id}`, { method: "DELETE" });
   });
   const button = "press inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs hover:bg-muted";

@@ -65,7 +65,7 @@ export const CONSULT_WITHHELD = [
   // Nor ring the owner's phone: the asking chat decides what he must know.
   "notify_owner",
   // Nor talk to a colleague's agent (it would wake this chat later, like a delegated task).
-  "network_ask", "network_reply", "network_connect",
+  "network_ask", "network_reply", "network_connect", "network_send_file",
 ];
 /** The consult row of a chat (null for any other chat). */
 export const consultOf = (store, chatId) => (chatId ? store.getKv(`${CONSULT_KV}${chatId}`) : null);
@@ -287,6 +287,13 @@ export function createPeers({
   async function wake(parentChatId) {
     if (!store.getChat(parentChatId)) return;
     const mine = delegatesOf(parentChatId);
+    // A child that started its next turn (a queued steer) is not done: report when that one ends,
+    // or its real answer comes after the report and nobody ever reads it (2026-11-05: 36 of 257).
+    for (const d of mine.filter((x) => x.state === "done" && runner.isActive(x.childId))) {
+      writeDelegate(d.childId, { ...d, state: "running" });
+      d.state = "running";
+      watchChild(d.childId);
+    }
     const done = mine.filter((d) => d.state === "done");
     if (!done.length) return;
     const still = mine.filter((d) => d.state === "running");
@@ -411,7 +418,8 @@ export function createPeers({
         const message = String(args?.message || "").trim();
         if (!message) return { isError: true, content: [{ type: "text", text: "message is required for steer" }] };
         const running = runner.isActive(d.childId);
-        if (!running) {
+        // Also a child still running whose earlier turn was already reported: nothing watches it now.
+        if (!running || d.state !== "running") {
           writeDelegate(d.childId, { ...d, state: "running", at: now().toISOString() });
           watchChild(d.childId);
         }

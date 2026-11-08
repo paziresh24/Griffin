@@ -56,6 +56,8 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
   const repos = usePolling("/api/repos", 5 * 60_000);
   const repo = chosen ?? (locked ? "" : repos?.default || "");
   const karsara = useFlag("repoCapsule"); // the "capsule" chip (ui-prefs.js)
+  // The very first visit, before the list ever arrived: the chip's place, not «بدون ریپو» that then changes.
+  const waiting = !repos && chosen == null && !locked;
   return (
     <div className="mb-1.5 flex flex-wrap items-center gap-1.5 px-1">
       {karsara ? (
@@ -67,7 +69,9 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
           <Server /> <span>{t("سرور گریفین")}</span>
         </span>
       )}
-      {locked && chatId && repo ? (
+      {waiting ? (
+        <span className={`${chip} w-28 animate-pulse`} aria-hidden />
+      ) : locked && chatId && repo ? (
         <RepoPicker repo={repo} moving onChange={(next) => next && next !== repo && switchFolder(chatId, next)} />
       ) : locked || !onRepoChange ? (
         repo ? <CopyChip icon={<Folder />} value={repo} label={repo} title={t("ریپوی این گفتگو: {repo} (کپی)", { repo })} /> : null
@@ -98,8 +102,9 @@ export function RepoChips({ chatId = null, repo: chosen = null, locked = false, 
 
 function RepoPicker({ repo, onChange, moving = false }) {
   const [refresh, setRefresh] = useState(0);
-  const data = usePolling(`/api/repos?r=${refresh}`, 5 * 60_000);
-  const repos = data?.repos || [];
+  const known = usePolling("/api/repos", 5 * 60_000);
+  const fresh = usePolling(refresh ? `/api/repos?r=${refresh}` : null, 5 * 60_000);
+  const repos = (fresh || known)?.repos || [];
   const [open, setOpen] = useState(false);
   // Each opening reads the list again: a repo cloned after this page loaded (another chat's agent)
   // only showed up after a reload, or once the first message moved the page to the chat (2026-10-28).

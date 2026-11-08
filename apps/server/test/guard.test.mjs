@@ -451,3 +451,14 @@ test("kube_delete always asks the owner, per object, and is never trusted on a c
   assert.equal(store.rows.some((r) => r.tool === "kube_delete" && r.decision === "trusted"), false);
   forgetDecisions();
 });
+
+test("security audit 2026-10-29: a Secret's value and a shell on Griffin's own servers are never free outside the owner's chats", () => {
+  assert.match(classify("kube_secret", { cluster: "prod", namespace: "team-a", name: "db" }).approve, /team-a\/db/);
+  process.env.GRIFFIN_OWN_HOSTS = "10.0.0.46,10.0.0.38,10.0.0.32";
+  for (const host of ["10.0.0.46", "10.0.0.38", "10.0.0.32", " 10.0.0.46 "]) {
+    assert.ok(classify("ssh_exec", { host, command: "hostname" })?.approve, host);
+    assert.ok(classify("ssh_exec", { host, user: "griffin", command: "id" })?.approve, host);
+  }
+  // A colleague's capsule as the read-only user stays free.
+  assert.equal(classify("ssh_exec", { host: "10.9.9.9", command: "docker ps" }), null);
+});

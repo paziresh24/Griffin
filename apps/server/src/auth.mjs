@@ -7,9 +7,9 @@ import { passkeyRoutes } from "./passkeys.mjs";
 import { newRecoveryCodes, newTotpSecret, otpauthUri, recoveryHash, totpMatch } from "./totp.mjs";
 
 const COOKIE = "griffin_session";
-// A sign-in lasts a day, counted from when it was made (owner 2026-10-25: «عمر لاگین 24 ساعت»):
-// a cookie copied off a device is dead by tomorrow. A passkey makes the daily sign-in one touch.
-const SESSION_MS = 24 * 3_600_000;
+// A sign-in lasts 14 days, counted from when it was made: a cookie copied off a device is dead within
+// two weeks, and «logout» / session_version still kill it at once. A passkey makes a fresh sign-in one touch.
+const SESSION_MS = 14 * 24 * 3_600_000;
 // A Karsara install moved onto Griffin keeps its kv (session_secret, session_version,
 // session_revoked), so its devices still hold a valid karsara_session: accepted within the same
 // lifetime and re-issued as Griffin's cookie on first use.

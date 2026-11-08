@@ -156,6 +156,13 @@ body {
    terms to LTR. Every block aligns to its dir; plain right/left (not `start`), so Streamdown's
    `text-left` on table headers loses on specificity. Never unicode-bidi:plaintext: it re-detects from
    the first strong char and flips English-leading Persian paragraphs back to LTR. */
+/* Streamdown's code block is content-visibility:auto with a 200px guess: each one the viewport reaches
+   drew at the guess, then shrank to its size, and the whole thread jumped on every chat opened. */
+.sd-block [data-streamdown="code-block"] {
+  content-visibility: visible !important; /* its own inline style */
+  contain-intrinsic-size: none !important;
+}
+
 .sd-block[dir="rtl"],
 .sd-block [dir="rtl"] {
   direction: rtl;
@@ -383,9 +390,12 @@ body {
   .pop[data-side="right"] { --pop-dx: -6px; --pop-dy: 0px; }
   .overlay { animation: fade-in 200ms ease-out; }
   .overlay[data-state="closed"] { animation: fade-out 150ms ease-in forwards; }
-  .msg-in { animation: msg-in 380ms cubic-bezier(0.16, 1, 0.3, 1); }
-  /* A chat comes in with a short fade and rise; the thread remounts per chat, so every switch plays it. */
-  .thread-in { animation: thread-in 260ms cubic-bezier(0.16, 1, 0.3, 1); }
+  /* A message arriving into the open thread (Thread.jsx useEntering): a fade, nothing moves. */
+  .msg-in { animation: fade-in 220ms ease-out; }
+  /* «در حال ارسال…» shows only if the send lasts. */
+  .g-send-state { animation: fade-in 200ms ease-out 700ms both; }
+  /* The box shrinks back after a send (and grows with the text) instead of snapping. */
+  .composer-box textarea { transition: height 160ms cubic-bezier(0.2, 0, 0, 1); }
   /* A list row or card that appears (an engine card moving between lists, a freshly loaded row). */
   .row-in { animation: thread-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 }
@@ -401,7 +411,6 @@ body {
 }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes fade-out { to { opacity: 0; } }
-@keyframes msg-in { from { opacity: 0; transform: translateY(8px); } }
 /* A card the board just opened (focus.js): a short ring, both skins. */
 .flash { border-radius: 10px; animation: flash 2.4s ease-out; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 55%, transparent); } 100% { box-shadow: 0 0 0 3px transparent; } }
@@ -518,7 +527,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .press, .pop, .pop[data-state="closed"], .overlay, .overlay[data-state="closed"], .msg-in, .thread-in, .row-in { animation: none; transition: none; }
+  .press, .pop, .pop[data-state="closed"], .overlay, .overlay[data-state="closed"], .msg-in, .g-send-state, .row-in { animation: none; transition: none; }
+  .composer-box textarea { transition: none; }
   .effort-thumb { transition: none; }
 }
 
@@ -1091,6 +1101,9 @@ html[dir="ltr"] .rtl-mirror { transform: scaleX(-1); }
 
 /* Phone widths: nothing in the thread wider than the screen; touch targets ≥ 44px. */
 @media (pointer: coarse) {
+  html:not([data-look="karsara"]) .g-icon-btn { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+  html:not([data-look="karsara"]) .g-sel-actions button { padding-block: 0.625rem; }
+  .g-msg-actions button { min-height: 36px; padding-inline: 0.375rem; }
   [data-look="karsara"] :is(.g-icon-btn, .g-send) { width: 44px; height: 44px; }
   [data-look="karsara"] :is(.g-chip, .g-pill) { position: relative; height: 36px; }
   [data-look="karsara"] :is(.g-pill, button.g-chip)::after { content: ""; position: absolute; inset: -4px 0; }
@@ -1315,7 +1328,7 @@ html:not([data-look="karsara"]) .g-repo-top:has([data-state="open"]) {
 .g-mini-zone[data-rest] { opacity: 0.4; }
 .g-mini-zone[data-rest]:hover { opacity: 0.75; }
 .g-mini-zone[data-on]::after { content: ""; position: absolute; inset: 2px; border: 2px solid var(--primary); border-radius: 0.625rem; pointer-events: none; }
-@media (min-width: 40rem) and (min-height: 44rem) {
+@media (min-width: 40rem) and (min-height: 56rem) {
   .g-mini-sticky { position: sticky; top: 0.5rem; z-index: 6; padding-block: 0.25rem; background: var(--background); }
 }
 .g-mini-side { display: flex; height: 100%; min-height: 19em; gap: 0.5em; padding: 0.7em; background: var(--card); }
@@ -1350,3 +1363,56 @@ html:not([data-look="karsara"]) .g-repo-top:has([data-state="open"]) {
 .g-mini-slider > span { position: absolute; inset-block: -0.15em; inset-inline-start: 1.2em; width: 0.8em; border-radius: 50%; background: var(--primary); }
 .g-mini-ring { width: 1.1em; height: 1.1em; flex-shrink: 0; border: 0.2em solid var(--muted); border-inline-start-color: var(--primary); border-radius: 50%; }
 .g-mini-caption { padding: 0.15em 0.6em; border-top: 1px solid var(--border); background: var(--card); color: var(--muted-foreground); font-size: 1.25em; text-align: center; }
+
+/* The chat's pane (ChatPane.jsx): a side chat inside it takes the pane's width, not its own. */
+.chat-pane .side-panel { width: auto; }
+.chat-plan-progress { appearance: none; display: block; width: 100%; height: 4px; border: 0; border-radius: 4px; background: var(--muted); overflow: hidden; }
+.chat-plan-progress::-webkit-progress-bar { background: var(--muted); }
+.chat-plan-progress::-webkit-progress-value { background: var(--primary); }
+.chat-plan-progress::-moz-progress-bar { background: var(--primary); }
+
+/* Selected text in the brand's colour (owner 2026-11-05: «انتخاب متن رنگشو هم بکن رنگ گریفین»). */
+::selection {
+  background: color-mix(in oklab, var(--primary) 38%, transparent);
+  color: inherit;
+}
+
+/* Rewind / edit under way (Thread.jsx UserMessage act): the messages it removes fade back until the
+   reloaded timeline drops them. */
+.g-rewinding ~ *,
+.g-rewinding-self .g-user-bubble {
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+/* The chat's work in progress (WorkFloat.jsx), in the empty margin at the end side of the thread: the
+   messages never move for it. Open only where that margin holds it; a pill otherwise. */
+.g-work-host { position: relative; container: work / inline-size; --thread-max: 64rem; }
+[data-look="karsara"] .g-work-host { --thread-max: 48rem; }
+.g-work-float { position: absolute; z-index: 20; top: 4rem; inset-inline-end: 0.75rem; display: flex; flex-direction: column; align-items: flex-end; max-height: calc(100% - 12rem); }
+.g-work-card { width: min(20rem, calc((100cqw - var(--thread-max)) / 2 - 1.5rem)); min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.375rem; border-radius: 1rem; border: 1px solid var(--border); background: color-mix(in oklch, var(--background) 88%, transparent); backdrop-filter: blur(8px); }
+.g-work-float.is-open .g-work-card { width: min(18rem, calc(100cqw - 1.5rem)); }
+.g-work-card > * { margin: 0 !important; }
+.g-work-pill { display: none; max-width: calc(100cqw - 1.5rem); }
+.g-work-float.is-compact:not(.is-open) .g-work-card { display: none; }
+.g-work-float.is-compact .g-work-pill { display: flex; }
+.g-work-float.is-open .g-work-pill { display: none; }
+/* The margin holds a 14rem card from (thread + 2 × 15.5rem) on. */
+@container work (max-width: 95rem) {
+  :root:not([data-look="karsara"]) .g-work-float:not(.is-open) .g-work-card { display: none; }
+  :root:not([data-look="karsara"]) .g-work-float:not(.is-open) .g-work-pill { display: flex; }
+}
+@container work (max-width: 79rem) {
+  [data-look="karsara"] .g-work-float:not(.is-open) .g-work-card { display: none; }
+  [data-look="karsara"] .g-work-float:not(.is-open) .g-work-pill { display: flex; }
+}
+/* No margin beside the messages for even the pill: it goes to the header instead of over them. */
+.g-work-pill-head { display: none; }
+@container work (max-width: 71rem) {
+  :root:not([data-look="karsara"]) .g-work-pill-head { display: flex; }
+  :root:not([data-look="karsara"]) .g-work-float:not(.is-open) .g-work-pill { display: none; }
+}
+@container work (max-width: 55rem) {
+  [data-look="karsara"] .g-work-pill-head { display: flex; }
+  [data-look="karsara"] .g-work-float:not(.is-open) .g-work-pill { display: none; }
+}

@@ -1,7 +1,7 @@
 import { ASK_TOOL } from "./asks.mjs";
-import { maskText, redactArgs } from "./redact.mjs";
+import { maskText, redactArgs, redactResult } from "./redact.mjs";
 import { OWNER, PERSONA } from "./persona.mjs";
-import { escalateReason } from "./handoff.mjs";
+import { escalateReason, POD_READ_HINT, podReadOnly } from "./handoff.mjs";
 
 // Code-level gate for irreversible tool calls. Applies to every run whose chain is not rooted
 // in the owner (teammate coverage, scheduler, ops room, and — later — external peers): the
@@ -126,6 +126,10 @@ export function fenceBackdoors(tools, { chatId, store = null, caller = "?" } = {
   return out;
 }
 
+// broker DEBUG_HOSTS by address (ssh_exec takes an address, debug_exec a name).
+// This install's own servers (GRIFFIN_OWN_HOSTS, comma-separated) and the sandbox aliases.
+const ownHosts = () => new Set(["griffin", "debug", "capsule", ...String(process.env.GRIFFIN_OWN_HOSTS || "").split(",").map((h) => h.trim()).filter(Boolean)]);
+
 // Changes to shared infrastructure that cannot be taken back by the agent itself.
 const NEEDS_APPROVAL = new Map([
   ["mikrotik_forward_add", "باز کردن پورت روی روتر"],
@@ -187,11 +191,19 @@ export function classify(name, args = {}) {
     if (isDestructiveShell(command)) return { block: "دستور مخرب (rm ریشه، mkfs، reboot …) اجازه ندارد" };
     if (isCredentialHunt(command)) return { block: "اسکن شبکه / امتحان کلید SSH / گشتن دنبال کریدنشیال اجازه ندارد" };
     if (OWNER_ROOT_TOKEN.test(command)) return { block: ROOT_TOKEN_REASON };
+    // Griffin's own servers (the app host .46, the debug node, the old capsule): the same question as
+    // debug_exec there, whoever the user (security audit 2026-10-29: ssh_exec to .46 was free while
+    // debug_exec host "griffin" asked).
+    const host = String(args?.host || "").trim().toLowerCase();
+    if (ownHosts().has(host)) return { approve: `اجرای دستور با SSH روی سرور خودِ گریفین (${host})` };
     // The user griffin is read-only by construction (no sudo but docker ps/logs, no write to anyone's
     // files), so asking added nothing. Another user asks.
     if (!args?.user || args.user === "griffin") return null;
     return { approve: `اجرای دستور با SSH روی ${args.user}@${args?.host || "?"}` };
   }
+  // A Kubernetes Secret's decoded value goes to the model (and its provider): never free outside the
+  // owner's own chats (security audit 2026-10-29); the owner's chats are not gated at all.
+  if (name === "kube_secret") return { approve: `خواندن مقدار secret ${args?.namespace || "?"}/${args?.name || "?"} روی ${args?.cluster || "?"}` };
   if (name === "gitlab_mr") return args?.action === "merge" ? { approve: "merge کردن MR" } : args?.action === "close" ? { approve: "بستن MR" } : null;
   if (name === "gitlab_pipeline") return args?.playJob || args?.retryFailed ? { approve: "اجرای job پایپ‌لاین" } : null;
   if (name === "infisical_machine_identity") {
@@ -284,7 +296,7 @@ const guardAsked = new Map(); // masked question -> askedAt
 // detail: the literal call (a shell command), shown folded under the question on the card.
 export async function confirmWithOwner(store, asks, chatId, question, { detail = null } = {}) {
   const safeDetail = detail ? maskText(String(detail)) : null;
-  const args = { question, options: [{ label: "بله" }, { label: "نه" }], ...(safeDetail ? { detail: safeDetail } : {}) };
+  const args = { question, options: [{ label: "بله" }, { label: "نه" }], via: "guard", ...(safeDetail ? { detail: safeDetail } : {}) };
   const callId = `guard-${Date.now()}`;
   // The question embeds a detail of the gated call — pg_query write SQL and
   // infisical_upsert values carry credentials, so the mirrored events get the same masking.
@@ -722,7 +734,13 @@ export function guardTools(tools, { chatId, asks, store = null, caller = "?", ex
         // A colleague's Telegram chain only reads (handoff.mjs): the write is refused with the way
         // to hand it to the owner's own chats, and nobody is asked per call.
         if (mode === "escalate") {
-          const reason = escalateReason(verdict.approve);
+          // A plain read inside a pod is how a cause gets found (handoff.mjs podReadOnly). Its output
+          // goes to a colleague's conversation, so it is masked here, not only in the timeline.
+          if (name === "kube_exec" && podReadOnly(args?.command)) {
+            store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "pod-read" });
+            return redactResult(name, await inner(args));
+          }
+          const reason = escalateReason(verdict.approve) + (name === "kube_exec" ? POD_READ_HINT : "");
           store?.recordApproval?.({ chatId, caller, tool: name, args: redactArgs(name, args), decision: "escalate", detail: verdict.approve });
           return refused(reason);
         }

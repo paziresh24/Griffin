@@ -116,8 +116,8 @@ function BackupsGroup() {
     <Group title={t("بکاپ گفتگوها")}>
       <Item
         icon={Archive}
-        title={s.enabled ? t("هر {hours} ساعت · {n} بکاپ نگه داشته شده", { hours: num(s.everyHours), n: num(s.files.length) }) : t("بکاپ خودکار خاموش است")}
-        subtitle={s.last && !s.last.ok ? t("آخرین: {newest} · خطا: {error}", { newest, error: s.last.error }) : t("آخرین: {newest}", { newest })}
+        title={s.enabled ? t("هر شب ساعت {hour} · {length} بکاپ نگه داشته شده", { hour: s.hour, length: s.files.length }) : t("بکاپ خودکار خاموش است")}
+        subtitle={t("آخرین: {newest}{v}", { newest, v: s.last && !s.last.ok ? t(" · خطا: {error}", { error: s.last.error }) : "" })}
         trailing={
           <button type="button" disabled={busy || s.running} onClick={now} className="g-pill press inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs">
             {busy || s.running ? <Loader2 className="size-3.5 animate-spin" /> : <Archive className="size-3.5" />} {t("بکاپ همین حالا")}

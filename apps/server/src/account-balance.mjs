@@ -54,3 +54,15 @@ export function balanceAccounts(list, { isPlain, usable, loadOf, placed = null }
   const pick = own && (load(own) < HIGH_LOAD || load(own) - load(roomiest) < MOVE_MARGIN) ? own : roomiest;
   return { list: [pick, ...list.filter((c) => c !== pick)], chosen: pick.provider };
 }
+
+/** For a one-shot (a title, the backlog draft, a reviewer): the usable plain account with the most room
+ *  left; equal loads keep the list's order. null = none usable. */
+export function roomiestAccount(ids, { usable, loadOf }) {
+  let best = null;
+  for (const id of ids) {
+    if (!usable(id)) continue;
+    const load = loadOf(id) ?? UNKNOWN_LOAD;
+    if (!best || load < best.load) best = { id, load };
+  }
+  return best?.id ?? null;
+}

@@ -1366,8 +1366,10 @@ export async function accountProfileOf(channels) {
 // Tools that stop and wait for the owner, as a question a messenger can show.
 export function questionFromEvent(event) {
   if (event.type !== "ask.pending") return null;
-  const { question, options, multiSelect, audience, askId } = event.data || {};
-  return question ? { question, options, multiSelect, audience: audience === REQUESTER ? REQUESTER : OWNER, ...(askId ? { askId } : {}) } : null;
+  const { question, options, multiSelect, audience, askId, detail, via } = event.data || {};
+  // A guard's detail is the literal call, for the card only; an agent's is what the owner must see to decide.
+  const shown = detail && !via && audience !== REQUESTER ? `${question}\n\n${String(detail).slice(0, 3000)}` : question;
+  return question ? { question: shown, options, multiSelect, audience: audience === REQUESTER ? REQUESTER : OWNER, ...(askId ? { askId } : {}) } : null;
 }
 
 // fillNames(ids): fa-names.mjs for those persons, in the background (index.mjs).

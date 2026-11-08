@@ -254,7 +254,7 @@ function NoteItem({ note, now, working, onNavigate }) {
   const saveText = () => guard(notesStore.update(note.id, { text: draft }).then(() => setEditing(false)));
   const setTime = (atMs) => guard(notesStore.update(note.id, { runAt: atMs ? new Date(atMs).toISOString() : null }).then(() => setTimeOpen(false)));
   const remove = async () => {
-    if ((await askConfirm(t("این یادداشت حذف شود؟")))) guard(notesStore.remove(note.id));
+    if ((await askConfirm(t("این یادداشت حذف شود؟"), { danger: true, yes: t("حذف") }))) guard(notesStore.remove(note.id));
   };
   return (
     <li className={`g-note-item rounded-lg border px-2.5 py-1.5 ${open ? "bg-muted/50" : ""}`} data-open={open ? "true" : undefined}>

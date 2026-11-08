@@ -16,6 +16,26 @@ export function readChatsCache(storage = globalThis.localStorage) {
   }
 }
 
+// A reloaded list with what did not change kept as the same objects (and the same array when nothing
+// changed), so memoized rows skip their redraw: with hundreds of chats that redraw held the page for
+// 100-300 ms on every list event, while the owner typed or scrolled.
+const rowText = new WeakMap();
+const textOf = (row) => {
+  if (!rowText.has(row)) rowText.set(row, JSON.stringify(row));
+  return rowText.get(row);
+};
+export function keepSameRows(before, after) {
+  const was = new Map(before.map((row) => [row.id, row]));
+  let same = before.length === after.length;
+  const rows = after.map((row, i) => {
+    const old = was.get(row.id);
+    const kept = old && textOf(old) === textOf(row) ? old : row;
+    if (kept !== before[i]) same = false;
+    return kept;
+  });
+  return same ? before : rows;
+}
+
 // looseAt: where «بدون گروه» sits among the groups (drag.js); undefined keeps the cached one.
 export function writeChatsCache(chats, groups, storage = globalThis.localStorage, looseAt) {
   try {

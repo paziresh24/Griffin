@@ -93,5 +93,22 @@
   "برگشت گفتگو": "Rewind conversation",
   "فقط فایل‌ها": "Files only",
   "آپلود فایل": "File upload",
-  "{fa}٪": "{fa}%"
+  "{fa}٪": "{fa}%",
+  "کپی کد": "Copy code",
+  "کپی جدول": "Copy table",
+  "کپی جدول به‌صورت CSV": "Copy table as CSV",
+  "کپی جدول به‌صورت Markdown": "Copy table as Markdown",
+  "کپی جدول به‌صورت TSV": "Copy table as TSV",
+  "دانلود جدول": "Download table",
+  "دانلود جدول به‌صورت CSV": "Download table as CSV",
+  "دانلود جدول به‌صورت Markdown": "Download table as Markdown",
+  "تمام‌صفحه": "Fullscreen",
+  "خروج از تمام‌صفحه": "Exit fullscreen",
+  "این پیام را سیستم برای ایجنت فرستاده، نه شما": "The system sent this to the agent, not you",
+  "در صف ماند تا آن ایجنت برگشت": "Waited in the queue until that agent was back",
+  "هنوز در کار: {v}": "Still working: {v}",
+  "باز کردن گفتگوی ساخت": "Open the build chat",
+  "متن کامل برای ایجنت": "Full text sent to the agent",
+  "در حال ارسال…": "Sending…",
+  "در حال برگشت به اینجا…": "Going back to here…"
 }

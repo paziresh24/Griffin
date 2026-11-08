@@ -193,7 +193,8 @@ export function UsageRing({ chatId, running }) {
             <circle cx="8" cy="8" r="6" />
             <circle cx="8" cy="8" r="6" data-fill="" strokeDasharray={`${(percent / 100) * circumference} ${circumference}`} />
           </svg>
-          {hasContext ? <span className="text-[11px] tabular-nums">{t("{fa}٪", { fa: fa(percent) })}</span> : null}
+          {/* Its place from the start: the model's name beside it does not shift when the number arrives. */}
+          {chatId ? <span className="inline-block w-7 text-start text-[11px] tabular-nums">{hasContext ? t("{fa}٪", { fa: fa(percent) }) : ""}</span> : null}
           {worst && level(worst.pct) !== "ok" ? <span className="kc-usage-dot" data-level={level(worst.pct)} aria-hidden /> : null}
         </button>
       </Popover.Trigger>

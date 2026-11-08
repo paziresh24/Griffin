@@ -5,7 +5,8 @@
 export const DEFAULT_MODEL = "sonnet";
 export const DEFAULT_EFFORT = "medium";
 
-const bare = (id) => String(id || "").replace(/^(?:cursor|claude|openai)(?:-[a-z0-9]{1,24})?:/, "");
+const ACCOUNT = /^(?:cursor|claude|openai)(?:-[a-z0-9]{1,24})?:/;
+const bare = (id) => String(id || "").replace(ACCOUNT, "");
 
 // Anything on the Claude side that is not Sonnet or Haiku costs more of the plan than the default.
 export function isHeavyModel(id) {
@@ -34,4 +35,12 @@ export function clampCandidate(candidate, ok = {}) {
   if (isHeavyModel(model) && !ok.model) model = DEFAULT_MODEL;
   if (!effort || (isHeavyEffort(effort) && !ok.effort)) effort = DEFAULT_EFFORT;
   return { ...candidate, model, effort };
+}
+
+// What a chat's picker shows: the same clamp the run goes through, so the two can never differ (a
+// chat pinned on Opus before this policy said Opus while it ran Sonnet, 2026-11-02 to 11-04).
+export function shownChoice({ model, effort }, ok = {}) {
+  const run = clampCandidate({ model, effort }, ok);
+  const account = run.model === model ? "" : String(model || "").match(ACCOUNT)?.[0] || "";
+  return { model: run.model ? account + run.model : run.model, effort: run.effort };
 }

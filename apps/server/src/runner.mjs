@@ -6,6 +6,7 @@ import { inertText, maskText } from "./redact.mjs";
 import { fileMeta, forEngine, isInline, keepOnDisk, mergeMessages, toSdkMessage } from "./attachments.mjs";
 import { ASK_TOOL } from "./asks.mjs";
 import { rootCallerOf } from "./agents/profiles.mjs";
+import { explainEgress } from "./egress-down.mjs";
 import { colleagueCaller } from "./colleague-access.mjs";
 import { UPGRADE_TOOL, upgradeNote } from "./model-upgrade.mjs";
 import { accountMoveNote, doneTools, droppedNote, ENGINE_UNAVAILABLE, resetFromText, FALLBACK_KEY, FALLBACK_OFFERS_KEY, fallbackNote, fallbackQuestion, saidWait, saidYes, storableMessage, withLeadNote } from "./plan-fallback.mjs";
@@ -178,6 +179,8 @@ export function createRunner({
   // notResumable(chat) -> true for a chat nobody waits on after a restart (a consult: the call
   // that waited for its answer is gone), so a cut or crashed run there is not continued.
   notResumable = () => false,
+  // shellHeld(chat) -> true while the chat holds someone else's words (no Claude Code shell, index.mjs).
+  shellHeld = () => false,
   // model-upgrade.mjs createUpgrades(): a colleague's chat on the light model that asked for the
   // stronger one goes on in the same run on it. null = never.
   upgrades = null,
@@ -729,7 +732,7 @@ export function createRunner({
     const root = chat?.parent_chat_id ? rootCallerOf(store, chat) : chat?.caller;
     return colleagueCaller(root) ? "agent" : chat?.mode || "agent";
   };
-  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}`;
+  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}|${Boolean(shellHeld(chat))}`;
   const liveAgent = (chatId) => {
     const chat = store.getChat(chatId);
     return bgAgents.get(chatId) || (chat?.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null) || null;
@@ -937,6 +940,8 @@ export function createRunner({
         result = await goOn(claim.nudge, same);
       }
       status = normalizeStatus(result.status, entry.cancelRequested);
+      // A dead VPN is worded as a dead VPN, not as a refused login (and its account stays in routing).
+      if (status === "error" && result.error && !entry.produced) result = { ...result, error: await explainEgress(result.error, { provider: entry.provider }) };
       if (status === "error") error = result.error?.message || "run failed";
       const limitCode = result.error?.code;
       const asking = status === "error" && askFallback(store.getChat(chatId));

@@ -49,10 +49,11 @@ export function WorkbenchPage({ onBack }) {
   );
 }
 
-function Terminal() {
-  const [lines, setLines] = useState([{ kind: "info", text: t("ترمینال sandbox. یک دستور بنویس و Enter بزن.") }]);
+// path: where a command runs. A chat's own folder (ChatPane.jsx) starts with no cwd: the server starts it there.
+export function Terminal({ path = "/api/sandbox/exec", startCwd = "/root", intro = null }) {
+  const [lines, setLines] = useState([{ kind: "info", text: intro || t("ترمینال sandbox. یک دستور بنویس و Enter بزن.") }]);
   const [cmd, setCmd] = useState("");
-  const [cwd, setCwd] = useState("/root");
+  const [cwd, setCwd] = useState(startCwd);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState([]);
   const [hi, setHi] = useState(-1);
@@ -69,7 +70,7 @@ function Terminal() {
     setBusy(true);
     try {
       // Track cwd across commands: run the command then print the resulting directory.
-      const r = await api("/api/sandbox/exec", { method: "POST", body: { command: `${command}\nprintf '\\n__CWD__%s' "$(pwd)"`, cwd } });
+      const r = await api(path, { method: "POST", body: { command: `${command}\nprintf '\\n__CWD__%s' "$(pwd)"`, cwd } });
       const out = (r.stdout || "");
       const m = out.lastIndexOf("__CWD__");
       const body = m >= 0 ? out.slice(0, m).replace(/\n$/, "") : out;

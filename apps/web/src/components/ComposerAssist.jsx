@@ -4,14 +4,13 @@ import { AtSign, Bot, ChevronDown, GitFork, MessagesSquare, RefreshCw, Sparkles,
 import { insertMention, mentionHandle, mentionQuery, mentionSpans } from "@griffin/timeline";
 import { Popover } from "radix-ui";
 import { toast } from "sonner";
-import { api, navigate } from "../api.js";
+import { api, listedChats, navigate } from "../api.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import {
   acceptsNextStep, dismissNextStep, enterPicks, fastNote, filterCommands, forkRunId, isClearCommand, moveIndex, nextStepReturnsOn, pickCommand, shownNextStep, slashQuery,
 } from "../assist.js";
 import { isRtl, locale, t } from "../i18n.js";
 import { MENU } from "./Controls.jsx";
-import { readChatsCache } from "../chats-cache.js";
 import { SECTION, mentionRows, ownAgents, recentChats } from "../mention-pick.js";
 import { MentionText } from "./Mention.jsx";
 
@@ -72,8 +71,11 @@ function useMentionables() {
 // is a chip; a half-typed «@so» is not. Kept on the textarea's box: size, font, padding and scroll.
 const MIRRORED = ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "paddingTop", "paddingBottom", "paddingInlineStart", "paddingInlineEnd", "direction", "textAlign"];
 export function MentionBackdrop({ inputRef }) {
-  const chat = useContext(ChatRecord);
   const { value: text } = unstable_useComposerInput();
+  return <MentionBackdropText inputRef={inputRef} text={text} />;
+}
+export function MentionBackdropText({ inputRef, text }) {
+  const chat = useContext(ChatRecord);
   const sources = useMentionables();
   const ref = useRef(null);
   const agents = [...ownAgents(sources.profiles, chat?.agent), ...sources.network];
@@ -97,6 +99,9 @@ export function MentionBackdrop({ inputRef }) {
     sync();
     const ro = new ResizeObserver(sync);
     ro.observe(input);
+    // The «@» list closing above it moves the box without resizing it: the chips must follow, or they
+    // stay where it was, stretch the page and leave the composer floating (found by a user walk 2026-11-05).
+    if (input.offsetParent) ro.observe(input.offsetParent);
     input.addEventListener("scroll", sync);
     return () => {
       ro.disconnect();
@@ -108,6 +113,100 @@ export function MentionBackdrop({ inputRef }) {
     <div ref={ref} aria-hidden="true" className="g-mention-backdrop pointer-events-none absolute z-0 overflow-hidden whitespace-pre-wrap break-words text-transparent">
       <MentionText text={text} handles={handles} />
       {"\u200b"}
+    </div>
+  );
+}
+
+// «@» on any box: what it offers for the text before the caret, and its keys. The composer and the
+// reply/new-chat box (SelectionActions, QuoteChip) share it. onKey says true when the key was the list's.
+export function useMentionPicker({ inputRef, text, setText, chatId = null, chatAgent = null, off = false }) {
+  const sources = useMentionables();
+  const [index, setIndex] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState(null);
+  const caret = inputRef.current?.selectionStart ?? String(text || "").length;
+  const at = off ? null : mentionQuery(text, caret);
+  const own = ownAgents(sources.profiles, chatAgent);
+  const agents = [...own, ...sources.network]; // every taggable agent: the handles' twin rule reads them all
+  const rows = at && at.start !== dismissedAt ? mentionRows({ own, network: sources.network, chats: recentChats(listedChats(), chatId), query: at.query }) : [];
+  useEffect(() => setIndex(0), [at?.query]);
+  useEffect(() => {
+    if (!at) setDismissedAt(null);
+  }, [at?.start]);
+  const tag = (agent) => {
+    const input = inputRef.current;
+    const out = insertMention(text, input?.selectionStart ?? String(text || "").length, agent, agents);
+    setText(out.text);
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange?.(out.caret, out.caret);
+    });
+  };
+  const onKey = (e) => {
+    if (!rows.length) return false;
+    const stop = () => {
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
+    };
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      setIndex(moveIndex(index, rows.length, e.key === "ArrowDown" ? 1 : -1));
+      return stop();
+    }
+    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+      tag(rows[index] || rows[0]);
+      return stop();
+    }
+    if (e.key === "Escape") {
+      setDismissedAt(at?.start ?? null);
+      return stop();
+    }
+    return false;
+  };
+  return { rows, index, agents, tag, onKey };
+}
+
+export function MentionList({ picker }) {
+  const { rows, index, agents, tag } = picker;
+  const listRef = useRef(null);
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [index]);
+  if (!rows.length) return null;
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card text-xs">
+      <ul ref={listRef} role="listbox" aria-label={t("تگ با @")} className="scrollbar-thin max-h-72 overflow-y-auto pb-1">
+        {rows.map((a, i) => {
+          const kind = a.kind || "network";
+          const heading = i === 0 || (rows[i - 1].kind || "network") !== kind;
+          return (
+            <li key={`${kind}:${a.id}`} role="option" aria-selected={i === index}>
+              {heading ? (
+                <p className={`flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] text-muted-foreground ${i ? "mt-1 border-t" : ""}`}>
+                  <AtSign className="size-3 shrink-0" />
+                  {SECTION[kind]}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => tag(a)}
+                className={`flex w-full items-center gap-2 px-3 py-1.5 text-start ${i === index ? "bg-muted" : "hover:bg-muted/60"}`}
+              >
+                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-medium text-primary">
+                  {kind === "chat" ? <MessagesSquare className="size-3.5" /> : kind === "agent" ? <Bot className="size-3.5" /> : (a.name || "?").slice(0, 1)}
+                </span>
+                <span className="min-w-0 flex-1 truncate" dir="auto">
+                  <span className="font-medium text-foreground">{a.name}</span>
+                  {kind === "network" && a.owner ? <span className="text-muted-foreground"> {t("· ایجنتِ {owner}", { owner: a.owner })}</span> : null}
+                  {kind === "agent" && a.domain ? <span className="text-muted-foreground"> · {a.domain}</span> : null}
+                  {kind === "chat" && a.runStatus === "running" ? <span className="text-muted-foreground"> {t("· در حال کار")}</span> : null}
+                </span>
+                {kind === "chat" ? null : <span className="shrink-0 text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}</span>}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -140,21 +239,12 @@ export function ComposerAssist({ inputRef, next = null }) {
   const list = query == null ? [] : filterCommands(info?.commands || [], query);
   // «@» tags our own agents, the colleagues' agents and the owner's recent chats (owner 2026-10-20): the
   // server tells the chat's agent to work with them here (mention-pick.js, mentions.mjs).
-  const sources = useMentionables();
-  const caret = inputRef.current?.selectionStart ?? String(text || "").length;
-  const at = !list.length ? mentionQuery(text, caret) : null;
-  const [dismissedAt, setDismissedAt] = useState(null);
-  const own = ownAgents(sources.profiles, chat?.agent);
-  const agents = [...own, ...sources.network]; // every taggable agent: the handles' twin rule reads them all
-  const mentions = at && at.start !== dismissedAt ? mentionRows({ own, network: sources.network, chats: recentChats(readChatsCache()?.chats, chatId), query: at.query }) : [];
+  const picker = useMentionPicker({ inputRef, text, setText, chatId, chatAgent: chat?.agent, off: list.length > 0 });
 
   useEffect(() => {
     setIndex(0);
     setMoved(false);
-  }, [query, at?.query]);
-  useEffect(() => {
-    if (!at) setDismissedAt(null);
-  }, [at?.start]);
+  }, [query]);
 
   const choose = (command) => {
     if (command.local && command.name === "clear") {
@@ -163,17 +253,8 @@ export function ComposerAssist({ inputRef, next = null }) {
     } else setText(pickCommand(command));
     inputRef.current?.focus();
   };
-  const tag = (agent) => {
-    const input = inputRef.current;
-    const out = insertMention(text, input?.selectionStart ?? String(text || "").length, agent, agents);
-    setText(out.text);
-    requestAnimationFrame(() => {
-      input?.focus();
-      input?.setSelectionRange?.(out.caret, out.caret);
-    });
-  };
   const state = useRef(null);
-  state.current = { list, index, moved, query, next, text, choose, mentions, tag, at };
+  state.current = { list, index, moved, query, next, text, choose, picker };
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return undefined;
@@ -198,23 +279,7 @@ export function ComposerAssist({ inputRef, next = null }) {
           return;
         }
       }
-      if (s.mentions.length) {
-        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          stop(e);
-          setIndex(moveIndex(s.index, s.mentions.length, e.key === "ArrowDown" ? 1 : -1));
-          return;
-        }
-        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-          stop(e);
-          s.tag(s.mentions[s.index] || s.mentions[0]);
-          return;
-        }
-        if (e.key === "Escape") {
-          stop(e);
-          setDismissedAt(s.at?.start ?? null);
-          return;
-        }
-      }
+      if (s.picker.onKey(e)) return;
       if (e.key === "Enter" && !e.shiftKey && isClearCommand(s.text)) {
         stop(e);
         setText("");
@@ -234,7 +299,7 @@ export function ComposerAssist({ inputRef, next = null }) {
   const cancelResume = () => api(`/api/chats/${chat.id}/limit-resume`, { method: "DELETE" }).catch((e) => toast.error(e.message));
   const resumeShown = Boolean(chat?.limitResumeAt) && !headerResume;
   const nextShown = next && !ghost;
-  if (!list.length && !mentions.length && !nextShown && !resumeShown) return null;
+  if (!list.length && !picker.rows.length && !nextShown && !resumeShown) return null;
 
   return (
     <div className="flex flex-col gap-1 px-2 pt-2 text-xs">
@@ -256,43 +321,7 @@ export function ComposerAssist({ inputRef, next = null }) {
           ))}
         </ul>
       ) : null}
-      {mentions.length ? (
-        <div className="overflow-hidden rounded-lg border bg-card">
-          <ul role="listbox" aria-label={t("تگ با @")} className="scrollbar-thin max-h-72 overflow-y-auto pb-1">
-            {mentions.map((a, i) => {
-              const kind = a.kind || "network";
-              const heading = i === 0 || (mentions[i - 1].kind || "network") !== kind;
-              return (
-                <li key={`${kind}:${a.id}`} role="option" aria-selected={i === index}>
-                  {heading ? (
-                    <p className={`flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] text-muted-foreground ${i ? "mt-1 border-t" : ""}`}>
-                      <AtSign className="size-3 shrink-0" />
-                      {SECTION[kind]}
-                    </p>
-                  ) : null}
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => tag(a)}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-start ${i === index ? "bg-muted" : "hover:bg-muted/60"}`}
-                  >
-                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-medium text-primary">
-                      {kind === "chat" ? <MessagesSquare className="size-3.5" /> : kind === "agent" ? <Bot className="size-3.5" /> : (a.name || "?").slice(0, 1)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate" dir="auto">
-                      <span className="font-medium text-foreground">{a.name}</span>
-                      {kind === "network" && a.owner ? <span className="text-muted-foreground"> {t("· ایجنتِ {owner}", { owner: a.owner })}</span> : null}
-                      {kind === "agent" && a.domain ? <span className="text-muted-foreground"> · {a.domain}</span> : null}
-                      {kind === "chat" && a.runStatus === "running" ? <span className="text-muted-foreground"> {t("· در حال کار")}</span> : null}
-                    </span>
-                    {kind === "chat" ? null : <span className="shrink-0 text-muted-foreground" dir="auto">@{mentionHandle(a, agents)}</span>}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
+      <MentionList picker={picker} />
       {resumeShown ? (
         <div className="flex items-center gap-2 rounded-lg bg-muted/60 ps-2 text-muted-foreground">
           <RefreshCw className="size-3.5 shrink-0" />

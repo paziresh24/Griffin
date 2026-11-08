@@ -1,5 +1,8 @@
 // First: a fresh install is named before persona.mjs and the agent registry read the name.
 import "./first-name.mjs";
+// Before any dependency can call process.report.getReport() (synchronous reverse DNS per socket).
+import "./report-no-dns.mjs";
+import { cpuProfile, recentStalls } from "./stall.mjs";
 import { egressDown, installCursorEgress, removeCursorEgress } from "./egress.mjs";
 import fs from "node:fs";
 import http from "node:http";
@@ -12,12 +15,12 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp } from "./app.mjs";
 import { createDualServer, loadTls, parseTrustedProxies } from "./listen.mjs";
 import { ASK_REQUESTER_TOOL, ASK_TOOL, createAsks } from "./asks.mjs";
-import { ownerClaim, ownerReached, trackOwnerReach, unbackedAnswerNudge } from "./owner-reach.mjs";
+import { ownerClaim, ownerReached, trackOwnerReach, unaskedWaitNudge, unbackedAnswerNudge, waitingOnOwner } from "./owner-reach.mjs";
 import { ASK_AGENT_TOOL, CONSULT_TOOL, DELEGATE_TOOL, SUBTASKS_TOOL, CONSULT_MAX_TURNS, CONSULT_WITHHELD, consultCandidates, consultOf, createPeers, resolveConsultAccounts } from "./peers.mjs";
 import { approvePendingNotes, createKnowledge, deleteNote, knowledgeAutoApprove, editNote, listAgentNotes, listTrash, purgeNote, playbookIndex, readAudit, restoreNote, reviewedRunbooks, setNoteReviewed } from "./knowledge.mjs";
 import { createChatTrust } from "./knowledge-trust.mjs";
 import { createOwnerExecTrust, markOwnerExec } from "./owner-exec.mjs";
-import { brokerPaths, claudeCodeOptions, createOwnerJobs, jobWriterOf, migrateJobModes, OWNER_JOBS_FLAG, runAccess } from "./jobs/owner-jobs.mjs";
+import { brokerPaths, claudeCodeOptions, createOwnerJobs, jobWriterOf, migrateJobModes, OWNER_JOBS_FLAG, freeShell, runAccess } from "./jobs/owner-jobs.mjs";
 import { createVisualizer, VISUALIZE_TOOL } from "./charts.mjs";
 import { createShowMedia, SHOW_MEDIA_TOOL } from "./media.mjs";
 import { createPreviews, localExec, previewRunsLocal } from "./previews.mjs";
@@ -42,7 +45,8 @@ import { engineState, isCreditError, probeVerdict, rankByState, sameModelNames }
 import { archiveIdleChats } from "./idle-archive.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler, STUCK_TITLE } from "./titles.mjs";
-import { accountLoad, balanceAccounts } from "./account-balance.mjs";
+import { accountLoad, balanceAccounts, roomiestAccount } from "./account-balance.mjs";
+import { createAccountLoads } from "./account-load.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
 import { STT_DEFAULTS, sttRoutes } from "./stt.mjs";
 import { hasLiveBorrower, treeBorrowers, treeOwnerId, treeToRelease } from "./tree-borrowers.mjs";
@@ -56,7 +60,7 @@ import { createJobTools } from "./jobs/tools.mjs";
 import { accountHistory, createAccountTools, parseProxy } from "./integrations/telegram-account.mjs";
 import { COVERAGE_CALLER, END_AGENT_TOOL, coverageOwnerNote, createEndAgentTool, guardTeamTools } from "./integrations/coverage.mjs";
 import { watchHandoffs } from "./handoff.mjs";
-import { colleagueCaller, FULL_ACCESS_TOOL, fullAccess, fullAccessNote, fullAccessTool } from "./colleague-access.mjs";
+import { colleagueCaller, FULL_ACCESS_TOOL, fullAccess, fullAccessNote, fullAccessTool, OWNER_CHAT_TOOL, ownerChatTool, SHELL_HELD_NOTE, SHELL_TOOL, shellTool } from "./colleague-access.mjs";
 import { createMotherTools, globalContext, isGlobalChat, motherContext, motherInfo, watchJoinedThreads } from "./integrations/mother.mjs";
 import { deliverable } from "./integrations/format.mjs";
 import { fillPersianNames } from "./integrations/fa-names.mjs";
@@ -75,6 +79,8 @@ import { TELEGRAM_LEDGER_CONFIG, ledgerRecorder, ledgerTools } from "./telegram-
 import { watchListTools } from "./integrations/telegram-watch-list.mjs";
 import { INBOX_PROMPT, createInbox, createInboxTools, dmMode, inboxRoutes, restrictForInbox } from "./telegram-inbox.mjs";
 import { TELEGRAM_BOT_API_CONFIG } from "./integrations/bots.mjs";
+import { PLAN_TOOL, chatPlanRoutes, chatPlanTool, offersPlan, planLine } from "./chat-plan.mjs";
+import { chatChanges, chatFileDiff, chatTerminalRun } from "./chat-changes.mjs";
 import { OWNER_TASK_TOOL, TODO_TOOL, offersOwnerTask, openChoresLine, ownerTaskTool, todoWriteTool, watchTodos } from "./todos.mjs";
 import { inboxTool } from "./inbox.mjs";
 import { claudeOneShot, claudeCodeLoginKey, resolveModel, runsFree } from "./providers/claude.mjs";
@@ -99,6 +105,7 @@ import { createIncidentStore, createIntake, incidentBucket, incidentView, isTeam
 import { createIncidentTools, createOpsRoom, formatChange } from "./incidents/opsroom.mjs";
 import { ADDABLE_KINDS, createCollector, createSourceStore, parseAlertText, SOURCE_KINDS, sourceView, testSource, webhookItems } from "./incidents/sources.mjs";
 import { createSourceTools, INCIDENT_SUGGEST } from "./incidents/tools.mjs";
+import { startSuggestedChat } from "./suggest-start.mjs";
 import { createBusinessSource } from "./incidents/business.mjs";
 import { bindChatTools, createAgentSettingsTools } from "./agents/settings-tools.mjs";
 import { createCustomAgent, customCallers, MAX_INSTRUCTIONS } from "./agents/create.mjs";
@@ -464,22 +471,37 @@ function changeReviewers() {
   }
   return reviewers;
 }
-// The first Claude account that can answer now (enabled, keyed, not at its plan limit, not out of
-// credit), base account first — not always the base one: «claude» out of credit left both reviewers
-// dead (2026-10-20) and every title and changelog translation failing on 8 installs (2026-10-21).
-function quickClaude() {
-  const id = accounts().find((a) => a.kind === PROVIDER_CLAUDE && !claudeEndpoint(a.id) && usableAccount(a.id))?.id;
+// The Claude account that can answer now (enabled, keyed, not at its plan limit, not out of credit, login
+// not refused) with the most room left, as chats pick theirs (account-balance.mjs) — not the first in the
+// list: «claude» out of credit left both reviewers dead (2026-10-20), and the first account took every
+// title and draft while others sat empty (2026-11-04). ACCOUNT_BALANCE=off keeps the fixed order.
+function quickClaude(skip = new Set()) {
+  const ids = accounts().filter((a) => plainClaude(a.id) && !skip.has(a.id)).map((a) => a.id);
+  const id = genv("ACCOUNT_BALANCE", "on") === "off" ? ids.find(usableAccount) : roomiestAccount(ids, { usable: usableAccount, loadOf: claudeLoad });
   const key = id ? providerKey(id) : "";
   return key ? { id, key } : null;
 }
+// A refused login or no credit marks the account (as a chat run does) and the same question goes to the
+// next usable account; only when none answers does it fail, in words a person can read. The raw CLI
+// line («OAuth session expired…») stays in the log (a colleague 2026-11-04: the backlog draft showed it).
+const NO_QUICK_CLAUDE = "حساب Claude این نصب الان جواب نمی‌دهد (ورودش منقضی شده یا اعتبارش تمام است)؛ از صفحهٔ موتورها دوباره وارد شوید.";
 async function claudeQuick(prompt, model) {
-  const account = quickClaude();
-  if (!account) throw new Error("no Claude account can answer now");
-  return claudeOneShot({ apiKey: account.key, model, prompt }).catch((error) => {
-    // Out of credit: remember it so the next one-shot picks another account.
-    if (/credit balance/i.test(String(error?.message))) store.setKv(`credit:${account.id}`, String(Date.now()));
-    throw error;
-  });
+  const tried = new Set();
+  let last = null;
+  for (let account = quickClaude(); account; account = quickClaude(tried)) {
+    tried.add(account.id);
+    try {
+      return await claudeOneShot({ apiKey: account.key, model, prompt });
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (error?.code === "auth_failed") store.setKv(`auth:${account.id}`, Date.now());
+      else if (/credit balance/i.test(message)) store.setKv(`credit:${account.id}`, String(Date.now()));
+      else throw error;
+      console.error(`[${account.id}] one-shot refused (${message}) — next account`);
+      last = error;
+    }
+  }
+  throw Object.assign(new Error(NO_QUICK_CLAUDE), last ? { cause: last } : {});
 }
 // Folded timelines in memory: opening a chat, titling it and delivering its answer read only new events.
 const timelines = createTimelineCache({ store });
@@ -829,8 +851,20 @@ function balancedCandidates(chat) {
   const list = modelCandidates(chat);
   if (genv("ACCOUNT_BALANCE", "on") === "off") return list;
   const placed = chat?.id ? store.lastRunProvider(chat.id) : null;
-  return balanceAccounts(list, { isPlain: plainClaude, usable: usableAccount, loadOf: (id) => accountLoad(providers[id]?.lastWindows?.()), placed }).list;
+  return balanceAccounts(list, { isPlain: plainClaude, usable: usableAccount, loadOf: claudeLoad, placed }).list;
 }
+// How full each plain Claude account is (account-load.mjs): its last run's windows, or a plan reading
+// every 15 minutes (no tokens), whichever is newer — so a restart does not leave every account unknown.
+const accountLoads = createAccountLoads({
+  ids: () => accounts().filter((a) => plainClaude(a.id) && usableAccount(a.id)).map((a) => a.id),
+  fetchUsage: (id) => providers[id]?.planUsage?.() ?? null,
+  runLoad: (id) => accountLoad(providers[id]?.lastWindows?.()),
+  runAt: (id) => providers[id]?.lastWindowsAt?.() || 0,
+});
+function claudeLoad(id) {
+  return accountLoads.loadOf(id);
+}
+if (genv("DEMO") !== "1" && genv("ACCOUNT_BALANCE", "on") !== "off") accountLoads.start();
 function routeModel(chat) {
   const ask = asksBeforeSwitch(chat);
   const list = ask ? balancedCandidates(chat) : rankByState(balancedCandidates(chat), stateOf);
@@ -933,10 +967,16 @@ const runner = createRunner({
   followThrough: (chat) => !chat.side_of && !chat.job_id && !chat.parent_chat_id && chat.caller === "owner",
   // The answer a colleague's agent (or a colleague's thread) receives may not say the owner was told,
   // or leave a decision with him, unless this conversation reached him (owner-reach.mjs). A mother
-  // chat's text is a report to him, never sent: its send_to_person is checked instead (desk.mjs).
+  // chat's text is a report to him, never sent: its send_to_person is checked instead (desk.mjs), and
+  // a report that says «منتظر شما» goes on once to really ask him (2026-11-04: 107 of 126 turns of one
+  // chat ended on it, and it waits there unread).
   ownerClaimCheck: (chat, tail) => {
     if (chat.parent_chat_id || chat.side_of || !(isPeerCaller(chat.caller) || chat.caller === COVERAGE_CALLER)) return null;
-    if (chat.caller === COVERAGE_CALLER && motherInfo(store, chat.id)) return null;
+    if (chat.caller === COVERAGE_CALLER && motherInfo(store, chat.id)) {
+      const waiting = waitingOnOwner(tail);
+      if (!waiting || ownerReached(store, chat.id)) return null;
+      return { nudge: unaskedWaitNudge(waiting), note: `گزارش می‌گفت «${waiting}» ولی چیزی به ${OWNER.nameFa} نرسیده بود؛ یک بار دیگر راهش انداختم تا بپرسد یا آن را بردارد.` };
+    }
     const phrase = ownerClaim(tail);
     if (!phrase || ownerReached(store, chat.id)) return null;
     return { nudge: unbackedAnswerNudge(phrase), note: `جواب می‌گفت «${phrase}» ولی چیزی به ${OWNER.nameFa} نرسیده بود؛ یک بار دیگر راهش انداختم تا بپرسد یا آن جمله را بردارد.` };
@@ -951,7 +991,7 @@ const runner = createRunner({
     }
     return (peersHolder.current?.pendingDelegates(chatId) || 0) + viaNetwork;
   },
-  annotate: (chatId) => [integrationsHolder.current?.desk?.annotate(chatId), openChoresLine(store, chatId)].filter(Boolean).join("\n") || null,
+  annotate: (chatId) => [integrationsHolder.current?.desk?.annotate(chatId), openChoresLine(store, chatId), planLine(store, chatId)].filter(Boolean).join("\n") || null,
   onFinished: (chatId) => {
     maybeTitle(chatId);
     tasksHolder.current?.sweep().catch(() => {});
@@ -1021,6 +1061,8 @@ const runner = createRunner({
   // A consult's caller is gone after a restart: it is never continued (peers.mjs).
   // The Telegram inbox puts its own item back in its queue after a restart: its chat is not continued.
   notResumable: (chat) => Boolean(consultOf(store, chat?.id)) || Boolean(inboxHolder.current?.isInboxChat(chat?.id)),
+  // A kept agent keeps the options it was made with: his yes, or new words, remake it.
+  shellHeld: (chat) => chatTrust.heldOthersWords(chat.id),
   providerFor: (chat) => providers[runModel(chat).provider] || providers[DEFAULT_PROVIDER],
   agentOptions: async (chat) => {
     if (genv("CLAUDE_CODE", "on") === "on") await mcpOauth.ensureFresh().catch(() => {});
@@ -1071,7 +1113,7 @@ const runner = createRunner({
       // tell_owner: only the ops room, only in "critical" mode (shadow/record stay silent).
       ...createIncidentTools({ incidents, notify: opsRoom.mode === "critical" && chat.caller === "ops" ? (text) => integrations.notifyOwner(text, chat.id) : null }),
       // Data sources and workspace chats of the incident layer (incidents/tools.mjs).
-      ...createSourceTools({ store, incidents, sources: incidentSources, secrets, chatId: chat.id, caller, builtins: incidentBuiltins, baseUrl: () => genv("PUBLIC_URL", "").replace(/\/+$/, "") }),
+      ...createSourceTools({ store, incidents, sources: incidentSources, secrets, chatId: chat.id, caller, builtins: incidentBuiltins, autoStart: genv("OPS_AUTOSTART", "on") === "off" ? null : autoStartIncidentChat, baseUrl: () => genv("PUBLIC_URL", "").replace(/\/+$/, "") }),
       ...settingsTools,
       ...doctor.tools,
       // A colleague's own conversation may tell an owner chat something (its quota decides).
@@ -1116,8 +1158,10 @@ const runner = createRunner({
     // «بدون پرسیدن» in the owner's own chat (and the subtasks it delegates) means no limit at all
     // (owner 2026-10-21: «وقتی میزارم روی بدون پرسیدن واقعا هیچ محدودیتی نداشته باشه، الان مثل اتوعه»):
     // no fence, no secrets gate, no reviewers, no file/state guard, no permission card. The other
-    // modes keep them.
-    const ownerBypass = rootCaller === "owner" && !unattended && (store.getChat(rootChatId)?.mode || "agent") === "agent";
+    // modes keep them. Only for his own words: a chat that holds a group member's, a colleague's or
+    // a peer's message (or was born from one) runs as «بپرس» (security audit 2026-10-29).
+    const othersHeld = rootCaller === "owner" && !unattended && chatTrust.heldOthersWords(chat.id);
+    const ownerBypass = rootCaller === "owner" && !unattended && (store.getChat(rootChatId)?.mode || "agent") === "agent" && !othersHeld;
     // A job the owner wrote, not «محدود»: his attended tools; gated calls ask him, or nothing asks in
     // «بدون پرسیدن» (jobs/owner-jobs.mjs). Every other run: asOwner = his own attended chain,
     // guardMode as before.
@@ -1195,14 +1239,15 @@ const runner = createRunner({
       mode: access.guardMode === "refuse" ? "refuse" : colleagueRoot && !fullGrant ? "escalate" : "ask",
       ownerProjects: String(genv("OWNER_INFISICAL_PROJECTS", "")).split(",").filter(Boolean),
     });
-    if (access.guardMode && !teamRooted && !fullGrant) {
+    // His own chat that holds someone else's message: every gated call asks him, as on «بپرس».
+    if ((access.guardMode || othersHeld) && !teamRooted && !fullGrant) {
       filtered = guardTools(filtered, {
         chatId: chat.id,
         asks,
         store,
         caller: rootCaller,
         allowPass: ownJob,
-        mode: colleagueRoot ? "escalate" : access.guardMode,
+        mode: colleagueRoot ? "escalate" : access.guardMode || "ask",
         verdictOf: (name, args) => modules.verdictOf(name) ?? classify(name, args),
       });
     }
@@ -1245,19 +1290,31 @@ const runner = createRunner({
     // What a colleague's conversation may not do on «بپرس» it asks the owner for once: his yes moves the
     // conversation to «بدون پرسیدن» and its next turn starts by itself with the full tools
     // (colleague-access.mjs). It used to leave a chat suggestion he had to start himself (handoff.mjs).
-    if (colleagueRoot && !fullGrant) {
+    if (colleagueRoot) {
       const root = store.getChat(rootChatId);
       const who = (root?.person_id && store.getPerson?.(root.person_id)?.display_name) || motherInfo(store, rootChatId)?.name || (peerRooted ? store.getPeerUser?.(rootCaller.slice("peer:".length))?.label || null : null);
       const askTool = asks.tool(chat.id);
-      filtered[FULL_ACCESS_TOOL] = fullAccessTool({
+      if (!fullGrant) {
+        filtered[FULL_ACCESS_TOOL] = fullAccessTool({
+          store,
+          rootChatId,
+          who,
+          ask: (args) => askTool.execute(args),
+          resume: (text) => {
+            const name = motherInfo(store, chat.id)?.name;
+            return runner.send(chat.id, { text: name ? coverageOwnerNote(name, text) : text, from: { kind: "owner_web" }, intent: "queue" });
+          },
+        });
+      }
+      // A wall its tools cannot pass, with or without the grant: his yes starts one chat of his own.
+      filtered[OWNER_CHAT_TOOL] = ownerChatTool({
         store,
+        chatId: chat.id,
         rootChatId,
         who,
         ask: (args) => askTool.execute(args),
-        resume: (text) => {
-          const name = motherInfo(store, chat.id)?.name;
-          return runner.send(chat.id, { text: name ? coverageOwnerNote(name, text) : text, from: { kind: "owner_web" }, intent: "queue" });
-        },
+        start: (row) => startSuggestedChat({ store, runner, row, model: row.model || "", note: "" }),
+        notify: (text, target) => Promise.all([push.notify("notify", store.getChat(target), { summary: text }), integrations.notifyOwner(text, target)]),
       });
     }
     // Every change, in every chain (owner's too), first needs two independent reviewers' yes.
@@ -1270,6 +1327,8 @@ const runner = createRunner({
     // never jobs, the ops room or a peer's /mcp chain); a rehearsal records it (sim.mjs).
     if (kindOf(runModel(chat).provider) === PROVIDER_OPENAI) filtered[TODO_TOOL] = todoWriteTool({ store, chatId: chat.id });
     if (agent === DEFAULT_AGENT && access.asOwner) filtered.inbox_list = inboxTool({ store, asks });
+    // The chat's plan (chat-plan.mjs): only where he is there to approve it.
+    if (offersPlan(chat, { rootCaller, unattended })) filtered[PLAN_TOOL] = chatPlanTool({ store, chatId: chat.id });
     filtered.later = laterTool({ store, chatId: chat.id });
     if (offersOwnerTask(ownerJob ? { rootCaller: "owner", unattended: false } : { rootCaller, unattended })) filtered[OWNER_TASK_TOOL] = ownerTaskTool({ store, chatId: rootChatId, askedIn: chat.id, agent });
 
@@ -1349,6 +1408,18 @@ const runner = createRunner({
       if (kindOf(runModel(chat).provider) !== PROVIDER_CLAUDE) filtered = {};
     }
 
+    // His chat with no shell (othersHeld): one question to him opens it, for this chat only.
+    const shellHeldHere = othersHeld && access.asOwner && !desk && !inboxChat && !readOnlySide && !consultOf(store, chat.id) && !store.getChat(rootChatId)?.sim;
+    if (shellHeldHere) {
+      const askTool = asks.tool(chat.id);
+      filtered[SHELL_TOOL] = shellTool({
+        reason: chatTrust.heldReason(chat.id),
+        ask: (args) => askTool.execute(args),
+        allow: () => chatTrust.allowShell(chat.id),
+        resume: (text) => runner.send(chat.id, { text, from: { kind: "owner_web" }, intent: "queue" }),
+      });
+    }
+
     // Rules are built from the tools this run really has (after caller filtering and guards).
     approvePendingKnowledge();
     const ruleOptions = { autoApprove: knowledgeAutoApprove(), agent, caller: quotaCaller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))), mother: Boolean(mother), autoTrust: KNOWLEDGE_AUTO_TRUST && !desk && chatTrust.ownerRooted(chat.id), isTrustedNote: chatTrust.isTrustedNote, businessDocsLabel: "business_docs_search" in filtered ? businessDocs.promptLabel : "", toolDescriptions: Object.fromEntries(Object.entries(filtered).map(([n, d]) => [n, d?.description || ""])), chrome: access.asOwner && myBrowser.paired() ? (myBrowser.connected() ? "connected" : "paired") : null };
@@ -1358,7 +1429,7 @@ const runner = createRunner({
     installRules(cwd, ruleOptions);
     // Claude Code loads the linked memory folder itself; other engines get the index here, only in owner-rooted chats.
     const repoMemory = repoContext?.repo && kindOf(runModel(chat).provider) !== PROVIDER_CLAUDE && chatTrust.ownerRooted(chat.id) ? repoMemoryRules({ configDir: mainConfigDir(), repoDir: path.join(REPOS_ROOT, repoContext.repo) }) : "";
-    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}${repoMemory ? `\n\n${repoMemory}` : ""}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "") + (ownerBypass ? BYPASS_NOTE : "") + (fullGrant ? fullAccessNote(fullGrant) : "") + (chatTrust.ownerRooted(chat.id) ? phone.promptLine() : "") + (access.asOwner && myBrowser.paired() ? myBrowser.promptLine() : "");
+    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}${repoMemory ? `\n\n${repoMemory}` : ""}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "") + (ownerBypass ? BYPASS_NOTE : "") + (fullGrant ? fullAccessNote(fullGrant) : "") + (chatTrust.ownerRooted(chat.id) ? phone.promptLine() : "") + (access.asOwner && myBrowser.paired() ? myBrowser.promptLine() : "") + (shellHeldHere ? SHELL_HELD_NOTE : "");
     const seedMessages = chat.agent_id ? null : seedTurns(chat);
     // «چرا؟»: what this session starts with, kept on the chat (manifest.mjs). Never fails the run.
     try {
@@ -1392,7 +1463,12 @@ const runner = createRunner({
     const workDir = repoContext?.dir || cwd;
     // One memory per repo, not per worktree (shared-memory.mjs).
     if (repoContext?.repo) linkSharedMemory({ configDir: mainConfigDir(), workDir, repoDir: path.join(REPOS_ROOT, repoContext.repo) });
-    const fileAccess = access.asOwner && !desk && !inboxChat
+    // Nor in his chat that holds someone else's message (othersHeld) — unless the chat is on «بدون
+    // پرسیدن» on Claude: then every chat gets the full shell (owner-jobs.mjs freeShell, 2026-11-07).
+    const shellFree = freeShell({ provider: kindOf(runModel(chat).provider), unattended, desk, inboxChat, rootCaller, rootMode: store.getChat(rootChatId)?.mode, fullGrant });
+    const fileAccess = shellFree && !readOnlySide
+      ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
+      : access.asOwner && !desk && !inboxChat && !othersHeld
       ? ownerBypass && !readOnlySide
         ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
         : { read: [WORKSPACE], write: readOnlySide ? [] : [workDir], deny: [KNOWLEDGE_ROOT, path.join(workDir, ".git"), ...[".cursor", ".claude", ".griffin-openai-sessions", "CLAUDE.md"].map((name) => path.join(cwd, name))] }
@@ -1795,7 +1871,7 @@ async function health() {
 // messages (bindPeerAgentPerson) and needs createUser's default-quota grant.
 const peerAuth = createPeerAuth({ store, publicUrl: genv("PUBLIC_URL", "") });
 // The agents' network (network.mjs): colleagues' installs find each other and talk over their MCP.
-const network = createNetwork({ store, peerAuth, secrets, runner, skills: () => buildSkills({ store, owner: OWNER, reposRoot: REPOS_ROOT, knowledgeRoot: KNOWLEDGE_ROOT, agentId: DEFAULT_AGENT, configDir: mainConfigDir() }), env: { GRIFFIN_NETWORK_DOMAINS: genv("NETWORK_DOMAINS", "") || undefined, GRIFFIN_NETWORK_SEEDS: genv("NETWORK_SEEDS", "") || undefined }, publicUrl: () => genv("PUBLIC_URL", ""), brandColor: () => createBrand(path.join(DATA, "brand")).read().color, enabled: () => genv("NETWORK", "on") !== "off",
+const network = createNetwork({ store, peerAuth, secrets, runner, skills: () => buildSkills({ store, owner: OWNER, reposRoot: REPOS_ROOT, knowledgeRoot: KNOWLEDGE_ROOT, agentId: DEFAULT_AGENT, configDir: mainConfigDir() }), env: { GRIFFIN_NETWORK_DOMAINS: genv("NETWORK_DOMAINS", "") || undefined, GRIFFIN_NETWORK_SEEDS: genv("NETWORK_SEEDS", "") || undefined }, publicUrl: () => genv("PUBLIC_URL", ""), brandColor: () => createBrand(path.join(DATA, "brand")).read().color, enabled: () => genv("NETWORK", "on") !== "off", admit: () => genv("NETWORK_ADMIT", "auto"), inboxDir: path.join(WORKSPACE, "network-inbox"), sendRoots: [WORKSPACE],
   // What the card tells the other agents besides «ready / updating»: the build, how busy, and whether
   // any engine can answer now (a plan limit everywhere means a late answer, not a dead agent).
   presence: () => ({ commit: readBuildCommit() || null, activeRuns: runner.activeCount(), canThink: accounts().some((a) => usableAccount(a.id)), noEngine: !demo && !accounts().some((a) => a.enabled && keyedAccount(a.id)) }) });
@@ -1839,11 +1915,12 @@ if (genv("DEMO") !== "1") {
 }
 
 // Self-check and self-repair (doctor.mjs): agents on a dead engine move to one that answers and
-// come back when it heals; stuck runs are cancelled. First pass a minute after start, then every 15.
+// come back when it heals, a dropped connection reconnects, and the owner hears what broke and what
+// was fixed. First pass a minute after start, then every 15.
 hookConsoleErrors();
 const backups = createBackups({
   store, dbFile: resolveDbPath(DATA), dataDir: DATA,
-  config: () => ({ every: genv("BACKUP_EVERY_HOURS", "6"), keep: genv("BACKUP_KEEP", "8"), dir: genv("BACKUP_DIR", "") }),
+  config: () => ({ hour: genv("BACKUP_HOUR", genv("BACKUP_EVERY_HOURS", "") === "0" ? "off" : ""), keep: genv("BACKUP_KEEP", "8"), dir: genv("BACKUP_DIR", "") }),
   offsite: createOffsite({
     store, dataDir: DATA, dbFile: resolveDbPath(DATA),
     url: () => genv("BACKUP_S3_URL", ""),
@@ -1855,6 +1932,10 @@ const doctor = createDoctor({
   store, runner, providers, providerKey, providerConfig, integrations, backups,
   openaiBaseUrl: () => genv("OPENAI_BASE_URL", ""),
   engineIds: PROVIDERS, dataDir: DATA,
+  notify: async (text) => {
+    await push.notify("notify", null, { summary: text });
+    await integrations.notifyOwner(text);
+  },
   onProbe: (id, result) => {
     const verdict = probeVerdict(result);
     // ponytail: a passing Haiku turn clears a limit a run saw on one model's own window (weekly
@@ -1893,7 +1974,9 @@ const tokenKeeper = createTokenKeeper({
 });
 if (genv("DEMO") !== "1") setInterval(() => tokenKeeper.tick().catch((error) => console.error(`[token-keeper] ${error.message}`)), 30_000).unref();
 
-if (genv("DEMO") !== "1" && genv("SELF_HEAL") !== "off") {
+// Off unless asked (config SELF_HEAL). It moves an agent only off an engine that can never answer (bad
+// key, region, model), not at a plan limit: that is the runner's fallback (owner 2026-10-12).
+if (genv("DEMO") !== "1" && genv("SELF_HEAL") === "on") {
   const heal = () => doctor.heal().catch((error) => console.error(`[doctor] ${error.message}`));
   setTimeout(heal, 60_000).unref();
   setInterval(heal, 15 * 60_000).unref();
@@ -1969,6 +2052,8 @@ const accounting = createAccounting({
           limit = null;
         }
         const key = claude ? providerKey(a.id) : "";
+        const st = a.enabled ? stateOf(a.id) : null;
+        const broken = claude && st && (st.state === "credit" || st.state === "auth") ? { state: st.state, since: new Date(st.since || Date.now()).toISOString() } : null;
         // A folder login's "key" is a marker with the folder's path, the same on every install for the
         // same account slot: its fingerprint is made per install, or unrelated accounts look like one
         // (2026-10-27: five Claude accounts were reported as one).
@@ -1982,6 +2067,7 @@ const accounting = createAccounting({
           windows: quota?.windows || null,
           windowsAt: quota?.seenAt || null,
           limit,
+          broken,
         };
       }),
     );
@@ -2055,6 +2141,14 @@ const incidentBuiltins = {
   },
 };
 const collectAlerts = createCollector({ sources: incidentSources, secrets, builtins: incidentBuiltins });
+
+// Critical incident: the ops room's card starts its chat at once (function declarations hoist).
+async function autoStartIncidentChat(suggestionId) {
+  const row = store.getSuggestion(suggestionId);
+  if (!row || row.status !== "open") return null;
+  const out = await startSuggestedChat({ store, runner, row, model: row.model || "", note: "" });
+  return out?.chat?.id || null;
+}
 
 // A suggestion card the owner started (or dismissed) settles its incidents: started = assigned to the
 // chat it opened. Lazy, on each poll and page load — no hook into the suggestions route.
@@ -2215,6 +2309,8 @@ function trustedProxies() {
 }
 const updates = createUpdates({ dir: path.join(DATA, "update"), current: readBuildCommit(), translate: (prompt) => titleText(prompt) });
 const app = createApp({
+  // The same chats modelCandidates clamps: what the picker shows is what runs (model-policy.mjs).
+  heldToDefaults: (chat, provider) => plainClaude(provider) && !consultOf(store, chat.id),
   previews,
   uploadsDir: path.join(DATA, "uploads"),
   updates,
@@ -2758,6 +2854,15 @@ const app = createApp({
     });
     // Doctor (self-check / self-repair) and the setup wizard (apps/web Setup.jsx).
     api.get("/api/doctor", async (c) => c.json(await doctor.report()));
+    // Where the server's time goes (stall.mjs): the last stalls of the loop and a CPU profile of ?ms.
+    api.get("/api/doctor/profile", async (c) => {
+      const ms = Math.min(Math.max(Number(c.req.query("ms")) || 10_000, 1000), 30_000);
+      try {
+        return c.json({ ms, stalls: recentStalls(), top: await cpuProfile(ms) });
+      } catch (error) {
+        return c.json({ error: error.message, stalls: recentStalls() }, 409);
+      }
+    });
     api.get("/api/doctor/engine/:id", async (c) => {
       const id = normalizeProvider(c.req.param("id"));
       if (id !== c.req.param("id")) return c.json({ error: "unknown provider" }, 404);
@@ -2908,6 +3013,39 @@ const app = createApp({
     api.delete("/api/mybrowser/devices/:id", (c) => c.json({ ok: myBrowser.forget(c.req.param("id")) }));
     // The download carries this install's address (no secret): once loaded it opens Settings here, where one click pairs it.
     api.get("/api/mybrowser/extension.zip", (c) => c.body(zipDir(EXTENSION_DIR, "griffin-chrome/", { "config.json": JSON.stringify({ server: new URL(genv("PUBLIC_URL", "") || c.req.url).origin }) }), 200, { "content-type": "application/zip", "content-disposition": 'attachment; filename="griffin-chrome.zip"' }));
+    // The pane beside a chat (web ChatPane.jsx): its plan, what its worktree changed, and a shell in that
+    // folder. Only his own chats; a chat with no folder gets the sandbox, as the workbench does.
+    chatPlanRoutes(api, { store, send: (chatId, text) => runner.send(chatId, { text, from: { kind: "owner_web" }, intent: runner.isActive(chatId) ? "queue" : "send" }) });
+    const ownFolder = (c) => {
+      const chat = store.getChat(c.req.param("id"));
+      if (!chat || (chat.caller || "owner") !== "owner") return { refused: c.json({ error: "not found" }, 404) };
+      const dir = chat.worktree_path && fs.existsSync(chat.worktree_path) ? chat.worktree_path : null;
+      return { dir };
+    };
+    api.get("/api/chats/:id/changes", async (c) => {
+      const { refused, dir } = ownFolder(c);
+      if (refused) return refused;
+      return c.json({ changes: dir ? await chatChanges(dir) : null });
+    });
+    api.get("/api/chats/:id/changes/file", async (c) => {
+      const { refused, dir } = ownFolder(c);
+      if (refused) return refused;
+      const diff = dir ? await chatFileDiff(dir, c.req.query("path") || "") : null;
+      return diff ? c.json(diff) : c.json({ error: "not found" }, 404);
+    });
+    api.post("/api/chats/:id/terminal", async (c) => {
+      const { refused, dir } = ownFolder(c);
+      if (refused) return refused;
+      const { command, cwd } = await c.req.json().catch(() => ({}));
+      if (typeof command !== "string" || !command.trim()) return c.json({ error: "command required" }, 400);
+      try {
+        if (dir) return c.json({ ...(await chatTerminalRun(dir, { command, cwd })), dir });
+        const r = await sandbox(cwd ? `cd ${shq(cwd)} 2>/dev/null; ${command}` : command);
+        return c.json({ stdout: r.stdout || "", stderr: r.stderr || "", dir: null });
+      } catch (error) {
+        return c.json({ error: String(error?.message || error) }, 502);
+      }
+    });
     // Live previews (previews.mjs): the chat's card reads its state and link here. The link carries the
     // preview's token, so it goes to the signed-in owner only — never into a tool result or an event.
     api.get("/api/previews", (c) => c.json({ previews: previews.list({ chatId: c.req.query("chat") || null }).map((rec) => previews.view(rec)) }));

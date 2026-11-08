@@ -97,20 +97,43 @@ export const AGENT_META = {
 
 export const KARSARA_BLURB = t("یک دستیار مختص شما.");
 
+function applyInfo({ name, latin, product, productLatin, productId, iconV }) {
+  if (iconV) setIconVersion(iconV);
+  // The assistant's own name per install (server persona); English UI shows its Latin form.
+  const shown = (lang === "en" && latin) || name;
+  if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = shown;
+  if (latin) BRAND.nameEn = latin;
+  const productShown = (lang === "en" && productLatin) || product;
+  if (productShown) BRAND.product = productShown;
+  if (productId) BRAND.productId = productId;
+}
+
+// The last visit's brand: the page draws at once with it and the server's answer follows, instead of a
+// black page for two round trips (owner 2026-11-05: «لودینگ ندارن»). False on a first visit.
+const BRAND_CACHE = "griffin.brand.v1";
+export function applyCachedBrand(storage = globalThis.localStorage) {
+  try {
+    const saved = JSON.parse(storage?.getItem(BRAND_CACHE) || "null");
+    if (!saved?.info?.name) return false;
+    applyInfo(saved.info);
+    setInstallLook(saved.info.skin || "griffin");
+    if (typeof saved.blurb === "string") AGENT_META.griffin.blurb = saved.blurb;
+    if (saved.brand) applyAgentColor(saved.brand);
+    if (BRAND.productId === "karsara") AGENT_META.griffin.blurb = KARSARA_BLURB;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // `fetchImpl` and `onSkin` are for tests; the page uses fetch and the install's preset (ui-prefs.js).
-export async function loadBrand({ fetchImpl = fetch, onSkin = setInstallLook } = {}) {
+export async function loadBrand({ fetchImpl = fetch, onSkin = setInstallLook, storage = globalThis.localStorage } = {}) {
+  const saved = {};
   try {
     const res = await fetchImpl("/api/public/brand/info", { signal: AbortSignal.timeout(3000) });
-    const { name, latin, product, productLatin, productId, skin, iconV } = await res.json();
-    if (iconV) setIconVersion(iconV);
-    // The assistant's own name per install (server persona); English UI shows its Latin form.
-    const shown = (lang === "en" && latin) || name;
-    if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = shown;
-    if (latin) BRAND.nameEn = latin;
-    const productShown = (lang === "en" && productLatin) || product;
-    if (productShown) BRAND.product = productShown;
-    if (productId) BRAND.productId = productId;
-    onSkin(skin || "griffin");
+    saved.info = await res.json();
+    applyInfo(saved.info);
+    onSkin(saved.info.skin || "griffin");
   } catch {
     onSkin("griffin"); // keep the built-in defaults; the cached look still paints
   }
@@ -119,6 +142,8 @@ export async function loadBrand({ fetchImpl = fetch, onSkin = setInstallLook } =
     const res = await fetchImpl("/api/brand", { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
       const { blurb, brand } = await res.json();
+      saved.blurb = blurb;
+      saved.brand = brand;
       if (typeof blurb === "string") AGENT_META.griffin.blurb = blurb;
       applyAgentColor(brand);
     }
@@ -127,6 +152,11 @@ export async function loadBrand({ fetchImpl = fetch, onSkin = setInstallLook } =
   }
   // An install with the Karsara look keeps that look's own new-chat line.
   if (BRAND.productId === "karsara") AGENT_META.griffin.blurb = KARSARA_BLURB;
+  try {
+    if (saved.info?.name) storage?.setItem(BRAND_CACHE, JSON.stringify(saved));
+  } catch {
+    /* blocked or full: the next visit waits for the server */
+  }
 }
 
 export function agentMeta(id) {

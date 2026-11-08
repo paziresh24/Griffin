@@ -20,7 +20,7 @@ const CATCH_UP_TIMEOUT_MS = 10_000;
 
 // A chat opens with its last PAGE messages; «earlier» pages of PAGE come on demand (a long chat
 // otherwise took longer to open the longer it grew).
-export const PAGE = 40;
+export const PAGE = 24;
 
 /**
  * remembered: { timeline, rev } from timeline-memo.js, or null.

@@ -151,6 +151,18 @@ export function claudeCodeOptions({ fileAccess, claudeCodeOn, stateGuardOn, stat
 // opsAsks: the ops room in critical mode reaches the owner on Telegram (ask_owner since 10-07), so a
 // gated step there asks him instead of being refused and handed back («the owner must do it himself in the CDN
 // panel» after he had approved, 2026-10-21).
+/**
+ * «بدون پرسیدن» on Claude is a full shell in every attended chat (owner 2026-11-07: «کلا شل رو در صورتی
+ * که روی کلاد هست و روی حالت بدون پرسیدن به همه چتا بده»): his own, one of his that holds someone else's
+ * words, a colleague's conversation with his grant (colleague-access.mjs: its «بدون پرسیدن»), and their
+ * subtasks. Not the unattended ones (nobody there), the Telegram desk or the inbox dispatcher.
+ * The Telegram-origin guard on his instruction files still applies (chat-origin.mjs).
+ */
+export function freeShell({ provider, unattended, desk = false, inboxChat = false, rootCaller, rootMode, fullGrant = null }) {
+  if (provider !== "claude" || unattended || desk || inboxChat) return false;
+  return rootCaller === "owner" ? (rootMode || "agent") === "agent" : Boolean(fullGrant);
+}
+
 export function runAccess({ rootCaller, unattended, ownerJob = false, bypass = false, coverage = false, opsAsks = false }) {
   const attendedOwner = rootCaller === "owner" && !unattended;
   const asOwner = attendedOwner || Boolean(ownerJob);

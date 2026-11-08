@@ -269,6 +269,7 @@ test("ask_agent timeout keeps the child alive as a subtask and delivers the resu
   const parent = store.createChat({ title: "root", agent: "platform", caller: "owner" });
   const sent = [];
   let releaseFinish;
+  let childEnded = false;
   const gate = new Promise((resolve) => (releaseFinish = resolve));
   const runner = {
     async send(chatId, input) {
@@ -280,7 +281,7 @@ test("ask_agent timeout keeps the child alive as a subtask and delivers the resu
     async cancel() {
       throw new Error("cancel must not be called anymore");
     },
-    isActive: (chatId) => chatId !== parent.id,
+    isActive: (chatId) => chatId !== parent.id && !childEnded,
   };
   const peers = createPeers({ store, runner, timeoutMs: 50, wakeDelayMs: 10 });
   const ask = peers.tool(parent.id);
@@ -302,6 +303,7 @@ test("ask_agent timeout keeps the child alive as a subtask and delivers the resu
   const runId = store.startRun(childChat.id);
   store.appendEvent(childChat.id, runId, "text", { text: "نتیجهٔ نهایی آماده است." });
   store.finishRun(childChat.id, runId, "finished", null);
+  childEnded = true;
   store.appendEvent(childChat.id, runId, "run.finished", { status: "finished" });
   await new Promise((r) => setTimeout(r, 80));
   const reported = sent.find((s) => s.chatId === parent.id && /گزارش خودکار زیرکارها/.test(String(s.input?.text || "")));

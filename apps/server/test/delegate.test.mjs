@@ -113,6 +113,48 @@ test("delegate keeps loop guard and unknown-agent checks", async () => {
   assert.match(loop.content[0].text, /loop/);
 });
 
+test("a child's next turn is reported: a steer to a child already reported, and a turn queued as it ended", async () => {
+  const { store, peers, sent, scripts, gates, active, runner } = setup();
+  const parent = store.createChat({ title: "p", agent: "griffin" });
+  const d = peers.delegateTool(parent.id);
+  const turn = (id, text) => (emit) => new Promise((resolve) => gates.set(id, () => { emit("text", { text }); resolve("finished"); }));
+  const origCreate = store.createChat.bind(store);
+  store.createChat = (opts) => {
+    const chat = origCreate(opts);
+    if (opts.parentChatId) scripts.set(chat.id, turn(chat.id, "اول"));
+    return chat;
+  };
+  const a = JSON.parse((await d.execute({ agent: "platform", request: "A" })).content[0].text).subtask;
+  assert.ok(await until(() => gates.has(a)));
+  // Its next turn starts right as the first ends, before the wake: only that turn is reported.
+  const release = gates.get(a);
+  gates.delete(a);
+  scripts.set(a, turn(a, "جواب واقعی"));
+  const next = (event) => {
+    if (event.type !== "run.finished") return;
+    store.bus.off(`chat:${a}`, next);
+    setImmediate(() => runner.send(a, { text: "صف", images: [], intent: "send" }));
+  };
+  store.bus.on(`chat:${a}`, next);
+  release();
+  assert.ok(await until(() => gates.has(a)));
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(sent.filter((s) => s.chatId === parent.id).length, 0);
+  gates.get(a)();
+  assert.ok(await until(() => sent.filter((s) => s.chatId === parent.id).length === 1));
+  assert.match(sent.find((s) => s.chatId === parent.id).text, /جواب واقعی/);
+  // Already reported, then a steer lands while it runs: that turn is reported too.
+  assert.ok(await until(() => !active.has(a)));
+  gates.delete(a);
+  scripts.set(a, turn(a, "نوبت سوم"));
+  await runner.send(a, { text: "دوباره", images: [], intent: "send" });
+  assert.ok(await until(() => gates.has(a)));
+  await peers.subtasksTool(parent.id).execute({ action: "steer", id: a, message: "بقیه‌اش" });
+  gates.get(a)();
+  assert.ok(await until(() => sent.filter((s) => s.chatId === parent.id).length === 2));
+  assert.match(sent.filter((s) => s.chatId === parent.id).at(-1).text, /نوبت سوم/);
+});
+
 test("peer task stays working until delegated work is reported and answered", async () => {
   const { store, runner, peers, scripts } = setup();
   const asks = createAsks({ store });

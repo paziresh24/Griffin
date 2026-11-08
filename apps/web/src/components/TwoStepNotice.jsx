@@ -40,7 +40,7 @@ export function TwoStepNotice() {
           <span className="text-xs leading-5 text-muted-foreground">{t("تا توکن لورفته به‌تنهایی کسی را وارد نکند")}</span>
         </span>
       </button>
-      <button type="button" onClick={later} className="press m-1.5 shrink-0 self-end rounded-lg border px-2 py-1 text-xs text-muted-foreground hover:bg-muted" title={t("یک هفتهٔ دیگر دوباره یادآوری می‌شود")}>
+      <button type="button" onClick={later} className="press m-1.5 shrink-0 self-end rounded-lg border px-2 py-1 text-xs text-muted-foreground hover:bg-muted pointer-coarse:min-h-9 pointer-coarse:px-3" title={t("یک هفتهٔ دیگر دوباره یادآوری می‌شود")}>
         {t("بعداً")}
       </button>
     </div>

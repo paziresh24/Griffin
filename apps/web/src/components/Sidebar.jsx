@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useGradual } from "../gradual.js";
+import { PushNudge } from "./PushNudge.jsx";
+import { readProfileCache, writeProfileCache } from "../profile.js";
 import { Popover } from "radix-ui";
 import {
   Archive, ArchiveRestore, ArrowDownAZ, ArrowUpDown, Bot, Check, ChevronDown, ChevronRight,
@@ -11,7 +14,7 @@ import { BRAND, agentMeta, iconUrl, readSetting, writeSetting } from "../brand.j
 import { PROFILE_EVENT, ownerView } from "../profile.js";
 import { textDir } from "../dir.js";
 import { FILTERS, GROUPS, SORTS, ago, chatState, filterChats, groupChats, reminderLabel, searchChats, sortChats } from "../chat-list.js";
-import { isUnreadChat, markSeen, markUnread, seenOf, useSeenVersion } from "../seen.js";
+import { isUnreadChat, markSeen, markUnread, seenOf, useSeenOf, useSeenVersion } from "../seen.js";
 import { isPlainClick } from "../sidebar-width.js";
 import { setUiPrefs, useFlag, useUiPrefs } from "../ui-prefs.js";
 import { AgentGlyph, AgentPicker } from "./Controls.jsx";
@@ -159,6 +162,7 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
       )}
 
       <HostNotice />
+      <PushNudge />
       <TwoStepNotice />
       <UpdateNotice />
       {flags.userMenu ? <UserMenu onNavigate={onClose} /> : <UserBar onNavigate={onClose} k={k} />}
@@ -274,10 +278,11 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
     [prepared, groupBy, groups, looseAt, sectionOrders, query, filter, showArchived, section, seenVersion],
   );
 
-  const open = (id) => {
+  const groupCreated = useCallback(() => setGroupBy("custom"), [setGroupBy]);
+  const open = useCallback((id) => {
     navigate(id);
     onClose?.();
-  };
+  }, [onClose]);
   const order = useMemo(() => groupOrder(groups, looseAt), [groups, looseAt]); // drag and drop (drag.js)
   // The ungrouped sections (by repository, …) in the order they show, for dragging their headings.
   const sectionKeys = sections.filter((s) => s.loose).map((s) => s.key);
@@ -321,7 +326,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
 
       <nav className="scrollbar-thin mt-0.5 min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         <SidebarSuggestions refreshKey={chats} onNavigate={onClose} karsara={k} />
-        {nav.sections}
+        {query.trim() ? null : nav.sections}
 
         <div className="my-4 flex items-center justify-center" aria-hidden>
           <span className="size-1 rounded-full bg-border" />
@@ -383,8 +388,9 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
               more={Boolean(expanded[`${section}/${item.key}`])}
               onMore={() => toggleMore(`${section}/${item.key}`)}
               onToggle={() => toggleGroup(item.key)}
-              onGroupCreated={() => setGroupBy("custom")}
+              onGroupCreated={groupCreated}
               onNewChat={showArchived ? null : startChat}
+              newLoose={item.key === "group:none"}
             />
           ))}
           {groupBy === "custom" && !showArchived ? (
@@ -526,7 +532,7 @@ function UserBar({ onNavigate, k: karsara = false }) {
   // The owner's name and photo (profile.js). The server waits up to 3 s for a Telegram photo on its
   // way, so a first answer with Telegram's name and no photo is asked once more a little later;
   // asked again now and then so a later Telegram connection shows up.
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState(readProfileCache); // the last visit's name and photo, at once
   const [photoFailed, setPhotoFailed] = useState(false);
   useEffect(() => {
     let live = true;
@@ -536,10 +542,15 @@ function UserBar({ onNavigate, k: karsara = false }) {
         (p) => {
           if (!live) return;
           setProfile(p);
+          writeProfileCache(p);
           setPhotoFailed(false);
           if (again && p.telegramName && !p.photo) timer = setTimeout(() => ask(false), 8_000);
         },
-        () => live && again && (timer = setTimeout(() => ask(false), 8_000)),
+        () => {
+          if (!live) return;
+          setProfile((p) => p || {}); // no answer: «Owner» rather than the placeholder for good
+          if (again) timer = setTimeout(() => ask(false), 8_000);
+        },
       );
     ask(true);
     const every = setInterval(() => ask(false), 15 * 60_000);
@@ -586,7 +597,7 @@ function UserBar({ onNavigate, k: karsara = false }) {
               className={`${karsara ? "size-6" : "size-9"} shrink-0 rounded-full ${owner.isPhoto ? "object-cover" : ""}`}
               onError={owner.isPhoto ? onPhotoError : undefined}
             />
-            <span className={`min-w-0 flex-1 truncate text-sm ${karsara ? "" : "font-medium"}`} dir="auto">{owner.name}</span>
+            <span className={`min-w-0 flex-1 truncate text-sm ${karsara ? "" : "font-medium"}`} dir="auto">{profile ? owner.name : <span className="inline-block h-3 w-20 animate-pulse rounded bg-muted align-middle" aria-hidden />}</span>
           </button>
         </Popover.Trigger>
         <Popover.Portal>
@@ -627,8 +638,12 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
   const { items, ids, hidden, moduleSection, reorder } = useSections();
   const activeSection = moduleSection || section;
   const style = navStyleOf(flags);
-  const shown = items.filter((item) => !hidden.includes(item.id) || activeSection === item.section);
+  // A section kept behind «بیشتر» stays there when it is open, and «بیشتر» says so: a row of its own
+  // pushed every row under it down and back on each move between sections (owner 2026-11-05: «پرش»).
+  const shown = items.filter((item) => !hidden.includes(item.id) || (!flags.navMore && activeSection === item.section));
   const rest = items.filter((item) => !shown.includes(item));
+  const openInMore = rest.find((item) => item.section === activeSection);
+  const MoreIcon = openInMore?.icon || MoreHorizontal;
   const icons = flags.navIcons;
   // «جای بخش‌ها» (Settings → ظاهر): the launcher keeps only the pinned rows here (its grid is in the
   // header), the menu none (the user menu and Ctrl+K have them), the rail none on a computer (the rows
@@ -680,11 +695,12 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
               ? "g-icon-btn flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground data-[state=open]:bg-muted"
               : karsara
                 ? "kc-list-row w-full justify-start"
-                : "g-nav-row flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-muted/70 hover:text-foreground data-[state=open]:bg-muted"
+                : `g-nav-row flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-muted/70 hover:text-foreground data-[state=open]:bg-muted ${openInMore ? "bg-primary/12 text-primary" : "text-muted-foreground"}`
           }
+          aria-current={openInMore ? "page" : undefined}
         >
-          <MoreHorizontal className="size-4 shrink-0" />
-          {icons ? null : <span>{t("بیشتر")}</span>}
+          <MoreIcon className="size-4 shrink-0" />
+          {icons ? null : <span className="min-w-0 truncate">{openInMore ? openInMore.label : t("بیشتر")}</span>}
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -792,7 +808,7 @@ const groupFailed = () => {
 // chat always shows. Folding the whole section is its title's chevron.
 const SECTION_LIMIT = 5;
 
-function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, dropTarget = null, drag = null, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat, limit = 0, more = false, onMore }) {
+function Section({ title, group = null, repo = null, chats, groups, activeId, onOpen, dropTarget = null, drag = null, collapsible = false, collapsed = false, onToggle, onGroupCreated, onNewChat, newLoose = false, limit = 0, more = false, onMore }) {
   const [menu, setMenu] = useState(false);
   const drop = useSectionDrop({ target: dropTarget, slots: drag?.slots || [] });
   const handle = drag?.handle ? groupDragProps(drag.handle.id, drag.handle.scope) : {};
@@ -801,6 +817,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   const shown = collapsed
     ? chats.filter((chat) => chat.id === activeId)
     : limit && !more ? chats.filter((chat, i) => i < limit || chat.id === activeId) : chats;
+  const drawn = useGradual(shown, activeId);
   // An empty group of the owner's still shows (a new one must show up to be used).
   if (!chats.length && !group) return null;
   const rename = async () => {
@@ -810,7 +827,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   };
   const remove = async () => {
     setMenu(false);
-    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name })))) {
+    if ((await askConfirm(t("گروه «{name}» حذف شود؟ گفتگوهایش سر جایشان می‌مانند و فقط بی‌گروه می‌شوند.", { name: group.name }), { danger: true, yes: t("حذف") }))) {
       api(`/api/groups/${group.id}`, { method: "DELETE" }).catch(groupFailed);
     }
   };
@@ -843,7 +860,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             </button>
           ) : null}
           {/* «بدون گروه» gets its «+» too (a colleague 2026-11-02): a new chat without a group. */}
-          {dropTarget?.kind === "loose" && onNewChat ? (
+          {newLoose && onNewChat ? (
             <button
               type="button"
               onClick={() => onNewChat(null)}
@@ -879,7 +896,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
         </div>
       ) : title ? <p className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">{title}</p> : <div className="pt-1" />}
       {collapsed && !shown.length ? null : <ul>
-        {shown.map((chat) => (
+        {drawn.map((chat) => (
           <ChatItem key={chat.id} chat={chat} active={chat.id === activeId} onOpen={onOpen} groups={groups} onGroupCreated={onGroupCreated} />
         ))}
         {limit && !collapsed && chats.length > limit ? (
@@ -895,7 +912,8 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
   );
 }
 
-function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
+// Memoized: a list reload keeps unchanged rows' objects (chats-cache.js), so only the row that changed draws again.
+const ChatItem = memo(function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
   const timeAgo = useFlag("timeAgo");
   const logos = useFlag("agentLogos"); // «لوگوی ایجنت‌ها کنار هر گفتگو» (ui-prefs.js)
   const [menu, setMenu] = useState(false);
@@ -904,7 +922,7 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
     setMenu(false);
     setMoving(false);
   };
-  useSeenVersion(); // a markSeen elsewhere (opening this chat) clears the badge live
+  useSeenOf(chat.id); // a markSeen elsewhere (opening this chat) clears the badge live
   const unread = isUnread(chat);
   const state = chatState(chat, isUnread);
   const agents = chatAgents(chat);
@@ -1070,17 +1088,17 @@ function ChatItem({ chat, active, onOpen, groups = [], onGroupCreated }) {
       ) : null}
     </li>
   );
-}
+});
 
 // host = on the server as the owner (his ssh keys, kubectl, git); container = inside Griffin, without them.
 const RUNS_ON = [["host", t("روی سرور، با دسترسی کامل شما"), Server], ["container", t("داخل کانتینر، بدون کلیدهای شما"), Box]];
 // Permanent delete of archived chats (owner 2026-10-20): one chat from its menu, or the whole archive.
 async function deleteForGood(chat) {
-  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title })))) return;
+  if (!(await askConfirm(t("گفتگوی «{title}» برای همیشه حذف شود؟ برگشتی ندارد.", { title: chat.title }), { danger: true, yes: t("حذف") }))) return;
   api(`/api/chats/${chat.id}`, { method: "DELETE" }).then(() => toast.success(t("حذف شد")), failed);
 }
 async function deleteAllArchived(ids) {
-  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length })))) return;
+  if (!(await askConfirm(t("همه {length} گفتگوی بایگانی برای همیشه حذف شوند؟ برگشتی ندارد.", { length: ids.length }), { danger: true, yes: t("حذف دائم") }))) return;
   api("/api/chats/delete-archived", { method: "POST", body: { ids } }).then(
     (r) => toast.success(r.skipped?.length ? t("{length} حذف شد؛ {length2} در حال کار بود", { length: r.deleted.length, length2: r.skipped.length }) : t("{length} حذف شد", { length: r.deleted.length })),
     failed,

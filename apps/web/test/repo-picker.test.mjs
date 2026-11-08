@@ -6,7 +6,7 @@ import fs from "node:fs";
 // came right only once the first message re-mounted the picker. Opening the list reads it again.
 test("the repo picker reads the list again each time it opens", () => {
   const src = fs.readFileSync(new URL("../src/components/RepoChips.jsx", import.meta.url), "utf8");
-  assert.match(src, /usePolling\(`\/api\/repos\?r=\$\{refresh\}`/);
+  assert.match(src, /usePolling\(refresh \? `\/api\/repos\?r=\$\{refresh\}` : null/);
   assert.match(src, /const toggle = \(next\) => \{\s*if \(next\) setRefresh\(\(n\) => n \+ 1\);\s*setOpen\(next\);/);
   assert.match(src, /<Popover\.Root open=\{open\} onOpenChange=\{toggle\}>/);
 });

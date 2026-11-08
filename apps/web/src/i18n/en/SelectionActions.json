@@ -16,5 +16,16 @@
   "خواسته‌ات از چت جدید": "What you want from the new chat",
   "در چت جدید چه می‌خواهی؟": "What do you want in the new chat?",
   "شروع چت جدید": "Start new chat",
-  "شروع چت جدید (Enter)": "Start new chat (Enter)"
+  "شروع چت جدید (Enter)": "Start new chat (Enter)",
+  "به «{name}» رفت": "Sent to “{name}”",
+  "این بخش را به چت جدید یا یکی از چت‌های دیگر بفرست": "Send this part to a new chat or another chat",
+  "فرستادن به…": "Send to…",
+  "کارهای بیشتر با این متن": "More actions for this text",
+  "به:": "To:",
+  "جستجوی چت…": "Search chats…",
+  "جستجوی چت": "Search chats",
+  "چتی با این نام نیست.": "No chat by that name.",
+  "فرستاده نشد: {message}": "Not sent: {message}",
+  "فرستادن این نقل به چت دیگر": "Send this quote to another chat",
+  "چیزی که با این متن می‌خواهی (اختیاری)": "What you want done with this text (optional)"
 }

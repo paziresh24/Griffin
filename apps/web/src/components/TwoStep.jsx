@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SkeletonRows } from "./Skeleton.jsx";
 import { Check, Copy, Fingerprint, Loader2, Plus, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import { browserSupportsWebAuthn, startRegistration } from "@simplewebauthn/browser";
 import { toast } from "sonner";
@@ -104,7 +105,7 @@ export function TwoStepSection({ required = false, onDone = null }) {
     </form>
   );
 
-  if (!state) return null;
+  if (!state) return <SkeletonRows rows={4} />;
   const on = state.enabled;
   return (
     <>

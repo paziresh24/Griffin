@@ -28,10 +28,13 @@
 // member that is not ready waits in an outbox and goes by itself when it is back; its answer wakes the
 // chat like any other — Telegram is never the way around an update.
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { OWNER, PERSONA } from "./persona.mjs";
 import { currentProduct } from "./identity.mjs";
 import { isColor, sanitizeSvg } from "./brand.mjs";
 import { createHash } from "node:crypto";
+import { addOwnerTask } from "./inbox.mjs";
 
 const PENDING_MS = 10 * 60_000;
 const REFRESH_MS = 30 * 60_000;
@@ -47,7 +50,8 @@ const FOLLOW_MAX_ERRORS = 20;
 export const NETWORK_REPORT_PREFIX = "[گزارش خودکار زیرکارها — شبکهٔ ایجنت‌ها";
 const secretName = (id) => `network/${id}`;
 
-export const NETWORK_TOOLS = ["network_agents", "network_ask", "network_reply", "network_connect"];
+export const NETWORK_TOOLS = ["network_agents", "network_ask", "network_reply", "network_connect", "network_send_file"];
+export const MAX_NETWORK_FILE_BYTES = 25 * 1024 * 1024;
 
 const STATUS = "network:status";
 // old member id -> the id it moved to (movedTo / memberIs): the peer user and the token we gave a member
@@ -91,7 +95,7 @@ function cleanSkills(sk) {
   return { ...(sk.role ? { role: str(sk.role) } : {}), ...(sk.summary ? { summary: str(sk.summary) } : {}), repos: arr(sk.repos, 40), knows: arr(sk.knows, 80) };
 }
 
-export function createNetwork({ store, peerAuth, secrets, runner = null, env = {}, publicUrl = () => "", brandColor = () => null, skills = () => null, enabled = () => true, presence = () => ({}), fetchFn = globalThis.fetch, log = console, now = () => Date.now(), pollGapMs = 5_000, retryMs = 30_000, relinkMs = 20_000, probeMs = PROBE_MS }) {
+export function createNetwork({ store, peerAuth, secrets, runner = null, env = {}, publicUrl = () => "", brandColor = () => null, skills = () => null, enabled = () => true, admit = () => "auto", presence = () => ({}), fetchFn = globalThis.fetch, log = console, now = () => Date.now(), pollGapMs = 5_000, retryMs = 30_000, relinkMs = 20_000, probeMs = PROBE_MS, inboxDir = null, sendRoots = [] }) {
   const domains = String(env.GRIFFIN_NETWORK_DOMAINS || "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
   const seeds = String(env.GRIFFIN_NETWORK_SEEDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   // Off (config NETWORK=off, e.g. a trial install beside the live one of the same owner): no card,
@@ -262,7 +266,17 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     const theirs = await getJson(`${origin}/api/public/network/card`);
     if (allowedOrigin(theirs?.url, domains) !== origin) throw new Error("card address mismatch");
     const user = `net-${id}`.slice(0, 41);
-    if (!store.getPeerUser(user)) peerAuth.createUser({ id: user, label: memberLabel(theirs, id) });
+    if (!store.getPeerUser(user)) {
+      peerAuth.createUser({ id: user, label: memberLabel(theirs, id) });
+      // Config NETWORK_ADMIT=owner (security audit 2026-10-29): anyone who can serve a card on a
+      // company domain used to become a member with a working token. A new member now waits,
+      // disabled, until the owner turns it on; members already known are not touched.
+      if (admit() === "owner") {
+        store.setPeerUserEnabled(user, false);
+        addOwnerTask(store, { title: `عضو تازهٔ شبکه منتظر تأیید: ${host}`, detail: `${memberLabel(theirs, id)} (${origin}) سلام کرد. اگر می‌شناسید: تنظیمات ← همتاها ← ${user} را فعال کنید؛ تا آن وقت توکنش کار نمی‌کند.` });
+        log.info?.(`[network] new member ${host} held for the owner (NETWORK_ADMIT=owner)`);
+      }
+    }
     // The old token stays until the new one is taken: a hello someone else sends in their name is
     // refused at their end (no hello pending there) and must not cut the link that works.
     const old = store.listPeerClients(user).filter((c) => !c.revoked_at);
@@ -740,6 +754,28 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
       if (!updating && prev.state && prev.state !== "ready") flush().catch((e) => log.error?.(`[network] flush: ${e.message}`));
       return c.json({ ok: true });
     });
+    // A file from a member (a pay slip, a report): only by the token this install gave it, kept in the
+    // inbox folder and named by path; the sender then tells our agent about it with a normal message.
+    app.post("/api/public/network/file", async (c) => {
+      if (!inboxDir) return c.json({ error: "this install takes no files" }, 404);
+      const who = peerAuth.authenticate(c.req.header("authorization"));
+      if (who.error) return c.json({ error: who.error }, who.status);
+      const origin = allowedOrigin(c.req.header("x-network-from"), domains);
+      const id = origin ? agentId(new URL(origin).host) : null;
+      if (!id || !(await memberIs(who.userId, new URL(origin).host))) return c.json({ error: "not that member" }, 403);
+      if (Number(c.req.header("content-length") || 0) > MAX_NETWORK_FILE_BYTES) return c.json({ error: "file too large" }, 413);
+      let name = "file";
+      try { name = decodeURIComponent(c.req.header("x-file-name") || "file"); } catch {}
+      name = path.basename(name).replace(/[^\p{L}\p{N}._ -]/gu, "_").replace(/^\.+/, "").slice(0, 100) || "file";
+      const buf = Buffer.from(await c.req.arrayBuffer());
+      if (!buf.length) return c.json({ error: "empty file" }, 400);
+      if (buf.length > MAX_NETWORK_FILE_BYTES) return c.json({ error: "file too large" }, 413);
+      const dir = path.join(inboxDir, id);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const file = path.join(dir, `${new Date(now()).toISOString().replace(/[:.]/g, "-")}-${name}`);
+      fs.writeFileSync(file, buf, { mode: 0o600 });
+      return c.json({ ok: true, path: file, bytes: buf.length });
+    });
     app.post("/api/public/network/token", async (c) => {
       if (limited(c.req.header("x-forwarded-for") || "direct")) return c.json({ error: "rate limited" }, 429);
       const body = await c.req.json().catch(() => ({}));
@@ -780,6 +816,26 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
         return c.json({ error: String(error.message) }, 502);
       }
     });
+  }
+
+  /** Send a file from this install's workspace to a member; the result names the path where it landed. */
+  async function sendFile(id, filePath) {
+    const real = fs.realpathSync(path.resolve(String(filePath)));
+    const inside = sendRoots.some((r) => {
+      try { const root = fs.realpathSync(r); return real === root || real.startsWith(root + path.sep); } catch { return false; }
+    });
+    if (!inside) throw new Error("only files inside this install's workspace can be sent");
+    const st = fs.statSync(real);
+    if (!st.isFile() || st.size === 0 || st.size > MAX_NETWORK_FILE_BYTES) throw new Error(`the file must be a regular file of 1 byte to ${MAX_NETWORK_FILE_BYTES / 1024 / 1024} MB`);
+    const me = self();
+    if (!me) throw new Error("this install has no public address");
+    const body = fs.readFileSync(real);
+    const sent = await withToken(id, async (url, token) => {
+      const res = await fetchFn(`${url}/api/public/network/file`, { method: "POST", headers: { authorization: `Bearer ${token}`, "x-network-from": me, "x-file-name": encodeURIComponent(path.basename(real)), "content-type": "application/octet-stream" }, body, signal: AbortSignal.timeout(120_000), redirect: "manual" });
+      if (!res.ok) throw new Error(`http ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      return res.json();
+    });
+    return { ok: true, agent: id, name: path.basename(real), bytes: st.size, remotePath: sent.path };
   }
 
   // The owner's own chats: see the network and talk to it. chatId: the chat a late answer wakes.
@@ -826,6 +882,16 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
           return reply(String(agent), String(taskId), String(answer || ""), { chatId });
         },
       },
+      network_send_file: {
+        description:
+          "Send a file (a pay slip, a report, a PDF) from this chat's workspace to a colleague's agent on the network (id from network_agents). Only files inside the workspace, up to 25 MB. " +
+          "The file is saved in that install's inbox; the result gives its path there. Then tell that agent with network_ask (name the file and give remotePath) so its owner gets it. " +
+          "A file with personal data (salary, ID) goes only to the recipient the sender named.",
+        inputSchema: { type: "object", properties: { agent: { type: "string" }, path: { type: "string" } }, required: ["agent", "path"], additionalProperties: false },
+        async execute({ agent, path: file }) {
+          return sendFile(String(agent), String(file));
+        },
+      },
       network_connect: {
         description:
           "Make a path to a colleague's agent when network_agents does not list it: network_connect {url} says hello to that install (its https address on the company's domains; " +
@@ -856,5 +922,5 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     recover();
   }
 
-  return { card, memberIs, hello, onHello, onToken, gossip, list, ask, say, reply, post, refresh, routes, ownerRoutes, tools, start, connected, pending, recover, probeAll, leave, arrive, flush, statusOf };
+  return { card, memberIs, hello, onHello, onToken, gossip, list, ask, say, reply, post, sendFile, refresh, routes, ownerRoutes, tools, start, connected, pending, recover, probeAll, leave, arrive, flush, statusOf };
 }

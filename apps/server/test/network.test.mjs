@@ -27,9 +27,10 @@ function install(host, net, extra = {}) {
     getPeerUser: (id) => users.get(id) || null,
     listPeerClients: (u) => clients.filter((c) => c.user === u).map((c) => ({ id: c.id, revoked_at: c.revoked ? 1 : null })),
     revokePeerClient: (u, id) => { const c = clients.find((x) => x.id === id); if (c) c.revoked = true; },
+    setPeerUserEnabled: (id, on) => { const u = users.get(id); if (u) u.enabled = on; },
   };
   const peerAuth = {
-    createUser: ({ id, label }) => users.set(id, { id, label }),
+    createUser: ({ id, label }) => users.set(id, { id, label, enabled: true }),
     issueClient: (user) => { const token = `grf_${host.replace(/\W/g, "")}_${clients.length}_xxxxxxxxxxxxxxxxxxxxxxxxx`; const id = String(clients.length); clients.push({ id, user, token }); return { id, token }; },
     authenticate: (header) => {
       const token = String(header || "").replace(/^Bearer /, "");
@@ -40,7 +41,7 @@ function install(host, net, extra = {}) {
   const box = new Map();
   const secrets = { get: (n) => box.get(n) || null, set: (n, v) => box.set(n, v), delete: (n) => box.delete(n) };
   const app = new Hono();
-  const n = createNetwork({ store, peerAuth, secrets, env: { GRIFFIN_NETWORK_DOMAINS: DOMAINS.join(","), GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => `https://${host}`, fetchFn: (url, init) => net(url, init), log: { log() {}, error() {} }, ...(extra.runner ? { runner: extra.runner } : {}), ...(extra.presence ? { presence: extra.presence } : {}), pollGapMs: 1, retryMs: 1 });
+  const n = createNetwork({ store, peerAuth, secrets, env: { GRIFFIN_NETWORK_DOMAINS: DOMAINS.join(","), GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => `https://${host}`, fetchFn: (url, init) => net(url, init), log: { log() {}, error() {} }, ...(extra.runner ? { runner: extra.runner } : {}), ...(extra.presence ? { presence: extra.presence } : {}), ...(extra.admit ? { admit: () => extra.admit } : {}), pollGapMs: 1, retryMs: 1, ...(extra.inboxDir ? { inboxDir: extra.inboxDir } : {}), ...(extra.sendRoots ? { sendRoots: extra.sendRoots } : {}) });
   n.routes(app);
   // The peer MCP: a valid, unrevoked token opens tools/list; griffin_send answers at once.
   app.post("/mcp", async (c) => {
@@ -52,8 +53,30 @@ function install(host, net, extra = {}) {
     const answer = { taskId: "t1", contextId: "c1", state: "completed", answer: `${host} got: ${body.params.arguments.message} from ${cl.user}` };
     return c.json({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(answer) }] } });
   });
-  return { host, app, n, users, clients, secrets: box };
+  return { host, app, n, users, clients, secrets: box, kv };
 }
+
+test("NETWORK_ADMIT=owner: a new member is made disabled with a card for the owner; a known one is untouched", async () => {
+  const hosts = {};
+  const net = (url, init = {}) => { const u = new URL(url); return hosts[u.host].app.request(u.pathname, init); };
+  const a = (hosts["a.example.org"] = install("a.example.org", net));
+  const b = (hosts["b.example.org"] = install("b.example.org", net, { admit: "owner" }));
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  await a.n.hello("https://b.example.org");
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(b.users.get("net-a-example-org")?.enabled, false, "B holds A until its owner turns it on");
+  const tasks = b.kv.get("ownertasks") || [];
+  assert.equal(tasks.length, 1);
+  assert.match(tasks[0].title, /a\.example\.org/);
+  // The owner turns it on; a later hello from A does not turn it off again or add a second card.
+  b.users.get("net-a-example-org").enabled = true;
+  await a.n.hello("https://b.example.org");
+  for (let i = 0; i < 10; i++) await settle();
+  assert.equal(b.users.get("net-a-example-org").enabled, true);
+  assert.equal((b.kv.get("ownertasks") || []).length, 1);
+  // Default (auto) keeps today's behaviour.
+  assert.equal(a.users.get("net-b-example-org")?.enabled, true);
+});
 
 test("a new agent that meets one member meets the whole network, and they all meet it", async () => {
   const hosts = {};
@@ -388,4 +411,37 @@ test("a member whose public name moved is followed to the new name, token and al
   assert.equal([...a.secrets.values()].includes(token), true, "the token we held came along");
   const r = await a.n.ask(agentId(bName), "سلام");
   assert.equal(r.state, "completed");
+});
+
+test("a file goes from one member to another's inbox; outside the workspace, a stranger, or too large is refused", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "net-file-"));
+  const work = path.join(tmp, "work");
+  const inbox = path.join(tmp, "inbox");
+  fs.mkdirSync(work);
+  fs.writeFileSync(path.join(work, "فیش.pdf"), "%PDF-1.4 slip");
+  fs.writeFileSync(path.join(tmp, "outside.txt"), "secret");
+  const hosts = {};
+  const net = (url, init = {}) => { const u = new URL(url); return hosts[u.host].app.request(u.pathname, init); };
+  const a = (hosts["a.example.org"] = install("a.example.org", net, { sendRoots: [work] }));
+  const b = (hosts["b.example.org"] = install("b.example.org", net, { inboxDir: inbox }));
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  await a.n.hello("https://b.example.org");
+  for (let i = 0; i < 10; i++) await settle();
+  const r = await a.n.sendFile("b-example-org", path.join(work, "فیش.pdf"));
+  assert.equal(r.ok, true);
+  assert.ok(r.remotePath.startsWith(path.join(inbox, "a-example-org")));
+  assert.equal(fs.readFileSync(r.remotePath, "utf8"), "%PDF-1.4 slip");
+  assert.match(path.basename(r.remotePath), /فیش\.pdf$/);
+  await assert.rejects(a.n.sendFile("b-example-org", path.join(tmp, "outside.txt")), /inside this install's workspace/);
+  await assert.rejects(a.n.sendFile("b-example-org", path.join(work, "..", "work", "..", "outside.txt")), /inside this install's workspace/);
+  // A stranger without a member token gets nothing.
+  const bad = await b.app.request("/api/public/network/file", { method: "POST", headers: { authorization: "Bearer nope", "x-network-from": "https://a.example.org" }, body: "x" });
+  assert.equal(bad.status, 401);
+  // An install with no inbox takes no files.
+  const c = install("c.example.org", net);
+  assert.equal((await c.app.request("/api/public/network/file", { method: "POST", body: "x" })).status, 404);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

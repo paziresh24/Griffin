@@ -45,10 +45,58 @@ test("a backup is a gzipped, checked copy that reopens with the chats", async ()
   assert.equal(fs.readdirSync(path.join(dir, "backups")).length, 1, "no .part or temp left");
 });
 
+test("a backup is due only in the night's hour, once a night", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-backup-"));
+  const dbFile = path.join(dir, "griffin.sqlite");
+  const store = openStore(dbFile);
+  let t = Date.parse("2026-11-04T10:00:00Z");
+  const backups = createBackups({ store, dbFile, dataDir: dir, now: () => t, log: {} });
+  assert.equal(backups.due(), true, "a new install does not wait for its first night");
+  assert.equal((await backups.run()).ok, true);
+  t = Date.parse("2026-11-05T01:20:00Z"); // 04:50 Tehran
+  assert.equal(backups.due(), false);
+  t = Date.parse("2026-11-05T01:40:00Z"); // 05:10 Tehran
+  assert.equal(backups.due(), true);
+  assert.equal((await backups.run()).ok, true);
+  t += 20 * 60_000;
+  assert.equal(backups.due(), false, "once a night");
+  t = Date.parse("2026-11-05T10:00:00Z");
+  assert.equal(backups.due(), false, "not in the day");
+  store.setKv("backup:last", JSON.stringify({ at: new Date(t - 2 * 3600_000).toISOString(), ok: false, error: "x" }));
+  assert.equal(backups.due(), false, "a recent backup is enough, even after a failed try");
+  t = Date.parse("2026-11-06T10:00:00Z");
+  assert.equal(backups.due(), true, "a failed night does not wait for the next");
+  const other = createBackups({ store, dbFile, dataDir: dir, config: () => ({ hour: "3" }), now: () => Date.parse("2026-11-06T23:40:00Z"), log: {} });
+  store.deleteKv("backup:last");
+  assert.equal(other.due(), true, "03:10 Tehran");
+});
+
+test("a backup survives writes from another connection and clears what a restart left", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-backup-"));
+  const dbFile = path.join(dir, "griffin.sqlite");
+  const store = openStore(dbFile);
+  const insert = store.db.prepare("INSERT INTO chats (id, title, created_at, updated_at) VALUES (?, 't', 'x', 'x')");
+  for (let i = 0; i < 2000; i++) insert.run(`old${i}`);
+  fs.mkdirSync(path.join(dir, "backups"));
+  const left = path.join(dir, "backups", ".griffin-20261104T085250Z.sqlite.gz.tmp");
+  fs.writeFileSync(left, "x");
+  const backups = createBackups({ store, dbFile, dataDir: dir, log: {} });
+  let done = false;
+  const running = backups.run().finally(() => (done = true));
+  for (let i = 0; !done; i++) {
+    insert.run(`new${i}`);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  const r = await running;
+  assert.equal(r.ok, true, r.error);
+  assert.ok(r.chats >= 2000);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "backups")).filter((n) => n.startsWith(".")), [], "no copy left behind");
+});
+
 test("off and failures show up in the doctor", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-backup-"));
   const store = openStore(path.join(dir, "griffin.sqlite"));
-  const off = createBackups({ store, dbFile: path.join(dir, "griffin.sqlite"), dataDir: dir, config: () => ({ every: 0 }), log: {} });
+  const off = createBackups({ store, dbFile: path.join(dir, "griffin.sqlite"), dataDir: dir, config: () => ({ hour: "off" }), log: {} });
   assert.equal(off.due(), false);
   assert.equal(off.health().level, "warn");
   const broken = createBackups({ store, dbFile: path.join(dir, "missing.sqlite"), dataDir: dir, log: {} });

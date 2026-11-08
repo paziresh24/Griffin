@@ -1,8 +1,10 @@
-// One backup on its own thread (backup.mjs): an online copy of the live database with SQLite's own
-// backup API (consistent while the server keeps writing — WAL readers do not block writers), checked
-// with quick_check, then gzipped. Nothing here runs on the server's event loop.
+// One backup on its own thread (backup.mjs): an online copy of the live database with VACUUM INTO, one
+// read snapshot that the server's writes never disturb, checked with quick_check, then gzipped. Not
+// SQLite's backup API: every write from another connection restarts it, so on a busy server it rewrote
+// the same file for half an hour and more and kept the disk from everything else (2026-11-04).
+// Nothing here runs on the server's event loop.
 import { parentPort, workerData } from "node:worker_threads";
-import { DatabaseSync, backup } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -14,13 +16,10 @@ const dropTmp = () => { for (const f of [tmp, `${tmp}-wal`, `${tmp}-shm`, `${tmp
 try {
   const live = new DatabaseSync(src, { readOnly: true });
   live.exec("PRAGMA busy_timeout = 5000;");
-  await backup(live, tmp, { rate: 512 });
+  live.prepare("VACUUM INTO ?").run(tmp);
   live.close();
 
-  // The copy carries the live file's WAL mode: fold it into one file (no -wal/-shm beside it) so the
-  // gzip holds every page.
   const copy = new DatabaseSync(tmp);
-  copy.exec("PRAGMA journal_mode = DELETE;");
   const check = copy.prepare("PRAGMA quick_check").get();
   const verdict = check ? Object.values(check)[0] : "no answer";
   const chats = copy.prepare("SELECT COUNT(*) AS n FROM chats").get().n;

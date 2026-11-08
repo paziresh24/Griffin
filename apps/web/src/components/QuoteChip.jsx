@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { MessagesSquare, Pencil, Quote, Reply, X } from "lucide-react";
 import { quotePreview, quoteStore } from "../quotes.js";
 import { textDir } from "../dir.js";
@@ -6,8 +6,27 @@ import { useTouchPrimary } from "../touch.js";
 import { isRtl, t } from "../i18n.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { MentionText } from "./Mention.jsx";
+import { useAutosize } from "../autosize.js";
+import { ChatRecord, MentionList, useMentionPicker } from "./ComposerAssist.jsx";
 
-// One waiting quote above the input. A click opens it in place: the quoted text and
+// The waiting quotes above the input: past a few they scroll here, so the box and the thread stay
+// on screen however many replies wait (owner 2026-11-05: «اسکرول نمیخوره و دیگه نمیشه چت رو خوند»).
+export function QuoteList({ chatId, quotes, onDone }) {
+  const box = useRef(null);
+  useEffect(() => {
+    if (box.current) box.current.scrollTop = box.current.scrollHeight; // the one just added
+  }, [quotes.length]);
+  if (!quotes.length) return null;
+  return (
+    <div ref={box} className="scrollbar-thin flex max-h-[min(11rem,28dvh)] flex-col gap-1 overflow-y-auto px-2 pt-2">
+      {quotes.map((q) => (
+        <QuoteChip key={q.id} chatId={chatId} quote={q} onDone={onDone} />
+      ))}
+    </div>
+  );
+}
+
+// One waiting quote above the input A click opens it in place: the quoted text and
 // the note are both editable, saved or cancelled before the message goes (Esc cancels; Enter in the
 // note, or Ctrl+Enter anywhere, saves — on a phone the buttons do). Focus leaving the editor keeps
 // the edit, so a send never carries the old quote.
@@ -16,7 +35,12 @@ export function QuoteChip({ chatId, quote, onDone }) {
   const karsara = useLook() === "karsara";
   const [draft, setDraft] = useState(null);
   const textBox = useRef(null);
+  const noteBox = useRef(null);
   const closing = useRef(false);
+  const chat = useContext(ChatRecord);
+  useAutosize(textBox, draft?.text);
+  useAutosize(noteBox, draft?.note);
+  const picker = useMentionPicker({ inputRef: noteBox, text: draft?.note || "", setText: (note) => setDraft((d) => (d ? { ...d, note } : d)), chatId, chatAgent: chat?.agent, off: !draft });
   useEffect(() => {
     const box = textBox.current;
     if (!draft || !box || document.activeElement === box) return;
@@ -45,6 +69,7 @@ export function QuoteChip({ chatId, quote, onDone }) {
   };
   const onKeyDown = (event, enterSaves) => {
     if (event.nativeEvent?.isComposing) return;
+    if (enterSaves && picker.onKey(event)) return;
     if (event.key === "Escape") {
       // The editor's, never the run's Stop.
       event.preventDefault();
@@ -67,9 +92,11 @@ export function QuoteChip({ chatId, quote, onDone }) {
           onChange={(event) => setDraft({ ...draft, text: event.target.value })}
           onKeyDown={(event) => onKeyDown(event, false)}
           aria-label={t("متن نقل‌قول")}
-          className={`${box} max-h-40 text-muted-foreground`}
+          className={`${box} max-h-[30dvh] text-muted-foreground`}
         />
+        <MentionList picker={picker} />
         <textarea
+          ref={noteBox}
           rows={2}
           value={draft.note}
           dir={draft.note ? textDir(draft.note) : isRtl ? "rtl" : "ltr"}
@@ -77,7 +104,7 @@ export function QuoteChip({ chatId, quote, onDone }) {
           onKeyDown={(event) => onKeyDown(event, true)}
           aria-label={t("نظر دربارهٔ این بخش")}
           placeholder={t("نظرت دربارهٔ این بخش (اختیاری)")}
-          className={`${box} max-h-32`}
+          className={`${box} max-h-[30dvh]`}
         />
         <div className="flex justify-end gap-2" onMouseDown={(event) => event.preventDefault()}>
           <button type="button" className="rounded-md px-2.5 py-1 hover:bg-muted" onClick={close}>{t("انصراف")}</button>

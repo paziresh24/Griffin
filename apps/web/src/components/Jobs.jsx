@@ -135,6 +135,7 @@ function JobCard({ job, targets, onChange, onEdit }) {
       await api(path, { method });
       await onChange();
       if (open) loadRuns();
+      if (method === "DELETE") toast.success(t("حذف شد"));
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -155,7 +156,7 @@ function JobCard({ job, targets, onChange, onEdit }) {
   };
 
   const remove = async () => {
-    if (!(await askConfirm(t("جاب «{name}» و گفتگوهای اجراهایش حذف شوند؟", { name: job.name })))) return;
+    if (!(await askConfirm(t("جاب «{name}» و گفتگوهای اجراهایش حذف شوند؟", { name: job.name }), { danger: true, yes: t("حذف") }))) return;
     call(`/api/jobs/${job.id}`, "DELETE");
   };
 

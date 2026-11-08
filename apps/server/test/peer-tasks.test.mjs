@@ -10,6 +10,7 @@ import { createPeerAuth } from "../src/peer-auth.mjs";
 import { createPeerTasks } from "../src/peer-tasks.mjs";
 import { createMcpHandler } from "../src/mcp.mjs";
 import { seedExampleAgents } from "./fixture-agents.mjs";
+import { questionFromEvent } from "../src/integrations/manager.mjs";
 
 // Fake runner: each send runs `script(chatId, emit)`; emit appends chat events like the real one.
 function setup(script, extra = {}) {
@@ -93,7 +94,7 @@ test("long task returns working quickly and streams progress through wait", asyn
   assert.equal(started.state, "working");
   const first = await tasks.wait(peer, { taskId: started.taskId, afterSeq: 0, waitSec: 2 });
   assert.equal(first.state, "working");
-  assert.match(first.progress.map((p) => p.text).join(""), /شروع کردم/);
+  assert.ok(!JSON.stringify(first).includes("شروع کردم"), "text is the answer: nothing of it reaches the requester before the task ends");
   release();
   let last = first;
   for (let i = 0; i < 5 && last.state !== "completed"; i += 1) {
@@ -287,6 +288,45 @@ test("permission question -> auth-required: the peer cannot answer, the owner ca
   }
   assert.equal(last.state, "completed");
   assert.match(last.answer, /Owner گفت: بله/);
+});
+
+// 2026-11-05: the owner asked to see a payslip first; what the agent had written still went to the requester.
+test("what the agent wrote before its question to the owner never reaches the requester; detail stays with the owner", async () => {
+  let toolResult;
+  const { store, tasks, peer, asks } = setup(async (chatId, emit) => {
+    emit("text", { text: "جدول فیش: ۱۲۳" });
+    const args = { question: "فیش را بدهم؟", detail: "جدول فیش: ۴۵۶" };
+    emit("tool.started", { name: "ask_owner", args });
+    const res = await asks.tool(chatId).execute(args);
+    toolResult = JSON.parse(res.content[0].text);
+    emit("text", { text: toolResult.answer === "نه" ? "مالک اجازه نداد" : "فیش: ۴۵۶" });
+  });
+  const r = await tasks.send(peer, { message: "فیش را بده", waitSec: 2 });
+  assert.equal(r.state, "auth-required");
+  assert.ok(!JSON.stringify(r).includes("فیش:"), "neither the draft nor the detail goes to the requester");
+  const pending = store.eventsAfter(r.contextId, 0, 100).find((e) => e.type === "ask.pending");
+  assert.equal(pending.data.detail, "جدول فیش: ۴۵۶");
+  assert.match(questionFromEvent(pending).question, /۴۵۶/, "the owner sees it on Telegram too");
+
+  assert.equal(asks.answer(r.contextId, { answer: "نه", selected: ["نه"] }), true);
+  let last = r;
+  for (let i = 0; i < 10 && last.state !== "completed"; i += 1) last = await tasks.wait(peer, { taskId: r.taskId, afterSeq: last.seq, waitSec: 2 });
+  assert.equal(last.answer, "مالک اجازه نداد");
+  assert.match(toolResult.note, /detail/);
+});
+
+test("a question carrying what the owner asked to see is not refused as a repeat", async () => {
+  const { store, asks } = setup(async () => {});
+  const chat = store.createChat({ title: "t", caller: "peer:team-a" });
+  const first = asks.tool(chat.id).execute({ question: "فیش حقوقی را به آیریس بدهم؟" });
+  await tick();
+  asks.answer(chat.id, { answer: "اول نشانم بده", selected: ["اول نشانم بده"] });
+  await first;
+  const again = asks.tool(chat.id).execute({ question: "فیش حقوقی را به آیریس بدهم؟", detail: "جدول" });
+  await tick();
+  assert.ok(asks.isWaiting(chat.id), "it waits for the owner");
+  asks.answer(chat.id, { answer: "بده", selected: ["بده"] });
+  assert.equal(JSON.parse((await again).content[0].text).answer, "بده");
 });
 
 // Griffin hands work to a specialist and ends its turn while the child is still waiting on the

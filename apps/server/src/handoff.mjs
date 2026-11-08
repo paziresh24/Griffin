@@ -71,6 +71,60 @@ export function shellWrites(command) {
   return SHELL_WRITE.test(String(command || ""));
 }
 
+// What a colleague's conversation runs inside a pod on «بپرس» without asking: a plain read, one command
+// or a pipe (owner 2026-11-04: «اتونوموسشو افزایش بدیم»; refusing `redis-cli info` and `nc -z` left it
+// no way to find a cause). An allowlist that fails closed: no variables or substitutions, no redirect
+// into a file, nothing that names a secret. Database clients and env stay out: data and secrets go
+// through request_full_access. ponytail: a text check, not a sandbox; the output is masked too (guard.mjs).
+const POD_READS = new Set([
+  "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "wc", "sort", "uniq", "cut", "tr", "find", "stat", "du", "df", "free",
+  "ps", "ss", "netstat", "ip", "uptime", "uname", "id", "whoami", "date", "echo",
+  "nslookup", "dig", "host", "getent", "ping", "traceroute", "nc", "curl", "wget", "redis-cli",
+]);
+const POD_SECRET = /secret|passw|pwd|token|credential|authoriz|api[-_]?key|private|shadow|\.env\b|\.pem\b|\.key\b|id_rsa|htpasswd|requirepass|masterauth|environ|kubeconfig|\.kube\b|serviceaccount/i;
+const POD_NEEDS = {
+  nc: /\s-[a-zA-Z]*z/,
+  wget: /--spider|\s-[a-zA-Z]*O\s*(-|\/dev\/null)(\s|$)/,
+  "redis-cli": /^redis-cli(\s+-[hpn]\s+\S+)*\s+(info|ping|dbsize|slowlog\s+get|client\s+list|config\s+get)\b/i,
+};
+const POD_REFUSES = {
+  curl: /\s-[a-zA-Z]*[dDFTXKuoOc]|\s--(data|json|form|upload|request|config|user|output|remote-name|dump-header|cookie-jar)/,
+  wget: /--post|--body|--output-file|\s-[a-zA-Z]*o\s/,
+  nc: /\s-[a-zA-Z]*[lec]\b/,
+  find: /\s-(delete|exec|execdir|ok|okdir|fprint\S*|fls)\b/,
+  sort: /\s-[a-zA-Z]*o\b|--output/,
+  ip: /\b(add|del|delete|flush|set|change|replace|append)\b/,
+  ss: /\s-[a-zA-Z]*K|--kill/,
+  date: /\s-[a-zA-Z]*s\b|--set/,
+  "redis-cli": /\sconfig\s+get\s+(Q|\S*\*)/i,
+  grep: /\s-[a-zA-Z]*[rR]|--recursive|--dereference-recursive/,
+};
+POD_REFUSES.egrep = POD_REFUSES.fgrep = POD_REFUSES.grep;
+const POD_NO_GLOB = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep"]);
+// curl's harmless spellings of flags POD_REFUSES.curl catches.
+const CURL_FINE = /\s-[a-zA-Z]*o\s+\/dev\/null|\s--output\s+\/dev\/null|\s(-X\s*|--request\s+)(GET|HEAD)\b/g;
+
+export function podReadOnly(command) {
+  const raw = String(command || "");
+  if (!raw.trim() || POD_SECRET.test(raw) || /[`$]/.test(raw)) return false;
+  // Quoted text is an argument, never a command or a separator.
+  const bare = raw.replace(/'[^']*'|"[^"]*"/g, "Q").replace(/\d?>&\d|\d?>\s*\/dev\/null/g, "");
+  if (/[<>()'"]/.test(bare)) return false;
+  return bare.split(/\|\||&&|[|;&\n]/).every((part) => {
+    const seg = part.trim().replace(/^timeout(\s+-\S+)*\s+\S+\s+/, "");
+    if (!seg) return true;
+    const cmd = seg.split(/\s+/)[0];
+    if (!POD_READS.has(cmd)) return false;
+    if (POD_NEEDS[cmd] && !POD_NEEDS[cmd].test(seg)) return false;
+    if (POD_NO_GLOB.has(cmd) && /[*?]/.test(seg)) return false;
+    return !POD_REFUSES[cmd]?.test(cmd === "curl" ? seg.replace(CURL_FINE, "") : seg);
+  });
+}
+
+// Said with a kube_exec refusal, so the next try is a plain read and not a request for access.
+export const POD_READ_HINT =
+  " خواندن ساده داخل پاد آزاد است: یک دستور یا pipe از cat، ls، grep، ps، ss، dig، nc -z، curl GET و redis-cli info، بدون متغیر، حلقه، redirect و نام رمز.";
+
 /** What a team chain may not run on top of the general gate: { approve: label } or null. */
 export function teamWriteVerdict(name, args = {}) {
   const label = TEAM_WRITES.get(name);
@@ -139,6 +193,8 @@ export function handoffStartedNotice({ who = null, title, why }) {
 
 const HEAD_MAX = handoffPrompt({ fromTitle: "x".repeat(80), who: "x".repeat(60), prompt: "", approved: { question: "x".repeat(300), answer: "x".repeat(120) } }).length;
 
+export const HANDOFF_PROMPT_ROOM = PROMPT_MAX - HEAD_MAX;
+
 /**
  * handoff_to_owner for a chain rooted in a colleague's conversation (their Telegram chat or their
  * agent over /mcp). rootChatId is that chain's root: the card, the report back and the limit are per
@@ -146,7 +202,7 @@ const HEAD_MAX = handoffPrompt({ fromTitle: "x".repeat(80), who: "x".repeat(60),
  * (suggest-start.mjs) — used when he already said yes in this conversation, so the work runs at once
  * instead of waiting on a second click.
  */
-export function handoffTool({ store, chatId, rootChatId, who = null, notify = null, start = null }) {
+export function handoffTool({ store, chatId, rootChatId, who = null, notify = null, start = null, approved: given = null }) {
   return {
     description:
       `Hand work this conversation may not do — any change (cluster, database, repo/MR, DNS/CDN, router, secret, server, Griffin's own code) or an access it lacks — to one of ${OWNER.name}'s own main chats. ` +
@@ -167,7 +223,7 @@ export function handoffTool({ store, chatId, rootChatId, who = null, notify = nu
       const why = maskText(str(args?.why, 600));
       const prompt = maskText(typeof args?.prompt === "string" ? args.prompt.trim() : "");
       if (!title || !why || !prompt) return fail("title, why and prompt are required");
-      const room = PROMPT_MAX - HEAD_MAX;
+      const room = HANDOFF_PROMPT_ROOM;
       if (prompt.length > room) return fail(`prompt is ${prompt.length} characters; the limit is ${room}. Shorten it (names and evidence, not pasted logs) and call again.`);
       const open = store.listSuggestions({ status: "open", limit: 500 }).filter((row) => row.from_chat_id === rootChatId && store.getKv(FROM_KEY(row.id)));
       if (open.length >= HANDOFF_MAX_OPEN) {
@@ -176,7 +232,7 @@ export function handoffTool({ store, chatId, rootChatId, who = null, notify = nu
       const same = open.find((row) => row.title === title);
       if (same) return ok({ id: same.id, already: "همین کار قبلاً سپرده شده و منتظر است" });
       const root = store.getChat(rootChatId);
-      const approved = start ? recentOwnerYes(store, rootChatId) : null;
+      const approved = start ? given || recentOwnerYes(store, rootChatId) : null;
       const row = store.createSuggestion({
         fromChatId: rootChatId,
         title,
