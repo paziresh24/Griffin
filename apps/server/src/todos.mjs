@@ -95,7 +95,7 @@ export const offersOwnerTask = ({ rootCaller, unattended }) => !unattended && ro
 export function ownerTaskTool({ store, chatId, askedIn = null, agent }) {
   return {
     description:
-      "Ask the owner for ACCESS you lack — besides a decision (ask_owner), the only thing that is his. Never work: a code change, the fixes a review asked for, editing a workflow, telling someone, running a fix — those are yours (do them or delegate them). Name the exact access: which permission or credential, on which system, and where it should land (e.g. «Maintainer برای کاربر griffin روی alice/search-service», «API key پنل n8n سرچ در Infisical پروژهٔ alice»). It lands on his main page; when he grants it the main conversation is told which thread asked, and the work goes on there. Do what you can meanwhile. " +
+      "Ask the owner for ACCESS you lack — besides a decision (ask_owner), the only thing that is his. Never work: a code change, the fixes a review asked for, editing a workflow, telling someone, running a fix — those are yours (do them or delegate them). Name the exact access: which permission or credential, on which system, and where it should land (e.g. «Maintainer برای کاربر griffin روی alice/search-service», «API key پنل n8n در صفحهٔ سکرت‌های همین نصب»). It lands on his main page; when he grants it the main conversation is told which thread asked, and the work goes on there. Do what you can meanwhile. " +
       "The card stays on his page until it is closed: once the access is there (he said so in this chat, or you saw it work) and you have tested it, close it with {done: <its id>} — never leave a granted access waiting on him.",
     inputSchema: {
       type: "object",

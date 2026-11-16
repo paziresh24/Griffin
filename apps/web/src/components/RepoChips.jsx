@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Popover } from "radix-ui";
 import { Command } from "cmdk";
-import { Check, Folder, FolderGit2, FolderInput, GitBranch, Loader2, Plus, Server } from "lucide-react";
+import { Check, Folder, FolderGit2, FolderInput, GitBranch, Loader2, Plus, Server, Star } from "lucide-react";
 import { toast } from "sonner";
 import { api, usePolling } from "../api.js";
 import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-switch.js";
@@ -104,7 +104,10 @@ function RepoPicker({ repo, onChange, moving = false }) {
   const [refresh, setRefresh] = useState(0);
   const known = usePolling("/api/repos", 5 * 60_000);
   const fresh = usePolling(refresh ? `/api/repos?r=${refresh}` : null, 5 * 60_000);
-  const repos = (fresh || known)?.repos || [];
+  const list = fresh || known;
+  const repos = list?.repos || [];
+  const [defaultRepo, setDefaultRepo] = useState(undefined);
+  const currentDefault = defaultRepo !== undefined ? defaultRepo : list?.default || null;
   const [open, setOpen] = useState(false);
   // Each opening reads the list again: a repo cloned after this page loaded (another chat's agent)
   // only showed up after a reload, or once the first message moved the page to the chat (2026-10-28).
@@ -118,12 +121,25 @@ function RepoPicker({ repo, onChange, moving = false }) {
     onChange(value);
     setOpen(false);
   };
-  // "group/name" typed in the search box can be cloned from GitLab.
-  const project = /^[\w.-]+(\/[\w.-]+)+$/.test(query.trim()) ? query.trim() : null;
+  // A git URL typed or pasted in the search box is cloned by the app (GitHub or any host); a GitLab
+  // "group/name" goes to the install's GitLab.
+  const typed = query.trim();
+  const url = /^(https:\/\/|ssh:\/\/|[\w.-]+@[\w.-]+:)\S+$/.test(typed) ? typed : null;
+  const project = !url && /^[\w.-]+(\/[\w.-]+)+$/.test(typed) ? typed : null;
+  // «پیش‌فرض کن»: the repo every new chat starts on (Settings → «ریپوی پیش‌فرض» is the same setting).
+  const makeDefault = async (name) => {
+    try {
+      const out = await api("/api/repos/default", { method: "PUT", body: { repo: name } });
+      setDefaultRepo(out.default);
+      toast.success(out.default ? t("«{repo}» ریپوی پیش‌فرض چت‌های تازه شد", { repo: out.default }) : t("ریپوی پیش‌فرض برداشته شد"));
+    } catch (error) {
+      toast.error(String(error?.message || error));
+    }
+  };
   const clone = async () => {
     setCloning(true);
     try {
-      const result = await api("/api/repos/clone", { method: "POST", body: { project } });
+      const result = await api("/api/repos/clone", { method: "POST", body: url ? { url } : { project } });
       setRefresh((n) => n + 1);
       toast.success(t("{repo} کلون شد", { repo: result.repo }));
       pick(result.repo);
@@ -143,7 +159,7 @@ function RepoPicker({ repo, onChange, moving = false }) {
       <Popover.Portal>
         <Popover.Content align="start" side="top" sideOffset={8} className="pop z-50 w-72 overflow-hidden rounded-xl border bg-card text-sm shadow-xl">
           <Command loop className="flex flex-col">
-            <Command.Input value={query} onValueChange={setQuery} autoFocus placeholder={t("جستجو، یا group/name برای کلون…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
+            <Command.Input value={query} onValueChange={setQuery} autoFocus placeholder={t("جستجو، یا آدرس git برای افزودن ریپو…")} className="border-b bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground" />
             <Command.List className="scrollbar-thin max-h-72 overflow-y-auto p-1">
               {moving ? null : (
                 <Command.Item value="__none" onSelect={() => pick("")} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
@@ -155,9 +171,32 @@ function RepoPicker({ repo, onChange, moving = false }) {
                 <Command.Item key={name} value={name} onSelect={() => pick(name)} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
                   <Folder className="size-3.5 text-muted-foreground" />
                   <span className="ltr flex-1 truncate">{name}</span>
+                  {currentDefault === name ? <span className="shrink-0 rounded-md bg-primary/10 px-1.5 text-[10px] text-primary">{t("پیش‌فرض")}</span> : null}
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      makeDefault(currentDefault === name ? "" : name);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    className={`press shrink-0 rounded-md p-1 hover:bg-background ${currentDefault === name ? "text-primary" : "text-muted-foreground/60 hover:text-foreground"}`}
+                    title={currentDefault === name ? t("برداشتن از پیش‌فرض") : t("پیش‌فرض کن: چت‌های تازه با این ریپو شروع شوند")}
+                    aria-label={currentDefault === name ? t("برداشتن از پیش‌فرض") : t("پیش‌فرض کن")}
+                  >
+                    <Star className={`size-3.5 ${currentDefault === name ? "fill-current" : ""}`} />
+                  </button>
                   {repo === name ? <Check className="size-3.5" /> : null}
                 </Command.Item>
               ))}
+              {!repos.length && !typed ? (
+                <p className="px-2.5 py-2 text-xs leading-5 text-muted-foreground">{t("هنوز ریپویی نیست. آدرس git را این‌جا بچسبانید (مثلاً https://github.com/owner/repo) تا کلون شود.")}</p>
+              ) : null}
+              {url ? (
+                <Command.Item value={`__clone ${url}`} disabled={cloning} onSelect={clone} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
+                  {cloning ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                  <span className="min-w-0 flex-1 truncate">{t("افزودن ریپو از این آدرس")}</span>
+                </Command.Item>
+              ) : null}
               {project ? (
                 <Command.Item value={`__clone ${project}`} disabled={cloning} onSelect={clone} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-muted">
                   {cloning ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}

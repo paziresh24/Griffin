@@ -46,7 +46,7 @@ test("the subagent brief carries the binding rules and the map, and the hook han
   const brief = subagentBrief(["infisical_upsert", "kube_get"], { ownerName: "Alex" });
   assert.match(brief, /subagent of /);
   assert.match(brief, /Secrets move only through Infisical/);
-  assert.match(brief, /Tehran time/);
+  assert.match(brief, /owner's local time/);
   assert.match(brief, /Report ONCE/);
   assert.match(brief, /Capability map/);
   const out = await subagentHook(brief).hooks[0]({ hook_event_name: "SubagentStart", agent_id: "a", agent_type: "general-purpose" });
@@ -56,4 +56,12 @@ test("the subagent brief carries the binding rules and the map, and the hook han
 test("the full owner map stays small (it is in every request)", () => {
   const map = capabilityMap(SEEN);
   assert.ok(map.length < 11_000, `map is ${map.length} chars`);
+});
+
+test("an install without Infisical is never told to use it, and times follow the owner's zone", () => {
+  const brief = subagentBrief(["kube_get", "debug_exec"], { ownerName: "Alex" });
+  assert.doesNotMatch(brief, /Infisical/);
+  assert.match(brief, /سکرت‌ها/);
+  assert.doesNotMatch(brief, /UTC\+03:30/);
+  assert.doesNotMatch(capabilityMap(["debug_exec", "owner_task"]), /Infisical/);
 });

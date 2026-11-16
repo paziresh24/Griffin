@@ -1,3 +1,4 @@
+import { DEFAULT_TZ } from "../jobs/cron.mjs";
 import { incidentBucket, incidentView } from "./index.mjs";
 import { ADDABLE_KINDS, SOURCE_KINDS, slugify, sourceView, testSource } from "./sources.mjs";
 
@@ -20,7 +21,7 @@ export const OPS_SUGGEST_PER_DAY = 6;
 
 const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 const fail = (error) => ({ isError: true, content: [{ type: "text", text: String(error) }] });
-const tehran = (iso) => (iso ? new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(iso)) : "—");
+const tehran = (iso) => (iso ? new Intl.DateTimeFormat("fa-IR", { timeZone: DEFAULT_TZ, hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }).format(new Date(iso)) : "—");
 
 /** A Telegram chat named by id, @username or title → its person row (only chats a message already came from). */
 export function findTelegramChat(store, chat) {

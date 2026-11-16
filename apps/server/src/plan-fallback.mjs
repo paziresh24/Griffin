@@ -4,6 +4,7 @@
 // owner's own chat instead gets a question card: go on with <model>, or wait for the reset. No
 // answer, «صبر کن» or a new message: nothing moves and the wait for the reset stands as before.
 
+import { DEFAULT_TZ } from "./jobs/cron.mjs";
 import { ASK_TOOL } from "./asks.mjs";
 import { maskText } from "./redact.mjs";
 import { isCreditError } from "./engine-state.mjs";
@@ -69,7 +70,7 @@ export const FALLBACK_OFFERS_KEY = "plan-fallback-offers";
 const faNumber = (n) => Number(n).toLocaleString("fa-IR");
 const tehranAt = (ms, now) => {
   const far = ms - now > 20 * 60 * 60_000;
-  return new Intl.DateTimeFormat("fa-IR", { timeZone: "Asia/Tehran", hour: "2-digit", minute: "2-digit", hour12: false, ...(far ? { weekday: "long" } : {}) }).format(new Date(ms));
+  return new Intl.DateTimeFormat("fa-IR", { timeZone: DEFAULT_TZ, hour: "2-digit", minute: "2-digit", hour12: false, ...(far ? { weekday: "long" } : {}) }).format(new Date(ms));
 };
 
 // Tools that only look: listed after everything that may have acted (sent, written, ran).

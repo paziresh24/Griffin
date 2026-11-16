@@ -1,0 +1,10 @@
+{
+  "«{repo}» ریپوی پیش‌فرض چت‌های تازه شد": "«{repo}» is now the default repo for new chats",
+  "ریپوی پیش‌فرض برداشته شد": "Default repo cleared",
+  "جستجو، یا آدرس git برای افزودن ریپو…": "Search, or a git URL to add a repo…",
+  "برداشتن از پیش‌فرض": "Remove as default",
+  "پیش‌فرض کن: چت‌های تازه با این ریپو شروع شوند": "Make default: new chats start on this repo",
+  "پیش‌فرض کن": "Make default",
+  "هنوز ریپویی نیست. آدرس git را این‌جا بچسبانید (مثلاً https://github.com/owner/repo) تا کلون شود.": "No repos yet. Paste a git URL here (e.g. https://github.com/owner/repo) to clone it.",
+  "افزودن ریپو از این آدرس": "Add the repo from this URL"
+}

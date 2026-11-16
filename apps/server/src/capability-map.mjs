@@ -8,6 +8,7 @@
 // with when to pick which; anything not mapped still appears (its description's first sentence),
 // so a new tool is never invisible.
 
+import { DEFAULT_TZ } from "./jobs/cron.mjs";
 import { PERSONA } from "./persona.mjs";
 
 const FAMILIES = [
@@ -47,7 +48,7 @@ const FAMILIES = [
   { names: ["mikrotik_print", "mikrotik_exec", "mikrotik_ping", "mikrotik_address_list_add", "mikrotik_forward_add", "mikrotik_remove", "mikrotik_set_enabled"], line: "mikrotik_* — office/site routers: print, ping, exec, address lists, port forwards." },
   { names: ["vcenter_inventory", "vcenter_vms", "vcenter_vm_get", "vcenter_vm_create", "vcenter_customization_specs"], line: "vcenter_* — VMware vCenter: inventory, VMs, create a VM from a template." },
   { names: ["ssh_exec"], line: "ssh_exec — one read-only shell command on any capsule/Platform server or colleague install (user griffin)." },
-  { names: ["debug_exec"], line: "debug_exec — a real root shell (sandbox; or debug/capsule/griffin hosts): drive any API/CLI with a credential read from Infisical when no tool covers it. A missing tool is never the answer while you have this." },
+  { names: ["debug_exec"], line: "debug_exec — a real root shell (sandbox; or debug/capsule/griffin hosts): drive any API/CLI with a credential read from where it is kept (never pasted in chat) when no tool covers it. A missing tool is never the answer while you have this." },
   { names: ["dns_lookup", "http_check", "tls_check"], line: "dns_lookup · http_check (the path users take) · tls_check." },
   // CDN
   { names: ["arvan_domains", "arvan_dns_records", "arvan_dns_create", "arvan_dns_delete", "arvan_dns_export", "arvan_dnssec", "arvan_cache_settings", "arvan_cache_purge", "arvan_purge_tags", "arvan_page_rules", "arvan_page_rule_create", "arvan_load_balancer_get", "arvan_reports", "arvan_security_rules"], line: "arvan_* — Arvan CDN: domains, DNS, cache/purge, page rules, load balancers, reports." },
@@ -122,13 +123,22 @@ ${lines.join("\n")}${browsers}
 `;
 }
 
+// Where secrets go, in this install's own terms: Infisical only when this run really has its tools; an install
+// without it keeps keys in its own encrypted store (Settings → سکرت‌ها) and must never be told to use Infisical.
+export function secretRule(tools = []) {
+  const list = Array.isArray(tools) ? tools : [];
+  return list.includes("infisical_upsert")
+    ? "- Secrets move only through Infisical (infisical_upsert into the person's project, then name the path). Never print a token, password or key — not in your report either."
+    : "- Never print a token, password or key — not in your report either. Keys live in this install's own encrypted store (Settings → سکرت‌ها); refer to one by its name, never by value, and do not suggest a secret manager this install does not have.";
+}
+
 // The rules a subagent (Claude Code's Agent tool) never gets: its prompt is the generic 2.7k one.
 // Kept short: it is added to every subagent's first turn.
 export function subagentBrief(tools, { descriptions = {}, chrome = null, ownerName = "the owner" } = {}) {
   return `You are a subagent of ${PERSONA.latin} (${PERSONA.name}), ${ownerName}'s assistant. Rules that also bind you:
-- Secrets move only through Infisical (infisical_upsert into the person's project, then name the path). Never print a token, password or key — not in your report either.
+${secretRule(tools)}
 - Read-only unless your task says otherwise; anything irreversible (deleting data/PVCs/DNS, production writes, a push to a shared repo's main) is not yours to do — report it back.
-- Times you write are Tehran time (UTC+03:30), not UTC. Your report is read by the parent agent: facts first, short, what you checked vs what you infer.
+- Times you write are the owner's local time (${DEFAULT_TZ}), not UTC. Your report is read by the parent agent: facts first, short, what you checked vs what you infer.
 - Report ONCE at the end; no progress messages. To wait for something, run a waiter in the background instead of polling.
 - Telegram, asking the owner and outside messages are the parent's: say in your report what should be sent or asked.
 ${capabilityMap(tools, { descriptions, chrome })}`;

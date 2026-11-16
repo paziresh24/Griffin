@@ -73,6 +73,7 @@ import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHo
 import { createChatTools, restrictForReadOnlySide, sideIsReadOnly } from "./chat-tools.mjs";
 import { createUpdates } from "./update.mjs";
 import { createUpdateCheck } from "./update-check.mjs";
+import { cloneUrl, isGitUrl } from "./repo-clone.mjs";
 import { readBuildCommit } from "./build-commit.mjs";
 import { BUILD_TOOL, createToolBuilder, guardGriffinMerge } from "./tool-builder.mjs";
 import { OWNER_CHAT_TOOLS_CONFIG, createOwnerChatToolkit, isOwnerChat, offersOwnerChatTools } from "./owner-chat-tools.mjs";
@@ -362,8 +363,12 @@ const businessDocs = businessDocsFeature({ config: businessDocsConfig(), store }
 // The owner's git clones: a chat may work on one, in its own worktree and branch
 // under <REPOS_ROOT>/_wt. The broker and the sandbox see the same path.
 const REPOS_ROOT = path.resolve(genv("REPOS_ROOT", path.join(WORKSPACE, "repos")));
-// The repo a new chat from the web composer starts on (GRIFFIN_DEFAULT_REPO; none unless set).
-const DEFAULT_REPO = genv("DEFAULT_REPO", "");
+// The repo a new chat from the web composer starts on (GRIFFIN_DEFAULT_REPO; none unless set). Read on
+// each use, so the picker's «پیش‌فرض کن» and Settings apply without a restart.
+const defaultRepoName = () => {
+  const name = genv("DEFAULT_REPO", "");
+  return isValidRepoName(REPOS_ROOT, name) ? name : null;
+};
 const showMedia = createShowMedia({
   store,
   workspace: WORKSPACE,
@@ -2383,7 +2388,7 @@ const app = createApp({
   timelines,
   isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo),
   folderSwitch,
-  defaultRepo: () => (isValidRepoName(REPOS_ROOT, DEFAULT_REPO) ? DEFAULT_REPO : null),
+  defaultRepo: defaultRepoName,
   asks,
   models,
   usage,
@@ -2401,9 +2406,25 @@ const app = createApp({
     // Telegram inbox: queue status (owner session only, like every /api/* route).
     inboxRoutes(api, inbox, { store, setMode: (mode) => { config.set({ TELEGRAM_DM_MODE: mode }); store.bus.emit("chats", { type: "config" }); } });
     // A chat's repo picker: the clones under REPOS_ROOT; a new one is cloned by the broker.
-    api.get("/api/repos", (c) => c.json({ repos: listRepos(REPOS_ROOT), root: REPOS_ROOT, default: isValidRepoName(REPOS_ROOT, DEFAULT_REPO) ? DEFAULT_REPO : null }));
+    api.get("/api/repos", (c) => c.json({ repos: listRepos(REPOS_ROOT), root: REPOS_ROOT, default: defaultRepoName() }));
+    // «پیش‌فرض کن» in the picker: the repo a new chat starts on ("" clears it).
+    api.put("/api/repos/default", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const repo = String(body.repo ?? "");
+      if (repo && !isValidRepoName(REPOS_ROOT, repo)) return c.json({ error: "این ریپو در فهرست نیست" }, 400);
+      config.set({ DEFAULT_REPO: repo });
+      return c.json({ default: repo || null });
+    });
     api.post("/api/repos/clone", async (c) => {
       const body = await c.req.json().catch(() => ({}));
+      // A git URL (GitHub, any host) is cloned by the app itself; a GitLab group/name goes to the broker.
+      if (isGitUrl(body.url || body.project)) {
+        try {
+          return c.json(await cloneUrl({ url: body.url || body.project, root: REPOS_ROOT, name: body.name || null }), 201);
+        } catch (error) {
+          return c.json({ error: error.message }, 400);
+        }
+      }
       try {
         return c.json(await callBrokerTool("git_clone", { project: String(body.project || ""), ...(body.name ? { name: String(body.name) } : {}) }, 11 * 60_000), 201);
       } catch (error) {

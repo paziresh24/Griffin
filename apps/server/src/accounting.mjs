@@ -11,6 +11,7 @@
 // Shared accounts: installs signed in with the same token share its fingerprint; a fresh
 // setup-token per install does not, so logins whose weekly window resets at the same moment are taken
 // as one account too (the window is the account's own). The owner names each account on the hub.
+import { DEFAULT_TZ } from "./jobs/cron.mjs";
 import crypto from "node:crypto";
 import { agentId } from "./network.mjs";
 import { usageParts } from "./token-usage.mjs";
@@ -435,7 +436,7 @@ const pctOf = (x) => `${Math.round(x * 100)}٪`;
 const whoOf = (i) => (i.owner ? `${i.owner} (${i.install})` : i.install);
 
 // A moment as the owner reads it: Tehran time, «امروز/فردا ساعت ۰۴:۳۰» or the weekday — never UTC.
-const TEHRAN = "Asia/Tehran";
+const TEHRAN = DEFAULT_TZ; // the owner's zone (GRIFFIN_TZ), the name kept for the code below
 const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
 const clockOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const weekdayOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, weekday: "long" });
