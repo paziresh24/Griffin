@@ -34,7 +34,7 @@ import { useListChoice, useSectionOrder } from "../list-prefs.js";
 import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 import { NavLauncher, NavSlot, PaletteKey, PinnedRow, SectionMenuFoot, SectionMenuItems, navStyleOf, useSections } from "./SectionNav.jsx";
-import { t, isRtl } from "../i18n.js";
+import { num, t, isRtl } from "../i18n.js";
 import { askConfirm, askPrompt } from "../dialog.jsx";
 
 const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));

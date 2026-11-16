@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND, agentMeta } from "../brand.js";
 import { AgentPicker, MODES } from "./Controls.jsx";
-import { t } from "../i18n.js";
+import { locale, num, t } from "../i18n.js";
 import { askConfirm } from "../dialog.jsx";
 
 // A job's mode: the chat's mode list (Controls.jsx) plus «محدود» (owner 2026-10-19). What each means in

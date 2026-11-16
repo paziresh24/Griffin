@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { textDir } from "../dir.js";
 import { clockLabel, createNotesStore, fromLocalInput, LATER_CHOICES, noteBody, noteError, noteTarget, noteTitle, noteWhen, sidebarNotes, toLocalInput, untilLabel } from "../notes.js";
-import { t } from "../i18n.js";
+import { isRtl, num, t } from "../i18n.js";
 import { askConfirm } from "../dialog.jsx";
 
 // One store for the whole app: the card above the composer and the sidebar list stay in step.
