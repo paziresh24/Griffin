@@ -40,8 +40,8 @@ import { subagentBrief } from "./capability-map.mjs";
 import { buildManifest, recordManifest } from "./manifest.mjs";
 import { simulateTools } from "./sim.mjs";
 import { createRunner, keptList, ownerTyped } from "./runner.mjs";
-import { pickAccountHop, pickFallback, pickRoute, planFallbackMode } from "./plan-fallback.mjs";
-import { engineState, isCreditError, probeVerdict, rankByState, sameModelNames } from "./engine-state.mjs";
+import { pickAccountHop, pickFallback, pickRoute, planFallbackMode, scopeSwitch } from "./plan-fallback.mjs";
+import { engineState, isCreditError, probeVerdict, rankByState } from "./engine-state.mjs";
 import { archiveIdleChats } from "./idle-archive.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler, STUCK_TITLE } from "./titles.mjs";
@@ -127,6 +127,7 @@ import { accountRoutes } from "./account-routes.mjs";
 import { createZaiAccount } from "./zai-account.mjs";
 import { createZaiQuotaCache, zaiQuotaFetch } from "./zai-usage.mjs";
 import { createPlanUsageCache } from "./plan-usage.mjs";
+import { claimReset, fetchResets, readLogin } from "./claude-resets.mjs";
 import { setupChecksRoutes } from "./setup-checks.mjs";
 import { createMcpServers } from "./mcp-servers.mjs";
 import { createMcpServerTools } from "./mcp-server-tools.mjs";
@@ -484,6 +485,8 @@ function quickClaude(skip = new Set()) {
 // A refused login or no credit marks the account (as a chat run does) and the same question goes to the
 // next usable account; only when none answers does it fail, in words a person can read. The raw CLI
 // line («OAuth session expired…») stays in the log (a colleague 2026-11-04: the backlog draft showed it).
+// kv: telegram_create_group's record of the groups this install made lately (telegram-account.mjs).
+const TELEGRAM_GROUPS_KV = "telegram-groups-made";
 const NO_QUICK_CLAUDE = "حساب Claude این نصب الان جواب نمی‌دهد (ورودش منقضی شده یا اعتبارش تمام است)؛ از صفحهٔ موتورها دوباره وارد شوید.";
 async function claudeQuick(prompt, model) {
   const tried = new Set();
@@ -564,10 +567,16 @@ function accounts() {
   const byId = new Map(saved.filter((a) => ACCOUNT_ID.test(a?.id || "")).map((a) => [a.id, a]));
   const base = KINDS.map((id) => ({ id, ...(byId.get(id) || {}) }));
   const extra = saved.filter((a) => ACCOUNT_ID.test(a?.id || "") && !KINDS.includes(a.id));
-  return [...base, ...extra].map((a) => ({ id: a.id, kind: kindOf(a.id) || a.id.split("-")[0], label: a.label || "", enabled: a.enabled !== false }));
+  // removed: a base account the owner deleted (owner 2026-11-14: «openai و claude حذف‌شدنی نیستن»).
+  // It stays in the list only as an id the code knows, off and hidden; a sign-in or a key brings it back.
+  // auto: false = never a target of the automatic switch (Engines page).
+  return [...base, ...extra].map((a) => {
+    const removed = KINDS.includes(a.id) && a.removed === true;
+    return { id: a.id, kind: kindOf(a.id) || a.id.split("-")[0], label: a.label || "", enabled: a.enabled !== false && !removed, removed, auto: a.auto !== false };
+  });
 }
 function saveAccounts(list) {
-  store.setKv("engines", JSON.stringify(list.map(({ id, label, enabled }) => ({ id, label, enabled }))));
+  store.setKv("engines", JSON.stringify(list.map(({ id, label, enabled, removed, auto }) => ({ id, label, enabled, ...(removed ? { removed: true } : {}), ...(auto === false ? { auto: false } : {}) }))));
   setAccounts(list);
 }
 setAccounts(accounts());
@@ -764,23 +773,12 @@ function rawModelCandidates(chat) {
   // itself to UPGRADE_MODEL for real work (model-upgrade.mjs).
   const peerFront = isPeerCaller(chat?.caller) ? genv("PEER_PROVIDER", "") : "";
   if (peerFront) add(peerFront, genv("PEER_MODEL", ""), effortOf(genv("PEER_EFFORT", "")));
-  const own = profile?.provider || chat?.provider;
-  // The default engine before the agent's own list; it keeps the agent's model only where that
-  // model name means the same thing (the same account, or two plain Claude logins).
+  // No engine per agent (owner 2026-11-14: «ست کردن موتور برای ایجنت رو کلا بردار»): every agent runs
+  // on the first engine that answers — the default engine, then plain Claude logins, then the rest in
+  // the Engines page's order. A model pinned in the chat's picker still comes first.
   const preferred = defaultEngine();
-  if (preferred) {
-    const same = sameModelNames(preferred, own, { kindOf, isEndpoint: (id) => Boolean(claudeEndpoint(id)) });
-    add(preferred, same ? (pinned ? null : chat?.model) || profile?.model : null);
-  }
-  for (const entry of profile?.meta?.models || []) {
-    const split = splitModel(entry);
-    if (split) add(split.provider, split.model);
-    else add(String(entry), null);
-  }
-  if (kindOf(own)) add(own, (pinned ? null : chat?.model) || profile?.model);
-  if (kindOf(own) === PROVIDER_OPENAI) add(PROVIDER_CLAUDE, genv("FALLBACK_CLAUDE_MODEL", "haiku"));
-  else add(PROVIDER_OPENAI, null);
-  for (const a of accounts()) add(a.id, null);
+  if (preferred) add(preferred, null);
+  for (const a of engineOrder()) add(a.id, null);
   // A colleague's chain (peer:*) runs only on the models the owner allowed it on this agent
   // (Peers page): the allowed entries are candidates themselves, and nothing else is.
   const rootCaller = chat?.parent_chat_id ? rootCallerOf(store, chat) : chat?.caller;
@@ -794,6 +792,25 @@ function rawModelCandidates(chat) {
     return list.filter((c) => allowsModel(allowed, c.provider, c.model));
   }
   return list;
+}
+// The order an agent tries the engines in when no default is set: plain Claude logins first (the
+// engine this product is built on), then the rest as the Engines page lists them.
+function engineOrder() {
+  const all = accounts().filter((a) => !a.removed);
+  return [...all.filter((a) => plainClaude(a.id)), ...all.filter((a) => !plainClaude(a.id))];
+}
+// Which way the automatic switch may go (Engines page): an account with auto off is never switched TO
+// (it still runs when it is the chat's own first engine), and with «same kind only» a chat moves only
+// to an account of its first engine's kind — plain Claude logins, Claude on another vendor's endpoint,
+// OpenAI-compatible and Cursor are four kinds (owner 2026-11-14: «فقط بین اکانت‌های کلاد سوییچ بشه»).
+const switchKind = (id) => (claudeEndpoint(id) ? "claude-endpoint" : kindOf(id));
+const switchSameKind = () => store.getKv("engine-switch-same-kind") === "1";
+function routedCandidates(chat) {
+  const list = modelCandidates(chat);
+  if (consultOf(store, chat?.id)) return list;
+  const home = list.find((c) => accountEnabled(c.provider) && keyedAccount(c.provider));
+  const byId = new Map(accounts().map((a) => [a.id, a]));
+  return scopeSwitch(list, { home, auto: (id) => byId.get(id)?.auto !== false, kind: switchKind, sameKind: switchSameKind() });
 }
 // Plain Claude logins run Sonnet at «medium» unless the owner confirmed a stronger model or effort
 // for this chat by hand (model-policy.mjs). A consult asks for its model explicitly and keeps it.
@@ -839,16 +856,16 @@ const keyedAccount = (id) => Boolean(providerKey(id)) || demo;
 // most room left and stays there; off = the fixed order above.
 const plainClaude = (id) => kindOf(id) === PROVIDER_CLAUDE && !claudeEndpoint(id);
 // The owner's existing routes: Web Push to his phone, and one line from his Telegram bot.
-async function ringOwner(target, text) {
+async function ringOwner(target, text, file = null) {
   const [pushed, telegram] = await Promise.all([
     push.notify("notify", target, { summary: text }),
-    integrations.notifyOwner(`🔔 ${String(target?.title || "").slice(0, 80)}\n${text}`, target?.id || null).catch(() => false),
+    integrations.notifyOwner(`🔔 ${String(target?.title || "").slice(0, 80)}\n${text}`, target?.id || null, file).catch(() => false),
   ]);
   return { push: pushed?.sent ?? 0, telegram: Boolean(telegram) };
 }
 
 function balancedCandidates(chat) {
-  const list = modelCandidates(chat);
+  const list = routedCandidates(chat);
   if (genv("ACCOUNT_BALANCE", "on") === "off") return list;
   const placed = chat?.id ? store.lastRunProvider(chat.id) : null;
   return balanceAccounts(list, { isPlain: plainClaude, usable: usableAccount, loadOf: claudeLoad, placed }).list;
@@ -1041,8 +1058,8 @@ const runner = createRunner({
     return times.length ? Math.min(...times) || Date.now() : null;
   },
   askFallback: asksBeforeSwitch,
-  accountHop: (chat) => pickAccountHop(modelCandidates(chat), routeModel(chat), { enabled: accountEnabled, keyed: keyedAccount, usable: usableAccount, nameOf: accountName, kindOf }),
-  fallbackFor: (chat) => pickFallback(modelCandidates(chat), routeModel(chat), { usable: usableAccount, nameOf: accountName, kindOf }),
+  accountHop: (chat) => pickAccountHop(routedCandidates(chat), routeModel(chat), { enabled: accountEnabled, keyed: keyedAccount, usable: usableAccount, nameOf: accountName, kindOf }),
+  fallbackFor: (chat) => pickFallback(routedCandidates(chat), routeModel(chat), { usable: usableAccount, nameOf: accountName, kindOf }),
   autoContinue: () => genv("AUTO_CONTINUE", "on") !== "off",
   promptSuggestions: () => genv("PROMPT_SUGGESTIONS", "on") !== "off",
   onCancel: (chatId) => {
@@ -1086,6 +1103,7 @@ const runner = createRunner({
       "telegram_send",
       "telegram_edit",
       "telegram_delete",
+      "telegram_create_group",
     ]);
     const settingsTools = bindChatTools(
       createAgentSettingsTools({ store, catalogNames: () => catalogForSettings, mayRename: (chatId) => chatTrust.ownerRooted(chatId) && chatTrust.isCleanChat(chatId) && !store.getKv(thirdPartyKey(chatId)), confirm: (chatId, question) => asks.confirm(chatId, { question }), engine: { isEngine: (id) => Boolean(kindOf(id)), splitModel } }),
@@ -1140,7 +1158,11 @@ const runner = createRunner({
     },
     // telegram_send {file}: only this chat's own working folder (its worktree, or the agent's folder);
     // workDir is set further down, before any tool runs.
-    fileRoots: () => [workDir] }));
+    fileRoots: () => [workDir],
+    // telegram_create_group: the groups made lately, kept across restarts (same title in 24h = that group,
+    // 3 an hour), and never from a job or a scheduler chain (`unattended` is set below, before any tool runs).
+    groupLog: { read: () => store.getKv(TELEGRAM_GROUPS_KV) || [], write: (rows) => store.setKv(TELEGRAM_GROUPS_KV, rows) },
+    unattended: () => unattended }));
     Object.assign(customTools, ledgerTools({ store, chat, enabled: ledgerOn() }));
     Object.assign(customTools, watchListTools({ store }));
 
@@ -1187,6 +1209,7 @@ const runner = createRunner({
         runner,
         link: (id) => (genv("PUBLIC_URL") ? `${genv("PUBLIC_URL").replace(/\/$/, "")}/#/c/${id}` : null),
         notify: ringOwner,
+        fileRoots: [WORKSPACE],
       });
       Object.assign(customTools, ownerChatToolkit.tools(chat.id));
     }
@@ -2424,7 +2447,7 @@ const app = createApp({
     api.get("/api/providers", async (c) => {
       const profiles = store.listAgentProfiles();
       const list = await Promise.all(
-        accounts().map(async (account) => {
+        accounts().filter((a) => !a.removed).map(async (account) => {
           const { id, kind } = account;
           const p = providers[id];
           const config = providerConfig(id);
@@ -2446,7 +2469,8 @@ const app = createApp({
             kind,
             label: account.label || "",
             enabled: account.enabled,
-            removable: id !== kind,
+            removable: true,
+            auto: account.auto,
             hasKey: Boolean(providerKey(id)),
             keyIn: secrets.has(`engine/${id}`) ? "secrets" : providerKey(id) ? "legacy" : null,
             defaultModel: p?.defaultModel || null,
@@ -2462,13 +2486,14 @@ const app = createApp({
             signedInAs,
             health,
             models: list.map((m) => ({ id: m.id, name: m.name || m.id })),
+            // The agents whose next chat would run here now (no agent has an engine of its own).
             agents: profiles
-              .filter((a) => normalizeProvider(a.provider) === id || (a.meta?.models || []).some((m) => String(m).split(":")[0] === id))
+              .filter((a) => routeModel({ agent: a.id, caller: "owner" }).provider === id)
               .map((a) => ({ id: a.id, label: a.label, model: a.model || null })),
           };
         }),
       );
-      return c.json({ providers: rankByState(list, stateOf, (p) => p.id), defaultEngine: defaultEngine(), kinds: KINDS, presets: OPENAI_PRESETS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })), claudeEndpoints: CLAUDE_ENDPOINTS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })) });
+      return c.json({ providers: rankByState(list, stateOf, (p) => p.id), defaultEngine: defaultEngine(), switchSameKind: switchSameKind(), kinds: KINDS, presets: OPENAI_PRESETS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })), claudeEndpoints: CLAUDE_ENDPOINTS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })) });
     });
     // A new engine account: a second Claude subscription, an OpenRouter key next to Z.ai, …
     api.post("/api/providers", async (c) => {
@@ -2479,11 +2504,32 @@ const app = createApp({
       if (!id) return c.json({ error: "invalid account id" }, 400);
       return c.json({ id }, 201);
     });
+    // Engines page: the automatic switch moves only between accounts of one kind.
+    api.put("/api/engine-switch", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      if (typeof body.sameKind !== "boolean") return c.json({ error: "sameKind must be true or false" }, 400);
+      if (body.sameKind) store.setKv("engine-switch-same-kind", "1");
+      else store.deleteKv("engine-switch-same-kind");
+      return c.json({ ok: true, sameKind: body.sameKind });
+    });
     api.delete("/api/providers/:id", (c) => {
       const id = c.req.param("id");
-      if (KINDS.includes(id)) return c.json({ error: "a base engine can be switched off, not removed" }, 400);
       const list = accounts();
-      if (!list.some((a) => a.id === id)) return c.json({ error: "unknown provider" }, 404);
+      if (!list.some((a) => a.id === id && !a.removed)) return c.json({ error: "unknown provider" }, 404);
+      // A base account (claude, openai, cursor) is an id the code knows: it is hidden and off, its key
+      // gone; its Claude login folder (the main one) is left alone.
+      if (KINDS.includes(id)) {
+        saveAccounts(list.map((a) => (a.id === id ? { ...a, enabled: false, removed: true, label: "" } : a)));
+        secrets.delete(`engine/${id}`);
+        store.deleteKv(`provider:${id}`);
+        clearEngineMarks(id);
+        if (store.getKv("engine-default") === id || store.getKv("claude-active") === id) {
+          store.deleteKv("engine-default");
+          store.deleteKv("claude-active");
+        }
+        reconfigureProviders();
+        return c.json({ ok: true });
+      }
       saveAccounts(list.filter((a) => a.id !== id));
       secrets.delete(`engine/${id}`);
       removeLoginDir(DATA, id);
@@ -2538,12 +2584,57 @@ const app = createApp({
       return "";
     };
     const planAccount = () => activeClaude() || PROVIDER_CLAUDE;
+    const planLimits = createPlanUsageCache({ fetchUsage: () => providers[planAccount()]?.planUsage?.() ?? null });
+    const resetLogin = (account) => {
+      const dir = providers[account]?.loginDir?.();
+      return dir ? readLogin(dir) : null;
+    };
+    const claudeResets = {
+      status: (account = planAccount()) => (resetLogin(account) ? fetchResets(resetLogin(account)) : { available: false, reason: "no_login" }),
+      claim: async (grantId, account = planAccount()) => {
+        const result = await claimReset(resetLogin(account), grantId);
+        if (result.result === "reset") {
+          clearEngineMarks(account);
+          planLimits.invalidate();
+          runner.resumeLimitedNow().catch(() => {});
+          console.log(`[${account}] plan limit reset spent (${grantId}); cleared ${result.cleared.join(",") || "?"}`);
+        }
+        return result;
+      },
+    };
+    // LIMIT_RESET_OFFER (Iris only for now): a chat waiting for a Claude limit offers that account's
+    // reset in its «continues at HH:MM» row, as Claude Code offers /limit-reset at the wall.
+    const limitedClaude = (chat) => modelCandidates(chat).map((c) => c.provider).find((id) => kindOf(id) === PROVIDER_CLAUDE && isLimited(id) && resetLogin(id));
+    api.get("/api/chats/:id/limit-reset", async (c) => {
+      c.header("cache-control", "no-store");
+      const chat = store.getChat(c.req.param("id"));
+      if (!chat) return c.json({ error: "not found" }, 404);
+      const account = genv("LIMIT_RESET_OFFER", "off") === "on" && runner.limitResumeAt(chat.id) ? limitedClaude(chat) : null;
+      if (!account) return c.json({ offer: false });
+      const status = await claudeResets.status(account).catch(() => null);
+      const grant = status?.available && (status.grants.find((g) => g.id === status.nextGrantId && g.usableNow) || status.grants.find((g) => g.usableNow));
+      return c.json(grant ? { offer: true, grant } : { offer: false });
+    });
+    api.post("/api/chats/:id/limit-reset", async (c) => {
+      c.header("cache-control", "no-store");
+      const chat = store.getChat(c.req.param("id"));
+      if (!chat) return c.json({ error: "not found" }, 404);
+      const account = genv("LIMIT_RESET_OFFER", "off") === "on" ? limitedClaude(chat) : null;
+      const body = await c.req.json().catch(() => ({}));
+      if (!account || typeof body?.grantId !== "string") return c.json({ result: "unavailable" }, 409);
+      try {
+        const result = await claudeResets.claim(body.grantId, account);
+        return c.json(result, result.result === "reset" ? 200 : 409);
+      } catch (e) {
+        return c.json({ error: "reset_failed", detail: String(e?.message || e).slice(0, 200) }, 502);
+      }
+    });
     const zaiQuota = createZaiQuotaCache({ fetchQuota: () => zaiQuotaFetch({ key: zaiKey() }) });
     accountRoutes(api, {
       signin: claudeSignin,
       engines: {
         isAccount: (id) => accounts().some((a) => a.id === id),
-        claudeAccounts: () => accounts().filter((a) => a.kind === PROVIDER_CLAUDE && !claudeEndpoint(a.id)).map((a) => ({ id: a.id, label: a.label, hasKey: Boolean(providerKey(a.id)) })),
+        claudeAccounts: () => accounts().filter((a) => a.kind === PROVIDER_CLAUDE && !a.removed && !claudeEndpoint(a.id)).map((a) => ({ id: a.id, label: a.label, hasKey: Boolean(providerKey(a.id)) })),
         addAccount,
         removeAccount: (id) => {
           saveAccounts(accounts().filter((a) => a.id !== id));
@@ -2575,7 +2666,8 @@ const app = createApp({
           reconfigureProviders();
         },
       },
-      planLimits: createPlanUsageCache({ fetchUsage: () => providers[planAccount()]?.planUsage?.() ?? null }),
+      planLimits,
+      claudeResets,
       zaiQuota,
       zaiAccount: createZaiAccount({
         secrets,
@@ -2596,6 +2688,8 @@ const app = createApp({
       if (kindOf(id) !== PROVIDER_CLAUDE) return c.json({ error: "browser sign-in is for Claude accounts" }, 400);
       // An Anthropic token stored on an endpoint account would be sent to the other vendor.
       if (claudeEndpoint(id)) return c.json({ error: `${claudeEndpoint(id).label} takes its own key, not a Claude sign-in` }, 400);
+      // Signing in to a removed base account brings it back.
+      if (accounts().some((a) => a.id === id && a.removed)) saveAccounts(accounts().map((a) => (a.id === id ? { ...a, removed: false, enabled: true } : a)));
       try {
         return c.json(await claudeSignin.start(id));
       } catch (error) {
@@ -2649,9 +2743,12 @@ const app = createApp({
         secrets.set(`engine/${id}`, body.apiKey.trim(), { note: `engine ${id}` });
         delete next.keyFile;
       }
-      if (typeof body.enabled === "boolean" || typeof body.label === "string") {
+      if (typeof body.enabled === "boolean" || typeof body.label === "string" || typeof body.auto === "boolean" || (typeof body.apiKey === "string" && body.apiKey.trim())) {
         saveAccounts(accounts().map((a) => (a.id === id ? {
           ...a,
+          removed: false,
+          ...(a.removed ? { enabled: true } : {}),
+          ...(typeof body.auto === "boolean" ? { auto: body.auto } : {}),
           ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
           ...(typeof body.label === "string" ? { label: body.label.trim().slice(0, 40) } : {}),
         } : a)));
@@ -3224,6 +3321,7 @@ const app = createApp({
         "telegram_send",
         "telegram_edit",
         "telegram_delete",
+        "telegram_create_group",
       ]);
     // The agents page makes an agent here; the mother agent makes one with agent_create (and the owner's yes).
     api.post("/api/agents", async (c) => {
@@ -3338,6 +3436,7 @@ const app = createApp({
         "telegram_send",
         "telegram_edit",
         "telegram_delete",
+        "telegram_create_group",
       ]);
       return c.json({ tools: names.map((name) => ({ name })) });
     });

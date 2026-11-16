@@ -844,7 +844,7 @@ export function createIntegrations({ store, runner, timelines = null, asks, netw
     await notifyOwner(`🔕 «${String(chat.title || "رشتهٔ همکار").slice(0, 80)}» بی‌جواب ماند (${String(why).slice(0, 120)}); به همکار چیزی نرفت.`, chat.id);
   }
   // One line from the bot to the owner, with a link to the chat when there is one.
-  async function notifyOwner(text, chatId = null) {
+  async function notifyOwner(text, chatId = null, file = null) {
     const bot = preferOwnerBot();
     const ownerId = ownerChatOn(bot);
     if (!bot || !ownerId) return false;
@@ -852,12 +852,15 @@ export function createIntegrations({ store, runner, timelines = null, asks, netw
     const link = publicUrl && chatId ? `\n${publicUrl}/#/c/${chatId}` : "";
     // The bot API drops a request now and then («fetch failed»: 4 of 33 ops-room tell_owner calls on
     // 2026-10-20/21); the agent then sent the same news again. One quiet retry covers it.
+    // A file rides as a document right after the line (the bot's own sendFile; the line is its caption
+    // too short to carry, so it goes first as text).
+    const message = { text: `${text}${link}`, ...(file ? { files: [{ name: file.name, mimeType: file.mimeType, data: file.data }] } : {}) };
     try {
-      await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+      await bot.channel.deliver(ownerId, message);
     } catch (error) {
       if (!/fetch failed|ECONNRESET|ETIMEDOUT|socket/i.test(String(error?.message || error))) throw error;
       await new Promise((r) => setTimeout(r, 3000));
-      await bot.channel.deliver(ownerId, { text: `${text}${link}` });
+      await bot.channel.deliver(ownerId, message);
     }
     return true;
   }

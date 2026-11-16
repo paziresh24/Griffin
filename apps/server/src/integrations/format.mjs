@@ -71,6 +71,7 @@ const TOOL_STATUS = {
   telegram_send: "ارسال تلگرام",
   telegram_edit: "ویرایش پیام تلگرام",
   telegram_delete: "حذف پیام تلگرام",
+  telegram_create_group: "ساخت گروه تلگرام",
   telegram_dialogs: "فهرست گفتگوها",
   dns_lookup: "DNS",
   http_check: "چک HTTP",

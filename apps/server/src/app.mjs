@@ -345,8 +345,10 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   // ones it already lists, so this says nothing about a chat the owner cannot see there. Off
   // (CHAT_SEARCH_MESSAGES, the default) the sidebar matches titles only, as before.
   app.get("/api/chats/search", (c) => {
-    if (!searchMessages()) return c.json({ ids: [], on: false });
-    return c.json({ ids: store.searchChatIds(String(c.req.query("q") || "").slice(0, 200)), on: true });
+    if (!searchMessages()) return c.json({ ids: [], hits: [], on: false });
+    // hits: [{ id, snippet?, loose? }] — the text around the match, so the row says why it matched.
+    const hits = store.searchChatHits(String(c.req.query("q") || "").slice(0, 200));
+    return c.json({ ids: hits.map((h) => h.id), hits, on: true });
   });
 
   // Everything waiting for the owner, from every chain, for the main page (inbox.mjs).

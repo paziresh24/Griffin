@@ -51,7 +51,7 @@ const plain = (e) => String(e?.message || e).slice(0, 200);
  *   setKey(id, key) · removeKey(id) · setConfig(id, patch)
  * signin: claude-signin.mjs (start/submit/cancel/available/pending).
  */
-export function accountRoutes(api, { engines, signin, zaiAccount = null, zaiQuota = null, planLimits = null }) {
+export function accountRoutes(api, { engines, signin, zaiAccount = null, zaiQuota = null, planLimits = null, claudeResets = null }) {
   // ---- Claude accounts (/api/providers/claude/accounts) ----
   const statusOf = (a) => ({
     available: Boolean(signin?.available()),
@@ -176,6 +176,28 @@ export function accountRoutes(api, { engines, signin, zaiAccount = null, zaiQuot
   api.get("/api/usage/limits", async (c) => {
     c.header("cache-control", "no-store");
     return c.json(planLimits ? await planLimits() : { available: false, reason: "not configured" });
+  });
+  // Claude's own limit resets (claude-resets.mjs), for the account whose limits the popover shows.
+  api.get("/api/usage/resets", async (c) => {
+    c.header("cache-control", "no-store");
+    if (!claudeResets) return c.json({ available: false, reason: "not configured" });
+    try {
+      return c.json(await claudeResets.status());
+    } catch (e) {
+      return c.json({ available: false, reason: plain(e) });
+    }
+  });
+  api.post("/api/usage/resets/claim", async (c) => {
+    c.header("cache-control", "no-store");
+    if (!claudeResets) return c.json({ error: "not configured" }, 503);
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body?.grantId !== "string" || !body.grantId) return c.json({ error: "invalid grantId" }, 400);
+    try {
+      const result = await claudeResets.claim(body.grantId);
+      return c.json(result, result.result === "reset" ? 200 : 409);
+    } catch (e) {
+      return c.json({ error: "reset_failed", detail: plain(e) }, 502);
+    }
   });
   api.get("/api/usage/zai", async (c) => {
     c.header("cache-control", "no-store");

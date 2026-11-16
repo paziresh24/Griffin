@@ -27,7 +27,6 @@ test("the unread dots and badges use the signal colour, not the palette's primar
 
 test("running, count and usage states read the signal/ok colours, never the palette", () => {
   for (const [file, needle] of [
-    ["components/Thread.jsx", "g-run-phase"],
     ["components/Telegram.jsx", "const Dots"],
     ["components/Health.jsx", "agent-dots"],
     ["components/Tool.jsx", "animate-pulse"],
@@ -41,6 +40,12 @@ test("running, count and usage states read the signal/ok colours, never the pale
   assert.match(src("components/QueuePeek.jsx"), /animate-spin text-signal/);
   assert.match(src("components/Peers.jsx"), /pct >= 80 \? "bg-warn" : "bg-ok"/);
   assert.match(src("styles.css"), /--series-0: var\(--signal\)/);
+});
+
+test("the «at work» dots take the theme's colour", () => {
+  // Owner 2026-11-12: «رنگ لودینگه یکسان باشه با تم» — the palette's primary, unlike the unread dot.
+  assert.match(src("components/Spinner.jsx"), /className = "text-primary"/);
+  assert.doesNotMatch(src("components/Thread.jsx").split("\n").find((l) => l.includes("g-run-phase")), /signal/);
 });
 
 test("the agent logos beside a chat are a flag, on in both presets", () => {

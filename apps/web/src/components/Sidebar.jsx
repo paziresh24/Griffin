@@ -24,7 +24,8 @@ import { useInbox } from "../inbox.js";
 import { peoplePath } from "../inbox-people.js";
 import { exactTime } from "../elapsed.js";
 import { inboxRow, shortAgo } from "../karsara-shell.js";
-import { OneList, RepoNewChat, UserMenu } from "./SidebarOneList.jsx";
+import { OneList, RepoNewChat, SearchSnippet, UserMenu } from "./SidebarOneList.jsx";
+import { focusText } from "../focus.js";
 import { UpdateNotice, useUpdateDot } from "./UpdateNotice.jsx";
 import { HostNotice } from "./HostNotice.jsx";
 import { TwoStepNotice } from "./TwoStepNotice.jsx";
@@ -239,7 +240,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
   // a third of a second after the last key; until then (or offline) the titles still match. With
   // CHAT_SEARCH_MESSAGES off the server says so ({ on: false }) and the sidebar stops asking for a
   // minute, so an install that keeps it off sends nothing per keystroke.
-  const [bodyHits, setBodyHits] = useState({ q: "", ids: null });
+  const [bodyHits, setBodyHits] = useState({ q: "", hits: null });
   const searchOffUntil = useRef(0);
   useEffect(() => {
     const q = query.trim();
@@ -249,7 +250,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
       api(`/api/chats/search?q=${encodeURIComponent(q)}`)
         .then((out) => {
           if (out?.on === false) searchOffUntil.current = Date.now() + 60_000;
-          if (alive) setBodyHits({ q, ids: new Set(out?.ids || []) });
+          if (alive) setBodyHits({ q, hits: out?.hits || (out?.ids || []).map((id) => ({ id })) });
         })
         .catch(() => {});
     }, 300);
@@ -259,14 +260,17 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
     };
   }, [query]);
   const prepared = useMemo(() => {
-    const items = searchChats(list, query, bodyHits.q === query.trim() ? bodyHits.ids : null);
+    const q = query.trim();
+    const items = searchChats(list, query, bodyHits.q === q ? bodyHits.hits : null);
+    // A search is ranked (title first, then messages), not re-sorted: the best hit stays on top.
+    if (q) return filterChats(items, section === "telegram" ? "all" : filter, isUnread, { keepId: activeId });
     // The Telegram tab has no sort/filter controls, so a choice made on another tab must not apply here.
     return sortChats(filterChats(items, section === "telegram" ? "all" : filter, isUnread, { keepId: activeId }), section === "telegram" ? "updated" : sort, isUnread);
   }, [list, query, bodyHits, sort, filter, activeId, section, seenVersion]);
 
   const sections = useMemo(
     () =>
-      groupChats(prepared, groupBy, {
+      query.trim() ? (prepared.length ? [{ key: "search", chats: prepared }] : []) : groupChats(prepared, groupBy, {
         isUnread,
         agentLabel: (id) => agentMeta(id).label,
         groups,
@@ -281,8 +285,11 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
   const groupCreated = useCallback(() => setGroupBy("custom"), [setGroupBy]);
   const open = useCallback((id) => {
     navigate(id);
+    // Found inside its messages: show where, in the chat itself.
+    const q = query.trim();
+    if (q && prepared.find((c) => c.id === id)?.searchSnippet) focusText(q);
     onClose?.();
-  }, [onClose]);
+  }, [onClose, query, prepared]);
   const order = useMemo(() => groupOrder(groups, looseAt), [groups, looseAt]); // drag and drop (drag.js)
   // The ungrouped sections (by repository, …) in the order they show, for dragging their headings.
   const sectionKeys = sections.filter((s) => s.loose).map((s) => s.key);
@@ -1086,6 +1093,7 @@ const ChatItem = memo(function ChatItem({ chat, active, onOpen, groups = [], onG
           )}
         </>
       ) : null}
+      {chat.searchSnippet ? <SearchSnippet chat={chat} onOpen={onOpen} /> : null}
     </li>
   );
 });

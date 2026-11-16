@@ -88,7 +88,7 @@ export const PEER_HEAD = "📥 محتوای شخص ثالث از ";
 // Telegram desk's (desk.mjs) count: tell_person and thread_join reach a colleague's mother chat as
 // the owner's note, telegram_pause silences every automatic answer.
 // consult hands the chat's content to another model on the owner's keys: a colleague's text stops here too.
-export const FORWARDING_TOOLS = ["telegram_send", RELATED_TOOL, "chat_send", "tell_person", "thread_join", "telegram_pause", "consult"];
+export const FORWARDING_TOOLS = ["telegram_send", RELATED_TOOL, "chat_send", "tell_person", "thread_join", "telegram_pause", "consult", "telegram_create_group"];
 const PEER_SEND_MAX = 3;
 const PEER_SEND_WINDOW_MS = 10 * 60_000;
 const PEER_GLOBAL_MAX = 10;

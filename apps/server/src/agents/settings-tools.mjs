@@ -47,8 +47,8 @@ export function createAgentSettingsTools({ store, catalogNames, mayRename = (cha
         "Make a new specialist agent. The owner is asked first (it hands out tools), so state clearly what it is for. " +
         "label: its name (no punctuation, ≤32 chars). domain: one line on its line of work. instructions: how it should work " +
         "(plain text, ≤6000 chars). tools: names from the tool catalog (agent_tools_list shows them); omit for a safe default " +
-        "(ask, look up, report). It cannot be given agent-editing tools. provider/model or models: the engine accounts it runs on " +
-        "(omit to use the same as the mother agent). The new agent's id is returned; call it with ask_agent/delegate.",
+        "(ask, look up, report). It cannot be given agent-editing tools. No agent has an engine of its own: every agent runs on " +
+        "the first ready engine of the Engines page (provider/model/models are ignored). The new agent's id is returned; call it with ask_agent/delegate.",
       inputSchema: {
         type: "object",
         properties: {
@@ -221,7 +221,7 @@ export function createAgentSettingsTools({ store, catalogNames, mayRename = (cha
 
     agent_settings_set: {
       description:
-        "Update THIS agent profile settings. provider: cursor|claude; model: provider model id or empty for auto.",
+        "Update THIS agent profile settings (label, domain). provider/model are kept but no longer pick the engine: every agent runs on the first ready engine of the Engines page, and the owner sets the order and the automatic switch there.",
       inputSchema: {
         type: "object",
         properties: {

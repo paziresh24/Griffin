@@ -211,3 +211,11 @@ export function pickFallback(list, current, { usable, nameOf, kindOf = (id) => i
   const name = sameKind ? `${model} (${nameOf(next.provider) || next.provider})` : model;
   return { provider: next.provider, model: next.model, name, fromName };
 }
+
+// The automatic switch's reach (Engines page, owner 2026-11-14): the chat's first engine (home) always
+// stays; any other candidate stays only when its account takes part in the switch (auto) and, with
+// sameKind, when it is of home's kind. Nothing to compare without a home: the list as it is.
+export function scopeSwitch(list, { home, auto, kind, sameKind }) {
+  if (!home) return list;
+  return list.filter((c) => c.provider === home.provider || (auto(c.provider) && (!sameKind || kind(c.provider) === kind(home.provider))));
+}

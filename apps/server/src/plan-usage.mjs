@@ -75,7 +75,7 @@ export function createPlanUsageCache({ fetchUsage, ttlMs = 60_000, failTtlMs = 1
   let cached = null; // { at, value, ok }
   let lastGood = null; // { at, value }
   let inflight = null;
-  return async function planLimits() {
+  async function planLimits() {
     if (cached && now() - cached.at < (cached.ok ? ttlMs : failTtlMs)) return cached.value;
     if (inflight) return inflight;
     inflight = (async () => {
@@ -103,7 +103,12 @@ export function createPlanUsageCache({ fetchUsage, ttlMs = 60_000, failTtlMs = 1
       inflight = null;
     });
     return inflight;
+  }
+  // A spent reset (claude-resets.mjs) changes the numbers: the next read asks again.
+  planLimits.invalidate = () => {
+    cached = null;
   };
+  return planLimits;
 }
 
 /** A run's unifiedWindows ({five_hour: {utilization 0-1, resetsAt epoch s}}) in the SDK's shape. */

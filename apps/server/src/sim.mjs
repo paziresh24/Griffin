@@ -8,7 +8,7 @@ import { ASK_REQUESTER_TOOL, ASK_TOOL } from "./asks.mjs";
 
 // Side effects the guard does not gate (it only gates irreversible infra work).
 const SIDE_EFFECTS = new Set([
-  "telegram_send", "knowledge_write", "jobs_create", "jobs_update", "jobs_delete", "jobs_run",
+  "telegram_send", "telegram_create_group", "knowledge_write", "jobs_create", "jobs_update", "jobs_delete", "jobs_run",
   "incident_update", "incident_ack", "tell_owner", "incident_source_set", "incident_assign", "incident_suggest", "arvan_cache_purge", "nsin_cache_purge", "agent_tools_enable",
   "agent_tools_disable", "agent_settings_set", "peer_invite", "gitlab_propose", "chat_send", "related_chat_send",
   "chat_suggest", "chat_dismiss_suggestion", "owner_task", "chat_plan", "consult", "notify_owner", "build_tool",

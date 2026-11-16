@@ -221,6 +221,28 @@ test("sidebar search: a chat matches by title or by the server's message hits", 
   assert.deepEqual(searchChats(list, "  ").map((c) => c.id), ["a", "b", "c"]);
 });
 
+// an owner 2026-11-11: the chat titled exactly what he typed was lost among 460 others.
+test("sidebar search ranks: exact title, title holds it, title holds every word, then message hits; snippets ride along", async () => {
+  const { searchChats, snippetParts } = await import("../src/chat-list.js");
+  const list = [
+    { id: "body", title: "بی‌ربط", updatedAt: "2026-11-11T10:00:00Z" },
+    { id: "words", title: "آنلاین: افت فروش ویزیت نمونه", updatedAt: "2026-11-11T09:00:00Z" },
+    { id: "holds", title: "گزارش نمونه؛ افت ویزیت آنلاین دیروز", updatedAt: "2026-11-10T09:00:00Z" },
+    { id: "exact", title: "نمونه - افت ويزيت آنلاين", updatedAt: "2026-11-01T09:00:00Z" },
+    { id: "loose", title: "دیگر", updatedAt: "2026-11-11T11:00:00Z" },
+    { id: "none", title: "هیچ", updatedAt: "2026-11-11T12:00:00Z" },
+  ];
+  const hits = [
+    { id: "loose", loose: true, snippet: "x" },
+    { id: "body", snippet: "پیام \u0002نمونه افت\u0003 بود" },
+  ];
+  const out = searchChats(list, "نمونه؛ افت ویزیت آنلاین", hits);
+  assert.deepEqual(out.map((c) => c.id), ["exact", "holds", "words", "body", "loose"]);
+  assert.equal(out[3].searchSnippet, "پیام \u0002نمونه افت\u0003 بود");
+  assert.equal(out[0].searchSnippet, undefined, "a title hit needs no snippet");
+  assert.deepEqual(snippetParts("پیام \u0002نمونه\u0003 بود"), [{ text: "پیام ", mark: false }, { text: "نمونه", mark: true }, { text: " بود", mark: false }]);
+});
+
 test("by repo (like Claude Desktop's folders), pinned chats stay on top", () => {
   const list = [{ id: "a", repo: "infra-repo" }, { id: "p", repo: "infra-repo", pinned: true }, { id: "b" }];
   assert.deepEqual(groupChats(list, "repo").map((s) => [s.title, s.chats.map((c) => c.id)]), [["سنجاق‌شده", ["p"]], ["infra-repo", ["a"]], ["بدون مخزن", ["b"]]]);

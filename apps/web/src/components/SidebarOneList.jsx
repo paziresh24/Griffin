@@ -19,7 +19,8 @@ import { isPlainClick } from "../sidebar-width.js";
 import { FILTERS, GROUPS, SORTS, chatState, filterChats, isPeerChat, layoutChats, sortChats, splitPeerChats } from "../karsara-chat-list.js";
 import { PROFILE_EVENT, ownerView } from "../profile.js";
 import { clockLabel } from "../elapsed.js";
-import { reminderLabel } from "../chat-list.js";
+import { reminderLabel, searchChats, snippetParts } from "../chat-list.js";
+import { focusText } from "../focus.js";
 import { useFlag } from "../ui-prefs.js";
 import { t } from "../i18n.js";
 import { useListChoice, useSectionOrder } from "../list-prefs.js";
@@ -138,47 +139,49 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
     return inboxOn ? withoutInboxChat(own, inboxStatus) : own;
   }, [showArchived, archived, chats, inboxStatus, inboxOn]);
 
-  // Client-side title filter only sees what's already loaded; the server also matches message
-  // bodies (SQLite FTS5) so a chat whose title never mentions the topic can still be found.
-  const [bodyMatches, setBodyMatches] = useState([]);
+  // Words inside messages too (CHAT_SEARCH_MESSAGES): the server's full-text index answers a fifth of
+  // a second after the last key with the chats and the text around each match; until then the titles
+  // still match. Off, the server says so ({ on: false }) and the list stops asking for a minute.
+  // (It used to ask /api/chats?q=, which ignores q and returned every chat: the search «did not work»,
+  // an owner 2026-11-11.)
+  const [bodyHits, setBodyHits] = useState({ q: "", hits: null });
+  const searchOffUntil = useRef(0);
   useEffect(() => {
     const q = query.trim();
-    if (!q) {
-      setBodyMatches([]);
-      return;
-    }
+    if ([...q].length < 2 || Date.now() < searchOffUntil.current) return undefined;
     let alive = true;
     const timer = setTimeout(() => {
-      api(`/api/chats?q=${encodeURIComponent(q)}${showArchived ? "&archived=1" : ""}`)
-        .then(({ chats: found }) => alive && setBodyMatches(found))
-        .catch(() => alive && setBodyMatches([]));
+      api(`/api/chats/search?q=${encodeURIComponent(q)}`)
+        .then((out) => {
+          if (out?.on === false) searchOffUntil.current = Date.now() + 60_000;
+          if (alive) setBodyHits({ q, hits: out?.hits || (out?.ids || []).map((id) => ({ id })) });
+        })
+        .catch(() => {});
     }, 200);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [query, showArchived]);
+  }, [query]);
 
   const prepared = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let items;
+    const q = query.trim();
     if (q) {
-      const byId = new Map(list.map((c) => [c.id, c]));
-      for (const c of bodyMatches) if (!byId.has(c.id)) byId.set(c.id, c);
-      items = [...byId.values()].filter((c) => c.title.toLowerCase().includes(q) || bodyMatches.some((m) => m.id === c.id));
-    } else {
-      items = [...list];
+      // A search is ranked (title first, then messages), not sorted or grouped: the best hit is on top.
+      const found = searchChats(list, q, bodyHits.q === q ? bodyHits.hits : null);
+      return { own: filterChats(found, filter, isUnread, { keepId: activeId }), peers: [] };
     }
-    const shown = sortChats(filterChats(items, filter, isUnread, { keepId: activeId }), sort, isUnread, { reverse: reverse === "yes" });
+    const shown = sortChats(filterChats(list, filter, isUnread, { keepId: activeId }), sort, isUnread, { reverse: reverse === "yes" });
     // Chats other agents opened sit, collapsed, under «ایجنت‌های همکاران»; a search still finds them in place.
-    return q ? { own: shown, peers: [] } : splitPeerChats(shown);
-  }, [list, query, sort, reverse, filter, bodyMatches, seenVersion, activeId]);
+    return splitPeerChats(shown);
+  }, [list, query, sort, reverse, filter, bodyHits, seenVersion, activeId]);
 
   const sections = useMemo(() => {
     // Pinned chats, the owner's groups and the chosen grouping all show at once (pinned on top);
     // the archive has no groups. An empty group stays visible (a new one must show up to be used),
     // but not while a search or a filter narrows the list.
     const narrowed = Boolean(query.trim()) || filter !== "all" || showArchived;
+    if (query.trim()) return prepared.own.length ? [{ key: "search", title: t("نتیجه‌ها ({n})", { n: prepared.own.length.toLocaleString(locale) }), chats: prepared.own }] : [];
     const all = layoutChats(prepared.own, groupBy, { isUnread, agentLabel: (id) => agentMeta(id).label, groups: showArchived ? [] : groups, looseAt, sectionOrder: sectionOrders[groupBy] });
     return all
       .filter((s) => s.chats.length || (s.groupId && !narrowed))
@@ -192,8 +195,11 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
 
   const open = useCallback((id) => {
     navigate(id);
+    // Found inside its messages: show where, in the chat itself.
+    const q = query.trim();
+    if (q && prepared.own.find((c) => c.id === id)?.searchSnippet) focusText(q);
     onClose?.();
-  }, [onClose]);
+  }, [onClose, query, prepared]);
   // A new chat, in a group when it comes from that group's «+».
   const startChat = (groupId = null, options = {}) => {
     if (onNewChat) onNewChat(groupId, options);
@@ -791,6 +797,7 @@ const ChatItem = memo(function ChatItem({ chat, active, activeId, onOpen, groups
           <MoreHorizontal />
         </button>
       </div>
+      {chat.searchSnippet ? <SearchSnippet chat={chat} onOpen={onOpen} /> : null}
       {children.length ? (
         <ul className="mb-1 ms-6 border-s ps-2">
           {children.map((child) => {
@@ -912,5 +919,23 @@ function ChatMenuItem({ icon: Icon, children, onClick }) {
       <Icon className="size-4 kc-muted" />
       {children}
     </button>
+  );
+}
+
+// Under a row the search found by its messages: the words around the match, the match marked.
+export function SearchSnippet({ chat, onOpen }) {
+  return (
+    <a
+      href={`#/c/${chat.id}`}
+      onClick={(event) => {
+        if (!isPlainClick(event)) return;
+        markSeen(chat.id, chat.updatedAt);
+        onOpen(chat.id);
+      }}
+      className="search-snippet -mt-0.5 mb-1 line-clamp-2 block px-2.5 text-xs leading-5 text-muted-foreground"
+      dir="auto"
+    >
+      {snippetParts(chat.searchSnippet).map((part, i) => (part.mark ? <mark key={i}>{part.text}</mark> : <span key={i}>{part.text}</span>))}
+    </a>
   );
 }

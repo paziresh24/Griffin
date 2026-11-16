@@ -12,15 +12,15 @@ test("claude model aliases map to current full ids; full ids pass through", () =
   assert.equal(resolveModel(""), "");
 });
 
-// Karsara's menu reads ۱ Opus 5.5 / ۲ Fable 5.1 / ۳ Sonnet 5.5 / ۴ Haiku 5.5. Fable is an
+// Karsara's menu reads ۱ Opus 5.5 / ۲ Fable 5.2 / ۳ Sonnet 5.5 / ۴ Haiku 5.5. Fable is an
 // alias like the others (bare "fable" 404s like bare "opus" did), and is listed only where the
 // install says its plan has it (GRIFFIN_CLAUDE_FABLE), so other installs' menus are unchanged.
 test("fable resolves to a full id; the menu lists it after Opus only with GRIFFIN_CLAUDE_FABLE", async () => {
   const { claudeModelList, versionLabel } = await import("../src/providers/claude.mjs");
-  assert.equal(resolveModel("fable"), "claude-fable-5-1");
+  assert.equal(resolveModel("fable"), "claude-fable-5-2");
   assert.deepEqual(claudeModelList({}).map((m) => m.id), ["opus", "sonnet", "haiku"]);
   assert.deepEqual(claudeModelList({ GRIFFIN_CLAUDE_FABLE: "1" }).map((m) => m.id), ["opus", "fable", "sonnet", "haiku"]);
-  assert.deepEqual(claudeModelList({ GRIFFIN_CLAUDE_FABLE: "1" }).map((m) => m.label), ["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
+  assert.deepEqual(claudeModelList({ GRIFFIN_CLAUDE_FABLE: "1" }).map((m) => m.label), ["Opus 5.5", "Fable 5.2", "Sonnet 5.5", "Haiku 5.5"]);
   assert.equal(claudeModelList({ GRIFFIN_CLAUDE_FABLE: "0" }).length, 3);
   assert.equal(claudeModelList({}).find((m) => m.id === "opus").name, "Claude Opus");
   assert.equal(versionLabel("claude-opus-4-8"), "Opus 4.8");

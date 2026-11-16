@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { DotsSpinner } from "./Spinner.jsx";
 import { AnimatePresence, motion } from "motion/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
@@ -236,6 +237,7 @@ const TOOLS = {
   alerts_active: { icon: AlertTriangle, label: t("هشدارهای فعال"), subtitle: (a) => a.cluster },
   telegram_edit: { icon: Send, label: t("ویرایش پیام تلگرام"), subtitle: (a) => a.chat, open: true },
   telegram_delete: { icon: Trash2, label: t("حذف پیام تلگرام"), subtitle: (a) => a.chat, open: true },
+  telegram_create_group: { icon: Users, label: t("ساخت گروه تلگرام"), subtitle: (a) => a.title, open: true },
   telegram_watch_list: { icon: Users, label: t("گفتگوهای زیر نظر") },
   related_chat_send: { icon: Send, label: t("پیام به گفتگوی همان درخواست‌کننده"), subtitle: (a) => a.chat },
   // Incidents (the ops room).
@@ -317,7 +319,7 @@ const TOOLS = {
 };
 
 // A running step under the Karsara skin: a thin spinning ring instead of a spinner icon.
-const Ring = () => <span aria-label={t("در حال اجرا")} className="inline-block size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent opacity-70" />;
+const Ring = () => <DotsSpinner label={t("در حال اجرا")} shape="grid" />;
 
 // A file path shortened to its last two segments, so the one-line row stays readable.
 export function shortTarget(value) {

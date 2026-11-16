@@ -12,6 +12,7 @@ import { NO_FILE_TOOLS, fileGuard, fileGuardHooks } from "./file-scope.mjs";
 import { stateGuard, denyOutput, instructionGuardOptions } from "./state-guard.mjs";
 import { planModeRefusal } from "./plan-mode-guard.mjs";
 import { gitIdentityRefusal } from "./git-identity-guard.mjs";
+import { peerBridgeRefusal } from "./peer-bridge-guard.mjs";
 import { hostConfigDir, hostSpawner, hostTarget } from "./host-spawn.mjs";
 import { isLoginDirKey, loginDirOf, loginDirToken, mainConfigDir, relativizeSharedLinks } from "../claude-account-dir.mjs";
 import { loginGate, noteLogin } from "../claude-login-guard.mjs";
@@ -34,18 +35,19 @@ export const PROVIDER_CLAUDE = "claude";
 // the bundled CLI rejects a model newer than itself ("does not support this model;
 // version X+ required"), so these must name an id the SDK knows — bump them together with the SDK
 // version (check: grep -roE 'claude-(opus|sonnet)-[0-9-]+' node_modules/@anthropic-ai/claude-agent-sdk).
-// SDK 0.3.296 knows the 5-5 line.
-const MODEL_ALIAS = { opus: "claude-opus-5-5", fable: "claude-fable-5-1", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
+// SDK 0.3.322 knows the 5-5 line and Fable 5.2 (CLI 2.1.321: «now the default Fable model»).
+const MODEL_ALIAS = { opus: "claude-opus-5-5", fable: "claude-fable-5-2", sonnet: "claude-sonnet-5-5", haiku: "claude-haiku-5-5" };
 export const resolveModel = (id) => MODEL_ALIAS[String(id || "").toLowerCase()] || id;
 
 // Claude Code's own default effort per model — from the model catalog baked into the bundled CLI
-// (SDK 0.3.296: grep its binary for `default_effort`). It is what a turn uses when Griffin sends no
+// (SDK 0.3.322: grep its binary for `default_effort`). It is what a turn uses when Griffin sends no
 // effort, so the effort panel marks it «پیشنهادی». A model missing here falls back to "high", as
 // Claude Code does. Bump with the SDK, like MODEL_ALIAS.
 const DEFAULT_EFFORT = {
   "claude-opus-5-5": "medium",
   "claude-sonnet-5-5": "medium",
   "claude-haiku-5-5": "medium",
+  "claude-fable-5-2": "medium",
   "claude-fable-5-1": "high",
   "claude-fable-5": "high",
   "claude-opus-5": "high",
@@ -79,7 +81,7 @@ export const CLAUDE_MODELS = claudeModelList();
 
 // The menu with what Claude Code itself offers this login (Query.supportedModels).
 // The aliases come first. A family the CLI
-// offers that the menu lacks joins as its alias — Fable comes as «claude-fable-5-1[1m]» (a [1m] id
+// offers that the menu lacks joins as its alias — Fable comes as «claude-fable-5-2[1m]» (a [1m] id
 // is a current flagship), so it shows without CLAUDE_FABLE. Any other model it
 // lists (a dated, older one) is added behind `more`.
 export function withCliModels(base, list) {
@@ -278,6 +280,11 @@ function resultError(message, limit, endpoint) {
 // A login or key the endpoint refused, as Claude Code words it in a `result` (an
 // expired OAuth login can come back as subtype "success" + is_error true + zero tokens).
 const AUTH_RESULT = /failed to authenticate|oauth|\b401\b|invalid api key|not logged in/i;
+// The account's organization closed Claude Code to its subscription (owner 2026-11-14: «Your
+// organization has disabled Claude subscription access for Claude Code» stopped every chat on
+// claude-2 and its titles, and nothing moved). No waiting brings it back on its own: like a refused
+// login it leaves routing (30 minutes, or until a test passes) and the turn goes to the next account.
+export const ACCESS_DISABLED = /organization has disabled|disabled claude subscription access|subscription access (?:is |has been )?disabled|your account has been disabled/i;
 // Two Claude Code processes renewing one account's expired token at the same moment: the loser says
 // so and stops (a colleague's 30-minute job, 2026-10-28 06:00Z; the token was renewed by 06:05). Not a
 // refused login — the runner tries the same turn once more after a short wait.
@@ -316,8 +323,9 @@ export function resultFailure(msg, { produced = false, limit = null, endpoint = 
   }
   const raw = msg.result || msg.errors?.join?.("; ") || msg.subtype || "claude run failed";
   const error = resultError(raw, limit, endpoint);
-  if (error.code || !AUTH_RESULT.test(raw)) return error;
+  if (error.code || !(AUTH_RESULT.test(raw) || ACCESS_DISABLED.test(raw))) return error;
   if (OAUTH_REFRESH_BUSY.test(raw)) return { message: `توکن ورود Claude همان لحظه در حال تمدید بود (${maskText(String(raw)).slice(0, 300)})`, code: OAUTH_REFRESH_BUSY_CODE };
+  if (!endpoint && ACCESS_DISABLED.test(raw)) return { ...error, code: AUTH_FAILED_CODE, message: `سازمانِ این حساب Claude دسترسی Claude Code را بسته است؛ کار به حساب بعدی رفت. مدیر سازمان باید دوباره بازش کند (${maskText(String(raw)).slice(0, 2_000)})` };
   const who = endpoint ? `کلید ${endpoint.label} پذیرفته نشد` : "ورود یا کلید Claude پذیرفته نشد";
   return { ...error, code: AUTH_FAILED_CODE, message: `${who}؛ در تنظیمات ← موتورها دوباره وارد شوید یا کلید تازه بگذارید (${maskText(String(raw)).slice(0, 2_000)})` };
 }
@@ -411,6 +419,8 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
     id: PROVIDER_CLAUDE,
     defaultModel: endpoint ? endpointModel(endpoint, defaultModel) : defaultModel,
     endpoint,
+    // The folder of this account's full Claude Code login (claude-resets.mjs); none for a setup-token or key.
+    loginDir: () => (endpoint ? null : isLoginDirKey(apiKey) ? loginDirOf(apiKey) : apiKey === CLAUDE_CODE_LOGIN ? mainConfigDir() : null),
     async listModels({ waitMs = 6_000 } = {}) {
       if (endpoint) return endpoint.models.map(({ id, name }) => ({ id, name, provider: PROVIDER_CLAUDE }));
       const base = claudeModelList();
@@ -1330,8 +1340,12 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       // every run with Bash, «بدون پرسیدن» included: it is about whose name a push carries, not a file scope.
       const identityHook = { hooks: [async (input) => ((why) => (why ? denyOutput(why) : {}))(gitIdentityRefusal(input?.tool_name, input?.tool_input || {}))] };
       const guarded = full && genv("GIT_IDENTITY_GUARD", "on") !== "off" ? { ...(planned || {}), PreToolUse: [...(planned?.PreToolUse || []), { matcher: "Bash", ...identityHook }] } : planned;
+      // Config PEER_BRIDGE_GUARD (default on): another install's agent only through network_ask, never a
+      // hand-made MCP bridge to its /mcp whose late answer never comes back (peer-bridge-guard.mjs). Full Claude Code only: elsewhere strictMcpConfig loads no other server.
+      const bridgeHook = { hooks: [async (input) => ((why) => (why ? denyOutput(why) : {}))(peerBridgeRefusal(input?.tool_name, mcpName()))] };
+      const bridged = full && genv("PEER_BRIDGE_GUARD", "on") !== "off" ? { ...(guarded || {}), PreToolUse: [...(guarded?.PreToolUse || []), { matcher: "mcp__.*", ...bridgeHook }] } : guarded;
       // Every chat, guarded or not: the Persian note rides on each user turn (no tool is gated by it).
-      const prompted = { ...(guarded || {}), UserPromptSubmit: [...(guarded?.UserPromptSubmit || []), languageHook] };
+      const prompted = { ...(bridged || {}), UserPromptSubmit: [...(guarded?.UserPromptSubmit || []), languageHook] };
       // A subagent's prompt is Claude Code's generic one: give it the capability map and the rules
       // that bind every agent here (capability-map.mjs subagentBrief, built per run in index.mjs).
       const hooks = options.subagentContext ? { ...prompted, SubagentStart: [...(prompted.SubagentStart || []), subagentHook(options.subagentContext)] } : prompted;
@@ -1536,7 +1550,7 @@ function bestEffort(fn) {
 // token» also says "session", and a fresh session would not fix it.
 // A thrown login failure (the CLI's own words, narrower than AUTH_RESULT) is a refused login too.
 const AUTH_THROWN = /oauth session expired|could not be refreshed|failed to authenticate|not logged in|invalid api key/i;
-const thrownError = (message) => (AUTH_THROWN.test(message) && !OAUTH_REFRESH_BUSY.test(message) ? { message, code: AUTH_FAILED_CODE } : sessionGone(message));
+const thrownError = (message) => ((AUTH_THROWN.test(message) || ACCESS_DISABLED.test(message)) && !OAUTH_REFRESH_BUSY.test(message) ? { message, code: AUTH_FAILED_CODE } : sessionGone(message));
 function sessionGone(message) {
   return /no conversation found with session id|failed to resume session/i.test(message) ? { message, code: "agent_not_found" } : { message };
 }
@@ -1871,6 +1885,6 @@ async function oneShotText(apiKey, model, prompt, cwd) {
 // showed «OAuth session expired and could not be refreshed» from a signed-out account, again and again).
 export function oneShotError(raw) {
   const message = String(raw).slice(0, 120);
-  const code = AUTH_THROWN.test(raw) && !OAUTH_REFRESH_BUSY.test(raw) ? AUTH_FAILED_CODE : "";
+  const code = (AUTH_THROWN.test(raw) || ACCESS_DISABLED.test(raw)) && !OAUTH_REFRESH_BUSY.test(raw) ? AUTH_FAILED_CODE : "";
   return Object.assign(new Error(message), code ? { code } : {});
 }

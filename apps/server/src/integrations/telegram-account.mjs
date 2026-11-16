@@ -964,8 +964,56 @@ export async function workspaceFile(roots, given) {
   throw new Error(`file must be an existing file inside this chat's workspace: ${value}`);
 }
 
+// telegram_create_group's limits (MR !495 review): checked in code, the schema is only a hint to the model.
+const GROUP_TITLE_MAX = 128;
+const GROUP_ABOUT_MAX = 255;
+const GROUP_MEMBERS_MAX = 20;
+const GROUP_MEMBER_RE = /^@?[A-Za-z][A-Za-z0-9_]{3,31}$/;
+const GROUP_SAME_TITLE_MS = 24 * 3600_000;
+const GROUP_RATE_WINDOW_MS = 3600_000;
+const GROUP_RATE_MAX = 3;
+
+/** The groups this install made lately ({key, chatId, at}); kept in memory unless the app passes a persisted one. */
+export function memoryGroupLog() {
+  let rows = [];
+  return { read: () => rows, write: (next) => (rows = next) };
+}
+// One per process: every chat's tool set shares it, so a loop across chats still hits the limits.
+const INSTALL_GROUP_LOG = memoryGroupLog();
+
+/** Telegram itself said no (gramjs RPCError: its own errorMessage and a 3xx/4xx code, e.g. FLOOD_WAIT,
+ * CHANNELS_TOO_MUCH, CHAT_TITLE_EMPTY). A connection error, a timeout (-503) or a server error (500)
+ * says nothing about whether the request was carried out. */
+export function telegramRefused(error) {
+  const code = Number(error?.code);
+  return typeof error?.errorMessage === "string" && error.errorMessage.length > 0 && Number.isInteger(code) && code >= 300 && code < 500;
+}
+
+function groupInput(args) {
+  const title = withoutInertMarks(typeof args?.title === "string" ? args.title : "").trim();
+  if (!title) throw new Error("title is required");
+  if ([...title].length > GROUP_TITLE_MAX) throw new Error(`title is longer than ${GROUP_TITLE_MAX} characters`);
+  if (args?.about != null && typeof args.about !== "string") throw new Error("about must be text");
+  const about = withoutInertMarks(args?.about || "").trim();
+  if ([...about].length > GROUP_ABOUT_MAX) throw new Error(`about is longer than ${GROUP_ABOUT_MAX} characters`);
+  if (args?.members != null && !Array.isArray(args.members)) throw new Error("members must be a list of @usernames");
+  const members = [];
+  const seen = new Set();
+  for (const raw of args?.members || []) {
+    if (typeof raw !== "string") throw new Error("each member must be an @username");
+    const member = raw.trim();
+    if (!GROUP_MEMBER_RE.test(member)) throw new Error(`not a Telegram username: ${member.slice(0, 40)}`);
+    const key = member.replace(/^@/, "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    members.push(member);
+  }
+  if (members.length > GROUP_MEMBERS_MAX) throw new Error(`at most ${GROUP_MEMBERS_MAX} members`);
+  return { title, about, members };
+}
+
 // fileRoots(): the chat's workspace roots a `file` may come from; without it telegram_send sends text only.
-export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null, networkFirst = null, fileRoots = null, loadCustomFile = async () => (await import("telegram/client/uploads.js")).CustomFile }) {
+export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null, networkFirst = null, fileRoots = null, loadCustomFile = async () => (await import("telegram/client/uploads.js")).CustomFile, loadApi = async () => (await import("telegram")).Api, groupLog = INSTALL_GROUP_LOG, now = () => Date.now(), unattended = () => false }) {
   const need = () => {
     const client = getClient();
     if (!client) throw new Error("no Telegram account is connected (Settings → اتصال‌ها)");
@@ -1184,6 +1232,89 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           const ids = args.messageIds.map(Number);
           await client.deleteMessages(entity, ids, { revoke: true });
           return text({ deleted: true, chat: title, messageIds: ids, source: "telegram account" });
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    },
+
+    // Owner 2026-11-15: «از همان ابزار تلگرام بخواه که گروه را بسازد». A new group (megagroup) made by
+    // his own account through the one live client — never a second session on the same key, which
+    // Telegram answers with AUTH_KEY_DUPLICATED and drops his session. Narrow on purpose: create and
+    // invite only; no delete, no admin rights. A bot invited as a member can post in a megagroup.
+    telegram_create_group: {
+      description:
+        "Create a new Telegram group (supergroup) with the owner's own account and add members (@usernames of people or bots, at most 20). " +
+        "Returns chatId in the Bot API form (-100…), the members added, and the ones that could not be invited. The same title within 24 hours returns the group already made; at most 3 new groups an hour. Only when the owner asked for the group.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: GROUP_TITLE_MAX },
+          about: { type: "string", maxLength: GROUP_ABOUT_MAX },
+          members: { type: "array", items: { type: "string", pattern: GROUP_MEMBER_RE.source }, maxItems: GROUP_MEMBERS_MAX },
+        },
+        required: ["title"],
+        additionalProperties: false,
+      },
+      async execute(args) {
+        try {
+          // Checked here, not only in the schema: some providers ignore maxLength/pattern and the OpenAI path passes raw args.
+          const { title, about, members } = groupInput(args);
+          if (unattended()) throw new Error("a scheduled/unattended run does not create Telegram groups; ask the owner in his own chat");
+          const client = need();
+          const Api = await loadApi();
+          // From here to the write below nothing awaits: the check and the pending entry are one step,
+          // so a concurrent call sees this one (re-review of !495). The entry is written BEFORE
+          // CreateChannel: a lost reply (reconnect, BadMessageError) leaves a group that may exist,
+          // and a retry must not make a second one.
+          const at = now();
+          const entries = (groupLog.read() || []).filter((e) => at - Number(e.at) < GROUP_SAME_TITLE_MS);
+          const key = title.toLowerCase();
+          const same = entries.find((e) => e.key === key);
+          if (same) {
+            return text({
+              created: false,
+              title,
+              chatId: same.chatId ?? null,
+              note: same.chatId
+                ? "a group with this title was already made in the last 24 hours; this is that group (members not invited again)"
+                : "a group with this title is being created or its creation result is unknown (last 24 hours); check telegram_dialogs before trying again",
+              source: "telegram account",
+            });
+          }
+          if (entries.filter((e) => at - Number(e.at) < GROUP_RATE_WINDOW_MS).length >= GROUP_RATE_MAX) {
+            throw new Error(`at most ${GROUP_RATE_MAX} groups an hour from this account; ${GROUP_RATE_MAX} were made in the last hour`);
+          }
+          const id = crypto.randomUUID();
+          groupLog.write([...entries, { id, key, chatId: null, at }]);
+          const keep = (fn) => groupLog.write((groupLog.read() || []).flatMap((e) => (e.id === id ? fn(e) : [e])));
+          let made;
+          try {
+            made = await client.invoke(new Api.channels.CreateChannel({ megagroup: true, title, about }));
+          } catch (error) {
+            // Only Telegram's own answer «no» proves nothing was made; anything else may hide a group.
+            if (telegramRefused(error)) keep(() => []);
+            throw error;
+          }
+          const channel = (made?.chats || []).find((c) => c?.className === "Channel");
+          const chatId = channel?.id != null ? `-100${String(channel.id)}` : null;
+          if (chatId) keep((e) => [{ ...e, chatId }]);
+          if (!chatId) {
+            return text({ created: null, title, chatId: null, note: "Telegram's answer had no group in it; the group may have been created — check telegram_dialogs for it before trying again", source: "telegram account" });
+          }
+          const added = [];
+          const failed = [];
+          for (const member of members) {
+            try {
+              const user = await client.getInputEntity(member);
+              const res = await client.invoke(new Api.channels.InviteToChannel({ channel, users: [user] }));
+              if ((res?.missingInvitees || []).length) failed.push({ member, error: "could not be invited: their privacy or premium setting does not allow it" });
+              else added.push(member);
+            } catch (error) {
+              failed.push({ member, error: String(error?.message || error) });
+            }
+          }
+          return text({ created: true, title, chatId, added, failed, source: "telegram account" });
         } catch (error) {
           return fail(error);
         }

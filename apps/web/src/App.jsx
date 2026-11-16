@@ -17,6 +17,7 @@ import { useModuleList } from "./module-hooks.js";
 import { peopleRoute } from "./inbox-people.js";
 import { GlobalPanel, MotherPanel, TelegramRedirect, WatchPill } from "./components/Telegram.jsx";
 import { TelegramChat } from "./components/TelegramChat.jsx";
+import { LimitResetButton } from "./components/PlanLimits.jsx";
 import { motherName } from "./telegram.js";
 import { GriffinRuntime, unwrapResult } from "./runtime.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
@@ -885,6 +886,7 @@ function LimitResumeChip({ chat, className = "" }) {
   return (
     <span className={`${className} shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground`} title={t("این گفتگو به سقف مصرف خورد و بعد از بازشدن سقف خودش ادامه می‌دهد")}>
       {t("ادامهٔ خودکار ساعت {at}", { at })}
+      <LimitResetButton chat={chat} />
       <button
         type="button"
         className="rounded-full px-1 hover:bg-background hover:text-foreground"

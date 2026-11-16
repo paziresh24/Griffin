@@ -63,12 +63,54 @@ export function chatState(chat, isUnread) {
 
 // `keepId`: the chat on screen stays listed whatever the filter — opening an unread chat marks it
 // read, and it must not vanish from under the pointer.
-// The sidebar's search: a chat matches by its title, or by its messages (bodyIds: the ids the server's
-// full-text search returned for the same text, /api/chats/search).
-export function searchChats(list, query, bodyIds = null) {
-  const q = String(query || "").trim().toLowerCase();
+// The sidebar's search text and a title, compared the same way: Arabic yeh/kaf as Persian, the
+// half-space, «؛»، «-» and other marks as spaces, so «نمونه؛ افت» finds «نمونه - افت‌ها».
+export const foldText = (text) =>
+  String(text ?? "")
+    .toLowerCase()
+    .replace(/\u064A/g, "\u06CC")
+    .replace(/\u0643/g, "\u06A9")
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+
+/**
+ * The sidebar's search, best first (owner 2026-11-11: «عناوین در سرچ اولویتی ندارن»): the title is the
+ * text → the title holds it → the title holds every word → the messages hold the phrase (`hits`, the
+ * server's /api/chats/search, newest first) → the messages hold every word. Within a rank the newest
+ * chat leads. A message hit carries `searchSnippet` (the text around the match) for the row.
+ * `hits`: [{ id, snippet?, loose? }] or a Set of ids (older servers).
+ */
+export function searchChats(list, query, hits = null) {
+  const q = foldText(query);
   if (!q) return list;
-  return list.filter((c) => String(c.title || "").toLowerCase().includes(q) || Boolean(bodyIds?.has(c.id)));
+  const words = q.split(" ");
+  const byId = new Map();
+  if (hits instanceof Set) for (const id of hits) byId.set(id, { id });
+  else for (const h of hits || []) byId.set(h.id, h);
+  const order = new Map([...byId.keys()].map((id, i) => [id, i]));
+  const ranked = [];
+  for (const chat of list) {
+    const title = foldText(chat.title);
+    const hit = byId.get(chat.id);
+    let rank = -1;
+    if (title === q) rank = 0;
+    else if (title.includes(q)) rank = 1;
+    else if (words.length > 1 && words.every((w) => title.includes(w))) rank = 2;
+    else if (hit) rank = hit.loose ? 4 : 3;
+    if (rank < 0) continue;
+    const item = hit?.snippet && rank >= 3 ? { ...chat, searchSnippet: hit.snippet } : chat;
+    ranked.push({ item, rank, at: rank >= 3 ? order.get(chat.id) : -stampOf(chat) });
+  }
+  return ranked.sort((a, b) => a.rank - b.rank || a.at - b.at).map((r) => r.item);
+}
+
+// A snippet from the server marks its match between \u0002 and \u0003: [{ text, mark }] for drawing.
+export function snippetParts(snippet) {
+  return String(snippet || "")
+    .split(/(\u0002[^\u0003]*\u0003)/)
+    .filter(Boolean)
+    .map((part) => (part.startsWith("\u0002") ? { text: part.slice(1, -1), mark: true } : { text: part, mark: false }));
 }
 
 export function filterChats(list, filter, isUnread, { keepId = null } = {}) {

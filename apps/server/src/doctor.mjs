@@ -40,7 +40,7 @@ export function classifyEngineError({ status = 0, text = "", network = false } =
   if (status === 402 || /quota|credit|insufficient|balance|usage limit|hit your limit/i.test(t)) return "quota";
   // Too many requests right now: the key works, the engine is just busy.
   if (status === 429 || /rate limit|too many requests|concurren/i.test(t)) return "busy";
-  if (status === 401 || /invalid[ _-]?(api[ _-]?)?key|unauthori[sz]ed|authentication|invalid x-api-key|invalid bearer/i.test(t)) return "bad_key";
+  if (status === 401 || /invalid[ _-]?(api[ _-]?)?key|unauthori[sz]ed|authentication|invalid x-api-key|invalid bearer|organization has disabled|subscription access (?:is |has been )?disabled|disabled claude subscription access/i.test(t)) return "bad_key";
   if (status === 404 || /model.*(not found|does not exist|unknown)|unknown model/i.test(t)) return "model";
   if (status === 403) return "forbidden";
   return "other";

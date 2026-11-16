@@ -571,7 +571,7 @@ export function plainIntent(text) {
 
 // Plain labels for tools gated only on some paths (teammate coverage) — «صدا زدن «telegram_send»»
 // meant nothing to the owner.
-const EXTRA_LABELS = { telegram_send: "فرستادن پیام", knowledge_write: `نوشتن یادداشت در دانش ${PERSONA.name}`, arvan_cache_purge: "پاک کردن کش آروان", knowledge_edit: `ویرایش یادداشت در دانش ${PERSONA.name}`, knowledge_delete: `حذف یادداشت از دانش ${PERSONA.name}` };
+const EXTRA_LABELS = { telegram_send: "فرستادن پیام", telegram_create_group: "ساختن گروه تلگرام با اکانت شما",knowledge_write: `نوشتن یادداشت در دانش ${PERSONA.name}`, arvan_cache_purge: "پاک کردن کش آروان", knowledge_edit: `ویرایش یادداشت در دانش ${PERSONA.name}`, knowledge_delete: `حذف یادداشت از دانش ${PERSONA.name}` };
 
 // What the action touches, in a few readable words — never a credential.
 function actionDetail(name, args) {
@@ -590,6 +590,11 @@ function actionDetail(name, args) {
   if (name === "telegram_send") {
     const file = args?.file ? ` فایل «${String(args.file).split("/").pop()}» با` : "";
     return `در «${args?.chat || "?"}»:${file} «${String(args?.text || "").replace(/\s+/g, " ").slice(0, 200)}»`;
+  }
+  // The owner sees the group and everyone who will be added to it with his account.
+  if (name === "telegram_create_group") {
+    const members = Array.isArray(args?.members) ? args.members.map((m) => String(m).trim()).filter(Boolean) : [];
+    return `گروه «${String(args?.title || "?").replace(/\s+/g, " ").slice(0, 128)}»${members.length ? ` با ${members.join("، ").slice(0, 600)}` : " (بدون عضو)"}`;
   }
   return Object.entries(args || {})
     .filter(([key, value]) => ["string", "number", "boolean"].includes(typeof value) && !/value|secret|pass|token|key$/i.test(key))

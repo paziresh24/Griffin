@@ -55,7 +55,7 @@ export function createEndAgentTool({ onEnd }) {
 // still asks the owner; replying in the same chat is free. Every change (the general gate's list,
 // guard.mjs classify, plus handoff.mjs teamWriteVerdict) is refused outright: the chain only reads
 // and hands such work to the owner's own chats (owner 2026-10-21).
-export const TEAM_MUTATING = new Set(["telegram_send", "knowledge_write", "knowledge_edit", "knowledge_delete"]);
+export const TEAM_MUTATING = new Set(["telegram_send", "telegram_create_group", "knowledge_write", "knowledge_edit", "knowledge_delete"]);
 // Knowledge on auto-approve (owner 2026-11-01): a colleague chain's knowledge_write no longer asks
 // him. Edit and delete still do (and knowledge.mjs refuses them on live notes outside his chats).
 const teamMutating = () => (knowledgeAutoApprove() ? new Set([...TEAM_MUTATING].filter((name) => name !== "knowledge_write")) : TEAM_MUTATING);

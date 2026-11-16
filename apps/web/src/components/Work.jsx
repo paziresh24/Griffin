@@ -137,7 +137,7 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
     return (
       <div className="my-2">
         <button type="button" onClick={() => setOpen(!expanded)} aria-expanded={expanded} className="g-worklog-head flex items-center gap-2 rounded-md py-1 pe-2 text-sm text-muted-foreground hover:text-foreground">
-          {running ? <span className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/35 border-t-primary" aria-hidden /> : <Brain className="size-3.5" />}
+          <Brain className="size-3.5" />
           {now ? (
             <span dir="auto" className="min-w-0 flex-1 truncate">{now}</span>
           ) : (
@@ -162,7 +162,7 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
         className="g-worklog-head group/work flex items-center gap-2 rounded-lg py-1 pe-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <span className={`flex size-6 items-center justify-center rounded-md bg-muted transition-colors group-hover/work:bg-accent ${running ? "text-signal" : ""}`}>
-          {running ? <Wrench className="size-3.5 animate-pulse" /> : <Brain className="size-3.5" />}
+          {running ? <Wrench className="size-3.5" /> : <Brain className="size-3.5" />}
         </span>
         {now ? (
           <span dir="auto" className="shimmer min-w-0 flex-1 truncate">{now}</span>
@@ -219,9 +219,7 @@ function StepGroup({ parts, body, active, karsara }) {
   return (
     <div>
       <button type="button" onClick={() => setOpen(!expanded)} aria-expanded={expanded} className="g-worklog-head group/work flex max-w-full items-center gap-2 rounded-lg py-1 pe-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
-        {active ? (
-          <span className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/35 border-t-primary" aria-hidden />
-        ) : failed ? (
+        {failed ? (
           <span className="size-2 shrink-0 rounded-full bg-bad" title={t("خطا")} aria-hidden />
         ) : (
           <Brain className="size-3.5 shrink-0" />

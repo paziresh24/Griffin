@@ -41,5 +41,18 @@
   "مدل": "Model",
   "زبان": "Language",
   "کلید سرویس": "Service key",
-  "حذف کلید": "Remove key"
+  "حذف کلید": "Remove key",
+  "این ریست فقط وقتی به سقف رسیده‌ای کار می‌کند؛ چیزی خرج نشد.": "This reset only works at a limit; nothing was used.",
+  "این ریست قبلاً استفاده شده.": "This reset was already used.",
+  "یک ریست تازه انجام شده؛ کمی بعد دوباره امتحان کن.": "A reset just went through; try again in a moment.",
+  "کمی بعد دوباره امتحان کن.": "Try again in a moment.",
+  "ورود Claude این حساب تازه نیست؛ یک پیام در چت بفرست تا Claude Code آن را تازه کند، بعد دوباره بزن.": "This account's Claude login is stale; send a chat message so Claude Code refreshes it, then try again.",
+  "ریست Fable": "Fable reset",
+  "ریست کامل سقف": "Full limit reset",
+  "ریست سقف ۵ ساعته": "5-hour limit reset",
+  "سقف Claude ریست شد؛ چت‌هایی که منتظر بودند ادامه می‌دهند.": "Claude limits reset; chats that were waiting continue now.",
+  "ریست انجام نشد ({reason})؛ کمی بعد دوباره امتحان کن.": "The reset didn't go through ({reason}); try again in a moment.",
+  "تا {date}": "until {date}",
+  "{name} تا وقتی سقف هفتگی پر است کار نمی‌کند.": "{name} can't be used while the weekly limit is full.",
+  "ادامه با ریست": "Continue with reset"
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, ChevronDown, Copy, ExternalLink, KeyRound, Loader2, Pencil, Plus, Settings2, Stethoscope, Trash2, X } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronDown, Copy, ExternalLink, KeyRound, Loader2, Pencil, Plus, Settings2, Stethoscope, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { Pill } from "./Health.jsx";
@@ -100,12 +100,34 @@ export function ProvidersSection() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3 rounded-2xl border bg-card p-4 sm:flex-row sm:items-center">
         <p className="min-w-0 flex-1 text-sm leading-7 text-muted-foreground">
-          {t("موتورها حساب‌هایی‌اند که ایجنت‌ها با آن‌ها فکر می‌کنند. «پیش‌فرض» برای همهٔ گفتگوها و ایجنت‌ها اول امتحان می‌شود (مگر گفتگویی مدل خودش را انتخاب کرده باشد). ترتیب خودکار است: آماده‌ها اول، بعد آن‌هایی که به سقف خورده‌اند به ترتیب زودتر باز شدن سقف، و آخر از همه آن‌هایی که اعتبارشان تمام شده.")}
+          {t("موتورها حساب‌هایی‌اند که ایجنت‌ها با آن‌ها فکر می‌کنند. هر ایجنت با اولین موتور آماده کار می‌کند: «پیش‌فرض» اول، بعد حساب‌های Claude، بعد بقیه (مگر گفتگویی مدل خودش را انتخاب کرده باشد). اگر موتوری خطا بدهد یا به سقف بخورد، کار خودش به موتور بعدی می‌رود.")}
         </p>
         <button type="button" onClick={() => { window.location.hash = "/setup/engine"; }} className="press inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground sm:self-auto">
           <Plus className="size-4" /> {t("افزودن موتور")}
         </button>
       </div>
+      <label className="flex items-start gap-3 rounded-2xl border bg-card p-4 text-sm">
+        <Switch.Root
+          checked={Boolean(data.switchSameKind)}
+          onCheckedChange={async (v) => {
+            setData((d) => ({ ...d, switchSameKind: v }));
+            try {
+              await api("/api/engine-switch", { method: "PUT", body: { sameKind: v } });
+            } catch (e) {
+              setData((d) => ({ ...d, switchSameKind: !v }));
+              toast.error(e.message);
+            }
+          }}
+          className="relative mt-1 h-5 w-9 shrink-0 rounded-full bg-muted transition-colors duration-200 data-[state=checked]:bg-primary"
+          aria-label={t("سوییچ فقط بین موتورهای هم‌نوع")}
+        >
+          <Switch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out data-[state=checked]:translate-x-[18px] rtl:data-[state=checked]:-translate-x-[18px]" />
+        </Switch.Root>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{t("سوییچ فقط بین موتورهای هم‌نوع")}</span>
+          <span className="block text-xs leading-6 text-muted-foreground">{t("وقتی موتوری خطا بدهد یا به سقف بخورد، کار فقط به حسابی از همان نوع می‌رود؛ مثلاً از یک حساب Claude به حساب Claude دیگر، نه به OpenAI. موتوری را هم که «بیرون از سوییچ خودکار» است هیچ‌وقت جایگزین نمی‌کند.")}</span>
+        </span>
+      </label>
       <div className="flex flex-col gap-4">
         <AnimatePresence initial={false} mode="popLayout">
           {on.length ? on.map((p) => (
@@ -285,6 +307,15 @@ function EngineCard({ p, presets, reload, canDefault = false, onToggle = null, s
           </button>
         ) : null}
         <button type="button" onClick={test} disabled={testing || !p.enabled} className={`${button} disabled:opacity-50`}>{testing ? <Loader2 className="size-3.5 animate-spin" /> : <Stethoscope className="size-3.5" />} {t("تست")}</button>
+        <button
+          type="button"
+          onClick={act(() => api(`/api/providers/${p.id}`, { method: "PATCH", body: { auto: p.auto === false } }))}
+          className={`${button} ${p.auto === false ? "text-muted-foreground line-through decoration-1" : ""}`}
+          aria-pressed={p.auto !== false}
+          title={p.auto === false ? t("وقتی موتور دیگری خطا بدهد یا به سقف بخورد، کار به این موتور نمی‌آید. بزنید تا دوباره در سوییچ خودکار باشد.") : t("وقتی موتور دیگری خطا بدهد یا به سقف بخورد، کار می‌تواند به این موتور بیاید. بزنید تا از سوییچ خودکار بیرون برود.")}
+        >
+          <ArrowLeftRight className="size-3.5" /> {p.auto === false ? t("بیرون از سوییچ خودکار") : t("در سوییچ خودکار")}
+        </button>
         {p.removable ? <button type="button" onClick={remove} className={`${button} ms-auto text-bad hover:bg-bad/10`}><Trash2 className="size-3.5" /> {t("حذف")}</button> : null}
       </div>
       {probe ? <div className="px-4 pb-3"><ProbeResult result={probe} /></div> : null}

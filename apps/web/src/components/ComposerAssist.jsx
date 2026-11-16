@@ -13,6 +13,7 @@ import { isRtl, locale, t } from "../i18n.js";
 import { MENU } from "./Controls.jsx";
 import { SECTION, mentionRows, ownAgents, recentChats } from "../mention-pick.js";
 import { MentionText } from "./Mention.jsx";
+import { LimitResetButton } from "./PlanLimits.jsx";
 
 // The open chat's record (App provides it): suggestion, auto-continue time, fast mode.
 // A side chat's thread is outside it and gets none of this.
@@ -326,6 +327,7 @@ export function ComposerAssist({ inputRef, next = null }) {
         <div className="flex items-center gap-2 rounded-lg bg-muted/60 ps-2 text-muted-foreground">
           <RefreshCw className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">{t("سقف مصرف پر شد؛ ساعت {time} خودکار ادامه می‌دهد.", { time: clock(chat.limitResumeAt) })}</span>
+          <LimitResetButton chat={chat} />
           <button type="button" onClick={cancelResume} className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-2 hover:bg-muted hover:text-foreground" aria-label={t("لغو ادامهٔ خودکار")}>
             <X className="size-3.5" /> {t("لغو")}
           </button>

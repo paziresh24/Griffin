@@ -1528,6 +1528,13 @@ export function createRunner({
       limitTries.delete(chatId);
     },
     sweepLimitResumes,
+    // A plan limit reset was spent (claude-resets.mjs): every chat waiting for the reset goes now.
+    resumeLimitedNow() {
+      const all = limitResumes();
+      for (const item of Object.values(all)) item.at = 0;
+      if (Object.keys(all).length) store.setKv(LIMIT_RESUME_KEY, all);
+      return sweepLimitResumes();
+    },
 
     // PLAN_FALLBACK=ask: the owner's click on a plan-limit card (true when it was the open one),
     // the open card's id, and withdrawing it (an archive).

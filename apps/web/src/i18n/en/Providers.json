@@ -99,5 +99,12 @@
   "گفتگوهای تازه، گفتگوهای «خودکار» و ایجنت‌ها از این به بعد اول با این موتور کار می‌کنند.": "New chats, \"auto\" chats and agents now try this engine first.",
   "ورود قبلی تمام شده بود؛ صفحهٔ ورود تازه باز شد. وارد شو و کد تازه را بگذار.": "The earlier sign-in had ended; a new sign-in page opened. Sign in and paste the new code.",
   "ورود منقضی": "Sign-in expired",
-  "ورود یا کلید این حساب پذیرفته نشد؛ کاری به آن نمی‌رود تا دوباره وارد شوید یا «تست» قبول شود.": "This account's sign-in or key was refused; no work goes to it until you sign in again or «Test» passes."
+  "ورود یا کلید این حساب پذیرفته نشد؛ کاری به آن نمی‌رود تا دوباره وارد شوید یا «تست» قبول شود.": "This account's sign-in or key was refused; no work goes to it until you sign in again or «Test» passes.",
+  "وقتی موتور دیگری خطا بدهد یا به سقف بخورد، کار به این موتور نمی‌آید. بزنید تا دوباره در سوییچ خودکار باشد.": "When another engine fails or hits its limit, work does not move to this one. Tap to put it back in automatic switching.",
+  "وقتی موتور دیگری خطا بدهد یا به سقف بخورد، کار می‌تواند به این موتور بیاید. بزنید تا از سوییچ خودکار بیرون برود.": "When another engine fails or hits its limit, work can move to this one. Tap to take it out of automatic switching.",
+  "بیرون از سوییچ خودکار": "Out of auto switch",
+  "در سوییچ خودکار": "In auto switch",
+  "سوییچ فقط بین موتورهای هم‌نوع": "Switch only between engines of the same kind",
+  "وقتی موتوری خطا بدهد یا به سقف بخورد، کار فقط به حسابی از همان نوع می‌رود؛ مثلاً از یک حساب Claude به حساب Claude دیگر، نه به OpenAI. موتوری را هم که «بیرون از سوییچ خودکار» است هیچ‌وقت جایگزین نمی‌کند.": "When an engine fails or hits its limit, work moves only to an account of the same kind — from one Claude account to another, not to OpenAI. An engine marked «out of auto switch» is never used as a replacement.",
+  "موتورها حساب‌هایی‌اند که ایجنت‌ها با آن‌ها فکر می‌کنند. هر ایجنت با اولین موتور آماده کار می‌کند: «پیش‌فرض» اول، بعد حساب‌های Claude، بعد بقیه (مگر گفتگویی مدل خودش را انتخاب کرده باشد). اگر موتوری خطا بدهد یا به سقف بخورد، کار خودش به موتور بعدی می‌رود.": "Engines are the accounts agents think with. Every agent runs on the first ready engine: the default first, then Claude accounts, then the rest (unless a chat picked its own model). If an engine fails or hits its limit, work moves to the next one by itself."
 }

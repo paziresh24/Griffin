@@ -265,6 +265,10 @@ const now = () => new Date().toISOString();
 const named = ({ fa_name, ...row }) => ({ ...row, tg_name: row.display_name, display_name: fa_name || row.display_name, fa_name: fa_name || null });
 // Bounded MCP call log: enough to debug a peer's client, never a growing archive.
 const PEER_CALLS_KEEP = 5_000;
+// Chat lists are capped per caller: the owner's own chats get room for years, every other caller
+// (a peer agent, a colleague, each job) its own smaller share — one busy caller can't push the rest out.
+const OWNER_LIST_CAP = 5_000;
+const OTHER_LIST_CAP = 800;
 
 // How far back (in event ids, all chats) a resent message is looked for.
 const RECENT_EVENTS = 100_000;
@@ -684,13 +688,18 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, side_of, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @sideOf, @at, @at)",
     ),
     getChat: db.prepare("SELECT * FROM chats WHERE id = ?"),
+    // A cap per caller (and per job), never one cap over everything (owner 2026-11-14: his archived
+    // chats «vanished» — 10k archived peer chats of one bot, ~1000 a day, filled the one LIMIT and
+    // pushed every owner chat older than two days out of the archive and out of chat_list).
     listChats: db.prepare(`
       SELECT c.*, r.status AS run_status, r.started_at AS run_started_at
       FROM chats c
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
       WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
-      ORDER BY c.pinned DESC, c.updated_at DESC
-      LIMIT 500`),
+        AND c.id IN (SELECT id FROM (SELECT id, caller, ROW_NUMBER() OVER (PARTITION BY COALESCE(caller, 'owner') ORDER BY pinned DESC, updated_at DESC) AS rn
+          FROM chats WHERE archived = @archived AND job_id IS NULL AND parent_chat_id IS NULL AND side_of IS NULL AND sim = 0)
+          WHERE rn <= CASE WHEN COALESCE(caller, 'owner') = 'owner' THEN ${OWNER_LIST_CAP} ELSE ${OTHER_LIST_CAP} END)
+      ORDER BY c.pinned DESC, c.updated_at DESC`),
     // Every top-level chat for the sidebar, tagged with where it came from so each tab lists its
     // own threads (manual chats under «گفتگو», Telegram-born ones under the Telegram tab, …).
     listChatsBySource: db.prepare(`
@@ -728,8 +737,10 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
         AND (@archived = 1 OR c.job_id IS NULL OR c.pinned = 1 OR c.job_kept = 1 OR r.status = 'running'
           OR c.id = (SELECT h.id FROM chats h WHERE h.job_id = c.job_id AND h.parent_chat_id IS NULL
             ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1))
-      ORDER BY c.pinned DESC, c.updated_at DESC
-      LIMIT 800`),
+        AND c.id IN (SELECT id FROM (SELECT id, caller, ROW_NUMBER() OVER (PARTITION BY COALESCE(job_id, caller, 'owner') ORDER BY pinned DESC, updated_at DESC) AS rn
+          FROM chats WHERE archived = @archived AND side_of IS NULL AND sim = 0)
+          WHERE rn <= CASE WHEN COALESCE(caller, 'owner') = 'owner' THEN ${OWNER_LIST_CAP} ELSE ${OTHER_LIST_CAP} END)
+      ORDER BY c.pinned DESC, c.updated_at DESC`),
     listChildChats: db.prepare("SELECT id FROM chats WHERE parent_chat_id = ?"),
     // Peer-call child chats (ask_agent/delegate) with their latest run status, for the sidebar nest.
     childChatsWithStatus: db.prepare(`
@@ -1614,21 +1625,49 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     // since a one-letter prefix makes SQLite expand it over the whole vocabulary. FTS5 syntax in it is
     // taken literally. Only the newest `scan` matching rows are read, so a common word costs the same on
     // a large DB as on a small one.
-    searchChatIds(query, { limit = 500, scan = 2000 } = {}) {
+    searchChatIds(query, options = {}) {
+      return store.searchChatHits(query, { ...options, snippets: 0 }).map((h) => h.id);
+    },
+
+    // The chats whose messages hold `query`, newest hit first: the exact phrase first, then chats that
+    // hold every word of it in one message (any order). The first `snippets` chats carry the text
+    // around their newest hit (FTS5 snippet, the match between \u0002 and \u0003) so the sidebar
+    // can show WHY a chat matched; `loose: true` marks the words-only hits.
+    searchChatHits(query, { limit = 500, scan = 2000, snippets = 40 } = {}) {
       const term = foldSearch(query).trim();
       if (!store.searchReady() || [...term].length < 2) return [];
-      const last = term.split(/[^\p{L}\p{N}]+/u).filter(Boolean).pop() || "";
-      const phrase = `"${term.replace(/"/g, '""')}"${[...last].length >= 2 ? "*" : ""}`;
-      const ids = new Set();
-      try {
-        for (const r of db.prepare("SELECT chat_id FROM events_fts WHERE events_fts MATCH ? ORDER BY rowid DESC LIMIT ?").iterate(phrase, scan)) {
-          ids.add(r.chat_id);
-          if (ids.size >= limit) break;
+      const words = term.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+      const last = words.at(-1) || "";
+      const star = [...last].length >= 2 ? "*" : "";
+      const quote = (w) => `"${w.replace(/"/g, '""')}"`;
+      const phrase = `${quote(term)}${star}`;
+      const loose = words.length > 1 ? words.map((w, i) => `${quote(w)}${i === words.length - 1 ? star : ""}`).join(" AND ") : null;
+      const hits = new Map();
+      const collect = (match, isLoose) => {
+        for (const r of db.prepare("SELECT rowid AS id, chat_id FROM events_fts WHERE events_fts MATCH ? ORDER BY rowid DESC LIMIT ?").iterate(match, scan)) {
+          if (hits.size >= limit) break;
+          if (!hits.has(r.chat_id)) hits.set(r.chat_id, { id: r.chat_id, row: r.id, match, loose: isLoose });
         }
+      };
+      try {
+        collect(phrase, false);
+        if (loose) collect(loose, true);
       } catch {
         return []; // only punctuation: no word to look for
       }
-      return [...ids];
+      const snip = db.prepare("SELECT snippet(events_fts, 1, char(2), char(3), '…', 14) AS s FROM events_fts WHERE events_fts MATCH ? AND rowid = ?");
+      return [...hits.values()].map((h, i) => {
+        const out = { id: h.id, ...(h.loose ? { loose: true } : {}) };
+        if (i < snippets) {
+          try {
+            const s = snip.get(h.match, h.row)?.s;
+            if (s) out.snippet = String(s).replace(/\s+/g, " ").trim().slice(0, 240);
+          } catch {
+            /* no snippet: the row still matches */
+          }
+        }
+        return out;
+      });
     },
 
     getKv(key) {

@@ -65,7 +65,7 @@ const FAMILIES = [
   { names: ["self_check", "self_fix"], line: "self_check (this app's real health: engines, stuck runs, messengers, disk) · self_fix (apply a fix it offered)." },
   { names: ["mcp_server_list", "mcp_server_add", "mcp_server_login", "mcp_server_remove"], line: "mcp_server_* — the owner's external MCP servers (add by Infisical reference, OAuth login)." },
   // Telegram
-  { names: ["telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_ledger", "telegram_watch_list", "send_to_person"], line: "telegram_* — the owner's own Telegram (people, groups): read, see media, send as him, edit/delete your own message (fix in place, never a second one); ledger = which chat sent what." },
+  { names: ["telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_create_group", "telegram_ledger", "telegram_watch_list", "send_to_person"], line: "telegram_* — the owner's own Telegram (people, groups): read, see media, send as him, edit/delete your own message (fix in place, never a second one); create a group as him and add members (only when he asked); ledger = which chat sent what." },
   { names: ["updateTodos"], line: "updateTodos — this task's step list." },
 ];
 

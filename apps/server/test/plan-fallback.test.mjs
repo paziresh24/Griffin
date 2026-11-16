@@ -617,3 +617,20 @@ test("ask routing moves off an account whose login was refused, even to another 
   assert.equal(pickRoute(list, { usable, enabled, ask: true, kindOf, broken: (id) => id === "claude-5" }).provider, "zai");
   assert.match(accountMoveNote({ from: "پنج", account: "شش", why: "auth" }), /ورود حساب پنج پذیرفته نشد/);
 });
+
+import { scopeSwitch } from "../src/plan-fallback.mjs";
+
+test("scopeSwitch: an account out of the automatic switch is never a target, but stays when it is home", () => {
+  const list = [{ provider: "claude-7" }, { provider: "openai" }, { provider: "claude-2" }];
+  const auto = (id) => id !== "openai";
+  const kind = (id) => id.split("-")[0];
+  assert.deepEqual(scopeSwitch(list, { home: list[0], auto, kind, sameKind: false }).map((c) => c.provider), ["claude-7", "claude-2"]);
+  assert.deepEqual(scopeSwitch(list, { home: list[1], auto, kind, sameKind: false }).map((c) => c.provider), ["claude-7", "openai", "claude-2"]);
+});
+
+test("scopeSwitch: same kind only keeps the home's kind; no home leaves the list alone", () => {
+  const list = [{ provider: "claude" }, { provider: "openai-zai" }, { provider: "claude-3" }, { provider: "cursor" }];
+  const kind = (id) => id.split("-")[0];
+  assert.deepEqual(scopeSwitch(list, { home: list[0], auto: () => true, kind, sameKind: true }).map((c) => c.provider), ["claude", "claude-3"]);
+  assert.equal(scopeSwitch(list, { home: null, auto: () => false, kind, sameKind: true }).length, 4);
+});

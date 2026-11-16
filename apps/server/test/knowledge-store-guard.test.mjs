@@ -368,7 +368,11 @@ test("Griffin: STATE_GUARD=off, and outside full Claude Code nothing changes", a
   // STATE_GUARD=off: index.mjs passes no stateGuard, and Bash is unguarded as before.
   const off = await hookOptions(env, { stateGuard: undefined });
   assert.equal((await decide(off, "Bash", { command: `echo x > ${note}` }, env.worktree)).decision, "allow");
-  assert.equal(off.hooks.PreToolUse.length, 3, "only the file guard, the plan-mode guard and the git identity guard");
+  assert.equal(off.hooks.PreToolUse.length, 4, "only the file guard, the plan-mode guard, the git identity guard and the peer-bridge guard");
+  // The peer-bridge guard: a hand-made bridge to another install's /mcp is refused, network_ask named (2026-11-09).
+  const bridge = await decide(off, "mcp__iris_bridge__griffin_send", { message: "x" }, env.worktree);
+  assert.equal(bridge.decision, "deny");
+  assert.match(bridge.reason, /network_ask/);
   // Without full Claude Code there is no Bash; the file guard alone runs.
   const scoped = await hookOptions(env, { claudeCode: false });
   assert.equal(scoped.hooks.PreToolUse.length, 2);

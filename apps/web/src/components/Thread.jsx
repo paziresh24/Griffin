@@ -1,4 +1,5 @@
 import { fallbackLabel } from "../fallback.js";
+import { DotsSpinner } from "./Spinner.jsx";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   ActionBarPrimitive, AttachmentPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, unstable_useComposerInput, useAui, useAuiEvent, useAuiState,
@@ -1173,31 +1174,26 @@ function RunFooter({ run }) {
   );
 }
 
-// What the running turn is doing (run-phase.js): a retry or a closed limit in words. The shared
-// clock lets a retry label expire.
+// What the running turn is doing (run-phase.js), Claude's way (owner 2026-11-12): no badge, one mark
+// for the whole turn — the dots (a square while a tool runs) and beside them, in shimmering text, the
+// phase («در حال اتصال», «خلاصه‌سازی», a retry, a closed limit) or, while it simply works, how long so far.
+const WORKING = phaseLabel("working");
 function RunPhase({ run }) {
-  const karsara = useLook() === "karsara";
-  useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
-  const label = phaseLabel(run.phase, run.phaseDetail, { at: run.phaseAt, now: Date.now() });
-  if (karsara) {
-    return (
-      <span className="g-run-phase inline-flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="inline-block size-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-muted-foreground/35 border-t-primary" aria-hidden />
-        {label}
-      </span>
-    );
-  }
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const now = Date.now();
+  const phase = phaseLabel(run.phase, run.phaseDetail, { at: run.phaseAt, now });
+  const since = run.startedAt ? Math.max(0, Math.round((now - new Date(run.startedAt)) / 1000)) : null;
+  const label = phase !== WORKING ? phase : since != null ? formatDuration(since, { compact: true }) : null;
+  const last = run.parts?.at(-1);
   return (
-    <motion.span
-      initial={{ opacity: 0, scale: 0.92 }}
-      animate={{ opacity: 1, scale: 1 }}
-      className="g-run-phase inline-flex items-center gap-2 rounded-full border border-signal/25 bg-signal/10 px-2.5 py-1 text-xs text-signal"
-    >
-      <span className="agent-dots" aria-hidden>
-        <i /><i /><i />
-      </span>
-      <span className="agent-pulse">{label}</span>
-    </motion.span>
+    <span className="g-run-phase inline-flex items-center gap-2 text-xs text-muted-foreground" role="status" aria-label={label || WORKING}>
+      <DotsSpinner shape={last?.type === "tool" && last.status === "running" ? "grid" : "orbit"} />
+      {label ? <span className="title-shimmer tabular-nums" dir={isRtl ? "rtl" : "ltr"}>{label}</span> : null}
+    </span>
   );
 }
 

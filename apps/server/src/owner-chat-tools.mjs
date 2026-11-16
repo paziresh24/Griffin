@@ -13,6 +13,8 @@
 //    already refuses chat_send there, and reading such a chat marks the reader the same way;
 //  - chat_read returns at most about 8k characters, newest kept, secrets redacted;
 //  - notify_owner: once a minute per chat, through the existing Web Push + Telegram owner route.
+import fs from "node:fs";
+import path from "node:path";
 import { foldEvents } from "@griffin/timeline";
 import { rootCallerOf } from "./agents/profiles.mjs";
 import { OWNER_TEXT_SINCE, telegramOriginKey } from "./db.mjs";
@@ -36,6 +38,8 @@ export const NOTIFY_WINDOW_MS = 60_000;
 // All owner chats together: a handful of rings a minute at most.
 export const NOTIFY_GLOBAL_MAX = 5;
 const NOTIFY_MAX = 3000;
+export const NOTIFY_FILE_MAX_BYTES = 20 * 1024 * 1024;
+const FILE_MIME = { ".csv": "text/csv", ".txt": "text/plain", ".pdf": "application/pdf", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".zip": "application/zip", ".md": "text/markdown" };
 // The head every chat_send message starts with; the receiver's hop is read back from it.
 export const sendHead = (title, hop) => `${CHAT_SEND_PREFIX}${cleanLabel(title, 80) || "بی‌نام"}» [hop ${hop}]: `;
 const HOP_RE = /^پیام از چت «[^«»]*» \[hop (\d+)\]: /;
@@ -143,12 +147,32 @@ export function createOwnerChatToolkit({
   notify = async () => ({}),
   // The web address of a chat (index.mjs, from PUBLIC_URL), or null when the install has none.
   link = () => null,
+  // Folders a notify_owner file may come from (index.mjs passes the install's workspace).
+  fileRoots = [],
   now = () => Date.now(),
 }) {
   const lastNotify = new Map(); // chatId -> ms of the last notify_owner that went out
   const sendTimes = new Map(); // chatId -> ms of its chat_sends in the last 10 minutes
   let sendTimesAll = []; // ms of every chat_send in the last hour
   let notifyTimesAll = []; // ms of every notify_owner in the last minute
+
+  // A file for the owner's bot: a regular file inside fileRoots, 1 byte to NOTIFY_FILE_MAX_BYTES.
+  function readNotifyFile(file) {
+    const real = fs.realpathSync(path.resolve(String(file)));
+    const inside = fileRoots.some((r) => {
+      try {
+        const root = fs.realpathSync(r);
+        return real === root || real.startsWith(root + path.sep);
+      } catch {
+        return false;
+      }
+    });
+    if (!inside) throw new Error("only files inside this install's workspace can be sent");
+    const st = fs.statSync(real);
+    if (!st.isFile() || st.size === 0 || st.size > NOTIFY_FILE_MAX_BYTES) throw new Error(`the file must be a regular file of 1 byte to ${NOTIFY_FILE_MAX_BYTES / 1024 / 1024} MB`);
+    const name = path.basename(real);
+    return { name, mimeType: FILE_MIME[path.extname(name).toLowerCase()] || "application/octet-stream", data: fs.readFileSync(real) };
+  }
 
   // The chat whose limits and marks a chat works under: a consult's asker, a side chat's main chat.
   const senderOf = (chat) => consultOf(store, chat.id)?.from || chat.side_of || chat.id;
@@ -381,11 +405,20 @@ export function createOwnerChatToolkit({
 
       notify_owner: {
         description:
-          "Ring the owner's phone (push notification, and his Telegram bot when paired) with one short line — for something he must know now while away from this chat. Never a secret. At most once a minute per chat.",
-        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false },
+          "Ring the owner's phone (push notification, and his Telegram bot when paired) with one short line — for something he must know now while away from this chat. Never a secret. At most once a minute per chat. " +
+          "Optional file: a path inside this chat's workspace (up to 20 MB) sent to his bot as a document with the line as caption; push carries the line only.",
+        inputSchema: { type: "object", properties: { text: { type: "string" }, file: { type: "string" } }, required: ["text"], additionalProperties: false },
         async execute(args) {
           const text = redactSecrets(str(args?.text, NOTIFY_MAX));
           if (!text) return fail("text is required");
+          let attached = null;
+          if (args?.file) {
+            try {
+              attached = readNotifyFile(args.file);
+            } catch (error) {
+              return fail(error);
+            }
+          }
           const key = senderOf(here);
           const last = lastNotify.get(key);
           const waitMs = last == null ? 0 : NOTIFY_WINDOW_MS - (now() - last);
@@ -396,7 +429,7 @@ export function createOwnerChatToolkit({
           lastNotify.set(key, at);
           notifyTimesAll.push(at);
           try {
-            const result = await notify(store.getChat(chatId), text);
+            const result = await notify(store.getChat(chatId), text, attached);
             return ok({ sent: true, ...(result && typeof result === "object" ? result : {}) });
           } catch (error) {
             return fail(error);

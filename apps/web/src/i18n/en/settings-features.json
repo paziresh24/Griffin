@@ -172,5 +172,9 @@
   "شیفت+اینتر": "Shift+Enter",
   "عضو تازهٔ شبکهٔ ایجنت‌ها": "New member of the agents' network",
   "نصبی که روی دامنه‌های شرکت سلام می‌کند: خودکار فوراً عضو می‌شود؛ با تأیید مالک غیرفعال می‌ماند و کارت «منتظر شما» می‌آید. عضوهای فعلی دست نمی‌خورند.": "An install on a company domain that says hello: Automatic makes it a member at once; Owner's approval keeps it disabled and raises a «Waiting for you» card. Current members are not touched.",
-  "با تأیید مالک": "Owner's approval"
+  "با تأیید مالک": "Owner's approval",
+  "همکار فقط از راه شبکه": "Colleagues only over the network",
+  "ایجنت برای کار خواستن از ایجنت همکار فقط از شبکهٔ ایجنت‌ها استفاده می‌کند، نه یک اتصال دست‌ساز؛ این‌طور جواب دیررس هم خودش به همان گفتگو برمی‌گردد.": "The agent asks a colleague's agent only over the agents' network, never through a hand-made connection, so even a late answer comes back to the same chat by itself.",
+  "ادامه با ریست سقف": "Continue with a limit reset",
+  "گفتگویی که به سقف Claude خورده و منتظر است، اگر حسابش ریست رایگان دارد، دکمهٔ «ادامه با ریست» نشان می‌دهد؛ مثل /limit-reset در Claude Code.": "A chat waiting at a Claude limit shows «Continue with reset» when its account has a free reset, like /limit-reset in Claude Code."
 }

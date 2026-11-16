@@ -24,7 +24,7 @@ export const NETWORK_TOOL_NAMES = ["network_agents", "network_ask", "network_rep
 // gate in guard.mjs is the control. Never: the owner's own Telegram account, peer admin, and the
 // agents' network (a colleague's chain does not fan out to other installs).
 export const PEER_NEVER_TOOLS = [
-  "telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_watch_list",
+  "telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_create_group", "telegram_watch_list",
   "peer_invite", "peer_connection",
   ...NETWORK_TOOL_NAMES,
   // The owner's incident sources and his workspace cards are his, not a colleague chain's.
@@ -69,6 +69,7 @@ export const APP_TOOL_NAMES = [
   "telegram_send",
   "telegram_edit",
   "telegram_delete",
+  "telegram_create_group",
   "end_agent",
   "incidents_list",
   "incident_update",

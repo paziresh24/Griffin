@@ -595,3 +595,31 @@ test("chat_archive clears the owner's list but keeps this, pinned and running ch
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("notify_owner sends a workspace file to the bot, and refuses anything outside the workspace", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-nf-"));
+  const ws = path.join(dir, "ws");
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, "list.csv"), "a,b\n1,2\n");
+  fs.writeFileSync(path.join(dir, "outside.csv"), "x");
+  const store = openStore(path.join(dir, "t.sqlite"));
+  const got = [];
+  const kit = createOwnerChatToolkit({ store, runner: { isActive: () => false, send: async () => ({}) }, fileRoots: [ws], notify: async (chat, text, file) => (got.push({ text, file }), { push: 1, telegram: true }) });
+  try {
+    const chat = store.createChat({ title: "t" });
+    const ok = await kit.tools(chat.id).notify_owner.execute({ text: "فایل", file: path.join(ws, "list.csv") });
+    assert.ok(!ok.isError);
+    assert.equal(got[0].file.name, "list.csv");
+    assert.equal(got[0].file.mimeType, "text/csv");
+    assert.equal(got[0].file.data.toString(), "a,b\n1,2\n");
+    const chat2 = store.createChat({ title: "t2" });
+    const out = await kit.tools(chat2.id).notify_owner.execute({ text: "x", file: path.join(dir, "outside.csv") });
+    assert.ok(out.isError && /inside this install's workspace/.test(parse(out).error));
+    assert.equal(got.length, 1, "nothing rung for a refused file");
+    const chat3 = store.createChat({ title: "t3" });
+    assert.ok((await kit.tools(chat3.id).notify_owner.execute({ text: "x", file: path.join(ws, "nope.csv") })).isError, "missing file");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

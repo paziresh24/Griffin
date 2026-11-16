@@ -70,5 +70,8 @@
   "ذخیرهٔ ترتیب": "Save order",
   "معرفی کوتاه روی کارت (اختیاری)": "Short line on the card (optional)",
   "({n} روشن)": "({n} on)",
-  "ساخته‌شده": "custom"
+  "ساخته‌شده": "custom",
+  "فکر کردن": "Thinking",
+  "موتور را صفحهٔ «موتورها» تعیین می‌کند: هر ایجنت با اولین موتور آماده کار می‌کند و اگر خطا بدهد خودش به بعدی می‌رود.": "The Engines page decides the engine: every agent runs on the first ready engine and moves to the next on an error.",
+  "هر ایجنت نام، کار، دستور کار و ابزارهای خودش را دارد. برای دیدن و ویرایش روی کارت بزنید؛ ایجنت تازه را هم از همین‌جا بسازید.": "Each agent has its own name, job, instructions and tools. Tap a card to see and edit it; make a new agent here too."
 }

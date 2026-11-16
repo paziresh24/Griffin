@@ -35,13 +35,14 @@ function Row({ label, value, percent, resetsAt, warnAt }) {
   );
 }
 
-/** Exact Claude plan limits, as the Claude app's /usage shows them. */
+/** Exact Claude plan limits, as the Claude app's /usage shows them, with its free limit resets. */
 export function ClaudeLimits() {
   const [limits, setLimits] = useState(null);
   const warnAt = useLook() === "karsara" ? 75 : 70;
+  const load = useCallback(() => api("/api/usage/limits").then(setLimits, () => setLimits({ available: false })), []);
   useEffect(() => {
-    api("/api/usage/limits").then(setLimits, () => setLimits({ available: false }));
-  }, []);
+    load();
+  }, [load]);
   if (!limits) return <div className="text-muted-foreground">{t("در حال خواندن…")}</div>;
   if (!limits.available) return <div className="text-muted-foreground">{limitsProblem(limits.reason)}</div>;
   return (
@@ -49,6 +50,54 @@ export function ClaudeLimits() {
       {limits.plan ? <div className="mb-1 text-muted-foreground">{t("اشتراک {plan}", { plan: planName(limits.plan) })}</div> : null}
       {limits.stale ? <div className="mb-1 text-muted-foreground">{t("خواندن تازه نشد؛ این عددها مال ساعت {time} است.", { time: new Date(limits.fetchedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }) })}</div> : null}
       {limits.rows.map((row) => <Row key={row.id} label={limitLabel(row)} value={`${row.percent}%`} percent={row.percent} resetsAt={row.resetsAt} warnAt={warnAt} />)}
+      <ClaudeResets onReset={load} />
+    </div>
+  );
+}
+
+const CLAUDE_RESET_ERRORS = {
+  not_limited: t("این ریست فقط وقتی به سقف رسیده‌ای کار می‌کند؛ چیزی خرج نشد."),
+  already_used: t("این ریست قبلاً استفاده شده."),
+  cooldown: t("یک ریست تازه انجام شده؛ کمی بعد دوباره امتحان کن."),
+  rate_limited: t("کمی بعد دوباره امتحان کن."),
+  auth_error: t("ورود Claude این حساب تازه نیست؛ یک پیام در چت بفرست تا Claude Code آن را تازه کند، بعد دوباره بزن."),
+};
+const resetName = (g) => (/fable/i.test(g.label) ? t("ریست Fable") : g.clears.includes("seven_day") ? t("ریست کامل سقف") : t("ریست سقف ۵ ساعته"));
+const shortDate = (iso) => (iso ? new Date(iso).toLocaleDateString(locale, { month: "long", day: "numeric" }) : "");
+
+/** Claude's free limit resets (claude.ai Settings → Usage «Reset for free», Claude Code /limit-reset). */
+function ClaudeResets({ onReset }) {
+  const [resets, setResets] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = useCallback(() => api("/api/usage/resets").then(setResets, () => setResets(null)), []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  if (!resets?.available || !resets.grants.length) return null;
+  const fire = async (grantId) => {
+    setBusy(grantId);
+    try {
+      await api("/api/usage/resets/claim", { method: "POST", body: { grantId } });
+      toast.success(t("سقف Claude ریست شد؛ چت‌هایی که منتظر بودند ادامه می‌دهند."));
+      await Promise.all([load(), onReset?.()]);
+    } catch (e) {
+      const code = e.body?.result || e.body?.error;
+      toast.error(CLAUDE_RESET_ERRORS[code] || t("ریست انجام نشد ({reason})؛ کمی بعد دوباره امتحان کن.", { reason: e.body?.reason || e.message }));
+      load();
+    }
+    setBusy(null);
+  };
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {resets.grants.map((g) => (
+          <span key={g.id} className="inline-flex items-center gap-1.5" title={g.label}>
+            <ResetButton label={resetName(g)} count={g.usableNow ? g.left : 0} resetType={g.id} onFire={fire} busy={busy === g.id} />
+            {g.endsAt ? <span className="text-muted-foreground">{t("تا {date}", { date: shortDate(g.endsAt) })}</span> : null}
+          </span>
+        ))}
+      </div>
+      {resets.grants.filter((g) => !g.usableNow && g.blocking.includes("seven_day")).map((g) => <div key={g.id} className="mt-1 text-muted-foreground">{t("{name} تا وقتی سقف هفتگی پر است کار نمی‌کند.", { name: resetName(g) })}</div>)}
     </div>
   );
 }
@@ -77,6 +126,38 @@ function ResetButton({ label, count, resetType, onFire, busy }) {
       {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
       {armed ? t("تأیید ریست؟") : label} <span className="text-muted-foreground">{num(count)}</span>
     </button>
+  );
+}
+
+/**
+ * «ادامه با ریست» in a chat waiting for a Claude limit (LIMIT_RESET_OFFER): that account's free reset,
+ * spent with two clicks; the server resumes the waiting chats. Nothing shows when there is none.
+ */
+export function LimitResetButton({ chat }) {
+  const [grant, setGrant] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setGrant(null);
+    if (!chat?.id || !chat.limitResumeAt) return;
+    api(`/api/chats/${chat.id}/limit-reset`).then((r) => setGrant(r.offer ? r.grant : null), () => {});
+  }, [chat?.id, chat?.limitResumeAt]);
+  if (!grant) return null;
+  const fire = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/chats/${chat.id}/limit-reset`, { method: "POST", body: { grantId: grant.id } });
+      toast.success(t("سقف Claude ریست شد؛ چت‌هایی که منتظر بودند ادامه می‌دهند."));
+      setGrant(null);
+    } catch (e) {
+      const code = e.body?.result || e.body?.error;
+      toast.error(CLAUDE_RESET_ERRORS[code] || t("ریست انجام نشد ({reason})؛ کمی بعد دوباره امتحان کن.", { reason: e.body?.reason || e.message }));
+    }
+    setBusy(false);
+  };
+  return (
+    <span title={grant.endsAt ? `${grant.label} · ${t("تا {date}", { date: shortDate(grant.endsAt) })}` : grant.label}>
+      <ResetButton label={t("ادامه با ریست")} count={grant.left} resetType={grant.id} onFire={fire} busy={busy} />
+    </span>
   );
 }
 

@@ -63,15 +63,16 @@ test("new messages are searchable at once; quotes and FTS syntax are taken liter
     const a = store.createChat({ title: "گفتگو", model: "m", mode: "agent" });
     const b = store.createChat({ title: "دیگری", model: "m", mode: "agent" });
     const c = store.createChat({ title: "سوم", model: "m", mode: "agent" });
-    store.appendEvent(a.id, null, "user", { text: "کلاستر مبین کند شده" });
+    store.appendEvent(a.id, null, "user", { text: "کلاستر نمونه کند شده" });
     answer(store, b.id, "r1", ["پرداخت ویزیت آنلاین"]);
-    store.appendEvent(b.id, null, "tool.done", { text: "مبین", name: "x" });
-    store.appendEvent(c.id, null, "user", { text: 'گفت "مبین OR کلاستر" را بنویس' });
-    assert.deepEqual(store.searchChatIds("مبین").sort(), [a.id, c.id].sort(), "user messages match; a tool result does not");
+    store.appendEvent(b.id, null, "tool.done", { text: "نمونه", name: "x" });
+    store.appendEvent(c.id, null, "user", { text: 'گفت "نمونه OR کلاستر" را بنویس' });
+    assert.deepEqual(store.searchChatIds("نمونه").sort(), [a.id, c.id].sort(), "user messages match; a tool result does not");
     assert.deepEqual(store.searchChatIds("ویزیت آنلاین"), [b.id], "an answer's text matches as a phrase");
-    assert.deepEqual(store.searchChatIds("آنلاین ویزیت"), [], "a phrase, not loose words");
-    // Read as FTS syntax, «مبین OR کلاستر» would match chat a too; taken literally it is c's phrase only.
-    assert.deepEqual(store.searchChatIds('"مبین OR کلاستر"'), [c.id], "quotes and OR are text, not a query");
+    assert.deepEqual(store.searchChatHits("آنلاین ویزیت").map((h) => [h.id, h.loose]), [[b.id, true]], "every word in one message, marked loose");
+    assert.match(store.searchChatHits("ویزیت آنلاین")[0].snippet, /\u0002ویزیت آنلاین\u0003/, "the snippet marks the match");
+    // Read as FTS syntax, «نمونه OR کلاستر» would match chat a too; taken literally it is c's phrase only.
+    assert.deepEqual(store.searchChatIds('"نمونه OR کلاستر"'), [c.id], "quotes and OR are text, not a query");
     assert.deepEqual(store.searchChatIds("..."), [], "punctuation alone finds nothing and does not throw");
     store.deleteChat(a.id);
     assert.deepEqual(store.searchChatIds("کند شده"), [], "a deleted chat's words leave the index");
@@ -131,14 +132,14 @@ test("one letter finds nothing; a one-letter last word is matched whole, not as 
     const ids = [];
     for (let i = 0; i < 10; i++) {
       const c = store.createChat({ title: `c${i}`, model: "m", mode: "agent" });
-      store.appendEvent(c.id, null, "user", { text: "سلام مبین" });
+      store.appendEvent(c.id, null, "user", { text: "سلام نمونه" });
       ids.push(c.id);
     }
     const x = store.createChat({ title: "x", model: "m", mode: "agent" });
     store.appendEvent(x.id, null, "user", { text: "سرور م کار نمی‌کند" });
     assert.deepEqual(store.searchChatIds("س"), []);
     assert.deepEqual(store.searchChatIds("سرور م"), [x.id], "«م» as a whole word");
-    assert.deepEqual(store.searchChatIds("سلام م"), [], "as a prefix «م» would match «مبین» in all ten chats");
+    assert.deepEqual(store.searchChatIds("سلام م"), [], "as a prefix «م» would match «نمونه» in all ten chats");
     assert.equal(store.searchChatIds("سلام").length, 10);
     assert.deepEqual(store.searchChatIds("سلام", { scan: 3 }), ids.slice(-3).reverse(), "the newest rows only");
   } finally {
@@ -215,11 +216,11 @@ test("GET /api/chats/search: off by default (titles only); CHAT_SEARCH_MESSAGES=
   const store = searchable();
   try {
     const chat = store.createChat({ title: "x", model: "m", mode: "agent" });
-    store.appendEvent(chat.id, null, "user", { text: "کلاستر مبین" });
+    store.appendEvent(chat.id, null, "user", { text: "کلاستر نمونه" });
     const off = createApp({ store, runner: {}, asks: {} });
-    assert.deepEqual(await (await off.request("/api/chats/search?q=" + encodeURIComponent("مبین"))).json(), { ids: [], on: false });
+    assert.deepEqual(await (await off.request("/api/chats/search?q=" + encodeURIComponent("نمونه"))).json(), { ids: [], hits: [], on: false });
     const on = createApp({ store, runner: {}, asks: {}, searchMessages: () => true });
-    assert.deepEqual(await (await on.request("/api/chats/search?q=" + encodeURIComponent("مبین"))).json(), { ids: [chat.id], on: true });
+    assert.deepEqual(await (await on.request("/api/chats/search?q=" + encodeURIComponent("نمونه"))).json(), { ids: [chat.id], hits: [{ id: chat.id, snippet: "کلاستر \u0002نمونه\u0003" }], on: true });
   } finally {
     store.close();
   }

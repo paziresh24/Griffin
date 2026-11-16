@@ -79,7 +79,7 @@ ENV NODE_ENV=production \
 RUN mkdir -p /run/griffin /data /workspace && chown node:node /run/griffin /data /workspace
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  CMD node -e "const h=process.env.HOST;fetch('http://'+(h&&h!=='0.0.0.0'&&h!=='::'?h:'127.0.0.1')+':'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/server/src/index.mjs"]
 
