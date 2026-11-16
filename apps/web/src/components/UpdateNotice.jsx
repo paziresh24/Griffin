@@ -9,6 +9,16 @@ import { onNewVersion, reloadNow } from "../new-version.js";
 import { t, isRtl } from "../i18n.js";
 import { useFlag } from "../ui-prefs.js";
 
+// The command that updates an install this app can only tell about (update.manual).
+async function copyCommand(command) {
+  try {
+    await navigator.clipboard.writeText(command);
+    toast.success(t("دستور آپدیت کپی شد؛ روی سرور اجرایش کنید."));
+  } catch {
+    toast(t("دستور آپدیت"), { description: command });
+  }
+}
+
 const GLOWED = "griffin.updateGlowed"; // the release whose arrival the sidebar item already lit up
 
 // Bottom of the sidebar: a newer release, its Persian changes and details. The host downloads it on
@@ -109,6 +119,12 @@ function UpdateLine({ place }) {
   const working = state === "waiting" || state === "installing";
 
   const press = async () => {
+    // Found on GitHub by the app itself: no host installs it here, so «اعمال» hands over the command.
+    if (update.manual) {
+      await copyCommand(update.command);
+      if (place !== "top") setOpen(true);
+      return;
+    }
     setBusy(true);
     try {
       const out = await api("/api/update", { method: "POST", body: { commit: update.available.commit } });
@@ -154,7 +170,7 @@ function UpdateLine({ place }) {
         </Dialog.Trigger>
         {working ? null : (
           <button type="button" onClick={press} disabled={busy} className="press flex shrink-0 items-center gap-0.5 font-medium text-foreground/80 hover:text-foreground disabled:opacity-60" title={t("ری‌استارت و اعمال نسخهٔ تازه")}>
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <>{t("اعمال")}<ChevronLeft className="rtl-mirror size-3.5" /></>}
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <>{update.manual ? t("دستور") : t("اعمال")}<ChevronLeft className="rtl-mirror size-3.5" /></>}
           </button>
         )}
       </div>
@@ -171,6 +187,15 @@ function UpdateLine({ place }) {
             <span className="font-medium">{label}</span>
             {sub ? <span className="block text-xs text-muted-foreground">{sub}</span> : null}
           </Dialog.Description>
+          {update.manual ? (
+            <div className="mb-4 rounded-xl border bg-muted/30 p-3 text-sm">
+              <p className="mb-2 text-xs text-muted-foreground">{t("روی سروری که Griffin آن‌جاست این دستور را اجرا کنید. تا تمام شدن گفتگوهای در حال کار صبر می‌کند و اگر نسخهٔ تازه سالم بالا نیاید برمی‌گردد.")}</p>
+              <div className="flex items-center gap-2">
+                <code dir="ltr" className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-lg bg-background px-2 py-1.5 font-mono text-xs">{update.command}</code>
+                <button type="button" onClick={() => copyCommand(update.command)} className="press shrink-0 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-muted">{t("کپی")}</button>
+              </div>
+            </div>
+          ) : null}
           {changes.length ? (
             <div className="mb-4 space-y-4">
               {byDay(changes).map(({ day, items }) => (
@@ -212,7 +237,7 @@ function UpdateLine({ place }) {
               className="press inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-60"
             >
               {working ? <Loader2 className="size-4 animate-spin" /> : <RotateCw className="size-4" />}
-              {working ? t("در حال اعمال…") : state === "failed" ? t("دوباره امتحان کن") : t("ری‌استارت و اعمال")}
+              {working ? t("در حال اعمال…") : state === "failed" ? t("دوباره امتحان کن") : update.manual ? t("کپی دستور آپدیت") : t("ری‌استارت و اعمال")}
             </button>
             <Dialog.Close className="press rounded-xl px-4 py-2 text-sm hover:bg-muted">{t("بعداً")}</Dialog.Close>
           </div>

@@ -72,6 +72,7 @@ import { buildSkills } from "./skills-map.mjs";
 import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHop, openWorkFor, relatedRules, thirdPartyKey } from "./related.mjs";
 import { createChatTools, restrictForReadOnlySide, sideIsReadOnly } from "./chat-tools.mjs";
 import { createUpdates } from "./update.mjs";
+import { createUpdateCheck } from "./update-check.mjs";
 import { readBuildCommit } from "./build-commit.mjs";
 import { BUILD_TOOL, createToolBuilder, guardGriffinMerge } from "./tool-builder.mjs";
 import { OWNER_CHAT_TOOLS_CONFIG, createOwnerChatToolkit, isOwnerChat, offersOwnerChatTools } from "./owner-chat-tools.mjs";
@@ -2331,6 +2332,8 @@ function trustedProxies() {
   }
 }
 const updates = createUpdates({ dir: path.join(DATA, "update"), current: readBuildCommit(), translate: (prompt) => titleText(prompt) });
+// A public install has no host agent: it looks at the project's GitHub itself (GRIFFIN_UPDATE_CHECK=off turns that off).
+if (genv("DEMO") !== "1") createUpdateCheck({ dir: path.join(DATA, "update"), current: readBuildCommit() }).start();
 const app = createApp({
   // The same chats modelCandidates clamps: what the picker shows is what runs (model-policy.mjs).
   heldToDefaults: (chat, provider) => plainClaude(provider) && !consultOf(store, chat.id),

@@ -50,3 +50,12 @@ test("the sidebar says what the update is doing and what it waits for", async ()
   assert.equal(describeUpdate(base, "ready").label, "آپدیت دانلود شد");
   assert.equal(describeUpdate(base, null).label, "");
 });
+
+test("a release the app found on GitHub is offered with the install command, not a download", async () => {
+  const { describeUpdate, offerState } = await import("../src/update.js");
+  const update = { available: { commit: "abc", changes: [] }, manual: true, command: "curl -fsSL https://example.org/install.sh | bash", status: null, requested: null };
+  assert.equal(offerState(update), "offered");
+  const { label, sub } = describeUpdate(update, "offered");
+  assert.match(label, /نسخهٔ جدید|New version/);
+  assert.doesNotMatch(sub, /دانلود|download/i);
+});

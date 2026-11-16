@@ -11,6 +11,7 @@
 // The host switches only to a release that was requested; the download does not wait for it.
 import fs from "node:fs";
 import path from "node:path";
+import { UPDATE_COMMAND } from "./update-check.mjs";
 
 const SHA = /^[0-9a-f]{12}$/;
 const mtime = (file) => {
@@ -113,6 +114,10 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
     return {
       current,
       available: newer ? { commit: newer.commit, at: newer.at || null, changes: persian(changesSince(newer.changes, current)) } : null,
+      // Found by the app itself on GitHub (update-check.mjs): no host agent installs it, the owner runs
+      // the install command again, so the web shows that command instead of an «اعمال» button.
+      manual: Boolean(newer && newer.source === "github"),
+      command: newer && newer.source === "github" ? UPDATE_COMMAND : null,
       translating: Boolean(translating),
       // A press is for «the update», not one commit: a release published after it is taken by the same
       // press (a colleague 2026-10-24 waited two idle hours — a newer release had come, and his press
@@ -133,6 +138,7 @@ export function createUpdates({ dir, current = null, now = () => new Date(), tra
   function request(commit) {
     const { available } = state();
     if (!available) return { error: "آپدیت تازه‌ای نیست" };
+    if (state().manual) return { error: `در این نصب آپدیت با اجرای دوبارهٔ دستور نصب انجام می‌شود: ${UPDATE_COMMAND}` };
     if (commit && commit !== available.commit) return { error: "این نسخه دیگر تازه‌ترین نیست؛ صفحه را دوباره باز کنید" };
     fs.mkdirSync(dir, { recursive: true });
     const body = JSON.stringify({ commit: available.commit, at: now().toISOString() });

@@ -34,6 +34,9 @@ curl -fsSL https://griffin.paziresh24.com/install.sh | bash
 
 It prints the address to open and how to read the login token. Run the same line again to update: the
 new version replaces the old one only once it is healthy, and your data stays in Docker volumes.
+Griffin also looks at this repository's `main` every few hours and shows a «new version» line in the
+sidebar with what changed and that same command (set `GRIFFIN_UPDATE_CHECK=off` to stop the lookup).
+It only tells; the update itself is the command, run on the server.
 Options go before `bash` (`curl … | GRIFFIN_PORT=3200 GRIFFIN_PROXY=http://host:port bash`); see the
 top of [`docs/install.sh`](docs/install.sh) for all of them.
 

@@ -1,0 +1,8 @@
+{
+  "دستور آپدیت کپی شد؛ روی سرور اجرایش کنید.": "Update command copied; run it on the server.",
+  "دستور آپدیت": "Update command",
+  "روی سروری که Griffin آن‌جاست این دستور را اجرا کنید. تا تمام شدن گفتگوهای در حال کار صبر می‌کند و اگر نسخهٔ تازه سالم بالا نیاید برمی‌گردد.": "Run this on the server where Griffin lives. It waits for running chats to finish and rolls back if the new version does not come up healthy.",
+  "کپی دستور آپدیت": "Copy update command",
+  "نسخهٔ جدید": "New version",
+  "برای آپدیت، همان دستور نصب را روی سرور دوباره بزنید.": "To update, run the same install command on the server again."
+}

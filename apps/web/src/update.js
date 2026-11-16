@@ -46,6 +46,8 @@ export function describeUpdate(update, state) {
   const size = formatSize(update?.status?.size);
   switch (state) {
     case "offered":
+      // Found on GitHub by the app itself (update-check.mjs): nobody downloads it in the background.
+      if (update?.manual) return { label: t("نسخهٔ جدید"), sub: t("برای آپدیت، همان دستور نصب را روی سرور دوباره بزنید.") };
       return { label: t("آپدیت جدید"), sub: t("هنوز دانلود نشده؛ تا یک دقیقهٔ دیگر در پس‌زمینه شروع می‌شود.") };
     case "downloading":
       return { label: t("در حال دانلود آپدیت…"), sub: `${size ? t("{size}؛ ", { size }) : ""}${autoLine(update)}` };
