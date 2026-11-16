@@ -18,6 +18,8 @@
 #   GRIFFIN_IMAGE    image to run (default ghcr.io/paziresh24/griffin:latest)
 #   GRIFFIN_NAME     container name (default griffin)
 #   GRIFFIN_FORCE=1  update even while a chat is running (it is marked failed)
+#   GRIFFIN_BROKER=off  run without the broker (the second container that keeps tool secrets — Settings →
+#                    Secrets → tools — and runs infrastructure tools once /etc/griffin/site.json describes them)
 #   ANTHROPIC_API_KEY / OPENAI_API_KEY (+ GRIFFIN_OPENAI_BASE_URL) / CURSOR_API_KEY
 #                    an engine key up front; otherwise the setup wizard asks for one in the browser
 #
@@ -29,7 +31,7 @@ main() {
   set -Eeuo pipefail
 
   local ETC=/etc/griffin
-  local IMAGE NAME PORT BIND PROXY PUBLIC_URL FORCE
+  local IMAGE NAME PORT BIND PROXY PUBLIC_URL FORCE BROKER BROKER_IMAGE
   local SUDO="" NET_ARGS=() BUILT=0
 
   say()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -59,6 +61,7 @@ main() {
       case "$key" in
         PORT) PORT=$value ;; BIND) BIND=$value ;; PROXY) PROXY=$value ;;
         PUBLIC_URL) PUBLIC_URL=$value ;; IMAGE) IMAGE=$value ;; NAME) NAME=$value ;;
+        BROKER) BROKER=$value ;;
       esac
     done < <(as_root cat "$ETC/install.conf")
   fi
@@ -68,6 +71,9 @@ main() {
   PROXY=${GRIFFIN_PROXY:-${PROXY:-}}
   PUBLIC_URL=${GRIFFIN_PUBLIC_URL:-${PUBLIC_URL:-}}
   FORCE=${GRIFFIN_FORCE:-0}
+  BROKER=${GRIFFIN_BROKER:-${BROKER:-on}}
+  case "$BROKER" in off|0|no|false) BROKER=off ;; *) BROKER=on ;; esac
+  BROKER_IMAGE=${GRIFFIN_BROKER_IMAGE:-ghcr.io/paziresh24/griffin-broker:latest}
   case "$PORT" in ''|*[!0-9]*) die "GRIFFIN_PORT must be a number." ;; esac
 
   if [ -n "$PROXY" ]; then
@@ -212,9 +218,9 @@ main() {
     return 1
   }
   pull() {
-    local i
+    local i image=${1:-$IMAGE}
     for i in 1 2 3; do
-      as_root docker pull -q "$IMAGE" >/dev/null 2>&1 && return 0
+      as_root docker pull -q "$image" >/dev/null 2>&1 && return 0
       sleep $((i * 3))
     done
     return 1
@@ -230,6 +236,11 @@ main() {
         as_root docker build -q --target app -t "$IMAGE" https://github.com/paziresh24/Griffin.git#main >/dev/null \
           || die "the build did not finish. If GitHub or npm is blocked here, set GRIFFIN_PROXY and run again."
         BUILT=1
+        if [ "$BROKER" = on ]; then
+          BROKER_IMAGE=griffin-broker:local
+          as_root docker build -q --target broker -t "$BROKER_IMAGE" https://github.com/paziresh24/Griffin.git#main >/dev/null \
+            || { warn "the broker did not build; Griffin runs without it (tool secrets stay off)."; BROKER=off; }
+        fi
       fi
       ;;
   esac
@@ -246,6 +257,46 @@ main() {
     fi
   fi
   local new_id; new_id=$(as_root docker image inspect -f '{{.Id}}' "$IMAGE")
+  if [ "$BROKER" = on ] && [ "$BUILT" = 0 ]; then
+    say "Downloading $BROKER_IMAGE"
+    pull "$BROKER_IMAGE" || { warn "the broker image could not be downloaded; Griffin runs without it (tool secrets stay off)."; BROKER=off; }
+  fi
+
+  # --- the broker ----------------------------------------------------------------------------
+  # A second container next to Griffin: it keeps the tool secrets in its own encrypted box (the
+  # griffin-broker-data volume) and runs infrastructure tools once /etc/griffin/site.json describes
+  # them. The two talk over a unix socket on the shared griffin-run volume; without that shared volume
+  # Griffin says «no broker» even with a broker running. No port, no engine keys.
+  local BNAME="$NAME-broker"
+  start_broker() {
+    local args=(-v griffin-run:/run/griffin -v griffin-broker-data:/broker-data -v griffin-workspace:/workspace
+      -e GRIFFIN_REPOS_ROOT=/workspace/repos)
+    if as_root test -f "$ETC/site.json"; then args+=(-v "$ETC/site.json:/config/site.json:ro" -e GRIFFIN_SITE_CONFIG=/config/site.json); fi
+    if [ -n "$PROXY" ]; then args+=(-e "HTTPS_PROXY=$PROXY" -e "HTTP_PROXY=$PROXY" -e NODE_USE_ENV_PROXY=1 -e "NO_PROXY=localhost,127.0.0.1,::1"); fi
+    as_root docker rm -f "$BNAME" >/dev/null 2>&1 || true
+    as_root docker run -d --name "$BNAME" --restart unless-stopped "${args[@]}" \
+      --log-opt max-size=20m --log-opt max-file=3 "$BROKER_IMAGE" >/dev/null || return 1
+    local i
+    for i in $(seq 1 15); do
+      [ "$(as_root docker container inspect -f '{{.State.Running}}' "$BNAME" 2>/dev/null)" = true ] || return 1
+      as_root docker exec "$BNAME" test -S /run/griffin/broker.sock 2>/dev/null && return 0
+      sleep 1
+    done
+    return 1
+  }
+  if [ "$BROKER" = on ]; then
+    local broker_img broker_new
+    broker_img=$(as_root docker container inspect -f '{{.Image}}' "$BNAME" 2>/dev/null || true)
+    broker_new=$(as_root docker image inspect -f '{{.Id}}' "$BROKER_IMAGE")
+    if [ -n "$broker_img" ] && [ "$broker_img" = "$broker_new" ] && [ "$(as_root docker container inspect -f '{{.State.Running}}' "$BNAME" 2>/dev/null)" = true ]; then
+      :
+    else
+      say "Starting the broker"
+      start_broker || { warn "the broker did not come up; Griffin runs without it. Its log:"; as_root docker logs --tail 20 "$BNAME" 2>&1 | sed 's/^/    /' >&2 || true; as_root docker rm -f "$BNAME" >/dev/null 2>&1 || true; BROKER=off; }
+    fi
+  else
+    as_root docker rm -f "$BNAME" >/dev/null 2>&1 || true
+  fi
 
   local check_host=127.0.0.1
   case "$BIND" in 0.0.0.0|127.0.0.1) ;; *) check_host=$BIND ;; esac
@@ -262,13 +313,15 @@ main() {
   run_container() {
     as_root docker run -d --name "$NAME" --restart unless-stopped \
       "${NET_ARGS[@]}" --env-file "$envfile" \
-      -v griffin-data:/data -v griffin-workspace:/workspace \
+      -v griffin-data:/data -v griffin-workspace:/workspace -v griffin-run:/run/griffin \
       --log-opt max-size=20m --log-opt max-file=3 \
       "$IMAGE" >/dev/null
   }
 
   # --- start or update -----------------------------------------------------------------------
-  if [ "$exists" = 1 ] && [ "$running" = 1 ] && [ "$old_id" = "$new_id" ] && healthz >/dev/null; then
+  local has_run=0
+  if [ "$exists" = 1 ] && as_root docker container inspect -f '{{range .Mounts}}{{.Name}} {{end}}' "$NAME" 2>/dev/null | grep -qw griffin-run; then has_run=1; fi
+  if [ "$exists" = 1 ] && [ "$running" = 1 ] && [ "$old_id" = "$new_id" ] && [ "$has_run" = 1 ] && healthz >/dev/null; then
     say "Griffin is already the latest version and running"
   elif [ "$exists" = 1 ]; then
     if [ "$running" = 1 ] && [ "$FORCE" != 1 ]; then
@@ -301,8 +354,8 @@ main() {
     wait_healthy || { as_root docker logs --tail 40 "$NAME" 2>&1 | sed 's/^/    /' >&2; die "Griffin started but does not answer on port $PORT. The log is above."; }
   fi
   # Remembered for the next run only once this version is up: a rolled-back image is not kept.
-  printf 'PORT=%s\nBIND=%s\nPROXY=%s\nPUBLIC_URL=%s\nIMAGE=%s\nNAME=%s\n' \
-    "$PORT" "$BIND" "$PROXY" "$PUBLIC_URL" "$IMAGE" "$NAME" | as_root tee "$ETC/install.conf" >/dev/null
+  printf 'PORT=%s\nBIND=%s\nPROXY=%s\nPUBLIC_URL=%s\nIMAGE=%s\nNAME=%s\nBROKER=%s\n' \
+    "$PORT" "$BIND" "$PROXY" "$PUBLIC_URL" "$IMAGE" "$NAME" "$BROKER" | as_root tee "$ETC/install.conf" >/dev/null
   # Old images of this tag are not needed any more.
   as_root docker image prune -f --filter "label=org.opencontainers.image.source=https://github.com/paziresh24/Griffin" >/dev/null 2>&1 || true
 
@@ -328,6 +381,7 @@ main() {
   info "        (keep it private; after the first login turn on two-step sign-in in Settings → Account)"
   echo
   info "Update: run the same install command again"
+  if [ "$BROKER" = on ]; then info "Broker: running ($BNAME); tool secrets live in Settings → Secrets"; else info "Broker: off (GRIFFIN_BROKER=off); only app secrets"; fi
   info "Logs:   $docker_cmd logs -f $NAME"
   info "Stop:   $docker_cmd stop $NAME      (your data stays in the griffin-data and griffin-workspace volumes)"
 }

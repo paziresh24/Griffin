@@ -2796,11 +2796,16 @@ const app = createApp({
       { name: "arvan__api-key", note: "ArvanCloud API key (full Authorization header)" },
       { name: "nsin__api-key", note: "NSIN CDN API key" },
     ];
-    // No broker (GRIFFIN_BROKER=off or no socket): app secrets still work, tool secrets say why not.
+    // No broker (GRIFFIN_BROKER=off or no socket): app secrets still work, tool secrets say why not —
+    // in words the owner can act on, not a bare «no broker» (a colleague 2026-11-16 installed a broker
+    // container by hand; without the shared socket volume the app still could not see it).
+    const NO_BROKER = brokerWanted
+      ? "بروکر کنار این نصب در دسترس نیست (سوکت /run/griffin/broker.sock پیدا نشد). دستور نصب را دوباره بزنید تا بروکر با حجم مشترک کنار گریفین بالا بیاید؛ بروکری که جدا اجرا شود بدون این حجم مشترک دیده نمی‌شود."
+      : "بروکر در این نصب خاموش است (GRIFFIN_BROKER=off)؛ فقط سکرت‌های خود برنامه کار می‌کنند.";
     const brokerSecrets = (method, body) =>
       brokerEnabled()
         ? brokerRequest(toolSource.socketPath, method, "/secrets", body, 20_000)
-        : Promise.resolve({ status: 503, body: { error: "no broker" } });
+        : Promise.resolve({ status: 503, body: { error: NO_BROKER } });
     api.get("/api/secrets", async (c) => {
       const tools = await brokerSecrets("GET").then((r) => (r.status === 200 ? r.body : { error: r.body?.error || `http_${r.status}` })).catch((error) => ({ error: `tools broker unreachable (${error.message})` }));
       return c.json({ app: secrets.list(), tools: { backend: tools.backend || null, items: tools.items || [], error: tools.error || null }, catalog: TOOL_SECRETS });

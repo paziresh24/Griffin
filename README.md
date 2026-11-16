@@ -196,7 +196,9 @@ process that holds them exposes only named tools with schemas. More in
    emergency SSH paths, GitLab, object storage, routers, shell hosts.
 2. Put the credentials in a vault (OpenBao/Vault KV) — [`docs/configuration.md`](docs/configuration.md)
    lists the item names the broker looks up.
-3. Start the broker: `COMPOSE_PROFILES=tools docker compose -f deploy/compose.yaml up -d --build`.
+3. Start the broker. The one-command installer already runs it next to Griffin (container `griffin-broker`,
+   sharing the `griffin-run` socket volume) and mounts `/etc/griffin/site.json` when it exists, so re-run the
+   install command after writing that file. From a checkout: `COMPOSE_PROFILES=tools docker compose -f deploy/compose.yaml up -d --build`.
 4. In **#/agents**, switch the new tools on for the agent that should have them — or import
    `examples/agents/platform.json` and edit it.
 
