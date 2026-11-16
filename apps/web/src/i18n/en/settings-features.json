@@ -176,5 +176,7 @@
   "همکار فقط از راه شبکه": "Colleagues only over the network",
   "ایجنت برای کار خواستن از ایجنت همکار فقط از شبکهٔ ایجنت‌ها استفاده می‌کند، نه یک اتصال دست‌ساز؛ این‌طور جواب دیررس هم خودش به همان گفتگو برمی‌گردد.": "The agent asks a colleague's agent only over the agents' network, never through a hand-made connection, so even a late answer comes back to the same chat by itself.",
   "ادامه با ریست سقف": "Continue with a limit reset",
-  "گفتگویی که به سقف Claude خورده و منتظر است، اگر حسابش ریست رایگان دارد، دکمهٔ «ادامه با ریست» نشان می‌دهد؛ مثل /limit-reset در Claude Code.": "A chat waiting at a Claude limit shows «Continue with reset» when its account has a free reset, like /limit-reset in Claude Code."
+  "گفتگویی که به سقف Claude خورده و منتظر است، اگر حسابش ریست رایگان دارد، دکمهٔ «ادامه با ریست» نشان می‌دهد؛ مثل /limit-reset در Claude Code.": "A chat waiting at a Claude limit shows «Continue with reset» when its account has a free reset, like /limit-reset in Claude Code.",
+  "سقف مدل برای صرفه‌جویی": "Hold the model to save quota",
+  "روشن: هر گفتگو روی Sonnet با تلاش متوسط شروع می‌شود و مدل قوی‌تر (Opus، Fable) یا تلاش بیشتر فقط با تأیید دوم در همان گفتگو. خاموش: همان مدلی که روی موتور یا گفتگو گذاشته‌اید اجرا می‌شود.": "On: every chat starts on Sonnet at medium effort, and a stronger model (Opus, Fable) or more effort needs a second confirmation in that chat. Off: the model you set on the engine or the chat runs."
 }

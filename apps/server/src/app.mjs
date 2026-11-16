@@ -14,7 +14,7 @@ import { AGENTS, DEFAULT_AGENT } from "./agents/registry.mjs";
 import { DEFAULT_PROVIDER, normalizeProvider, PROVIDERS } from "./providers/index.mjs";
 import { EFFORTS, effortOf, splitModel } from "./providers/ids.mjs";
 import { chatAdvice, spendAdvice } from "./usage-advice.mjs";
-import { heavyKey, isHeavyEffort, isHeavyModel, needsConfirm, shownChoice } from "./model-policy.mjs";
+import { heavyKey, isHeavyEffort, isHeavyModel, modelHoldOn, needsConfirm, shownChoice } from "./model-policy.mjs";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -221,7 +221,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   // needs them before auth, and a fresh browser takes the product's skin. No owner name here.
   app.get("/api/public/brand/info", (c) => {
     const product = currentProduct();
-    return c.json({ name: PERSONA.name, latin: PERSONA.latin, product: product.name, productLatin: product.latin, productId: product.id, skin: product.skin, iconV: iconVersion() });
+    return c.json({ name: PERSONA.name, latin: PERSONA.latin, product: product.name, productLatin: product.latin, productId: product.id, skin: product.skin, iconV: iconVersion(), modelHold: modelHoldOn(genv("MODEL_HOLD", "off")) });
   });
 
   // Public read-only view of a shared chat. Registered before auth; everything is scoped to the
@@ -792,7 +792,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       patch.repo = body.repo || null;
     }
     // A stronger model or a higher effort is a second, explicit confirmation (model-policy.mjs).
-    if (body.confirm !== true) {
+    if (body.confirm !== true && modelHoldOn(genv("MODEL_HOLD", "off"))) {
       const need = needsConfirm({ model: typeof body.model === "string" ? body.model : null, effort: "effort" in body ? effortOf(body.effort) : null });
       if (need.length) return c.json({ error: "confirm_required", needs: need }, 409);
     }

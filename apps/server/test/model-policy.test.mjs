@@ -28,3 +28,11 @@ test("the picker shows what the run's clamp leaves, the chat's account kept", ()
   assert.deepEqual(shownChoice({ model: "claude-5:opus", effort: "max" }, { model: true }), { model: "claude-5:opus", effort: "medium" });
   assert.deepEqual(shownChoice({ model: null, effort: null }), { model: null, effort: "medium" });
 });
+
+test("MODEL_HOLD is off unless set to on: an install's chosen model is not a cost policy of someone else", async () => {
+  const { modelHoldOn } = await import("../src/model-policy.mjs");
+  assert.equal(modelHoldOn(undefined), false);
+  assert.equal(modelHoldOn("off"), false);
+  assert.equal(modelHoldOn("on"), true);
+  assert.equal(modelHoldOn("ON"), true);
+});

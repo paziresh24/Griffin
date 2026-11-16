@@ -8,7 +8,7 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleHe
 import { api, usePolling } from "../api.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
-import { DEFAULT_EFFORT } from "../model-policy.js";
+import { DEFAULT_EFFORT, modelHeld } from "../model-policy.js";
 import { isRtl, locale, num, t } from "../i18n.js";
 
 // The chat's mode, as Claude Desktop's mode menu. The three asking modes apply to Claude with full
@@ -635,7 +635,7 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
   const recommended = levels.includes(modelDefault) ? modelDefault : kind === "claude" ? "high" : "medium";
   // What runs with no choice here: a plain Claude login is held to the default (model-policy.mjs).
   const plainClaude = kind === "claude" && !accounts.find((a) => a.id === account)?.endpoint;
-  const applied = plainClaude ? DEFAULT_EFFORT : levels.includes(profile?.effort) ? profile.effort : recommended;
+  const applied = plainClaude && modelHeld() ? DEFAULT_EFFORT : levels.includes(profile?.effort) ? profile.effort : recommended;
   const current = levels.includes(effort) ? effort : applied;
   // Karsara offers effort only on its plain Claude login; a Claude-compatible endpoint (Z.ai, custom) has none.
   if (simple) return kind === "claude" ? <KarsaraEffort levels={levels} effort={levels.includes(effort) ? effort : ""} onChange={onChange} /> : null;

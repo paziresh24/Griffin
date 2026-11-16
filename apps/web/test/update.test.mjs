@@ -59,3 +59,14 @@ test("a release the app found on GitHub is offered with the install command, not
   assert.match(label, /نسخهٔ جدید|New version/);
   assert.doesNotMatch(sub, /دانلود|download/i);
 });
+
+test("the web asks a second time for Opus only while the install holds models (MODEL_HOLD)", async () => {
+  const policy = await import("../src/model-policy.js");
+  policy.setModelHold(false);
+  assert.equal(policy.isHeavyModel("claude:opus"), false);
+  assert.equal(policy.isHeavyEffort("max"), false);
+  policy.setModelHold(true);
+  assert.equal(policy.isHeavyModel("claude:opus"), true);
+  assert.equal(policy.isHeavyEffort("max"), true);
+  policy.setModelHold(false);
+});

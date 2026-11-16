@@ -3,6 +3,10 @@
 // owner confirms a second time; the confirmation is kept per chat (kv heavyok:<chatId>). Nothing else
 // moves a chat there: not an agent profile's default, TEAM_/PEER_ routing, nor UPGRADE_MODEL.
 export const DEFAULT_MODEL = "sonnet";
+// Config MODEL_HOLD: «on» holds every plain Claude chat to the defaults above until the chat's own heavy
+// choice is confirmed; «off» (the default) runs the model and effort the engine or the chat chose.
+// A cost policy of one owner, not a product default: an install that set Opus on its engine got Sonnet.
+export const modelHoldOn = (value) => String(value ?? "off").toLowerCase() === "on";
 export const DEFAULT_EFFORT = "medium";
 
 const ACCOUNT = /^(?:cursor|claude|openai)(?:-[a-z0-9]{1,24})?:/;

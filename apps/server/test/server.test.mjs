@@ -504,7 +504,12 @@ test("chat picker: a model of another provider moves the chat; effort is stored 
     let body = await patch({ model: "", effort: "nonsense" });
     assert.equal(body.chat.provider, "openai");
     assert.equal(body.chat.effort, null);
-    // A stronger model or a higher effort is refused until the owner confirms it a second time.
+    // With MODEL_HOLD off (the default) a stronger model is taken as asked.
+    const free = await app.request(`/api/chats/${created.chat.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude:opus" }) });
+    assert.equal(free.status, 200);
+    await patch({ model: "" });
+    // MODEL_HOLD=on: a stronger model or a higher effort is refused until the owner confirms it a second time.
+    process.env.GRIFFIN_MODEL_HOLD = "on";
     const refused = await app.request(`/api/chats/${created.chat.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "claude:opus", effort: "max" }) });
     assert.equal(refused.status, 409);
     assert.deepEqual((await refused.json()).needs, ["model", "effort"]);
@@ -513,6 +518,7 @@ test("chat picker: a model of another provider moves the chat; effort is stored 
     assert.equal(store.getChat(created.chat.id).provider, "claude");
     assert.equal(body.chat.effort, "max");
     assert.deepEqual(store.getKv(`heavyok:${created.chat.id}`), { model: true, effort: true });
+    delete process.env.GRIFFIN_MODEL_HOLD;
     // A new chat that asks for them without confirm opens on the defaults.
     const plain = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin", model: "claude:opus", effort: "high" }))).json();
     await until(() => !store.runningRuns().length);

@@ -1,6 +1,7 @@
 // Griffin shell brand + per-agent accents. Agent ids stay stable; labels/colors are UI-facing.
 // Griffin is the platform; the assistant's name and the product come from the server (persona.mjs,
 // identity.mjs) via loadBrand(). Nothing here names an install's assistant or owner.
+import { setModelHold } from "./model-policy.js";
 import { lang, t } from "./i18n.js";
 import { setInstallLook } from "./ui-prefs.js";
 
@@ -97,8 +98,9 @@ export const AGENT_META = {
 
 export const KARSARA_BLURB = t("یک دستیار مختص شما.");
 
-function applyInfo({ name, latin, product, productLatin, productId, iconV }) {
+function applyInfo({ name, latin, product, productLatin, productId, iconV, modelHold }) {
   if (iconV) setIconVersion(iconV);
+  setModelHold(modelHold);
   // The assistant's own name per install (server persona); English UI shows its Latin form.
   const shown = (lang === "en" && latin) || name;
   if (shown) BRAND.name = AGENT_META.griffin.label = AGENT_META.griffin.short = shown;

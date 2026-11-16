@@ -87,7 +87,8 @@ import { OWNER_TASK_TOOL, TODO_TOOL, offersOwnerTask, openChoresLine, ownerTaskT
 import { inboxTool } from "./inbox.mjs";
 import { claudeOneShot, claudeCodeLoginKey, resolveModel, runsFree } from "./providers/claude.mjs";
 import { UPGRADE_TOOL, createUpgrades, upgradeTool } from "./model-upgrade.mjs";
-import { clampCandidate, heavyKey, isHeavyModel } from "./model-policy.mjs";
+import { clampCandidate, heavyKey, isHeavyModel, modelHoldOn } from "./model-policy.mjs";
+const modelHold = () => modelHoldOn(genv("MODEL_HOLD", "off"));
 import { CLAUDE_ENDPOINTS, endpointOf, endpointSettings } from "./providers/claude-endpoint.mjs";
 import { createVerifier } from "./verify.mjs";
 import { allowsModel, peerSettings } from "./peer-limits.mjs";
@@ -822,7 +823,7 @@ function routedCandidates(chat) {
 // for this chat by hand (model-policy.mjs). A consult asks for its model explicitly and keeps it.
 function modelCandidates(chat) {
   const list = rawModelCandidates(chat);
-  if (consultOf(store, chat?.id)) return list;
+  if (consultOf(store, chat?.id) || !modelHold()) return list;
   const ok = (chat?.id && store.getKv(heavyKey(chat.id))) || {};
   return list.map((c) => (plainClaude(c.provider) ? clampCandidate(c, ok) : c));
 }
@@ -2341,7 +2342,7 @@ const updates = createUpdates({ dir: path.join(DATA, "update"), current: readBui
 if (genv("DEMO") !== "1") createUpdateCheck({ dir: path.join(DATA, "update"), current: readBuildCommit() }).start();
 const app = createApp({
   // The same chats modelCandidates clamps: what the picker shows is what runs (model-policy.mjs).
-  heldToDefaults: (chat, provider) => plainClaude(provider) && !consultOf(store, chat.id),
+  heldToDefaults: (chat, provider) => modelHold() && plainClaude(provider) && !consultOf(store, chat.id),
   previews,
   uploadsDir: path.join(DATA, "uploads"),
   updates,
