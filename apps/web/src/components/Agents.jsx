@@ -12,6 +12,9 @@ import { askConfirm } from "../dialog.jsx";
 
 
 // Callers that exist in every install, beyond the other agents and connected peers.
+const input = "w-full rounded-xl border bg-background px-3 py-2 text-sm";
+const pill = "press rounded-full border px-3 py-1.5 text-sm";
+
 const FIXED_CALLERS = [
   { id: "scheduler", label: t("زمان‌بند (جاب‌ها)") },
   { id: "team", label: t("همکار (پیام‌رسان)") },

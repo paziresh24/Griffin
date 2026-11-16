@@ -22,7 +22,7 @@ import { clockLabel } from "../elapsed.js";
 import { reminderLabel, searchChats, snippetParts } from "../chat-list.js";
 import { focusText } from "../focus.js";
 import { useFlag } from "../ui-prefs.js";
-import { t } from "../i18n.js";
+import { locale, t } from "../i18n.js";
 import { useListChoice, useSectionOrder } from "../list-prefs.js";
 import { useUpdateDot } from "./UpdateNotice.jsx";
 import { PaletteKey, SectionMenuFoot, SectionMenuItems } from "./SectionNav.jsx";

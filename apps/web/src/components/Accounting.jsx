@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { api, usePolling } from "../api.js";
 import { formatTokens } from "../tokens-format.js";
 import { exactTime } from "../elapsed.js";
-import { num, t } from "../i18n.js";
+import { locale, num, t } from "../i18n.js";
 
 // Settings → usage accounting, on the hub install only (accounting.mjs; GET /api/accounting is
 // 404 everywhere else and the section stays hidden): every install's usage from its own database,

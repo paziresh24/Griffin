@@ -19,6 +19,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # A name used but never defined or imported only fails when that screen renders: the whole page
+      # goes black (the sidebar badge's num, the Agents page's pill/input, 2026-11-16). Caught here.
+      - name: Undefined names
+        run: npx --yes oxlint@1.94.0 -c .oxlintrc.json --deny-warnings apps/web/src apps/server/src apps/broker/src packages
       - run: npm test
       - run: npm run build
       # The README quick start, on a clean machine: the server must come up and serve the UI.

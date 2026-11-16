@@ -1,0 +1,1 @@
+{ "env": { "browser": true, "node": true, "es2024": true, "worker": true, "serviceworker": true }, "rules": { "no-undef": "error" }, "categories": { "correctness": "off", "suspicious": "off", "pedantic": "off", "style": "off", "restriction": "off", "perf": "off", "nursery": "off" } }
