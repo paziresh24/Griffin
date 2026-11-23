@@ -3,62 +3,622 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>گریفین | ایجنت و دستیار هوش مصنوعی متن‌باز و خودمیزبان</title>
-<meta name="description" content="گریفین یک سامانهٔ متن‌باز و خودمیزبان برای تیمی از ایجنت‌های هوش مصنوعی است: ایجنت‌های خودتان را بسازید، به هر کدام ابزار و دسترسی مشخص بدهید و روی Claude، Cursor یا هر مدل سازگار با OpenAI اجرا کنید. دستیار تلگرام، گزارش زمان‌بندی‌شده، MCP.">
+<title>گریفین — نیروی کار هوش مصنوعی خودمیزبان برای تیم‌های فنی و محصول</title>
+<meta name="description" content="گریفین یک چت‌بات نیست؛ سیستم‌عامل هوش مصنوعی خودمیزبان روی سرور شرکت شماست. کاهش بار On-Call، شبکه ایجنت‌های همکاران (A2A)، اتصال به تلگرام، کوبرنتیز و گیت‌لب با بروکر ایزوله و تأیید یک‌کلیکی مالک.">
 <link rel="canonical" href="https://griffin.paziresh24.com/fa/">
 <link rel="alternate" hreflang="en" href="https://griffin.paziresh24.com/">
 <link rel="alternate" hreflang="fa" href="https://griffin.paziresh24.com/fa/">
-<link rel="alternate" hreflang="x-default" href="https://griffin.paziresh24.com/">
-<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
 <meta property="og:type" content="website">
-<meta property="og:site_name" content="Griffin">
-<meta property="og:title" content="گریفین | ایجنت و دستیار هوش مصنوعی متن‌باز و خودمیزبان">
-<meta property="og:description" content="گریفین یک سامانهٔ متن‌باز و خودمیزبان برای تیمی از ایجنت‌های هوش مصنوعی است: ایجنت‌های خودتان را بسازید، به هر کدام ابزار و دسترسی مشخص بدهید و روی Claude، Cursor یا هر مدل سازگار با OpenAI اجرا کنید. دستیار تلگرام، گزارش زمان‌بندی‌شده، MCP.">
+<meta property="og:title" content="گریفین — نیروی کار هوش مصنوعی سازمان شما، روی سرور خودتان">
+<meta property="og:description" content="سیستم‌عامل چندایجنتی متن‌باز و خودمیزبان برای عملیات زیرساخت، توسعه محصول و هماهنگی تیم‌های سازمانی.">
 <meta property="og:url" content="https://griffin.paziresh24.com/fa/">
 <meta property="og:image" content="https://griffin.paziresh24.com/media/social-card.png">
-<meta property="og:image:width" content="1280">
-<meta property="og:image:height" content="640">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="گریفین | ایجنت و دستیار هوش مصنوعی متن‌باز و خودمیزبان">
-<meta name="twitter:description" content="گریفین یک سامانهٔ متن‌باز و خودمیزبان برای تیمی از ایجنت‌های هوش مصنوعی است: ایجنت‌های خودتان را بسازید، به هر کدام ابزار و دسترسی مشخص بدهید و روی Claude، Cursor یا هر مدل سازگار با OpenAI اجرا کنید. دستیار تلگرام، گزارش زمان‌بندی‌شده، MCP.">
-<meta name="twitter:image" content="https://griffin.paziresh24.com/media/social-card.png">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Griffin", "item": "https://griffin.paziresh24.com/"}, {"@type": "ListItem", "position": 2, "name": "گریفین؛ تیم ایجنت‌های هوش مصنوعی خودتان", "item": "https://griffin.paziresh24.com/fa/"}]}</script>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap" rel="stylesheet">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
-<main>
-<nav><a href="./">گریفین</a> <a href="ai-agent.html">ایجنت هوش مصنوعی</a> <a href="telegram-ai-bot.html">دستیار تلگرام</a> <a href="../">English</a> <a href="https://github.com/paziresh24/Griffin">GitHub</a></nav>
-<header>
-  <img src="../media/griffin-mark.svg" alt="Griffin logo">
-  <h1>گریفین؛ تیم ایجنت‌های هوش مصنوعی خودتان</h1>
-</header>
-<p class="lead">گریفین یک سامانهٔ چندایجنتی هوش مصنوعی متن‌باز است که روی سرور خودتان اجرا می‌شود. خودتان تعیین می‌کنید هر ایجنت چه کاره است، از چه ابزارهایی استفاده کند و چه کسی بتواند صدایش بزند؛ و ایجنت‌ها جواب را از ابزار واقعی می‌گیرند، نه از حافظهٔ مدل.</p>
-<div class="btns">
-  <a class="btn primary" href="https://github.com/paziresh24/Griffin">گریفین در گیت‌هاب</a>
-  <a class="btn" href="https://github.com/paziresh24/Griffin#two-minutes-to-your-own">راه‌اندازی در دو دقیقه</a>
-</div>
-<h2>کاربردها</h2>
-<div class="grid">
-<div class="card"><h3>دستیار شخصی در تلگرام</h3><p>پیام‌ها را می‌خواند، به درخواست شما پیام می‌فرستد، یادداشت نگه می‌دارد و کارهای تکراری را به جاب زمان‌بندی‌شده تبدیل می‌کند.</p></div>
-<div class="card"><h3>ایجنت پژوهش و نوشتن</h3><p>منابع را مقایسه و خلاصه می‌کند، متن فارسی و انگلیسی می‌نویسد، ویرایش و ترجمه می‌کند.</p></div>
-<div class="card"><h3>دستیار تیم</h3><p>همکاران در تلگرام به آن پیام می‌دهند؛ فقط برای کار واقعی رشته باز می‌کند و برای کار برگشت‌ناپذیر از شما تأیید می‌گیرد.</p></div>
-<div class="card"><h3>گزارش زمان‌بندی‌شده</h3><p>یک پرامپت، یک زمان‌بندی و یک مقصد: عدد روزانه، خلاصهٔ هفتگی یا نمودار در همان چتی که همه هستند.</p></div>
-<div class="card"><h3>سرور MCP</h3><p>Claude Code، Claude Desktop و Cursor کار طولانی را به گریفین می‌سپارند و نتیجه را می‌گیرند.</p></div>
-<div class="card"><h3>اتصال به سیستم‌های خودتان</h3><p>دیتابیس، ذخیره‌ساز، CI و سرورها از راه ابزارهای تعریف‌شده؛ کلیدها هرگز به مدل نمی‌رسند.</p></div>
-</div>
-<h2>چرا گریفین</h2>
-<ul class="plain">
-<li>ایجنت‌ها دیتا هستند، نه کد؛ از رابط کاربری ساخته و ویرایش می‌شوند.</li>
-<li>دسترسی هر صداکننده جداست: شما، ایجنت دیگر، جاب زمان‌بندی‌شده، همکار در تلگرام یا ایجنت بیرونی.</li>
-<li>هر مدلی: Claude، Cursor یا هر API سازگار با OpenAI، از جمله مدل‌های محلی.</li>
-<li>کار برگشت‌ناپذیر منتظر تأیید شما می‌ماند و هر تأیید ثبت می‌شود.</li>
-<li>رابط کاربری فارسی و راست‌به‌چپ.</li>
-</ul>
-<h2>راه‌اندازی</h2>
-<p>Node 24 و SQLite؛ روی یک سرور لینوکس با یک دستور نصب می‌شود: <code dir="ltr">curl -fsSL https://griffin.paziresh24.com/install.sh | bash</code> (اگر Docker نباشد نصبش می‌کند و گریفین را بالا می‌آورد؛ اجرای دوباره‌اش همان به‌روزرسانی است). نصب تازه یعنی یک چت با یک ایجنت، بدون نیاز به سرور یا تنظیمات پیچیده. راهنمای کامل در <a href="https://github.com/paziresh24/Griffin">گیت‌هاب</a>.</p>
 
-<footer>گریفین متن‌باز است (MIT)، ساختهٔ <a href="https://github.com/paziresh24">Paziresh24</a>. <a href="https://github.com/paziresh24/Griffin">GitHub</a></footer>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="./">
+      <img src="../media/griffin-mark.svg" alt="گریفین">
+      <span>گریفین</span>
+    </a>
+    <nav class="nav-links" aria-label="ناوبری اصلی">
+      <a href="#outcomes">دستاوردهای کسب‌وکار</a>
+      <a href="#architecture">معماری و امنیت</a>
+      <a href="#comparison">مقایسه</a>
+      <a href="#articles">مقالات</a>
+      <a href="#install">نصب</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="lang-link" href="../" lang="en" dir="ltr">English</a>
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="تغییر تم روشن و تاریک">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+      <a class="nav-github" href="https://github.com/paziresh24/Griffin">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.1.78-.25.78-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.08 0 4.41-2.69 5.39-5.26 5.67.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.66.79.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-kicker">
+        <span class="dot"></span>
+        <span>متن‌باز با لایسنس MIT • خودمیزبان روی سرور لینوکس شما</span>
+      </div>
+      <h1>نیروی کار هوش مصنوعی سازمان شما، نه یک پنجرهٔ چت دیگر</h1>
+      <p class="hero-lead">
+        گریفین روی زیرساخت خودتان نصب می‌شود، رخدادهای شبانه را پیش از اثر روی فروش ریشه‌یابی می‌کند، میان دستیارهای همکاران بدون جلسه و تیکت هماهنگی انجام می‌دهد و هر تغییر حساسی را پشت تأیید یک‌کلیکی شما نگه می‌دارد.
+      </p>
+
+      <div class="hero-cta-row">
+        <a class="btn btn-primary" href="#install">راه‌اندازی در ۶۰ ثانیه</a>
+        <div class="cmd-inline">
+          <code id="installCmd">curl -fsSL https://griffin.paziresh24.com/install.sh | sudo bash</code>
+          <button class="cmd-copy" type="button" onclick="copyInstall(this)">کپی</button>
+        </div>
+      </div>
+
+      <!-- Interactive Real Product Stage -->
+      <div class="stage-wrap">
+        <div class="stage-frame">
+          <div class="stage-bar">
+            <div class="stage-tabs" role="tablist">
+              <button class="stage-tab active" type="button" onclick="switchStage(0)">نمای زندهٔ محصول</button>
+              <button class="stage-tab" type="button" onclick="switchStage(1)">مهار بحران ۳ صبح</button>
+              <button class="stage-tab" type="button" onclick="switchStage(2)">شبکهٔ همکاران (A2A)</button>
+              <button class="stage-tab" type="button" onclick="switchStage(3)">پایش زنده و نمودار</button>
+            </div>
+            <span class="stage-status">self-hosted · broker-isolated</span>
+          </div>
+
+          <!-- Panel 0: Real Animated Demo -->
+          <div class="stage-panel active" id="stage-0">
+            <div class="stage-media-wrap">
+              <img class="demo-img-light" src="../media/demo-light.gif" alt="نمای واقعی محیط کار گریفین در حالت روشن">
+              <img class="demo-img-dark" src="../media/demo-dark.gif" alt="نمای واقعی محیط کار گریفین در حالت تاریک">
+            </div>
+            <div class="stage-aside">
+              <div>
+                <div class="stage-aside-label">یک کار، نه یک گفت‌وگوی بی‌پایان</div>
+                <h3>از دریافت علامت تا تحویل نتیجهٔ تست‌شده</h3>
+                <p>
+                  شما مسئله را به زبان ساده می‌گویید. ایجنت مادر کار را به متخصص‌های کلاستر، لبهٔ CDN، دیتابیس و گیت تفویض می‌کند، خروجی را زنده روی محیط واقعی می‌آزماید و گزارش نهایی قابل تصمیم‌گیری را تحویل می‌دهد.
+                </p>
+              </div>
+              <div class="stage-metrics">
+                <div class="stage-metric">
+                  <strong>۱۶۰+</strong>
+                  <span>ابزار عملیاتی آماده و متصل به زیرساخت</span>
+                </div>
+                <div class="stage-metric">
+                  <strong>Worktree</strong>
+                  <span>شاخه و محیط ایزوله برای هر چت کدنویسی</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 1: 3 AM Incident -->
+          <div class="stage-panel" id="stage-1">
+            <div class="stage-main">
+              <div class="thread">
+                <div class="thread-event">
+                  <div class="thread-meta">
+                    <span>اتاق عملیات خودکار</span>
+                    <span>ساعت ۰۳:۱۴</span>
+                  </div>
+                  هشدار <code>5xx Spike</code> روی درگاه نوبت‌دهی همراه با افت ۵ دقیقه‌ای پالس فروش آنلاین.
+                </div>
+                <div class="thread-event reply">
+                  <div class="thread-meta">
+                    <span>ایجنت مادر ← تفویض موازی به متخصص‌ها</span>
+                    <span>۴۲ ثانیه</span>
+                  </div>
+                  <div class="trace-list">
+                    <div class="trace-row"><span class="trace-dot"></span><span>http_check checkout endpoint → 503 confirmed</span></div>
+                    <div class="trace-row"><span class="trace-dot"></span><span>cdn-agent: edge &amp; origin health → edge clean</span></div>
+                    <div class="trace-row"><span class="trace-dot"></span><span>infra-agent: pod logs + pg_query → 2-conn pool saturated</span></div>
+                    <div class="trace-row"><span class="trace-dot gate"></span><span>approval_gate: waiting for owner tap on Telegram</span></div>
+                  </div>
+                  فروش از ساعت ۰۳:۱۲ افت کرده است. لبهٔ CDN سالم است؛ سرویس <code>service-profiles</code> روی pool دواتصالهٔ دیتابیس صف ساخته است. اصلاحیه آماده است؛ مرج و اعمال شود؟
+                </div>
+                <div class="approval-strip">
+                  <span>تأیید مالک در تلگرام برای اعمال تغییر روی کلاستر اصلی</span>
+                  <span class="approval-btn">تأیید و اجرا</span>
+                </div>
+              </div>
+            </div>
+            <div class="stage-aside">
+              <div>
+                <div class="stage-aside-label">حفاظت از درآمد</div>
+                <h3>پایان سردرگمی نیمه‌شب در ۵ داشبورد مختلف</h3>
+                <p>
+                  پیش از اینکه مهندسی را بیدار کند، ابتدا بررسی می‌کند آیا مسیر واقعی خرید کاربر آسیب دیده است یا فقط نویز مانیتورینگ است. اگر فروش تحت تأثیر باشد، ریشه و راه‌حل آماده را یک‌جا می‌آورد.
+                </p>
+              </div>
+              <div class="stage-metrics">
+                <div class="stage-metric">
+                  <strong>۸۰٪-</strong>
+                  <span>کاهش آلارم‌های کاذب و بیدارباش بی‌مورد</span>
+                </div>
+                <div class="stage-metric">
+                  <strong>۱ کلیک</strong>
+                  <span>اجازهٔ مالک در تلگرام برای هر اقدام حساس</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 2: A2A Mesh -->
+          <div class="stage-panel" id="stage-2">
+            <div class="stage-main">
+              <div class="thread">
+                <div class="thread-event">
+                  <div class="thread-meta">
+                    <span>مدیر محصول جستجو (نصب اختصاصی خودش)</span>
+                    <span>۱۱:۰۸</span>
+                  </div>
+                  چرا تغییرات پروفایل پزشکان امروز با ۲۰ دقیقه تأخیر در نتایج جستجو دیده می‌شود؟
+                </div>
+                <div class="thread-event reply">
+                  <div class="thread-meta">
+                    <span>شبکهٔ ایجنت‌های سازمان (A2A)</span>
+                    <span>۷۵ ثانیه</span>
+                  </div>
+                  <div class="trace-list">
+                    <div class="trace-row"><span class="trace-dot"></span><span>network_agents → matched infra owner via skills map</span></div>
+                    <div class="trace-row"><span class="trace-dot"></span><span>network_ask (read-only peer quota) → queue lag 18m</span></div>
+                    <div class="trace-row"><span class="trace-dot"></span><span>metrics_query → geo-search starving consumer CPU</span></div>
+                    <div class="trace-row"><span class="trace-dot gate"></span><span>gitlab_propose → Draft MR isolating queue consumer</span></div>
+                  </div>
+                  بررسی با دستیار تیم زیرساخت نشان داد ترافیک جستجوی نقشه، CPU پاد مشترک را پر کرده بود. Draft MR برای جداسازی پاد مصرف‌کنندهٔ صف باز شد تا بدون تداخل پردازش شود.
+                </div>
+              </div>
+            </div>
+            <div class="stage-aside">
+              <div>
+                <div class="stage-aside-label">حذف مالیات هماهنگی</div>
+                <h3>ایجنت‌ها از هم می‌پرسند؛ آدم‌ها در کار عمیق می‌مانند</h3>
+                <p>
+                  به‌جای باز کردن تیکت یا قطع کردن تمرکز همکار تیم دیگر، دستیار هر نفر نقشهٔ مهارت و مخازن همکاران مجاز شرکت را می‌شناسد و در چارچوب دسترسی Read-Only مسأله را تا رسیدن به پاسخ مستند پیگیری می‌کند.
+                </p>
+              </div>
+              <div class="stage-metrics">
+                <div class="stage-metric">
+                  <strong>صفر تیکت</strong>
+                  <span>استعلام مستقیم بین دستیارهای تیم‌ها</span>
+                </div>
+                <div class="stage-metric">
+                  <strong>Read-Only</strong>
+                  <span>سهمیهٔ امن پیش‌فرض برای درخواست‌های همتا</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 3: Real Chart -->
+          <div class="stage-panel" id="stage-3">
+            <div class="stage-media-wrap">
+              <img src="../media/chart.png" alt="نمودار زنده تولیدشده داخل چت گریفین">
+            </div>
+            <div class="stage-aside">
+              <div>
+                <div class="stage-aside-label">اشراف مدیریتی و داده</div>
+                <h3>ترجمهٔ متریک و فروش به تصمیم روشن</h3>
+                <p>
+                  مستقیم از Prometheus، گرافانا و دیتابیس‌های عملیاتی کوئری می‌گیرد، روند لحظه‌ای را با الگوی روزهای عادی می‌سنجد و نمودار و خلاصهٔ مدیریتی بدون نویز را صبح‌ها در تلگرام می‌فرستد.
+                </p>
+              </div>
+              <div class="stage-metrics">
+                <div class="stage-metric">
+                  <strong>۷۵٪-</strong>
+                  <span>حذف نویز کامیت‌های برگشت‌خورده در گزارش روزانه</span>
+                </div>
+                <div class="stage-metric">
+                  <strong>خودکار</strong>
+                  <span>زمان‌بندی جاب‌های روزانه و هفتگی به وقت محلی</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Hairline Outcomes Strip -->
+  <section class="section" id="outcomes">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">خروجی‌های واقعی در کسب‌وکار</span>
+        <h2>ساخته‌شده برای نتایجی که در صورت‌حساب و سرعت تیم دیده می‌شوند</h2>
+        <p>گریفین حاصل نیاز واقعی یک تیم زیرساخت و محصول در مقیاس ترافیک میلیونی است؛ هر بخش آن برای حل یک گلوگاه واقعی شرکت طراحی شده است.</p>
+      </div>
+
+      <div class="hairline-grid">
+        <div class="hairline-cell">
+          <div class="cell-num">&lt; ۶۰ ثانیه</div>
+          <h3>زمان رسیدن به ریشهٔ خطا (MTTR)</h3>
+          <p>به‌جای جابه‌جایی دستی میان لاگ پادها، گرافانا، لبهٔ CDN و کامیت‌های گیت‌لب، همهٔ لایه‌ها به‌صورت موازی بررسی و با مسیر واقعی کاربر تطبیق داده می‌شوند.</p>
+        </div>
+        <div class="hairline-cell">
+          <div class="cell-num">حفظ دانش سازمانی</div>
+          <h3>حافظهٔ گیت‌محور که با رفتن افراد پاک نمی‌شود</h3>
+          <p>هر تلهٔ زیرساختی، ساختار شبکه یا قاعدهٔ کسب‌وکاری که کشف می‌شود، در مخزن گیت دانش ثبت می‌شود و در چت‌های بعدی به همهٔ اجراها تزریق می‌گردد.</p>
+        </div>
+        <div class="hairline-cell">
+          <div class="cell-num">اقتصاد ناوگان مدل‌ها</div>
+          <h3>سوییچ خودکار میان اشتراک‌ها بدون توقف تیم</h3>
+          <p>اشتراک‌های Claude، OpenAI Codex، Gemini و مدل‌های محلی Ollama را در یک استخر مدیریت می‌کند و هنگام پر شدن سهمیهٔ ۵ ساعته، بدون قطع کار روی موتور بعدی می‌رود.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture & Security (Alternating Split Rows with Crisp SVG Diagrams + Real Screenshot) -->
+  <section class="section" id="architecture">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">معماری امنیتی و اجرایی</span>
+        <h2>چرا مدیران فنی با خیال راحت گریفین را به زیرساخت پروداکشن وصل می‌کنند</h2>
+        <p>امنیت در گریفین به «قول دادن مدل در پرامپت» متکی نیست؛ در جداسازی کانتینرها و کد بروکر قفل شده است.</p>
+      </div>
+
+      <!-- Split 1: Privilege-Separated Broker SVG Diagram -->
+      <div class="split-row">
+        <div class="split-copy">
+          <span class="section-eyebrow">جداسازی دسترسی (Zero-Trust Broker)</span>
+          <h3>کلیدهای شرکت هرگز وارد محیط مدل زبانی نمی‌شوند</h3>
+          <p>
+            کانتینر اصلی که نشست مدل و سندباکس در آن اجرا می‌شود هیچ رمز عبور، کلید SSH یا kubeconfigای ندارد. تمام کلیدها در کانتینر جداگانهٔ <strong>Broker</strong> یا خزانهٔ Infisical شما می‌مانند و فقط از طریق یک سوکت یونیکس محلی، ابزارهای تایپ‌شده اجرا می‌شوند.
+          </p>
+          <ul class="check-list">
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>پاک‌سازی خودکار خروجی ابزارها (Secret Scrubbing) پیش از بازگشت به مدل</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>کوئری‌های دیتابیس به‌صورت پیش‌فرض در تراکنش Read-Only اجرا می‌شوند</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>ابزارهای تغییردهنده و حذف تا کلیک مالک روی کارت تأیید در کد متوقف می‌مانند</span>
+            </li>
+          </ul>
+        </div>
+        <div class="visual-card">
+          <svg viewBox="0 0 540 280" width="100%" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="دیاگرام معماری جداسازی بروکر گریفین">
+            <rect x="16" y="34" width="148" height="148" rx="12" fill="var(--surface-subtle)" stroke="var(--line-strong)"/>
+            <text x="90" y="64" text-anchor="middle" fill="var(--ink)" font-size="13" font-weight="700">Griffin App</text>
+            <text x="90" y="84" text-anchor="middle" fill="var(--muted)" font-size="11">LLM + Sandbox</text>
+            <rect x="34" y="106" width="112" height="28" rx="6" fill="var(--surface)" stroke="var(--line)"/>
+            <text x="90" y="124" text-anchor="middle" fill="var(--muted)" font-size="10.5">No raw credentials</text>
+            <rect x="34" y="142" width="112" height="24" rx="6" fill="var(--surface)" stroke="var(--line)"/>
+            <text x="90" y="158" text-anchor="middle" fill="var(--muted)" font-size="10.5">No kubeconfig / SSH</text>
+
+            <line x1="164" y1="108" x2="208" y2="108" stroke="var(--brand)" stroke-width="1.6" stroke-dasharray="4 3"/>
+            <text x="186" y="97" text-anchor="middle" fill="var(--muted)" font-size="9.5">unix.sock</text>
+
+            <rect x="208" y="20" width="160" height="176" rx="12" fill="var(--surface)" stroke="var(--brand)" stroke-width="1.5"/>
+            <text x="288" y="50" text-anchor="middle" fill="var(--ink)" font-size="13" font-weight="700">Isolated Broker</text>
+            <text x="288" y="69" text-anchor="middle" fill="var(--brand)" font-size="11" font-weight="600">Vault + Code Guards</text>
+            <rect x="224" y="86" width="128" height="26" rx="6" fill="var(--surface-subtle)" stroke="var(--line)"/>
+            <text x="288" y="103" text-anchor="middle" fill="var(--ink-2)" font-size="10.5">Infisical / Encrypted Vault</text>
+            <rect x="224" y="120" width="128" height="26" rx="6" fill="var(--brand-tint)" stroke="var(--brand)" stroke-opacity="0.4"/>
+            <text x="288" y="137" text-anchor="middle" fill="var(--ink)" font-size="10.5" font-weight="600">Owner Approval Gate</text>
+            <rect x="224" y="154" width="128" height="26" rx="6" fill="var(--surface-subtle)" stroke="var(--line)"/>
+            <text x="288" y="171" text-anchor="middle" fill="var(--ink-2)" font-size="10.5">Secret Scrubber</text>
+
+            <line x1="368" y1="68" x2="404" y2="68" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <line x1="368" y1="108" x2="404" y2="108" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <line x1="368" y1="148" x2="404" y2="148" stroke="var(--line-strong)" stroke-width="1.5"/>
+
+            <rect x="404" y="48" width="120" height="36" rx="8" fill="var(--surface-subtle)" stroke="var(--line)"/>
+            <text x="464" y="70" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-weight="600">Kubernetes &amp; DB</text>
+            <rect x="404" y="90" width="120" height="36" rx="8" fill="var(--surface-subtle)" stroke="var(--line)"/>
+            <text x="464" y="112" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-weight="600">GitLab &amp; CI</text>
+            <rect x="404" y="132" width="120" height="36" rx="8" fill="var(--surface-subtle)" stroke="var(--line)"/>
+            <text x="464" y="154" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-weight="600">CDN &amp; Routers</text>
+
+            <line x1="288" y1="196" x2="288" y2="226" stroke="var(--brand)" stroke-width="1.5"/>
+            <rect x="178" y="226" width="220" height="36" rx="9" fill="var(--surface-subtle)" stroke="var(--line-strong)"/>
+            <text x="288" y="248" text-anchor="middle" fill="var(--ink)" font-size="11" font-weight="600">Owner 1-Tap Approval (Web / Telegram)</text>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Split 2: Agent-to-Agent Mesh -->
+      <div class="split-row reverse">
+        <div class="split-copy">
+          <span class="section-eyebrow">شبکهٔ غیرمتمرکز همکاران (Agent Mesh)</span>
+          <h3>به هر نفر دستیار خودش را بدهید و دستیارها را به هم وصل کنید</h3>
+          <p>
+            یک ایجنت مرکزی برای کل شرکت، مرزهای دسترسی را می‌شکند و کانتکست تیم‌ها را قاطی می‌کند. در گریفین هر همکار نصب مستقل خودش را دارد و نصب‌های تأییدشده روی دامنهٔ داخلی شرکت از طریق توکن‌های Read-Only به هم وصل می‌شوند.
+          </p>
+          <ul class="check-list">
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>تأیید صریح مالک (<code>NETWORK_ADMIT=owner</code>) برای پذیرش هر عضو جدید</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>مخفی ماندن فهرست همتاها و مهارت‌ها از اینترنت عمومی (احراز هویت اجباری)</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>صف خودکار تحویل پیام در صورت آپدیت یا خاموشی موقت ایجنت مقابل</span>
+            </li>
+          </ul>
+        </div>
+        <div class="visual-card">
+          <svg viewBox="0 0 540 260" width="100%" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="دیاگرام شبکه همتا به همتای ایجنت‌های سازمان">
+            <line x1="270" y1="84" x2="120" y2="176" stroke="var(--brand)" stroke-width="1.6"/>
+            <line x1="270" y1="84" x2="420" y2="176" stroke="var(--brand)" stroke-width="1.6"/>
+            <line x1="170" y1="194" x2="370" y2="194" stroke="var(--line-strong)" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+            <rect x="180" y="24" width="180" height="62" rx="12" fill="var(--surface)" stroke="var(--brand)" stroke-width="1.5"/>
+            <text x="270" y="50" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-weight="700">Platform Lead Agent</text>
+            <text x="270" y="70" text-anchor="middle" fill="var(--muted)" font-size="10.5">K8s · GitOps · CDN · DB</text>
+
+            <rect x="30" y="164" width="176" height="62" rx="12" fill="var(--surface-subtle)" stroke="var(--line-strong)"/>
+            <text x="118" y="190" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-weight="700">Product Team Agent</text>
+            <text x="118" y="210" text-anchor="middle" fill="var(--muted)" font-size="10.5">Search · Frontend · UX</text>
+
+            <rect x="334" y="164" width="176" height="62" rx="12" fill="var(--surface-subtle)" stroke="var(--line-strong)"/>
+            <text x="422" y="190" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-weight="700">Data &amp; BI Agent</text>
+            <text x="422" y="210" text-anchor="middle" fill="var(--muted)" font-size="10.5">Sales Pulse · Grafana</text>
+
+            <rect x="202" y="118" width="136" height="24" rx="999" fill="var(--surface)" stroke="var(--line)"/>
+            <text x="270" y="134" text-anchor="middle" fill="var(--brand)" font-size="10" font-weight="600">Authenticated A2A Mesh</text>
+          </svg>
+        </div>
+      </div>
+
+      <!-- Split 3: Real Interface + Telegram & Browser -->
+      <div class="split-row">
+        <div class="split-copy">
+          <span class="section-eyebrow">جایی که تیم شما واقعاً کار می‌کند</span>
+          <h3>وب، تلگرام، بله و مرورگر کروم — همه متصل به یک حافظه و یک سندباکس</h3>
+          <p>
+            نیازی نیست رفتار تیم را عوض کنید. از موبایل در تلگرام دستور بدهید، در پنل وب پریویو زندهٔ کدی که ایجنت نوشته را ببینید، و با مرورگر Playwright یا افزونهٔ کروم مطمئن شوید صفحهٔ جدید بدون خطای کنسول رندر می‌شود.
+          </p>
+          <ul class="check-list">
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>پشتیبانی هم‌زمان از ربات تلگرام، ربات بله و دستیار حساب رسمی مالک</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>ساخت ایجنت متخصص جدید در ۳۰ ثانیه به‌عنوان داده، بدون کدنویسی فریم‌ورک</span>
+            </li>
+            <li>
+              <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>پشتیبانی کامل از استاندارد MCP برای اتصال به سرویس‌های بیرونی و داخلی</span>
+            </li>
+          </ul>
+        </div>
+        <div class="visual-card flush">
+          <img src="../media/chat.png" alt="نمای گفت‌وگو و گزارش ساختاریافته در محیط وب گریفین">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Clean Comparison Table -->
+  <section class="section" id="comparison">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">مقایسهٔ صریح</span>
+        <h2>گریفین کجا می‌ایستد؟</h2>
+        <p>تفاوت یک محصول عملیاتی خودمیزبان با رابط‌های چت ساده و کتابخانه‌های کدنویسی.</p>
+      </div>
+
+      <div class="table-shell">
+        <table>
+          <thead>
+            <tr>
+              <th>نیاز واقعی سازمان</th>
+              <th>رابط‌های چت (OpenWebUI / ChatGPT)</th>
+              <th>فریم‌ورک‌ها (LangChain / CrewAI)</th>
+              <th class="col-griffin">گریفین (Griffin)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>اجرای واقعی روی زیرساخت</strong></td>
+              <td>خیر، کپی‌پیست دستی توسط انسان</td>
+              <td>نیازمند کدنویسی و نگهداشت مداوم</td>
+              <td class="col-griffin">آمادهٔ کار با ۱۶۰+ ابزار و Worktree ایزوله</td>
+            </tr>
+            <tr>
+              <td><strong>حفاظت از کلیدها و پروداکشن</strong></td>
+              <td>بدون دسترسی یا بدون کنترل</td>
+              <td>کلیدها داخل همان پروسهٔ مدل</td>
+              <td class="col-griffin">Broker جداگانه + تأیید یک‌کلیکی مالک در کد</td>
+            </tr>
+            <tr>
+              <td><strong>هماهنگی بین همکاران</strong></td>
+              <td>چت‌های جزیره‌ای و جدا</td>
+              <td>پیاده‌سازی دستی از صفر</td>
+              <td class="col-griffin">شبکهٔ همتا به همتای ایجنت‌ها (A2A Mesh)</td>
+            </tr>
+            <tr>
+              <td><strong>استمرار هنگام پر شدن سهمیه</strong></td>
+              <td>توقف کار با خطای سقف مصرف</td>
+              <td>شکست پایپ‌لاین روی ۴۲۹</td>
+              <td class="col-griffin">سوییچ خودکار میان اکانت‌های Claude، Codex و Gemini</td>
+            </tr>
+            <tr>
+              <td><strong>آزمون کد و رابط کاربری</strong></td>
+              <td>فقط تولید متن کد</td>
+              <td>محدود به اسکریپت‌های دستی</td>
+              <td class="col-griffin">پریویو زنده در چت + مرورگر واقعی Playwright</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Editorial Articles Section -->
+  <section class="section" id="articles">
+    <div class="container">
+      <div class="section-header">
+        <span class="section-eyebrow">مقالات و مستندات فارسی</span>
+        <h2>یادداشت‌های معماری از تجربهٔ واقعی پروداکشن</h2>
+        <p>جزئیات فنی و مدیریتی دربارهٔ ساخت، ایمن‌سازی و بهره‌برداری از تیم ایجنت‌های هوش مصنوعی در سازمان.</p>
+      </div>
+
+      <div class="editorial-list">
+        <a class="editorial-item" href="ai-agent.html">
+          <span class="editorial-cat">معماری و استراتژی AI</span>
+          <div>
+            <h3 class="editorial-title">از چت‌بات تا نیروی کار خودمختار: چرا ایجنت‌های هوش مصنوعی در سازمان‌ها شکست می‌خورند؟</h3>
+            <p class="editorial-desc">کالبدشکافی سه دیوار اصلی در استقرار AI سازمانی و چگونگی حل آن‌ها با الگوی ایجنت مادر، متخصص‌ها، Broker ایزوله و حافظهٔ گیت‌محور.</p>
+          </div>
+          <span class="editorial-arrow">مطالعه ←</span>
+        </a>
+
+        <a class="editorial-item" href="telegram-ai-bot.html">
+          <span class="editorial-cat">اتاق فرمان پیام‌رسان</span>
+          <div>
+            <h3 class="editorial-title">اتاق فرمان شرکت در تلگرام و بله: ساخت دستیار اجرایی روی سرور خودتان</h3>
+            <p class="editorial-desc">تفاوت اتصال ربات و همزاد حساب رسمی مالک، قوانین اصلاح درجا، سیاست صفر-رمز در چت و راهنمای راه‌اندازی در ۳ دقیقه.</p>
+          </div>
+          <span class="editorial-arrow">مطالعه ←</span>
+        </a>
+
+        <a class="editorial-item" href="multi-agent-architecture.html">
+          <span class="editorial-cat">شبکهٔ ایجنت‌ها (A2A)</span>
+          <div>
+            <h3 class="editorial-title">معماری Agent Mesh: وقتی دستیار هر همکار با دستیار بقیهٔ تیم مذاکره و کار را تمام می‌کند</h3>
+            <p class="editorial-desc">چرا یک ایجنت مرکزی برای کل شرکت جواب نمی‌دهد و چگونه نقشهٔ مهارت‌ها و سهمیهٔ Read-Only گلوگاه تیکت‌های بین‌تیمی را حذف می‌کند.</p>
+          </div>
+          <span class="editorial-arrow">مطالعه ←</span>
+        </a>
+
+        <a class="editorial-item" href="ai-sre-ops-room.html">
+          <span class="editorial-cat">عملیات و AI SRE</span>
+          <div>
+            <h3 class="editorial-title">پایان بیدارباش ۳ صبح: طراحی اتاق عملیات خودکار برای کوبرنتیز، دیتابیس و CDN</h3>
+            <p class="editorial-desc">تفکیک آلارم خام از اثر واقعی روی فروش و کاربر، تریاژ ۶۰ ثانیه‌ای و گاردهای کدی برای جلوگیری از خطاهای خودکار در پروداکشن.</p>
+          </div>
+          <span class="editorial-arrow">مطالعه ←</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section class="section-sm" id="install">
+    <div class="container">
+      <div class="install-box">
+        <span class="section-eyebrow">نصب روی سرور لینوکس شما</span>
+        <h2 style="margin:0 0 10px;font-size:1.7rem">راه‌اندازی کامل در کمتر از یک دقیقه</h2>
+        <p style="margin:0;color:var(--muted);max-width:640px">
+          فقط یک سرور لینوکس با Docker نیاز دارید. اسکریپت رسمی، کانتینر اپ و کانتینر ایزولهٔ Broker را با سوکت مشترک بالا می‌آورد.
+        </p>
+        <pre><code>curl -fsSL https://griffin.paziresh24.com/install.sh | sudo bash</code></pre>
+        <div class="steps-3">
+          <div>
+            <span class="step-num">۱</span>
+            <h4>باز کردن رابط وب</h4>
+            <p>روی پورت <code>3100</code> وارد شوید، زبان فارسی را انتخاب کنید و رمز مالک را بگذارید.</p>
+          </div>
+          <div>
+            <span class="step-num">۲</span>
+            <h4>اتصال موتور هوش مصنوعی</h4>
+            <p>اکانت Claude، OpenAI، Gemini یا مدل محلی Ollama را از بخش موتورها متصل کنید.</p>
+          </div>
+          <div>
+            <span class="step-num">۳</span>
+            <h4>اتصال تلگرام و ابزارها</h4>
+            <p>کد ۶ رقمی جفت‌سازی را به ربات خود بفرستید و ابزارهای زیرساختتان را فعال کنید.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section-sm" id="faq">
+    <div class="container">
+      <div class="section-header" style="margin-bottom:28px">
+        <span class="section-eyebrow">پرسش‌های پرتکرار</span>
+        <h2>پاسخ‌های کوتاه به دغدغه‌های امنیتی و فنی</h2>
+      </div>
+
+      <div class="faq-list">
+        <details class="faq-item" open>
+          <summary>آیا داده‌های کد یا دیتابیس ما به سرور دیگری ارسال می‌شود؟</summary>
+          <p>خیر. گریفین ۱۰۰٪ متن‌باز و خودمیزبان است. چت‌ها در SQLite محلی، دانش در Git محلی و کلیدها در خزانهٔ رمزنگاری‌شدهٔ سرور خودتان می‌مانند. تنها ارتباط بیرونی، درخواست مستقیم به موتور هوش مصنوعی انتخابی خودتان (یا مدل کاملاً محلی Ollama) است.</p>
+        </details>
+        <details class="faq-item">
+          <summary>چطور از خطای ناخواستهٔ هوش مصنوعی روی سرورهای پروداکشن جلوگیری می‌شود؟</summary>
+          <p>ابزارهای خواندن از ابزارهای نوشتن جدا هستند. تغییرات کد فقط در شاخهٔ ایزوله به شکل Draft MR ثبت می‌شوند، کوئری‌های دیتابیس به‌صورت پیش‌فرض Read-Only هستند، و ابزارهای تغییردهنده یا حذف در کد بروکر تا تأیید صریح شما متوقف می‌مانند.</p>
+        </details>
+        <details class="faq-item">
+          <summary>در ایران با محدودیت دسترسی به مدل‌های خارجی چطور کار می‌کند؟</summary>
+          <p>گریفین مدیریت پروکسی خروجی و مسیریابی انتخابی دامنه‌ها را به‌صورت داخلی دارد تا فقط ترافیک API مدل‌های تحریمی از تونل رد شود و ارتباط با سرورها و دیتابیس‌های داخلی شرکت مستقیم و بدون تأخیر باقی بماند.</p>
+        </details>
+      </div>
+    </div>
+  </section>
 </main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div><strong>گریفین</strong> — متن‌باز با لایسنس MIT، ساخته‌شده توسط تیم پلتفرم پذیرش۲۴</div>
+    <div class="footer-links">
+      <a href="ai-agent.html">معماری ایجنت</a>
+      <a href="telegram-ai-bot.html">تلگرام و بله</a>
+      <a href="multi-agent-architecture.html">شبکهٔ ایجنت‌ها</a>
+      <a href="ai-sre-ops-room.html">AI SRE</a>
+      <a href="../" lang="en" dir="ltr">English</a>
+      <a href="https://github.com/paziresh24/Griffin">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function switchStage(idx) {
+  var tabs = document.querySelectorAll('.stage-tab');
+  var panels = document.querySelectorAll('.stage-panel');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].classList.toggle('active', i === idx);
+    panels[i].classList.toggle('active', i === idx);
+  }
+}
+
+function copyInstall(btn) {
+  var cmd = document.getElementById('installCmd').textContent;
+  if (navigator.clipboard) navigator.clipboard.writeText(cmd);
+  var old = btn.textContent;
+  btn.textContent = 'کپی شد';
+  setTimeout(function() { btn.textContent = old; }, 1800);
+}
+
+(function() {
+  var saved = localStorage.getItem('griffin-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  var btn = document.getElementById('themeToggle');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('griffin-theme', next);
+    });
+  }
+})();
+</script>
 </body>
 </html>

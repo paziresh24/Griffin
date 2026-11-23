@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>پایان بیدارباش ۳ صبح: طراحی اتاق عملیات خودکار (AI SRE) در گریفین</title>
+<meta name="description" content="چگونه اتاق عملیات گریفین هشدارهای Alertmanager، گرافانا و پالس فروش کسب‌وکار را تریاژ می‌کند، نویز را از اثر واقعی روی کاربر جدا می‌سازد و MTTR را به زیر یک دقیقه می‌رساند؟">
+<link rel="canonical" href="https://griffin.paziresh24.com/fa/ai-sre-ops-room.html">
+<link rel="alternate" hreflang="en" href="https://griffin.paziresh24.com/kubernetes-ai-agent.html">
+<link rel="alternate" hreflang="fa" href="https://griffin.paziresh24.com/fa/ai-sre-ops-room.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="./">
+      <img src="../media/griffin-mark.svg" alt="گریفین">
+      <span>گریفین</span>
+    </a>
+    <nav class="nav-links" aria-label="ناوبری مقالات">
+      <a href="./">صفحهٔ اصلی</a>
+      <a href="ai-agent.html">معماری ایجنت</a>
+      <a href="telegram-ai-bot.html">تلگرام و بله</a>
+      <a href="multi-agent-architecture.html">شبکهٔ ایجنت‌ها</a>
+      <a href="ai-sre-ops-room.html" class="active">اتاق عملیات SRE</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="lang-link" href="../kubernetes-ai-agent.html" lang="en" dir="ltr">English</a>
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="تغییر تم">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="container-reading">
+  <header class="article-header">
+    <div class="breadcrumb"><a href="./">گریفین</a> / <span>عملیات و AI SRE</span></div>
+    <h1>پایان بیدارباش ۳ صبح: طراحی اتاق عملیات خودکار (AI SRE) برای کوبرنتیز، دیتابیس و CDN</h1>
+    <p class="article-subtitle">
+      خستگی ناشی از آلارم‌های کاذب بزرگ‌ترین قاتل تمرکز تیم‌های زیرساخت است. در این مقاله نشان می‌دهیم چگونه لایهٔ Incident در گریفین هشدارهای خام را به تشخیص ریشه‌ای و سنجش اثر واقعی روی فروش تبدیل می‌کند.
+    </p>
+    <div class="article-meta">
+      <span>زمان مطالعه: ۱۰ دقیقه</span>
+      <span>•</span>
+      <span>مخاطب: مهندسان SRE، DevOps، مدیران زیرساخت و CTOها</span>
+    </div>
+  </header>
+
+  <article class="prose">
+    <h2>۱. اصل اول: یک آلارم، اثباتِ آسیب دیدن کاربر نیست</h2>
+    <p>
+      وقتی یک سرویس روی کلاستر استندبای پایین می‌آید یا یک پاد به‌طور موقت ری‌استارت می‌شود، سیستم‌های مانیتورینگ سنتی هشدار بحرانی می‌فرستند. اگر یک مدل زبانی خام به این آلارم وصل باشد، با دیدن پایین بودن سرویس احراز هویت روی کلاستر استندبای اعلام می‌کند «ورود کل کاربران قطع شده است» — در حالی که مسیر واقعی کاربران کد ۲۰۰ می‌گیرد.
+    </p>
+    <p>
+      در اتاق عملیات گریفین، پیش از هر ادعایی دربارهٔ قطعی یا اثر روی کاربر، دو بررسی الزامی است: تست مستقیم مسیر عمومی کاربر و Origin با <code>http_check</code> (برای تفکیک خطای CDN از خطای کلاستر)، و تطبیق با سیگنال لحظه‌ای فروش و تراکنش. اگر مسیر کاربر سالم باشد، ایجنت صریح گزارش می‌دهد که هشدار فنی فعال است اما کاربر اثری ندیده، و مالک را بی‌جهت بیدار نمی‌کند.
+    </p>
+
+    <h2>۲. چرخهٔ تریاژ چهارمرحله‌ای در زیر ۶۰ ثانیه</h2>
+    <ol>
+      <li><strong>بررسی تاریخچه و Ackهای عمدی (<code>incident_history</code>):</strong> چک می‌کند آیا این رخداد قبلاً رخ داده یا مالک آن را به‌عنوان وضعیت عمدی (<code>incident_ack</code>) علامت زده است؟</li>
+      <li><strong>سنجش موازی لایه‌ها:</strong> در یک دور موازی، وضعیت پادها و رویدادها (<code>kube_status</code>, <code>kube_get</code>)، لاگ کانتینر قبلی (<code>kube_logs</code> با <code>previous: true</code>)، متریک‌های پرومتئوس (<code>metrics_query</code>) و کامیت‌های اخیر گیت‌لب خوانده می‌شوند.</li>
+      <li><strong>ثبت تریاژ ساختاریافته (<code>incident_update</code>):</strong> علت ریشه‌ای، سطح اطمینان، اثر واقعی روی کاربر و اقدام پیشنهادی روی کارت رخداد ثبت می‌شود.</li>
+      <li><strong>اطلاع‌رسانی هوشمند (<code>tell_owner</code>) و کارت پیگیری (<code>incident_suggest</code>):</strong> تنها زمانی که کاربر آسیب دیده، داده یا بک‌آپ در خطر است یا مسیر آلارم کور شده، پیامی ۲ تا ۴ خطی و روشن به تلگرام مالک می‌رود و یک کارت آمادهٔ پیگیری روی میز کار او قرار می‌گیرد.</li>
+    </ol>
+
+    <div class="prose-note">
+      <strong>چرا گاردهای کدی در AI SRE غیرقابل‌مذاکره‌اند؟</strong>
+      یک مدل زبانی زیر فشار حل یک آلارم، اگر دستش باز باشد، ممکن است برای ساکت کردن خطای یک زیردامنه کل کش دامنهٔ اصلی در CDN را خاموش کند یا پچی نسنجیده را مستقیم روی <code>main</code> بفرستد. در گریفین ایجنت تا عمیق‌ترین لایهٔ عیب‌یابی و باز کردن Draft MR با ویرایش دقیق <code>find/replace</code> پیش می‌رود، اما اعمال نهایی تغییر در لایهٔ کد پشت تأیید مالک قفل است.
+    </div>
+
+    <nav class="article-nav" aria-label="ناوبری مقالات">
+      <a class="btn" href="multi-agent-architecture.html">→ مقالهٔ قبلی: شبکهٔ ایجنت‌ها</a>
+      <a class="btn btn-primary" href="./#install">راه‌اندازی گریفین روی سرور ←</a>
+    </nav>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div><strong>گریفین</strong> — متن‌باز با لایسنس MIT</div>
+    <div class="footer-links">
+      <a href="./">صفحهٔ اصلی فارسی</a>
+      <a href="ai-agent.html">معماری ایجنت</a>
+      <a href="telegram-ai-bot.html">تلگرام و بله</a>
+      <a href="multi-agent-architecture.html">شبکهٔ ایجنت‌ها</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function() {
+  var saved = localStorage.getItem('griffin-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  var btn = document.getElementById('themeToggle');
+  if (btn) btn.addEventListener('click', function() {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('griffin-theme', next);
+  });
+})();
+</script>
+</body>
+</html>

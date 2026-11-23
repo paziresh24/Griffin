@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>شبکهٔ ایجنت‌های سازمانی (Agent Mesh): معماری A2A در گریفین</title>
+<meta name="description" content="چگونه در گریفین دستیار هوش مصنوعی هر همکار روی شبکه داخلی شرکت با دستیار سایر اعضای تیم مذاکره و کار را تمام می‌کند؟ معماری Agent-to-Agent (A2A) و نقشه مهارت‌ها.">
+<link rel="canonical" href="https://griffin.paziresh24.com/fa/multi-agent-architecture.html">
+<link rel="alternate" hreflang="en" href="https://griffin.paziresh24.com/guides/claude-code-delegate-mcp.html">
+<link rel="alternate" hreflang="fa" href="https://griffin.paziresh24.com/fa/multi-agent-architecture.html">
+<link rel="icon" href="../media/griffin-mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="./">
+      <img src="../media/griffin-mark.svg" alt="گریفین">
+      <span>گریفین</span>
+    </a>
+    <nav class="nav-links" aria-label="ناوبری مقالات">
+      <a href="./">صفحهٔ اصلی</a>
+      <a href="ai-agent.html">معماری ایجنت</a>
+      <a href="telegram-ai-bot.html">تلگرام و بله</a>
+      <a href="multi-agent-architecture.html" class="active">شبکهٔ ایجنت‌ها</a>
+      <a href="ai-sre-ops-room.html">اتاق عملیات SRE</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="lang-link" href="../" lang="en" dir="ltr">English</a>
+      <button class="icon-btn" id="themeToggle" type="button" aria-label="تغییر تم">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="container-reading">
+  <header class="article-header">
+    <div class="breadcrumb"><a href="./">گریفین</a> / <span>شبکهٔ ایجنت‌ها (A2A)</span></div>
+    <h1>شبکهٔ ایجنت‌های سازمانی (Agent Mesh): وقتی دستیار هوش مصنوعی هر همکار با دستیار بقیهٔ تیم مذاکره می‌کند</h1>
+    <p class="article-subtitle">
+      در شرکت‌های واقعی، کندی از «نوشتن کد» نیست؛ از «مالیات هماهنگی بین آدم‌ها» است. گریفین به هر عضو تیم یک دستیار مستقل می‌دهد که روی دامنهٔ داخلی شرکت با دستیار سایر همکاران گفتگو و کار را بدون جلسه و تیکت تمام می‌کند.
+    </p>
+    <div class="article-meta">
+      <span>زمان مطالعه: ۸ دقیقه</span>
+      <span>•</span>
+      <span>مخاطب: مدیران مهندسی، معماران سیستم و لیدهای محصول</span>
+    </div>
+  </header>
+
+  <article class="prose">
+    <h2>۱. چرا یک ایجنت مرکزی برای کل شرکت جواب نمی‌دهد؟</h2>
+    <p>
+      در نگاه اول، راه‌اندازی یک ایجنت مرکزی برای کل ۳۰ یا ۱۰۰ نفر اعضای شرکت ساده به نظر می‌رسد؛ اما این مدل خیلی زود به دو مشکل جدی برمی‌خورد:
+    </p>
+    <ul>
+      <li><strong>گسترش شعاع آسیب (Blast Radius):</strong> اگر یک ایجنت به دیتابیس مالی، کلاستر اصلی و مخازن همهٔ تیم‌ها دسترسی داشته باشد، هر کاربری که با آن چت کند پشت فرمانی نشسته که به کل اسرار شرکت دسترسی دارد.</li>
+      <li><strong>آلودگی زمینه و دانش (Context Pollution):</strong> اولویت‌ها، مخازن کد و یادداشت‌های دانش تیم جستجو با تیم زیرساخت یا مالی کاملاً متفاوت است. تجمیع همه در یک پرامپت دقت خروجی را پایین می‌آورد.</li>
+    </ul>
+
+    <h2>۲. معماری Federated Agent Mesh در گریفین</h2>
+    <p>
+      در گریفین هر همکار یا تیم نصب مستقل خودش را دارد و فقط به مخازن گیت، پروژه‌های Infisical و ابزارهای مربوط به مالک خودش دسترسی دارد. نصب‌های تأییدشده روی شبکهٔ داخلی شرکت از دو قابلیت کلیدی استفاده می‌کنند:
+    </p>
+    <ul>
+      <li><strong>نقشهٔ مهارت‌های احراز هویت‌شده (Skills Map):</strong> اعضای شبکه که توکن معتبر دارند، فهرست نقش، مخازن کد و عناوین دانش خود را برای همتاها قابل جستجو می‌کنند. وقتی از ایجنت خودتان دربارهٔ سرویسی از تیم دیگر می‌پرسید، ایجنت شما به‌جای گفتن «از فلانی بپرسید»، صاحب آن سرویس را با <code>network_agents</code> پیدا می‌کند.</li>
+      <li><strong>گفتگوی مستقیم با صف خودکار (<code>network_ask</code>):</strong> ایجنت شما سؤال فنی را برای ایجنت همکار می‌فرستد. اگر نصب همکار در حال آپدیت یا ری‌استارت باشد، پیام در صف می‌ماند و به محض بالا آمدن تحویل داده می‌شود و چت شما را با پاسخ بیدار می‌کند.</li>
+    </ul>
+
+    <h2>۳. مدل امنیتی Zero-Trust در شبکهٔ ایجنت‌ها</h2>
+    <ul>
+      <li><strong>محدودیت دامنهٔ سازمانی:</strong> فقط آدرس‌های HTTPS روی دامنه‌های مجاز شرکت حق درخواست عضویت دارند.</li>
+      <li><strong>پذیرش با تأیید مالک (<code>NETWORK_ADMIT=owner</code>):</strong> هیچ نصب جدیدی به‌طور خودکار توکن فعال نمی‌گیرد؛ درخواست عضویت به‌صورت کارت تأیید به مالک نمایش داده می‌شود.</li>
+      <li><strong>سهمیهٔ پیش‌فرض Read-Only:</strong> درخواست‌های همتاها فقط اجازهٔ خواندن و بررسی دارند. هر تغییری روی سیستم همکار مقابل، مستلزم تأیید مالکِ همان سیستم است.</li>
+      <li><strong>مخفی ماندن ساختار تیم از اینترنت عمومی:</strong> فهرست همتاها (<code>/api/public/network/peers</code>) و مهارت‌ها (<code>skills</code>) تنها در برابر توکن معتبر شبکه برگردانده می‌شوند و به اینترنت عمومی هیچ اطلاعاتی از اسامی همکاران یا مخازن لو نمی‌دهند.</li>
+    </ul>
+
+    <div class="prose-note">
+      <strong>نمونهٔ واقعی در عمل</strong>
+      وقتی تیم پشتیبانی گزارش می‌دهد که فایل‌های ضبط تماس باز نمی‌شوند، دستیار پشتیبانی هم‌زمان از دستیار بک‌اند و دستیار زیرساخت استعلام می‌گیرد؛ ظرف ۹۰ ثانیه مشخص می‌شود باکت S3 به سقف سهمیه خورده، اصلاح انجام می‌شود، فایل تست خوانده می‌شود و پاسخ نهایی برمی‌گردد — بدون اینکه ۴ مهندس از کار عمیق خود خارج شوند.
+    </div>
+
+    <nav class="article-nav" aria-label="ناوبری مقالات">
+      <a class="btn" href="telegram-ai-bot.html">→ مقالهٔ قبلی: تلگرام و بله</a>
+      <a class="btn btn-primary" href="ai-sre-ops-room.html">مقالهٔ بعدی: اتاق عملیات خودکار (AI SRE) ←</a>
+    </nav>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div><strong>گریفین</strong> — متن‌باز با لایسنس MIT</div>
+    <div class="footer-links">
+      <a href="./">صفحهٔ اصلی فارسی</a>
+      <a href="ai-agent.html">معماری ایجنت</a>
+      <a href="telegram-ai-bot.html">تلگرام و بله</a>
+      <a href="ai-sre-ops-room.html">AI SRE</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function() {
+  var saved = localStorage.getItem('griffin-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  var btn = document.getElementById('themeToggle');
+  if (btn) btn.addEventListener('click', function() {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('griffin-theme', next);
+  });
+})();
+</script>
+</body>
+</html>
