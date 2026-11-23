@@ -89,6 +89,7 @@ test("a new agent that meets one member meets the whole network, and they all me
   for (let i = 0; i < 10; i++) await settle();
   assert.deepEqual(b.n.connected().map((x) => x.url), ["https://c.example.com"]);
   await a.n.hello("https://b.example.com");
+  await b.n.hello("https://a.example.com");
   for (let i = 0; i < 20; i++) await settle();
   assert.deepEqual(a.n.connected().map((x) => x.url).sort(), ["https://b.example.com", "https://c.example.com"]);
   assert.ok(c.n.connected().some((x) => x.url === "https://a.example.com"), "C knows the newcomer");
@@ -113,6 +114,7 @@ test("a hello sent in someone else's name does not cut their working link", asyn
   const b = (hosts["b.example.com"] = install("b.example.com", net));
   const settle = () => new Promise((r) => setTimeout(r, 50));
   await a.n.hello("https://b.example.com");
+  await b.n.hello("https://a.example.com");
   for (let i = 0; i < 10; i++) await settle();
   // A third party asks B to say hello to "A": B mints a token, A refuses it (no hello pending).
   await b.app.request("/api/public/network/hello", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://a.example.com" }) });
@@ -444,4 +446,45 @@ test("a file goes from one member to another's inbox; outside the workspace, a s
   const c = install("c.example.org", net);
   assert.equal((await c.app.request("/api/public/network/file", { method: "POST", body: "x" })).status, 404);
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("invalid token on /card never leaks skills and /peers requires a valid member token", async () => {
+  const hosts = {};
+  const net = (url, init) => {
+    const u = new URL(url);
+    return hosts[u.host].fetch(new Request(u, init));
+  };
+  const a = install("a.example.com", net);
+  const b = install("b.example.com", net);
+  hosts[a.host] = a.app;
+  hosts[b.host] = b.app;
+  await a.n.hello("https://b.example.com");
+  await b.n.hello("https://a.example.com");
+
+  const cardUnauth = await a.app.request("https://a.example.com/api/public/network/card");
+  assert.equal(cardUnauth.status, 200);
+  assert.equal((await cardUnauth.json()).skills, undefined);
+
+  const cardFake = await a.app.request("https://a.example.com/api/public/network/card", {
+    headers: { authorization: "Bearer totally-fake-token" },
+  });
+  assert.equal(cardFake.status, 200);
+  assert.equal((await cardFake.json()).skills, undefined);
+
+  const peersUnauth = await a.app.request("https://a.example.com/api/public/network/peers");
+  assert.equal(peersUnauth.status, 401);
+
+  const peersFake = await a.app.request("https://a.example.com/api/public/network/peers", {
+    headers: { authorization: "Bearer totally-fake-token" },
+  });
+  assert.equal(peersFake.status, 401);
+
+  const validToken = a.clients[0]?.token;
+  assert.ok(validToken);
+  const peersValid = await a.app.request("https://a.example.com/api/public/network/peers", {
+    headers: { authorization: `Bearer ${validToken}` },
+  });
+  assert.equal(peersValid.status, 200);
+  const body = await peersValid.json();
+  assert.equal(body.agents.length, 1);
 });

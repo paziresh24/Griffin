@@ -313,7 +313,9 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
 
   // Everyone a member knows that we do not, at once.
   async function gossip(origin) {
-    const list = await getJson(`${origin}/api/public/network/peers`);
+    const id = agentId(new URL(origin).host);
+    const token = secrets.get(secretName(id));
+    const list = await getJson(`${origin}/api/public/network/peers`, token ? { headers: { authorization: `Bearer ${token}` } } : {});
     const known = agents();
     for (const a of Array.isArray(list?.agents) ? list.agents : []) {
       const o = allowedOrigin(a?.url, domains);
@@ -726,10 +728,16 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     // Skills only to a member that shows its network token: repo names and note titles are not public.
     app.get("/api/public/network/card", (c) => {
       if (!self()) return c.json({ error: "no public address" }, 404);
-      const member = c.req.header("authorization") ? peerAuth.authenticate(c.req.header("authorization")) : null;
-      return c.json(card({ withSkills: Boolean(member) }));
+      const auth = c.req.header("authorization");
+      const member = auth ? peerAuth.authenticate(auth) : null;
+      const isMember = Boolean(member && !member.error);
+      return c.json(card({ withSkills: isMember }));
     });
-    app.get("/api/public/network/peers", (c) => c.json({ agents: connected().map(({ url, name, latin, owner, product }) => ({ url, name, latin, owner, product })) }));
+    app.get("/api/public/network/peers", (c) => {
+      const who = peerAuth.authenticate(c.req.header("authorization"));
+      if (!who || who.error) return c.json({ error: who?.error || "unauthorized" }, who?.status || 401);
+      return c.json({ agents: connected().map(({ url, name, latin, owner, product }) => ({ url, name, latin, owner, product })) });
+    });
     app.post("/api/public/network/hello", async (c) => {
       if (limited(c.req.header("x-forwarded-for") || "direct")) return c.json({ error: "rate limited" }, 429);
       const body = await c.req.json().catch(() => ({}));
