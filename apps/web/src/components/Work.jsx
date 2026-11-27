@@ -3,22 +3,22 @@ import { AnimatePresence, motion } from "motion/react";
 import { Brain, ChevronDown, Wrench } from "lucide-react";
 import { unwrapResult } from "../result.js";
 import { ToolCard, stepLine, stepTitle } from "./Tool.jsx";
-import { locale, num, t } from "../i18n.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { groupLabel, groupNow, groupWork } from "../work-groups.js";
+import { locale, t } from "../i18n.js";
 
 // Tools whose output is the answer itself; they stay visible outside the collapsed work log.
 // send_to_person: every message that reached a colleague keeps its «📤» card in sight; owner_task:
 // the chore the board links to (its run often ends with no answer, so it was all folded away);
 // consult: another model's answer, which the agent usually works on after (folded away otherwise).
-const RESULT_TOOLS = new Set(["show_media", "browser_screenshot", "s3_get", "visualize", "preview_start", "ask_owner", "ask_requester", "ask_agent", "consult", "send_to_person", "owner_task"]);
+const RESULT_TOOLS = new Set(["show_media", "browser_screenshot", "s3_get", "visualize", "preview_start", "ask_owner", "ask_requester", "ask_agent", "consult", "send_to_person", "owner_task", "settings_suggest"]);
 
 // Splits an assistant run into the work log (thinking, tool calls, narration between them) and the
 // answer (text after the last working tool, plus charts/files/questions wherever they appeared).
 // An answered question is history: it stays where it happened in the work log. A question still
-// open is pulled out — otherwise it sat under all later work. Open means not answered,
+// open is pulled out — otherwise it sat under all later work (2026-09-24). Open means not answered,
 // not only "still running": a run that stopped leaves its question unanswered, and the card still
-// takes an answer (as a new message); folded into the log it was never seen.
+// takes an answer (as a new message); folded into the log it was never seen (2026-10-15).
 // Closed without an answer, so it stays history: the nag guard's duplicate, a plan-limit card once
 // over, a withdrawn card, a chain nobody watches (scheduler/job/ops: refused for the owner), and a
 // question the tool itself refused (a tool choice, an empty question: an error with its own text).
@@ -93,7 +93,7 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
   const running = run.status === "running";
   const [open, setOpen] = useState(null);
   const karsara = useLook() === "karsara";
-  // Folded by default, also while running (like Claude): the head says in one line
+  // Folded by default, also while running (owner 2026-10-17, «مثل کلاد»): the head says in one line
   // what the agent is doing right now. «مراحل کار باز، هنگام اجرا» (ui-prefs.js) keeps it open instead.
   const openWhileRunning = useFlag("workLogOpen");
   // «روایت بین مراحل» (like Claude Desktop): the agent's narration stays on the page and only the
@@ -106,9 +106,9 @@ export function WorkLog({ run, parts, renderText, renderReasoning }) {
   const thoughts = parts.filter((p) => p.type === "reasoning").length;
   const seconds = run.endedAt && run.startedAt ? Math.max(1, Math.round((new Date(run.endedAt) - new Date(run.startedAt)) / 1000)) : null;
   const summary = [
-    seconds ? t("{duration} کار", { duration: formatDuration(seconds, { compact: true }) }) : running ? t("در حال کار") : t("کار"),
-    tools ? t("{n} ابزار", { n: num(tools) }) : null,
-    thoughts ? t("{n} فکر", { n: num(thoughts) }) : null,
+    seconds ? t("{formatDuration} کار", { formatDuration: formatDuration(seconds, { compact: true }) }) : running ? t("در حال کار") : t("کار"),
+    tools ? t("{toLocaleString} ابزار", { toLocaleString: tools.toLocaleString(locale) }) : null,
+    thoughts ? t("{toLocaleString} فکر", { toLocaleString: thoughts.toLocaleString(locale) }) : null,
   ].filter(Boolean).join(" · ");
   const current = running ? [...parts].reverse().find((p) => p.type === "tool") : null;
   const now = running && !openWhileRunning && !expanded ? nowLine(parts) : null;
@@ -239,34 +239,35 @@ function StepGroup({ parts, body, active, karsara }) {
 }
 
 // The one line a folded, running work log shows: the newest step — a tool's plain title, the agent's
-// own narration ("checking the disk…"), or that it is thinking.
+// own narration («دارم دیسک node-3 را می‌بینم…»), or that it is thinking.
 export function nowLine(parts) {
   const last = parts[parts.length - 1];
   if (!last) return t("در حال کار");
   if (last.type === "reasoning") return t("در حال فکر کردن…");
   if (last.type === "tool") return stepLine(last.name, last.args) || t("در حال اجرای یک ابزار…");
   const text = String(last.text || "").replace(/\s+/g, " ").trim();
-  const sentence = text.split(/(?<=[.!?؟。])\s/)[0]; // i18n-ignore (Persian question mark)
+  const sentence = text.split(/(?<=[.!?؟。])\s/)[0]; // i18n-ignore
   return sentence ? sentence.slice(0, 160) : t("در حال کار");
 }
 
-// When an answer arrived, on the browser clock: the time today, with the date on any other day.
-const clock = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
-const day = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long" });
-const dayKey = new Intl.DateTimeFormat("en-CA", {});
+// When an answer arrived, on the Tehran clock: "۰۹:۳۴" today, with the date on any other day.
+const TEHRAN = "Asia/Tehran";
+const clock = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hour12: false });
+const day = new Intl.DateTimeFormat(locale, { timeZone: TEHRAN, day: "numeric", month: "long" });
+const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
 
 export function formatAnsweredAt(iso, now = new Date()) {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return null;
   const time = clock.format(at);
-  return dayKey.format(at) === dayKey.format(now) ? time : t("{day}، {time}", { day: day.format(at), time });
+  return dayKey.format(at) === dayKey.format(now) ? time : t("{format}، {time}", { format: day.format(at), time });
 }
 
 export function formatDuration(seconds, { compact = false } = {}) {
-  if (seconds < 60) return compact ? t("{s}ث", { s: num(seconds) }) : t("{s} ثانیه", { s: num(seconds) });
-  const m = num(Math.floor(seconds / 60));
+  const fa = (n) => n.toLocaleString(locale);
+  if (seconds < 60) return compact ? t("{fa}ث", { fa: fa(seconds) }) : t("{fa} ثانیه", { fa: fa(seconds) });
+  const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
-  const s = num(rest);
-  if (compact) return rest ? t("{m}د {s}ث", { m, s }) : t("{m}د", { m });
-  return rest ? t("{m} دقیقه و {s} ثانیه", { m, s }) : t("{m} دقیقه", { m });
+  if (compact) return rest ? t("{fa}د {fa2}ث", { fa: fa(minutes), fa2: fa(rest) }) : t("{fa}د", { fa: fa(minutes) });
+  return rest ? t("{fa} دقیقه و {fa2} ثانیه", { fa: fa(minutes), fa2: fa(rest) }) : t("{fa} دقیقه", { fa: fa(minutes) });
 }

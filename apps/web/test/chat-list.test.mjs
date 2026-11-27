@@ -1,4 +1,4 @@
-// The sidebar's list rules (shared by both skins, merged with Griffin's owner grouping and tabs), the
+// The sidebar's list rules (from Karsara, merged with Griffin's owner grouping and tabs), the
 // resizable width and the clipboard fallback.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -79,14 +79,14 @@ test("groups: state, date, repo, owner and the owner's own groups", () => {
   ]);
   assert.deepEqual(shape(groupChats(list, "date", opts)), [["امروز", ["read", "unread", "ask", "run"]], ["دیروز", ["yesterday"]], ["قدیمی‌تر", ["old"]]]);
   assert.deepEqual(groupChats(list, "repo", opts).map((s) => s.title), ["griffin", "بدون مخزن"]);
-  const owned = groupChats([chat("x", { ownerKey: "k", ownerLabel: "آقای احمدی" }), chat("y")], "owner", { scope: "telegram" });
-  assert.deepEqual(owned.map((s) => [s.key, s.title, s.collapsible]), [["telegram:k", "آقای احمدی", true], ["telegram:none", "بدون صاحب", true]]);
+  const owned = groupChats([chat("x", { ownerKey: "k", ownerLabel: "آقای قانع" }), chat("y")], "owner", { scope: "telegram" });
+  assert.deepEqual(owned.map((s) => [s.key, s.title, s.collapsible]), [["telegram:k", "آقای قانع", true], ["telegram:none", "بدون صاحب", true]]);
   const custom = groupChats([chat("g", { groupId: "g1" }), chat("n")], "custom", { groups: [{ id: "g1", name: "سرچ" }] });
   assert.deepEqual(shape(custom), [["سرچ", ["g"]], ["بدون گروه", ["n"]]]);
   for (const id of ["none", "custom", "owner", "state", "read", "date", "agent", "repo", "model"]) assert.ok(GROUPS.some((g) => g.id === id), id);
 });
 
-test("errors never lead: a failure sinks last seen or not (keeping its unread dot), a resolved one is read", () => {
+test("errors never lead but no longer sink: after asking and running, before unread (keeping its unread dot), a resolved one is read", () => {
   const no = () => false;
   assert.deepEqual(chatState({ runStatus: "error" }, no), { id: "error", label: "خطادار", unread: false, failed: true });
   const unseen = chatState({ runStatus: "error" }, () => true);
@@ -113,12 +113,12 @@ test("errors never lead: a failure sinks last seen or not (keeping its unread do
   assert.deepEqual(shape(groupChats(list, "state", { isUnread })), [
     ["منتظر پاسخ شما", ["ask"]],
     ["در حال کار", ["run", "kid-runs", "limit"]],
+    ["خطادار", ["err-seen", "err-new"]],
     ["خوانده‌نشده", ["unread"]],
     ["خوانده‌شده", ["read", "resolved"]],
-    ["خطادار", ["err-seen", "err-new"]],
   ]);
   const stamped = list.map((c, i) => ({ ...c, updatedAt: new Date(Date.parse("2026-10-07T10:00:00.000Z") - i * 60_000).toISOString() }));
-  assert.deepEqual(sortChats(stamped, "state", isUnread).map((c) => c.id), ["ask", "run", "kid-runs", "limit", "unread", "read", "resolved", "err-seen", "err-new"]);
+  assert.deepEqual(sortChats(stamped, "state", isUnread).map((c) => c.id), ["ask", "run", "kid-runs", "limit", "err-seen", "err-new", "unread", "read", "resolved"]);
   assert.ok(SORTS.some((s) => s.id === "state"));
   assert.ok(!SORTS.some((s) => s.id === "running"));
 
@@ -136,26 +136,27 @@ test("a failed run with a kept message, or an unseen failure, never leads any vi
   const ok = chat("ok", { updatedAt: "2026-10-07T11:00:00.000Z" });
   const no = () => false;
   assert.equal(chatState(err, no).id, "error", "not «منتظر پاسخ شما»");
-  for (const sort of ["updated", "state", "unread", "title"]) {
+  // It keeps its place by time (not last); only the «state» sort lifts it above the read chats.
+  for (const sort of ["updated", "unread"]) {
     assert.deepEqual(shape(groupChats(sortChats([err, ok], sort, no), "none", { isUnread: no })), [[null, ["ok", "err"]]], sort);
   }
-  assert.deepEqual(sortChats([err, ok], "state", no).map((c) => c.id), ["ok", "err"]);
-  assert.deepEqual(shape(groupChats([err, ok], "state", { isUnread: no })), [["خوانده‌شده", ["ok"]], ["خطادار", ["err"]]]);
+  assert.deepEqual(sortChats([err, ok], "state", no).map((c) => c.id), ["err", "ok"]);
+  assert.deepEqual(shape(groupChats([err, ok], "state", { isUnread: no })), [["خطادار", ["err"]], ["خوانده‌شده", ["ok"]]]);
   assert.deepEqual(filterChats([err, ok], "ask", no), []);
   assert.deepEqual(filterChats([err, ok], "error", no).map((c) => c.id), ["err"]);
 
   // Two failures he has not opened and one finished chat he has read: the read one still leads.
   const err2 = chat("err2", { runStatus: "error", updatedAt: "2026-10-07T11:30:00.000Z" });
   const newErr = (c) => c.id.startsWith("err");
-  assert.deepEqual(shape(groupChats([err2, err, ok], "state", { isUnread: newErr })), [["خوانده‌شده", ["ok"]], ["خطادار", ["err2", "err"]]]);
-  assert.deepEqual(sortChats([err2, err, ok], "state", newErr).map((c) => c.id), ["ok", "err2", "err"]);
-  assert.deepEqual(shape(groupChats([err2, ok], "none", { isUnread: newErr })), [[null, ["ok", "err2"]]]);
+  assert.deepEqual(shape(groupChats([err2, err, ok], "state", { isUnread: newErr })), [["خطادار", ["err2", "err"]], ["خوانده‌شده", ["ok"]]]);
+  assert.deepEqual(sortChats([err2, err, ok], "state", newErr).map((c) => c.id), ["err2", "err", "ok"]);
+  assert.deepEqual(shape(groupChats([err2, ok], "none", { isUnread: newErr })), [[null, ["err2", "ok"]]]);
   assert.equal(chatState(err2, newErr).unread, true, "the unread dot stays");
 
-  // A pinned failure stays pinned, after the pinned chats that are fine.
+  // A pinned failure stays pinned, in its time place among the pinned.
   const pinErr = chat("pin-err", { runStatus: "error", pinned: true, updatedAt: "2026-10-07T11:59:00.000Z" });
   const pin = chat("pin", { pinned: true });
-  assert.deepEqual(shape(groupChats([pinErr, pin, ok], "none", { isUnread: no })), [["سنجاق‌شده", ["pin", "pin-err"]], [null, ["ok"]]]);
+  assert.deepEqual(shape(groupChats([pinErr, pin, ok], "none", { isUnread: no })), [["سنجاق‌شده", ["pin-err", "pin"]], [null, ["ok"]]]);
 });
 
 test("ago: a row's time is a clock, not «۵ دقیقه» (exact time is the tooltip)", () => {
@@ -217,51 +218,51 @@ test("sidebar search: a chat matches by title or by the server's message hits", 
   const { searchChats } = await import("../src/chat-list.js");
   const list = [{ id: "a", title: "کلاستر" }, { id: "b", title: "بی‌عنوان" }, { id: "c", title: "دیگر" }];
   assert.deepEqual(searchChats(list, "کلاس").map((c) => c.id), ["a"]);
-  assert.deepEqual(searchChats(list, "سرور", new Set(["b"])).map((c) => c.id), ["b"]);
+  assert.deepEqual(searchChats(list, "مبین", new Set(["b"])).map((c) => c.id), ["b"]);
   assert.deepEqual(searchChats(list, "  ").map((c) => c.id), ["a", "b", "c"]);
 });
 
-// an owner 2026-11-11: the chat titled exactly what he typed was lost among 460 others.
+// a colleague 2026-11-11: the chat titled exactly what he typed was lost among 460 others.
 test("sidebar search ranks: exact title, title holds it, title holds every word, then message hits; snippets ride along", async () => {
   const { searchChats, snippetParts } = await import("../src/chat-list.js");
   const list = [
     { id: "body", title: "بی‌ربط", updatedAt: "2026-11-11T10:00:00Z" },
-    { id: "words", title: "آنلاین: افت فروش ویزیت نمونه", updatedAt: "2026-11-11T09:00:00Z" },
-    { id: "holds", title: "گزارش نمونه؛ افت ویزیت آنلاین دیروز", updatedAt: "2026-11-10T09:00:00Z" },
-    { id: "exact", title: "نمونه - افت ويزيت آنلاين", updatedAt: "2026-11-01T09:00:00Z" },
+    { id: "words", title: "آنلاین: افت فروش ویزیت ساجدی", updatedAt: "2026-11-11T09:00:00Z" },
+    { id: "holds", title: "گزارش ساجدی؛ افت ویزیت آنلاین دیروز", updatedAt: "2026-11-10T09:00:00Z" },
+    { id: "exact", title: "ساجدي - افت ويزيت آنلاين", updatedAt: "2026-11-01T09:00:00Z" },
     { id: "loose", title: "دیگر", updatedAt: "2026-11-11T11:00:00Z" },
     { id: "none", title: "هیچ", updatedAt: "2026-11-11T12:00:00Z" },
   ];
   const hits = [
     { id: "loose", loose: true, snippet: "x" },
-    { id: "body", snippet: "پیام \u0002نمونه افت\u0003 بود" },
+    { id: "body", snippet: "پیام \u0002ساجدی افت\u0003 بود" },
   ];
-  const out = searchChats(list, "نمونه؛ افت ویزیت آنلاین", hits);
+  const out = searchChats(list, "ساجدی؛ افت ویزیت آنلاین", hits);
   assert.deepEqual(out.map((c) => c.id), ["exact", "holds", "words", "body", "loose"]);
-  assert.equal(out[3].searchSnippet, "پیام \u0002نمونه افت\u0003 بود");
+  assert.equal(out[3].searchSnippet, "پیام \u0002ساجدی افت\u0003 بود");
   assert.equal(out[0].searchSnippet, undefined, "a title hit needs no snippet");
-  assert.deepEqual(snippetParts("پیام \u0002نمونه\u0003 بود"), [{ text: "پیام ", mark: false }, { text: "نمونه", mark: true }, { text: " بود", mark: false }]);
+  assert.deepEqual(snippetParts("پیام \u0002ساجدی\u0003 بود"), [{ text: "پیام ", mark: false }, { text: "ساجدی", mark: true }, { text: " بود", mark: false }]);
 });
 
 test("by repo (like Claude Desktop's folders), pinned chats stay on top", () => {
-  const list = [{ id: "a", repo: "infra-repo" }, { id: "p", repo: "infra-repo", pinned: true }, { id: "b" }];
-  assert.deepEqual(groupChats(list, "repo").map((s) => [s.title, s.chats.map((c) => c.id)]), [["سنجاق‌شده", ["p"]], ["infra-repo", ["a"]], ["بدون مخزن", ["b"]]]);
+  const list = [{ id: "a", repo: "platform-gitops" }, { id: "p", repo: "platform-gitops", pinned: true }, { id: "b" }];
+  assert.deepEqual(groupChats(list, "repo").map((s) => [s.title, s.chats.map((c) => c.id)]), [["سنجاق‌شده", ["p"]], ["platform-gitops", ["a"]], ["بدون مخزن", ["b"]]]);
 });
 
 // Colleagues' agents' chats have no owner key; grouped by owner they all sat in «بدون صاحب» (owner 2026-10-20).
 test("by owner: each colleague's agent gets its own section, named by the server's label", () => {
   const chats = [
-    { id: "a", caller: "peer:sara-jafari", peerLabel: "آیدا جعفری", updatedAt: "2026-10-20T10:00:00Z" },
-    { id: "b", caller: "peer:net-karsara-kazemi-example-org", peerLabel: "یارا (علیرضا کاظمی)", updatedAt: "2026-10-20T09:00:00Z" },
-    { id: "c", caller: "peer:sara-jafari", peerLabel: "آیدا جعفری", updatedAt: "2026-10-20T08:00:00Z" },
-    { id: "d", caller: "team", ownerKey: "person:7", ownerLabel: "آقای کریمی" },
+    { id: "a", caller: "peer:alex-carter", peerLabel: "آلکس کارتر", updatedAt: "2026-10-20T10:00:00Z" },
+    { id: "b", caller: "peer:net-sara-example-com", peerLabel: "سارا (همکار)", updatedAt: "2026-10-20T09:00:00Z" },
+    { id: "c", caller: "peer:alex-carter", peerLabel: "آلکس کارتر", updatedAt: "2026-10-20T08:00:00Z" },
+    { id: "d", caller: "team", ownerKey: "person:7", ownerLabel: "آقای ساجدی" },
     { id: "e", caller: "owner" },
   ];
   const sections = groupChats(chats, "owner", { scope: "peer" });
   assert.deepEqual(sections.map((s) => [s.title, s.chats.map((c) => c.id)]), [
-    ["آیدا جعفری", ["a", "c"]],
-    ["یارا (علیرضا کاظمی)", ["b"]],
-    ["آقای کریمی", ["d"]],
+    ["آلکس کارتر", ["a", "c"]],
+    ["سارا (همکار)", ["b"]],
+    ["آقای ساجدی", ["d"]],
     ["بدون صاحب", ["e"]],
   ]);
 });

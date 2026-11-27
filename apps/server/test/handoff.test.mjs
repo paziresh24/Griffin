@@ -19,7 +19,7 @@ test("handoff_to_owner leaves a suggested chat from the chain's root and rings t
   const sub = store.createChat({ title: "رشته", caller: "agent:platform", parentChatId: mother.id });
   const rung = [];
   const tool = handoffTool({ store, chatId: sub.id, rootChatId: mother.id, who: "ابوالفضل حسینی", notify: async (text, chatId) => rung.push({ text, chatId }) });
-  const out = await tool.execute({ title: "بکاپ دستی سفارش‌ها", why: "بکاپ پیش از مهاجرت لازم است", prompt: "Backup orders-db-manual در ns hojat-khajavi روی east" });
+  const out = await tool.execute({ title: "بکاپ دستی سفارش‌ها", why: "بکاپ پیش از مهاجرت لازم است", prompt: "Backup orders-db-manual در ns team-ns روی east" });
   assert.equal(out.isError, undefined);
   const { id } = body(out);
   const row = store.getSuggestion(id);

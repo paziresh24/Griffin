@@ -13,10 +13,13 @@ import { stateGuard, denyOutput, instructionGuardOptions } from "./state-guard.m
 import { planModeRefusal } from "./plan-mode-guard.mjs";
 import { gitIdentityRefusal } from "./git-identity-guard.mjs";
 import { peerBridgeRefusal } from "./peer-bridge-guard.mjs";
+import { RTK_NOTE, rtkEnabled, rtkFor, withRtk, withRtkPath } from "./rtk.mjs";
 import { hostConfigDir, hostSpawner, hostTarget } from "./host-spawn.mjs";
 import { isLoginDirKey, loginDirOf, loginDirToken, mainConfigDir, relativizeSharedLinks } from "../claude-account-dir.mjs";
 import { loginGate, noteLogin } from "../claude-login-guard.mjs";
 import { genv } from "../env.mjs";
+import { claudeSafety, hardenedEnv, sendSettings } from "../claude-safety.mjs";
+import { accountEgressEnv, assertEgress } from "../account-egress.mjs";
 import { syncMcpServers } from "../mcp-servers.mjs";
 import { agentSlug } from "../persona.mjs";
 // The in-process MCP server carries the assistant's own name, so the model sees mcp__<name>__kube_get,
@@ -27,6 +30,7 @@ import { resetFromText } from "../plan-fallback.mjs";
 import { fromRunWindows } from "../plan-usage.mjs";
 import { execFile } from "node:child_process";
 import { claudeBinary } from "../claude-signin.mjs";
+import { lowPriorityExecutable } from "./agent-priority.mjs";
 
 export const PROVIDER_CLAUDE = "claude";
 
@@ -212,8 +216,11 @@ export function claudeAuthEnv(key) {
   return env;
 }
 // GRIFFIN_CLAUDE_BIN: a host-installed Claude Code instead of the SDK's bundled one (empty = bundled).
-export const claudeExecutableOption = (env = process.env) => {
+// Either one starts below the app (agent-priority.mjs, GRIFFIN_AGENT_NICE) when the wrapper can be made.
+export const claudeExecutableOption = (env = process.env, { real = claudeBinary(env), wrap = lowPriorityExecutable } = {}) => {
   const bin = genv("CLAUDE_BIN", "", env);
+  const wrapped = wrap(bin || real, { env });
+  if (wrapped) return { pathToClaudeCodeExecutable: wrapped };
   return bin ? { pathToClaudeCodeExecutable: bin } : {};
 };
 
@@ -267,6 +274,8 @@ function withMcpSync(env, on) {
 export const gitAuthorEnv = (author) =>
   author?.email ? { GIT_AUTHOR_NAME: author.name || author.email, GIT_AUTHOR_EMAIL: author.email, GIT_COMMITTER_NAME: author.name || author.email, GIT_COMMITTER_EMAIL: author.email } : {};
 const runEnv = (apiKey, endpoint, modelId) => (endpoint ? endpointEnv(endpoint, apiKey, modelId) : withCompactWindow(claudeAuthEnv(apiKey)));
+// Resolved per send (not at boot) so a change in Settings takes effect on the next message.
+const claudeSafetyFlags = () => claudeSafety(genv);
 
 // What a failed result says to the runner: plan_limit / engine_unavailable (plan-fallback.mjs), else
 // a gone session. An endpoint account's spent plan (Z.ai 1308/1310) is a plan limit like Claude's,
@@ -284,7 +293,8 @@ const AUTH_RESULT = /failed to authenticate|oauth|\b401\b|invalid api key|not lo
 // organization has disabled Claude subscription access for Claude Code» stopped every chat on
 // claude-2 and its titles, and nothing moved). No waiting brings it back on its own: like a refused
 // login it leaves routing (30 minutes, or until a test passes) and the turn goes to the next account.
-export const ACCESS_DISABLED = /organization has disabled|disabled claude subscription access|subscription access (?:is |has been )?disabled|your account has been disabled/i;
+export const ACCESS_DISABLED = /organization has disabled|disabled claude subscription access|subscription access (?:is |has been )?disabled|your account has been disabled|account can(?:'|’|no)t receive replies from claude|verification portal/i;
+const HELD_FOR_VERIFICATION = /verification portal|receive replies from claude/i;
 // Two Claude Code processes renewing one account's expired token at the same moment: the loser says
 // so and stops (a colleague's 30-minute job, 2026-10-28 06:00Z; the token was renewed by 06:05). Not a
 // refused login — the runner tries the same turn once more after a short wait.
@@ -325,6 +335,7 @@ export function resultFailure(msg, { produced = false, limit = null, endpoint = 
   const error = resultError(raw, limit, endpoint);
   if (error.code || !(AUTH_RESULT.test(raw) || ACCESS_DISABLED.test(raw))) return error;
   if (OAUTH_REFRESH_BUSY.test(raw)) return { message: `توکن ورود Claude همان لحظه در حال تمدید بود (${maskText(String(raw)).slice(0, 300)})`, code: OAUTH_REFRESH_BUSY_CODE };
+  if (!endpoint && HELD_FOR_VERIFICATION.test(raw)) return { ...error, code: AUTH_FAILED_CODE, message: `Anthropic این حساب Claude را تا تأیید هویت متوقف کرده است؛ صاحب حساب باید از لینک Verification Portal در همین خطا هویتش را تأیید کند. اگر حساب Claude دیگری روشن باشد، کار به آن رفت (${maskText(String(raw)).slice(0, 2_000)})` };
   if (!endpoint && ACCESS_DISABLED.test(raw)) return { ...error, code: AUTH_FAILED_CODE, message: `سازمانِ این حساب Claude دسترسی Claude Code را بسته است؛ کار به حساب بعدی رفت. مدیر سازمان باید دوباره بازش کند (${maskText(String(raw)).slice(0, 2_000)})` };
   const who = endpoint ? `کلید ${endpoint.label} پذیرفته نشد` : "ورود یا کلید Claude پذیرفته نشد";
   return { ...error, code: AUTH_FAILED_CODE, message: `${who}؛ در تنظیمات ← موتورها دوباره وارد شوید یا کلید تازه بگذارید (${maskText(String(raw)).slice(0, 2_000)})` };
@@ -389,7 +400,7 @@ const cliStatus = (env, timeoutMs = 15_000) =>
     execFile(bin, ["auth", "status", "--json"], { env, timeout: timeoutMs, maxBuffer: 65_536 }, (error, stdout) => resolve(error ? null : stdout));
   });
 
-export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImpl = query, endpoint = null, fetchImpl = fetch, statusImpl = cliStatus } = {}) {
+export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImpl = query, endpoint = null, fetchImpl = fetch, statusImpl = cliStatus, egress = null } = {}) {
   // Last plan windows this account's runs saw (one subscription per account).
   const lastLimits = { windows: null, at: null };
   const zai = Boolean(endpoint && /\bz\.ai\b/.test(endpoint.baseUrl));
@@ -503,8 +514,9 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
     // A real, tiny turn (Haiku, no tools) the way every run goes: the only way to see a spent plan or
     // a spent credit — /v1/models answers 200 either way (every engine said «ready»
     // while its limit was hit). -> { ok, state?: "limited"|"credit", until?, detail? }
-    async probe({ timeoutMs = 45_000 } = {}) {
+    async probe({ timeoutMs = 45_000, optIn = false } = {}) {
       if (endpoint || !apiKey) return null;
+      if (!optIn && !claudeSafetyFlags().healthProbe) return null;
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), timeoutMs);
       timer.unref?.();
@@ -514,7 +526,7 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
         await loginGate(apiKey);
         for await (const msg of queryImpl({
           prompt: "Reply with: ok",
-          options: { abortController: abort, model: resolveModel("haiku"), maxTurns: 1, tools: [], allowedTools: [], settingSources: [], strictMcpConfig: true, persistSession: false, systemPrompt: "Reply with: ok", env: claudeAuthEnv(apiKey), ...claudeExecutableOption() },
+          options: { abortController: abort, model: resolveModel("haiku"), maxTurns: 1, tools: [], allowedTools: [], settingSources: [], strictMcpConfig: true, persistSession: false, systemPrompt: "Reply with: ok", env: hardenedEnv(accountEgressEnv(claudeAuthEnv(apiKey), egress), claudeSafetyFlags()), ...claudeExecutableOption() },
         })) {
           const info = msg?.type === "rate_limit_event" ? msg.rate_limit_info : null;
           if (info?.unifiedWindows) Object.assign(lastLimits, { windows: info.unifiedWindows, at: new Date().toISOString() });
@@ -580,10 +592,10 @@ export function createClaudeProvider({ apiKey, defaultModel = "sonnet", queryImp
       }
     },
     create(options) {
-      return makeAgent(null, options, { apiKey, defaultModel, lastLimits, queryImpl, endpoint });
+      return makeAgent(null, options, { apiKey, defaultModel, lastLimits, queryImpl, endpoint, egress });
     },
     resume(sessionId, options) {
-      return makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits, queryImpl, endpoint });
+      return makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits, queryImpl, endpoint, egress });
     },
     // A copy of a conversation up to one entry (SDK forkSession), written next to the source in
     // Claude Code's projects folder, so the fork must run in the same folder. Returns the new id.
@@ -685,7 +697,7 @@ export async function planDecision(input, ask, { emit = async () => {}, toolUseI
   return { behavior: "deny", message: `The owner did not approve the plan; keep planning.${note}` };
 }
 
-function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, queryImpl = query, endpoint = null }) {
+function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, queryImpl = query, endpoint = null, egress = null }) {
   // Stable id from the start so runner can persist agent_id before the first stream frame.
   let currentSessionId = sessionId || randomUUID();
   let started = Boolean(sessionId);
@@ -1187,6 +1199,16 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
     // One turn, with the context kept in reach: see PROMPT_TOO_LONG. A «/…» command is sent as is.
     // Config CLAUDE_COMPACT_AT (a fraction of the window, default 0.8; 0 = off) is the "before" trigger.
     async send(message, sendOptions = {}) {
+      const gate = await assertEgress(egress);
+      if (!gate.ok) {
+        const error = Object.assign(new Error(gate.error), { code: "egress_down" });
+        return {
+          supports: (cap) => cap === "cancel",
+          async cancel() {},
+          steer: () => "revert_to_followup",
+          wait: async () => ({ status: "error", error }),
+        };
+      }
       if (seed) {
         message = withSeed(message, seed);
         seed = "";
@@ -1343,7 +1365,10 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
       // Config PEER_BRIDGE_GUARD (default on): another install's agent only through network_ask, never a
       // hand-made MCP bridge to its /mcp whose late answer never comes back (peer-bridge-guard.mjs). Full Claude Code only: elsewhere strictMcpConfig loads no other server.
       const bridgeHook = { hooks: [async (input) => ((why) => (why ? denyOutput(why) : {}))(peerBridgeRefusal(input?.tool_name, mcpName()))] };
-      const bridged = full && genv("PEER_BRIDGE_GUARD", "on") !== "off" ? { ...(guarded || {}), PreToolUse: [...(guarded?.PreToolUse || []), { matcher: "mcp__.*", ...bridgeHook }] } : guarded;
+      const rtkBase = rtkFor({ full, host: Boolean(host), ownerJob: Boolean(options.ownerJob) });
+      const rtk = rtkBase && { ...rtkBase, cwd: options.cwd, configDirs: [mainConfigDir()], active: () => rtkEnabled() && ["agent", "auto"].includes(liveMode) };
+      const rtked = withRtk(guarded, rtk);
+      const bridged = full && genv("PEER_BRIDGE_GUARD", "on") !== "off" ? { ...(rtked || {}), PreToolUse: [...(rtked?.PreToolUse || []), { matcher: "mcp__.*", ...bridgeHook }] } : rtked;
       // Every chat, guarded or not: the Persian note rides on each user turn (no tool is gated by it).
       const prompted = { ...(bridged || {}), UserPromptSubmit: [...(guarded?.UserPromptSubmit || []), languageHook] };
       // A subagent's prompt is Claude Code's generic one: give it the capability map and the rules
@@ -1380,7 +1405,7 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             // language: Claude Code's own «# Language — Always respond in …» note, kept inside the conversation;
             // the Persian rule deep in the appended rules alone lost to the long English preset and tool
             // output (2026-10-25: three owner chats opened in English until he typed «فارسی»).
-            settings: { language: REPLY_LANGUAGE, ...(extras.fast ? { fastMode: true } : {}), ...(planGate ? { plansDirectory: PLANS_DIR } : {}) },
+            settings: sendSettings(claudeSafetyFlags(), { language: REPLY_LANGUAGE, ...(extras.fast ? { fastMode: true } : {}), ...(planGate ? { plansDirectory: PLANS_DIR } : {}) }),
             ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
             ...(checkpoint ? { enableFileCheckpointing: true } : {}),
             permissionMode: PERMISSION_MODES[mode],
@@ -1401,18 +1426,15 @@ function makeAgent(sessionId, options, { apiKey, defaultModel, lastLimits = {}, 
             strictMcpConfig: !full,
             // Rules come with the run, not from the shared workspace CLAUDE.md: concurrent chats of
             // one agent rewrite that file, so a colleague thread could run on the owner's rules.
-            ...(options.rules
-              ? { systemPrompt: { type: "preset", preset: "claude_code", append: full ? `${options.rules}\n\n${fullModeNote({ ownerJob: options.ownerJob, host: Boolean(host), onHost: options.onHost })}` : options.rules }, settingSources: full ? ["user", "project", "local"] : [] }
+            ...(options.rules && claudeSafetyFlags().promptAppend
+              ? { systemPrompt: { type: "preset", preset: "claude_code", append: full ? `${options.rules}\n\n${fullModeNote({ ownerJob: options.ownerJob, host: Boolean(host), onHost: options.onHost })}${rtk && rtkEnabled() ? ` ${RTK_NOTE}` : ""}` : options.rules }, settingSources: full ? ["user", "project", "local"] : [] }
               : { settingSources: full ? ["user", "project", "local"] : ["project"] }),
-            env: {
-              ...withMcpSync(runEnv(host && hostLogin ? hostLogin.token : apiKey, endpoint, modelId), full && !host),
+            env: hardenedEnv(accountEgressEnv({
+              ...withRtkPath(withMcpSync(runEnv(host && hostLogin ? hostLogin.token : apiKey, endpoint, modelId), full && !host), rtk),
               ...gitAuthorEnv(options.gitAuthor),
               CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT: SILENT_TURN_REMINDER,
-              // Claude Code stops suggesting by itself once the account is past its warning line
-              // (rate limit «allowed_warning», 72% of the week on 2026-10-22) or after 20 unused ones;
-              // the owner's switch (config PROMPT_SUGGESTIONS) decides, not that.
               ...(extras.onSuggestion ? { CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "true" } : {}),
-            },
+            }, egress), claudeSafetyFlags()),
             ...claudeExecutableOption(),
             // options.onHost (index.mjs, config CLAUDE_HOST): the process runs on the host as the owner.
             ...(host ? { spawnClaudeCodeProcess: hostSpawner(host) } : {}),

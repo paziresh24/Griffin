@@ -1,11 +1,11 @@
-// The sidebar's chat list as pure functions: what state a chat is in, and how a tab's list is
-// filtered, sorted and grouped. The component only draws the result. Griffin keeps its own tabs per
-// source, so there is no «origin» grouping; «owner» (whose threads, for Telegram and peer tabs) and
-// the owner's own groups stay.
+// The sidebar's chat list as pure functions (from Karsara): what state a chat is in, and how a tab's
+// list is filtered, sorted and grouped. The component only draws the result. Griffin keeps its own
+// tabs per source, so Karsara's «origin» grouping and job/mine filters are left out; «owner» (whose
+// threads, for Telegram and peer tabs) and the owner's own groups stay.
 import { clockLabel } from "./elapsed.js";
 import { groupSections } from "./chat-groups.js";
-import { locale, num, t } from "./i18n.js";
 import { orderSections } from "./drag.js";
+import { locale, t } from "./i18n.js";
 
 export const SORTS = [
   { id: "updated", label: t("جدیدترین") },
@@ -36,18 +36,20 @@ export const FILTERS = [
 ];
 
 const STATES = { ask: t("منتظر پاسخ شما"), running: t("در حال کار"), unread: t("خوانده‌نشده"), read: t("خوانده‌شده"), error: t("خطادار") };
-const STATE_ORDER = ["ask", "running", "unread", "read", "error"];
+const STATE_ORDER = ["ask", "running", "error", "unread", "read"];
 
-// The chat failed and the owner has not resolved it («حل شد» makes it "resolved"): the last run ended
-// in an error, or a message never reached the agent and was kept — unless the plan limit kept it:
-// that one goes again by itself at the reset.
+/**
+ * The chat failed and he has not resolved it («حل شد» makes it "resolved"): the last run ended in an
+ * error, or a message never reached the agent and was kept — unless the plan limit kept it: that one
+ * goes again by itself at the reset.
+ */
 export const failed = (chat) => chat?.runStatus === "error" || Boolean(chat?.kept?.length && !chat?.limitResumeAt);
 
 /**
- * The one state a chat is in, most pressing first: asking the owner → running → unread → read → error.
- * Only a real question (`waitingForOwner`, from the server) asks the owner. Errors never lead: a failure
- * ranks after every read chat, seen or not — the row still shows its red dot, and its unread dot while
- * the owner has not opened it. A parent whose subtask still runs, or that goes on by itself when the plan
+ * The one state a chat is in, most pressing first: asking him → running → error → unread → read.
+ * Only a real question (`waitingForOwner`, from the server) asks him. Errors never lead (they rank
+ * after asking and running) but no longer sink below the read chats (2026-11-23): the row carries a red
+ * «خطا» tag, and its unread dot while he has not opened it. A parent whose subtask still runs, or that goes on by itself when the plan
  * limit resets, is still at work.
  */
 export function chatState(chat, isUnread) {
@@ -64,7 +66,7 @@ export function chatState(chat, isUnread) {
 // `keepId`: the chat on screen stays listed whatever the filter — opening an unread chat marks it
 // read, and it must not vanish from under the pointer.
 // The sidebar's search text and a title, compared the same way: Arabic yeh/kaf as Persian, the
-// half-space, «؛»، «-» and other marks as spaces, so «نمونه؛ افت» finds «نمونه - افت‌ها».
+// half-space, «؛»، «-» and other marks as spaces, so «ساجدی؛ افت» finds «ساجدی - افت‌ها».
 export const foldText = (text) =>
   String(text ?? "")
     .toLowerCase()
@@ -126,15 +128,15 @@ const stampOf = (c) => {
   const v = c.updatedAt || c.createdAt;
   if (typeof v === "number") return v < 1e12 ? v * 1000 : v;
   const s = String(v || "");
-  const ms = Date.parse(/^\d{4}-\d\d-\d\d \d/.test(s) ? `${s.replace(" ", "T")}Z` : s);
-  return Number.isFinite(ms) ? ms : 0;
+  const t = Date.parse(/^\d{4}-\d\d-\d\d \d/.test(s) ? `${s.replace(" ", "T")}Z` : s);
+  return Number.isFinite(t) ? t : 0;
 };
 const newest = (a, b) => stampOf(b) - stampOf(a);
 
 export function sortChats(list, sort, isUnread) {
   const first = (test) => (a, b) => Number(test(b)) - Number(test(a)) || newest(a, b);
   const items = [...list];
-  if (sort === "title") return items.sort((a, b) => String(a.title).localeCompare(String(b.title), locale));
+  if (sort === "title") return items.sort((a, b) => String(a.title).localeCompare(String(b.title), "fa"));
   if (sort === "unread") return items.sort(first((c) => isUnread(c)));
   if (sort === "state") {
     // The same states as the row's dots, so a running subtask or a plan-limit wait counts as work.
@@ -166,7 +168,7 @@ function bucket(list, keyOf, order = null) {
 /**
  * Sections of the list: [{ key, title, chats, collapsible?, groupId? }], empty ones left out (the
  * owner's own empty groups stay unless `narrowed`). The chats keep the order they came in.
- * "none" gives asking the owner → running → pinned → the rest: what needs the owner and background work must be
+ * "none" gives asking him → running → pinned → the rest: what needs him and background work must be
  * impossible to miss; failures sit at the end of pinned and of the rest.
  */
 export function groupChats(list, groupBy, options = {}) {
@@ -212,7 +214,7 @@ function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date
     return bucket(list, (c) => (isUnread(c) ? "unread" : "read"), ["unread", "read"]).map((s) => ({ key: `read:${s.key}`, title: STATES[s.key], chats: s.chats }));
   }
   if (groupBy === "date") {
-    const names = { today: t("امروز"), yesterday: t("دیروز"), week: t("{n} روز اخیر", { n: num(7) }), older: t("قدیمی‌تر") };
+    const names = { today: t("امروز"), yesterday: t("دیروز"), week: t("۷ روز اخیر"), older: t("قدیمی‌تر") };
     const keyOf = (c) => {
       const d = daysAgo(c.updatedAt || c.createdAt, now, timeZone);
       return d <= 0 ? "today" : d === 1 ? "yesterday" : d <= 7 ? "week" : "older";
@@ -230,16 +232,19 @@ function attributeGroups(list, groupBy, { isUnread = () => false, now = new Date
   const running = list.filter((c) => stateOf(c) === "running");
   // Failures go last in their section, read chats before them.
   const rest = list.filter((c) => stateOf(c) !== "ask" && stateOf(c) !== "running");
-  const others = [...rest.filter((c) => stateOf(c) !== "error"), ...rest.filter((c) => stateOf(c) === "error")];
+  // A failure keeps its place by time (2026-11-23: a chat that hit a server error or a full account sank
+  // to the bottom unseen); the red «خطا» tag on its row marks it.
+  const others = rest;
+  const count = (n) => (n > 1 ? ` (${n.toLocaleString(locale)})` : "");
   return [
-    { key: "ask", title: ask.length > 1 ? t("منتظر پاسخ شما ({n})", { n: num(ask.length) }) : t("منتظر پاسخ شما"), chats: ask },
-    { key: "running", title: running.length > 1 ? t("در حال اجرا ({n})", { n: num(running.length) }) : t("در حال اجرا"), chats: running },
+    { key: "ask", title: t("منتظر پاسخ شما{count}", { count: count(ask.length) }), chats: ask },
+    { key: "running", title: t("در حال اجرا{count}", { count: count(running.length) }), chats: running },
     { key: "pinned", title: t("سنجاق‌شده"), chats: others.filter((c) => c.pinned) },
     { key: "rest", title: null, chats: others.filter((c) => !c.pinned) },
   ].filter((s) => s.chats.length);
 }
 
-// A row's time, as a clock (elapsed.js clockLabel) rather than «۵ دقیقه».
+/** A row's time, as a clock (elapsed.js clockLabel) — the owner did not want «۵ دقیقه». */
 export function ago(stamp, now = Date.now()) {
   return clockLabel(stamp, new Date(now));
 }

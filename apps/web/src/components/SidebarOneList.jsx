@@ -1,3 +1,4 @@
+import { isMember } from "../auth-me.js";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGradual } from "../gradual.js";
 import { readProfileCache, writeProfileCache } from "../profile.js";
@@ -22,13 +23,12 @@ import { clockLabel } from "../elapsed.js";
 import { reminderLabel, searchChats, snippetParts } from "../chat-list.js";
 import { focusText } from "../focus.js";
 import { useFlag } from "../ui-prefs.js";
-import { locale, t } from "../i18n.js";
 import { useListChoice, useSectionOrder } from "../list-prefs.js";
 import { useUpdateDot } from "./UpdateNotice.jsx";
 import { PaletteKey, SectionMenuFoot, SectionMenuItems } from "./SectionNav.jsx";
 import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
-
+import { locale, t } from "../i18n.js";
 import { askAlert, askConfirm, askPrompt } from "../dialog.jsx";
 
 // The sidebar's one list (flag «یک فهرست برای همه», ui-prefs.js): Karsara's own list (karsara-live
@@ -56,8 +56,10 @@ function withoutInboxChat(chats, status) {
 
 // Karsara's useSetup().pending, as far as Griffin's /api/setup tells: an engine still needs a key.
 function useSetupMissing() {
+  const member = isMember();
   const [missing, setMissing] = useState(false);
   useEffect(() => {
+    if (member) return undefined;
     let live = true;
     api("/api/setup").then((r) => live && setMissing(Boolean(r?.needsEngine)), () => {});
     return () => {
@@ -143,7 +145,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
   // a second after the last key with the chats and the text around each match; until then the titles
   // still match. Off, the server says so ({ on: false }) and the list stops asking for a minute.
   // (It used to ask /api/chats?q=, which ignores q and returned every chat: the search «did not work»,
-  // an owner 2026-11-11.)
+  // a colleague 2026-11-11.)
   const [bodyHits, setBodyHits] = useState({ q: "", hits: null });
   const searchOffUntil = useRef(0);
   useEffect(() => {
@@ -185,7 +187,7 @@ export function OneList({ chats, archived, groups = [], looseAt = null, loading 
     const all = layoutChats(prepared.own, groupBy, { isUnread, agentLabel: (id) => agentMeta(id).label, groups: showArchived ? [] : groups, looseAt, sectionOrder: sectionOrders[groupBy] });
     return all
       .filter((s) => s.chats.length || (s.groupId && !narrowed))
-      .map((s) => (s.title && !s.counted ? { ...s, title: `${s.title} (${s.chats.length.toLocaleString("fa-IR")})` } : s));
+      .map((s) => (s.title && !s.counted ? { ...s, title: `${s.title} (${s.chats.length.toLocaleString(locale)})` } : s));
   }, [prepared, groupBy, groups, looseAt, sectionOrders, query, filter, showArchived, seenVersion]);
   const order = useMemo(() => groupOrder(groups, looseAt), [groups, looseAt]); // drag and drop (drag.js)
   const sectionKeys = sections.filter((s) => s.loose).map((s) => s.key);
@@ -362,6 +364,7 @@ function MenuPick({ icon: Icon, label, selected, onClick }) {
 
 // «منوی کاربر پایین فهرست» (flag userMenu): the owner's name opens agents, token usage and settings.
 export function UserMenu({ onNavigate }) {
+  const member = isMember();
   const [open, setOpen] = useState(false);
   // Something to connect (Claude signed out, Telegram not connected): marked here, so it is seen
   // without opening Settings.
@@ -443,13 +446,13 @@ export function UserMenu({ onNavigate }) {
           >
             {/* «جای بخش‌ها: منوی کاربر»: the sections first (SectionNav.jsx); nothing otherwise. */}
             <SectionMenuItems onPick={() => { setOpen(false); onNavigate?.(); }} rowClass="kc-row" iconClass="size-4 kc-muted" />
-            {PROFILE_ITEMS.filter((item) => item.id !== "logout").map(({ id, icon, label }) => (
+            {PROFILE_ITEMS.filter((item) => item.id !== "logout" && (!member || item.id === "profile")).map(({ id, icon, label }) => (
               <MenuRow key={id} icon={icon} label={label} onClick={() => { setOpen(false); profileAction(id, { editProfile: () => go("/settings", "account") }); }} />
             ))}
             <div className="my-1 border-t" />
-            <MenuRow icon={Bot} label={t("ایجنت‌ها")} onClick={() => go("/agents")} />
+            {member ? null : <MenuRow icon={Bot} label={t("ایجنت‌ها")} onClick={() => go("/agents")} />}
             {/* Griffin keeps token usage in Settings: «مصرف توکن» opens that section. */}
-            <MenuRow icon={Zap} label={t("مصرف توکن")} onClick={() => go("/settings", "tokens")} />
+            {member ? null : <MenuRow icon={Zap} label={t("مصرف توکن")} onClick={() => go("/settings", "tokens")} />}
             <MenuRow icon={Settings2} label={updateDot ? t("تنظیمات · نسخهٔ تازه") : t("تنظیمات")} onClick={() => go("/settings", updateDot ? "status" : null)} warn={setupMissing || updateDot} />
             <SectionMenuFoot />
             <div className="my-1 border-t" />
@@ -457,7 +460,7 @@ export function UserMenu({ onNavigate }) {
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      <FeedbackBarButton className="kc-icon-btn !size-11" />
+      {member ? null : <FeedbackBarButton className="kc-icon-btn !size-11" />}
     </div>
   );
 }
@@ -511,7 +514,7 @@ function PeerChats({ chats, activeId, onOpen, filtered = false }) {
         className="kc-list-row w-full justify-start ps-8 text-xs !text-[var(--kc-muted)]"
       >
         <ChevronDown className={`size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
-        <span>{t("گفتگوهای ایجنت‌های همکاران ({toLocaleString})", { toLocaleString: chats.length.toLocaleString("fa-IR") })}</span>
+        <span>{t("گفتگوهای ایجنت‌های همکاران ({toLocaleString})", { toLocaleString: chats.length.toLocaleString(locale) })}</span>
         {pending && !open ? <span className="kc-unread" title={t("گفتگویی منتظر دیدن است")} /> : null}
       </button>
       {/* A filter forces the group open, so only then it keeps its own short scroll: own chats stay in reach.
@@ -525,7 +528,7 @@ function PeerChats({ chats, activeId, onOpen, filtered = false }) {
               <div key={g.caller}>
                 <a href={`#/peers/${encodeURIComponent(g.caller.slice("peer:".length))}`} className="kc-list-row w-full justify-start text-xs !text-[var(--kc-muted)]" title={t("همهٔ کارهای این همکار")}>
                   <span className="min-w-0 truncate" dir="auto">{g.label}</span>
-                  <span className="shrink-0">{`(${g.chats.length.toLocaleString("fa-IR")})`}</span>
+                  <span className="shrink-0">{`(${g.chats.length.toLocaleString(locale)})`}</span>
                 </a>
                 <ul>
                   {shown.map((chat) => (
@@ -894,10 +897,10 @@ const ChatItem = memo(function ChatItem({ chat, active, activeId, onOpen, groups
 
 // Short, muted relative time for the chat list («۵ دقیقه», «۲ ساعت», «۳ روز»).
 function ago(stamp) {
-  const ms = stamp ? new Date(stamp).getTime() : NaN;
-  if (!Number.isFinite(ms)) return "";
-  const minutes = Math.max(0, Math.round((Date.now() - ms) / 60000));
-  const fa = (n) => n.toLocaleString("fa-IR");
+  const tk = stamp ? new Date(stamp).getTime() : NaN;
+  if (!Number.isFinite(tk)) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - tk) / 60000));
+  const fa = (n) => n.toLocaleString(locale);
   if (minutes < 1) return t("الان");
   if (minutes < 60) return t("{fa} دقیقه", { fa: fa(minutes) });
   const hours = Math.round(minutes / 60);

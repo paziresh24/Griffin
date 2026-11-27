@@ -6,10 +6,11 @@ import { clockLabel, exactTime } from "../elapsed.js";
 import { useFlag } from "../ui-prefs.js";
 import { AGENT_META, BRAND } from "../brand.js";
 import { BrandPicker } from "./BrandPicker.jsx";
-import { ClaudeSignin } from "./Providers.jsx";
+import { ClaudeSignin, PlanSignin } from "./Providers.jsx";
+import { EngineLogo } from "./EngineLogo.jsx";
 import { AccountLogin } from "./Settings.jsx";
-import { t } from "../i18n.js";
-import { fill, tr } from "../fill.js";
+import { locale, num, t } from "../i18n.js";
+import { fill } from "../fill.js";
 import { askConfirm } from "../dialog.jsx";
 
 // Setup wizards: first run (engine → name → look → messenger), and each piece on its own from
@@ -49,14 +50,16 @@ export function setupFlowFromHash(hash = window.location.hash) {
 // Each engine in plain words: what it is, what it costs, where its key comes from, what the key looks
 // like (checked before sending), and whether a server in Iran needs the proxy for it.
 const ENGINES = [
-  { id: "claude-sub", provider: "claude", label: t("اشتراک Claude (Pro/Max)"), blurb: t("اگر اشتراک ماهانهٔ Claude داری"), what: t("با همان اکانت Claude وارد می‌شوی؛ کلید API لازم نیست. گریفین یک توکن بلندمدت می‌گیرد و رمزنگاری‌شده نگه می‌دارد."), cost: t("هزینهٔ جدا ندارد، همان اشتراک ماهانه است؛ ولی سقف استفادهٔ چندساعته و هفتگی دارد."), link: "https://claude.ai/upgrade", linkLabel: t("خرید اشتراک در claude.ai"), placeholder: "sk-ant-oat01-…", keyRe: /^sk-ant-oat/, keyHint: t("توکن اشتراک با sk-ant-oat شروع می‌شود"), proxy: true },
-  { id: "claude-api", provider: "claude", label: t("کلید API Claude"), blurb: t("پرداخت به ازای مصرف"), what: t("کلید رسمی Anthropic برای کسی که اشتراک ندارد یا مصرف زیاد دارد."), cost: t("به ازای مصرف؛ برای کار شخصی معمولاً چند تا چند ده دلار در ماه. پرداخت با کارت بین‌المللی."), link: "https://platform.claude.com/settings/keys", linkLabel: "platform.claude.com → API Keys", placeholder: "sk-ant-…", keyRe: /^sk-ant-(?!oat)/, keyHint: t("کلید API با sk-ant- شروع می‌شود (sk-ant-oat یعنی اشتراک؛ گزینهٔ اول را بزن)"), proxy: true },
-  { id: "zai", provider: "openai", preset: "zai", label: "Z.ai (GLM)", blurb: t("ارزان، معمولاً بدون پراکسی"), what: t("مدل‌های GLM با پلن کدنویسی Z.ai. از ایران معمولاً بدون پراکسی جواب می‌دهد."), cost: t("پلن ماهانه از چند دلار."), link: "https://z.ai/manage-apikey/apikey-list", linkLabel: "z.ai → API Keys", placeholder: t("کلید Z.ai"), model: "glm-5.3", proxy: false },
-  { id: "openai", provider: "openai", preset: "openai", label: "OpenAI (GPT)", blurb: t("کلید API اوپن‌ای‌آی"), what: t("مدل‌های GPT با کلید API رسمی OpenAI."), cost: t("به ازای مصرف، با کارت بین‌المللی."), link: "https://platform.openai.com/api-keys", linkLabel: "platform.openai.com/api-keys", placeholder: "sk-…", keyRe: /^sk-/, keyHint: t("کلید OpenAI با sk- شروع می‌شود"), model: "gpt-4o-mini", proxy: true },
-  { id: "openrouter", provider: "openai", preset: "openrouter", label: "OpenRouter", blurb: t("صدها مدل با یک کلید"), what: t("یک کلید برای صدها مدل (Claude، GPT، Gemini، …). مدل را به شکل provider/model می‌نویسی."), cost: t("پیش‌پرداخت اعتبار؛ هر مدل قیمت خودش را دارد. چند مدل رایگان هم دارد."), link: "https://openrouter.ai/keys", linkLabel: "openrouter.ai/keys", placeholder: "sk-or-v1-…", keyRe: /^sk-or-/, keyHint: t("کلید OpenRouter با sk-or- شروع می‌شود"), model: "openai/gpt-4o-mini", proxy: true },
-  { id: "ollama", provider: "openai", preset: "ollama", label: t("Ollama (مدل محلی)"), blurb: t("روی همین سرور، بدون کلید"), what: t("مدلی که روی همین ماشین با Ollama اجرا می‌شود؛ نه کلید می‌خواهد نه اینترنت. به سخت‌افزار قوی (ترجیحاً GPU) نیاز دارد."), cost: t("رایگان."), link: "https://ollama.com/download", linkLabel: "ollama.com", noKey: true, model: "llama3.1", proxy: false, extra: t("اگر گریفین در Docker است، کانتینر را با ‎--add-host=host.docker.internal:host-gateway‎ اجرا کن تا به Ollama روی خود سرور برسد.") },
+  { id: "codex-sub", provider: "openai", plan: "codex", logo: "codex", label: t("اشتراک ChatGPT (Codex)"), blurb: t("اگر اشتراک ChatGPT (Plus/Pro/Business) داری"), what: t("با همان حساب ChatGPT وارد می‌شوی و مدل‌های Codex/GPT را با سقف اشتراکت به کار می‌گیری؛ کلید API لازم نیست."), cost: t("هزینهٔ جدا ندارد، همان اشتراک ChatGPT است؛ ولی سقف استفادهٔ چندساعته و هفتگی دارد."), link: "https://chatgpt.com/#pricing", linkLabel: "chatgpt.com", proxy: true },
+  { id: "antigravity-sub", provider: "openai", plan: "antigravity", logo: "antigravity", label: t("اشتراک Google Antigravity"), blurb: t("اگر Google AI Pro/Ultra داری"), what: t("با حساب Google وارد می‌شوی و مدل‌های Gemini را با سهمیهٔ Antigravity به کار می‌گیری؛ کلید API لازم نیست."), cost: t("هزینهٔ جدا ندارد، همان اشتراک Google است؛ سهمیه دارد."), link: "https://antigravity.google", linkLabel: "antigravity.google", proxy: true },
+  { id: "claude-sub", provider: "claude", logo: "claude", label: t("اشتراک Claude (Pro/Max)"), blurb: t("اگر اشتراک ماهانهٔ Claude داری"), what: t("با همان اکانت Claude وارد می‌شوی؛ کلید API لازم نیست. گریفین یک توکن بلندمدت می‌گیرد و رمزنگاری‌شده نگه می‌دارد."), cost: t("هزینهٔ جدا ندارد، همان اشتراک ماهانه است؛ ولی سقف استفادهٔ چندساعته و هفتگی دارد."), link: "https://claude.ai/upgrade", linkLabel: t("خرید اشتراک در claude.ai"), placeholder: "sk-ant-oat01-…", keyRe: /^sk-ant-oat/, keyHint: t("توکن اشتراک با sk-ant-oat شروع می‌شود"), proxy: true },
+  { id: "claude-api", provider: "claude", logo: "claude", label: t("کلید API Claude"), blurb: t("پرداخت به ازای مصرف"), what: t("کلید رسمی Anthropic برای کسی که اشتراک ندارد یا مصرف زیاد دارد."), cost: t("به ازای مصرف؛ برای کار شخصی معمولاً چند تا چند ده دلار در ماه. پرداخت با کارت بین‌المللی."), link: "https://platform.claude.com/settings/keys", linkLabel: "platform.claude.com → API Keys", placeholder: "sk-ant-…", keyRe: /^sk-ant-(?!oat)/, keyHint: t("کلید API با sk-ant- شروع می‌شود (sk-ant-oat یعنی اشتراک؛ گزینهٔ اول را بزن)"), proxy: true },
+  { id: "zai", provider: "openai", preset: "zai", logo: "zai", label: "Z.ai (GLM)", blurb: t("ارزان، معمولاً بدون پراکسی"), what: t("مدل‌های GLM با پلن کدنویسی Z.ai. از ایران معمولاً بدون پراکسی جواب می‌دهد."), cost: t("پلن ماهانه از چند دلار."), link: "https://z.ai/manage-apikey/apikey-list", linkLabel: "z.ai → API Keys", placeholder: t("کلید Z.ai"), model: "glm-5.3", proxy: false },
+  { id: "openai", provider: "openai", preset: "openai", logo: "openai", label: "OpenAI (GPT)", blurb: t("کلید API اوپن‌ای‌آی"), what: t("مدل‌های GPT با کلید API رسمی OpenAI."), cost: t("به ازای مصرف، با کارت بین‌المللی."), link: "https://platform.openai.com/api-keys", linkLabel: "platform.openai.com/api-keys", placeholder: "sk-…", keyRe: /^sk-/, keyHint: t("کلید OpenAI با sk- شروع می‌شود"), model: "gpt-4o-mini", proxy: true },
+  { id: "openrouter", provider: "openai", preset: "openrouter", logo: "openrouter", label: "OpenRouter", blurb: t("صدها مدل با یک کلید"), what: t("یک کلید برای صدها مدل (Claude، GPT، Gemini، …). مدل را به شکل provider/model می‌نویسی."), cost: t("پیش‌پرداخت اعتبار؛ هر مدل قیمت خودش را دارد. چند مدل رایگان هم دارد."), link: "https://openrouter.ai/keys", linkLabel: "openrouter.ai/keys", placeholder: "sk-or-v1-…", keyRe: /^sk-or-/, keyHint: t("کلید OpenRouter با sk-or- شروع می‌شود"), model: "openai/gpt-4o-mini", proxy: true },
+  { id: "ollama", provider: "openai", preset: "ollama", logo: "ollama", label: t("Ollama (مدل محلی)"), blurb: t("روی همین سرور، بدون کلید"), what: t("مدلی که روی همین ماشین با Ollama اجرا می‌شود؛ نه کلید می‌خواهد نه اینترنت. به سخت‌افزار قوی (ترجیحاً GPU) نیاز دارد."), cost: t("رایگان."), link: "https://ollama.com/download", linkLabel: "ollama.com", noKey: true, model: "llama3.1", proxy: false, extra: t("اگر گریفین در Docker است، کانتینر را با ‎--add-host=host.docker.internal:host-gateway‎ اجرا کن تا به Ollama روی خود سرور برسد.") },
   { id: "custom", provider: "openai", label: t("سرویس سازگار با OpenAI"), blurb: t("vLLM، LM Studio، هر /chat/completions"), what: t("هر سرویسی که API آن مثل OpenAI است (آدرسی که به /v1 ختم می‌شود)."), cost: t("بسته به سرویس."), placeholder: t("کلید"), model: "", custom: true },
-  { id: "cursor", provider: "cursor", label: "Cursor", blurb: t("کلید API کرسر"), what: t("ایجنت‌های Cursor با کلید API حساب Cursor."), cost: t("طبق پلن Cursor (سقف مصرف ماهانه)."), link: "https://cursor.com/settings", linkLabel: "cursor.com → Settings → API keys", placeholder: "key_…", keyRe: /^(key_|crsr_)/, keyHint: t("کلید Cursor معمولاً با key_ شروع می‌شود"), proxy: true },
+  { id: "cursor", provider: "cursor", logo: "cursor", label: "Cursor", blurb: t("کلید API کرسر"), what: t("ایجنت‌های Cursor با کلید API حساب Cursor."), cost: t("طبق پلن Cursor (سقف مصرف ماهانه)."), link: "https://cursor.com/settings", linkLabel: "cursor.com → Settings → API keys", placeholder: "key_…", keyRe: /^(key_|crsr_)/, keyHint: t("کلید Cursor معمولاً با key_ شروع می‌شود"), proxy: true },
 ];
 
 // What to do next for each reason the doctor gives (doctor.mjs classifyEngineError).
@@ -263,7 +266,7 @@ function AgentStep({ onNext }) {
         </p>
       </div>
 
-      <Question n={t("۱")} title={t("با کدام ایجنت کار می‌کنی؟")}>
+      <Question n={num(1)} title={t("با کدام ایجنت کار می‌کنی؟")}>
         <div className="flex flex-wrap gap-2">
           {AGENT_CHOICES.map((a) => (
             <button key={a.id} type="button" onClick={() => setAgent(a.id)} aria-pressed={agent === a.id} className={`g-choice press rounded-full border px-3 py-1.5 text-sm ${agent === a.id ? "border-primary bg-primary/10 g-choice-on" : ""}`}>{a.label}</button>
@@ -271,7 +274,7 @@ function AgentStep({ onNext }) {
         </div>
       </Question>
 
-      <Question n={t("۲")} title={t("اسم دستیارت")}>
+      <Question n={num(2)} title={t("اسم دستیارت")}>
         <div className="flex gap-2">
           <input className={field} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("مثلاً آوا")} />
           <button type="button" onClick={shuffle} className="press inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm"><Shuffle className="size-4" /> {t("یک اسم دیگر")}</button>
@@ -279,33 +282,33 @@ function AgentStep({ onNext }) {
         <input className={field} dir="ltr" value={latin} onChange={(e) => setLatin(e.target.value)} placeholder="Latin, e.g. Ava" />
       </Question>
 
-      <Question n={t("۳")} title={t("از کدام حساب هوش مصنوعی استفاده می‌کنی؟")}>
+      <Question n={num(3)} title={t("از کدام حساب هوش مصنوعی استفاده می‌کنی؟")}>
         <div className="grid gap-2 sm:grid-cols-2">
           {ENGINES.map((e) => <Choice key={e.id} on={engine === e.id} onClick={() => setEngine(e.id)} label={e.label} blurb={e.blurb} />)}
           <Choice on={engine === ""} onClick={() => setEngine("")} label={t("هنوز نمی‌دانم")} blurb={t("ایجنت گزینه‌ها را توضیح می‌دهد و می‌پرسد")} />
         </div>
       </Question>
 
-      <Question n={t("۴")} title={t("پراکسی")}>
+      <Question n={num(4)} title={t("پراکسی")}>
         <div className="grid gap-2">
           {PROXY_CHOICES.map((p) => <Choice key={p.id} on={proxy === p.id} onClick={() => setProxy(p.id)} label={p.label} blurb={p.blurb} />)}
         </div>
       </Question>
 
-      <Question n={t("۵")} title={t("کلیدها و رمزها")}>
+      <Question n={num(5)} title={t("کلیدها و رمزها")}>
         <div className="grid gap-2">
           {SECRET_CHOICES.map((p) => <Choice key={p.id} on={secrets === p.id} onClick={() => setSecrets(p.id)} label={p.label} blurb={p.blurb} />)}
         </div>
       </Question>
 
-      <Question n={t("۶")} title={t("از ایجنت فعلی چه چیزهایی منتقل شود؟")}>
+      <Question n={num(6)} title={t("از ایجنت فعلی چه چیزهایی منتقل شود؟")}>
         <div className="grid gap-2 sm:grid-cols-2">
           {usable.map((t) => <Choice key={t.id} multi on={transfer.includes(t.id)} onClick={() => toggle(t.id)} label={t.label} blurb={t.blurb} />)}
         </div>
         {agent !== "claude" ? <p className="text-xs text-muted-foreground">{t("مهارت‌ها فقط از Claude Code منتقل می‌شوند؛ تاریخچهٔ خود {label} منتقل نمی‌شود.", { label: AGENT_CHOICES.find((a) => a.id === agent)?.label })}</p> : null}
       </Question>
 
-      <Question n={t("۷")} title={t("پیام‌رسان")}>
+      <Question n={num(7)} title={t("پیام‌رسان")}>
         <Choice multi on={telegram} onClick={() => setTelegram((t) => !t)} label={t("ربات تلگرام/بله یا اکانت تلگرامم را هم وصل کند")} blurb={t("قدم‌به‌قدم می‌گوید چه بکنی؛ کد ورود و رمز را فقط از خودت می‌پرسد")} />
       </Question>
 
@@ -441,8 +444,8 @@ function AppearanceStep({ onNext }) {
 // The account is made only when the connection starts, and the base account of a kind is used while it
 // has no key; otherwise a new account is made, so a second Claude never overwrites the one that works.
 const ROUTES = [
-  { id: "sub", title: t("اشتراک Claude"), blurb: t("اگر در claude.ai اشتراک (Pro یا Max) دارید یا شخصی اشتراکش را در اختیارتان می‌گذارد. فقط وارد حساب می‌شوید؛ کلید لازم نیست."), tag: t("ساده‌ترین راه"), engine: "claude-sub" },
-  { id: "key", title: t("کلید API"), blurb: t("از Claude، OpenAI، Z.ai، OpenRouter یا Cursor یک کلید می‌گیرید و این‌جا می‌گذارید."), services: ["claude-api", "zai", "openai", "openrouter", "cursor"] },
+  { id: "sub", title: t("اشتراک (Claude، ChatGPT یا Google)"), blurb: t("اگر اشتراک Claude (Pro/Max)، ChatGPT (برای Codex) یا Google Antigravity دارید یا کسی اشتراکش را در اختیارتان می‌گذارد. فقط وارد حساب می‌شوید؛ کلید لازم نیست."), tag: t("ساده‌ترین راه"), services: ["claude-sub", "codex-sub", "antigravity-sub"], logos: ["claude", "codex", "antigravity"] },
+  { id: "key", title: t("کلید API"), blurb: t("از Claude، OpenAI، Z.ai، OpenRouter یا Cursor یک کلید می‌گیرید و این‌جا می‌گذارید."), services: ["claude-api", "zai", "openai", "openrouter", "cursor"], logos: ["claude", "openai", "zai", "openrouter", "cursor"] },
   { id: "other", title: t("مدل روی سرور خودم یا سرویس دیگر"), blurb: t("Ollama، یا هر سرویسی که مثل OpenAI کار می‌کند."), services: ["ollama", "custom"] },
 ];
 
@@ -499,7 +502,11 @@ function EngineStep({ onNext, moveDefault, goto }) {
     const { providers } = await api("/api/providers");
     const base = providers.find((p) => p.id === engine.provider);
     let id;
-    if (base && !base.hasKey) {
+    if (engine.plan) {
+      // A subscription account of that plan not signed in yet is reused; otherwise a new one is made.
+      const idle = providers.find((p) => p.plan === engine.plan && !p.hasKey);
+      ({ id } = idle || (await api("/api/providers", { method: "POST", body: { kind: "openai", plan: engine.plan } })));
+    } else if (base && !base.hasKey) {
       id = base.id;
       await api(`/api/providers/${id}`, { method: "PATCH", body: { enabled: true } });
     } else {
@@ -579,6 +586,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2 text-sm font-semibold">{r.title}{r.tag ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-normal text-primary">{r.tag}</span> : null}</span>
                   <span className="mt-1 block text-xs leading-6 text-muted-foreground">{r.blurb}</span>
+                  {r.logos ? <span className="mt-2 flex gap-1.5">{r.logos.map((l) => <EngineLogo key={l} id={l} className="size-6 rounded-md" />)}</span> : null}
                 </span>
                 <ArrowLeft className="mt-1 size-4 shrink-0 text-muted-foreground ltr:rotate-180" />
               </button>
@@ -589,10 +597,11 @@ function EngineStep({ onNext, moveDefault, goto }) {
 
       {stage === "service" ? (
         <>
-          <h2 className="text-lg font-semibold">{route?.id === "key" ? t("کلید کدام سرویس را دارید؟") : t("کدام یک؟")}</h2>
+          <h2 className="text-lg font-semibold">{route?.id === "key" ? t("کلید کدام سرویس را دارید؟") : route?.id === "sub" ? t("اشتراک کدام سرویس را دارید؟") : t("کدام یک؟")}</h2>
           <div className="space-y-2">
             {services.map((e) => (
               <button key={e.id} type="button" onClick={() => pick(e)} className="press g-card flex w-full items-start gap-3 rounded-xl border p-3 text-start hover:border-primary/60 hover:bg-muted/40">
+                <EngineLogo id={e.logo} className="size-9" />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium">{e.label}</span>
                   <span className="mt-0.5 block text-xs leading-6 text-muted-foreground">{e.blurb}</span>
@@ -606,9 +615,11 @@ function EngineStep({ onNext, moveDefault, goto }) {
 
       {stage === "connect" && engine ? (
         <>
-          <h2 className="text-lg font-semibold">{engine.id === "claude-sub" ? t("ورود با اشتراک Claude") : t("اتصال {label}", { label: engine.label })}</h2>
+          <h2 className="flex items-center gap-2 text-lg font-semibold">{engine.logo ? <EngineLogo id={engine.logo} className="size-7" /> : null}{engine.id === "claude-sub" ? t("ورود با اشتراک Claude") : engine.plan ? t("ورود با {label}", { label: engine.label }) : t("اتصال {label}", { label: engine.label })}</h2>
           {engine.id === "claude-sub" ? (
             <ClaudeSignin id={() => resolveAccount()} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} />
+          ) : engine.plan ? (
+            <PlanSignin id={() => resolveAccount()} plan={engine.plan} onDone={(id) => verify(id).catch((e) => setResult({ ok: false, cause: "other", detail: e.message }))} />
           ) : (
             <div className="space-y-3">
               {engine.link ? (
@@ -678,7 +689,7 @@ function EngineStep({ onNext, moveDefault, goto }) {
 }
 
 export function ProbeResult({ result, engine = null, onProxy = null }) {
-  if (result.state === "limited") return <p className="rounded-lg bg-warn/10 p-3 text-sm text-warn">{CAUSE.limited}{result.until ? t(" باز شدن سقف: {toLocaleString}", { toLocaleString: new Date(result.until).toLocaleString("fa-IR", { weekday: "long", hour: "2-digit", minute: "2-digit" }) }) : ""}</p>;
+  if (result.state === "limited") return <p className="rounded-lg bg-warn/10 p-3 text-sm text-warn">{CAUSE.limited}{result.until ? t(" باز شدن سقف: {toLocaleString}", { toLocaleString: new Date(result.until).toLocaleString(locale, { weekday: "long", hour: "2-digit", minute: "2-digit" }) }) : ""}</p>;
   if (result.ok) return <p className="flex items-center gap-2 text-sm text-ok"><Check className="size-4" /> {result.busy ? t("کلید درست است (سرویس الان شلوغ است)") : t("جواب داد")}{result.ms ? ` (${result.ms}ms)` : ""}.</p>;
   const needsProxy = result.cause === "region" || result.cause === "network";
   return (
@@ -823,7 +834,7 @@ export function ProxyStep({ onSaved, inline = false, heading = true }) {
   );
 }
 
-const faN = (n) => Number(n).toLocaleString("fa-IR");
+const faN = (n) => Number(n).toLocaleString(locale);
 const STALE_MS = 10 * 60_000;
 
 // The owner's own routes for the built-in VPN (owner 2026-10-19: «بشه اونی که میخوایم دایرکت بشه رو مشخص کنیم»):
@@ -856,11 +867,11 @@ function RoutingBox({ list, onSaved }) {
   return (
     <details className="rounded-lg border bg-background px-3 py-2 text-xs leading-6" open={count > 0}>
       <summary className="cursor-pointer text-sm font-medium">
-        {t("مسیر ترافیک: چه چیزی مستقیم برود؟")} {count ? <span className="text-xs font-normal text-muted-foreground">{t("({toLocaleString} مورد)", { toLocaleString: count.toLocaleString("fa-IR") })}</span> : null}
+        {t("مسیر ترافیک: چه چیزی مستقیم برود؟")} {count ? <span className="text-xs font-normal text-muted-foreground">{t("({toLocaleString} مورد)", { toLocaleString: count.toLocaleString(locale) })}</span> : null}
       </summary>
       <div className="space-y-3 pt-2">
         <p className="text-muted-foreground">
-          {t("بدون نوشتن چیزی، این‌ها همیشه مستقیم می‌روند: IPهای لوکال و شبکهٔ داخلی، دامنه‌های")} <span dir="ltr">.ir</span>{t("، و هر چیزی که پروایدر یا تلگرام نیست. اگر چیز دیگری را هم می‌خواهی مستقیم باشد (یا برعکس، حتماً از VPN برود)، این‌جا بنویس: دامنه (")}<span dir="ltr">example.com</span>{t(")، IP یا رنج (")}<span dir="ltr">10.20.0.0/16</span>{t(")؛ هر خط یکی. آدرس کامل (")}<span dir="ltr">https://…</span>{t(") هم می‌شود.")}
+          {t("بدون نوشتن چیزی، این‌ها همیشه مستقیم می‌روند: IPهای لوکال و شبکهٔ داخلی، دامنه‌های")} <span dir="ltr">.ir</span> {t("و")} <span dir="ltr">example.com</span>{t("، و هر چیزی که پروایدر یا تلگرام نیست. اگر چیز دیگری را هم می‌خواهی مستقیم باشد (یا برعکس، حتماً از VPN برود)، این‌جا بنویس: دامنه (")}<span dir="ltr">example.com</span>{t(")، IP یا رنج (")}<span dir="ltr">10.20.0.0/16</span>{t(")؛ هر خط یکی. آدرس کامل (")}<span dir="ltr">https://…</span>{t(") هم می‌شود.")}
         </p>
         <label className="block space-y-1">
           <span className="font-medium">{t("همیشه مستقیم (بدون VPN)")}</span>
@@ -888,7 +899,7 @@ function RoutingBox({ list, onSaved }) {
 const flagOf = (cc) => (cc ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : "");
 const countryName = (cc) => {
   try {
-    return new Intl.DisplayNames(["fa"], { type: "region" }).of(cc) || cc;
+    return new Intl.DisplayNames([locale], { type: "region" }).of(cc) || cc;
   } catch {
     return cc;
   }
@@ -1442,7 +1453,7 @@ function Done({ onClose, goto, first }) {
       {!report ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {t("چک نهایی…")}</p> : bad.length ? (
         <div className="space-y-1 text-sm">
           <p className="text-muted-foreground">{t("چک نهایی چند مورد پیدا کرد (تنظیمات → سلامت):")}</p>
-          {bad.map((c) => <p key={c.id} className={c.level === "error" ? "text-bad" : "text-amber-600"}>• {tr(c.title, c.vars)}</p>)}
+          {bad.map((c) => <p key={c.id} className={c.level === "error" ? "text-bad" : "text-amber-600"}>• {fill(c.title, c.vars)}</p>)}
         </div>
       ) : <p className="text-sm text-ok">{t("چک نهایی: همه‌چیز سالم است.")}</p>}
       {first ? <p className="text-xs leading-6 text-muted-foreground">{t("هر کدام را بعداً هم می‌شود عوض کرد: تنظیمات → سلامت (ویزاردها) و تنظیمات → ظاهر.")}</p> : null}
@@ -1451,3 +1462,4 @@ function Done({ onClose, goto, first }) {
   );
 }
 
+export { fill };

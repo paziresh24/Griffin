@@ -7,10 +7,11 @@ import { agentSlug } from "../persona.mjs";
 // data folder (the owner token, secrets.key, the database, engine keys) and the knowledge store.
 // providers/file-scope.mjs fences the file tools; Bash was left open. A chat that had read
 // third-party text could then write a note marked «reviewed: true» that every later prompt carries
-// as trusted, or rewrite the owner token. This state guard is on by default wherever CLAUDE_CODE is on (config STATE_GUARD=off turns it off): the owner's
+// as trusted, or rewrite the owner token. Port of Karsara's state guard (Karsara !77, 2026-10-13,
+// with both review rounds: a4f3684, d084925), on by default wherever CLAUDE_CODE is on (config STATE_GUARD=off turns it off): the owner's
 // chats keep the full toolset and every folder they work in; only the knowledge store and Griffin's
 // data folder refuse changes. The owner's home folder, when it lies inside the data folder
-// (HOME=/data/home in the image), stays the owner's: it is excepted.
+// (HOME=/data/home in the image), stays his: it is excepted.
 //
 // Bash is checked by its text (paths it names, its working folder): a best-effort fence, not a
 // sandbox — a path assembled at run time (variables, base64, a script file written first) is not
@@ -247,7 +248,7 @@ function realCommand(words) {
 const GIT_READ = new Set(["log", "show", "diff", "status", "blame", "grep", "ls-files", "ls-tree", "rev-parse", "cat-file", "shortlog", "describe", "reflog", "whatchanged", "branch", "tag", "remote", "config"]);
 // Commands that wipe or move a whole folder: refused when they name a folder above the store.
 // Commands that run the command after them (their own options and a duration skipped).
-const RUNNERS = new Set(["sudo", "doas", "nohup", "setsid", "exec", "busybox", "time", "command", "builtin", "nice", "ionice", "timeout", "env", "stdbuf", "xargs", "flock", "chrt", "taskset", "unbuffer", "strace", "chroot", "runuser", "su"]);
+const RUNNERS = new Set(["sudo", "doas", "nohup", "setsid", "exec", "busybox", "time", "command", "builtin", "nice", "ionice", "timeout", "env", "stdbuf", "xargs", "flock", "chrt", "taskset", "unbuffer", "strace", "chroot", "runuser", "su", "rtk"]);
 const DESTRUCTIVE = new Set(["rm", "rmdir", "mv", "chmod", "chown", "chgrp", "shred", "unlink", "srm"]);
 
 export const STATE_REASON = "This path is the knowledge store or its own state (the data folder): a note changes only through the knowledge tools and the owner's review, never by writing the file.";
@@ -635,7 +636,7 @@ export const griffinStatePaths = ({ knowledgeRoot, data, home = os.homedir() }) 
 export const denyOutput = (why) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
 
 // --- The owner's instruction files, closed to a chat born from someone else's messenger message ---
-// chat-origin.mjs; config TELEGRAM_INSTRUCTION_GUARD, on by default. These files feed every
+// Port of Karsara !79 (chat-origin.mjs; config TELEGRAM_INSTRUCTION_GUARD, on by default). These files feed every
 // later session's instructions: the Claude config folder's CLAUDE.md, settings.json,
 // settings.local.json, memory/, skills/, hooks/, agents/, commands/, plugins/, rules/, output-styles/,
 // agent-memory/, projects/ (per-project auto-memory) and .claude.json (MCP servers), the brain's

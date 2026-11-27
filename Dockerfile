@@ -29,6 +29,14 @@ RUN npm run build --workspace apps/web
 FROM deps AS prod-deps
 RUN npm prune --omit=dev --offline --no-audit --no-fund
 
+FROM ${NODE_SLIM} AS rtk
+ARG RTK_RETRY=
+ARG RTK_BASE=
+ENV RTK_BASE=$RTK_BASE
+COPY apps/server/scripts/fetch-rtk.mjs /fetch-rtk.mjs
+ENV NODE_USE_ENV_PROXY=1
+RUN : "$RTK_RETRY" && mkdir /out && node /fetch-rtk.mjs /out
+
 FROM ${NODE_SLIM} AS app
 # git: per-chat worktrees and the repo_* file/git tools (apps/server/src/worktrees.mjs, repo-tools.mjs).
 # openssh-client: config CLAUDE_HOST runs the owner's Claude Code on the host (providers/host-spawn.mjs).
@@ -47,6 +55,7 @@ RUN S=/etc/apt/sources.list.d/debian.sources && cp $S /tmp/debian.sources \
   && apt-get -o Acquire::Retries=3 update \
   && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates git openssh-client python3 adb tini restic \
   && mv /tmp/debian.sources $S && rm -rf /var/lib/apt/lists/*
+COPY --from=rtk /out/ /usr/local/
 WORKDIR /app
 COPY --from=prod-deps /src/package.json /src/package-lock.json ./
 COPY --from=prod-deps /src/node_modules node_modules
@@ -66,6 +75,11 @@ COPY modules modules
 # and the MCP presets (tickets' setup prompt). test/docker-web-imports.test.mjs checks every such import is copied.
 COPY apps/web/src/i18n.js apps/web/src/i18n.js
 COPY apps/web/src/mcp.js apps/web/src/mcp.js
+COPY apps/web/src/ui-flags.js apps/web/src/ui-flags.js
+COPY apps/web/src/settings-search.js apps/web/src/settings-search.js
+COPY apps/web/src/settings-catalog.js apps/web/src/settings-catalog.js
+COPY apps/web/src/settings-features.js apps/web/src/settings-features.js
+COPY apps/web/src/settings-map.js apps/web/src/settings-map.js
 COPY --from=web /src/apps/web/dist apps/web/dist
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

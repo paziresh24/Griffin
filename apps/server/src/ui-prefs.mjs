@@ -27,21 +27,24 @@ export function cleanUiPrefs(body) {
 }
 
 export function uiPrefsRoutes(app, { store }) {
-  app.get("/api/ui-prefs", (c) => c.json({ stored: store.getKv(KEY) || null }));
+  const keyOf = (c) => (c.get?.("authUser") ? `${KEY}:user:${c.get("authUser").id}` : KEY);
+  app.get("/api/ui-prefs", (c) => c.json({ stored: store.getKv(keyOf(c)) || null }));
   app.put("/api/ui-prefs", async (c) => {
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== "object") return c.json({ error: "بدنهٔ JSON لازم است." }, 400);
-    const prev = store.getKv(KEY) || {};
+    const key = keyOf(c);
+    const prev = store.getKv(key) || {};
     const next = cleanUiPrefs(body);
-    // A migration snapshot never overwrites what a device already saved (two devices loading at once).
-    if (next.migrated && store.getKv(KEY)) return c.json({ stored: prev });
+    if (next.migrated && store.getKv(key)) return c.json({ stored: prev });
     const merged = { ...prev, ...next, flags: { ...(prev.flags || {}), ...next.flags }, at: new Date().toISOString() };
     if (!next.migrated) delete merged.migrated;
-    store.setKv(KEY, merged);
+    store.setKv(key, merged);
+    if (!c.get?.("authUser")) store.bus?.emit?.("prefs", { kind: "ui" });
     return c.json({ stored: merged });
   });
   app.delete("/api/ui-prefs", (c) => {
-    store.setKv(KEY, {});
+    store.setKv(keyOf(c), {});
+    if (!c.get?.("authUser")) store.bus?.emit?.("prefs", { kind: "ui" });
     return c.json({ stored: {} });
   });
 }

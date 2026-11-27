@@ -1,3 +1,4 @@
+import { DEFAULT_TZ } from "../src/jobs/cron.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -45,30 +46,38 @@ test("a backup is a gzipped, checked copy that reopens with the chats", async ()
   assert.equal(fs.readdirSync(path.join(dir, "backups")).length, 1, "no .part or temp left");
 });
 
+const localTime = (ymd, hm) => {
+  const [y, mo, d] = ymd.split("-").map(Number);
+  const [h, m] = hm.split(":").map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, m);
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: DEFAULT_TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(guess).map((x) => [x.type, Number(x.value)]));
+  const actual = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  return guess - (actual - guess);
+};
 test("a backup is due only in the night's hour, once a night", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-backup-"));
   const dbFile = path.join(dir, "griffin.sqlite");
   const store = openStore(dbFile);
-  let t = Date.parse("2026-11-04T10:00:00Z");
+  let t = localTime("2026-11-04", "13:30");
   const backups = createBackups({ store, dbFile, dataDir: dir, now: () => t, log: {} });
   assert.equal(backups.due(), true, "a new install does not wait for its first night");
   assert.equal((await backups.run()).ok, true);
-  t = Date.parse("2026-11-05T01:20:00Z"); // 04:50 Tehran
+  t = localTime("2026-11-05", "04:50");
   assert.equal(backups.due(), false);
-  t = Date.parse("2026-11-05T01:40:00Z"); // 05:10 Tehran
+  t = localTime("2026-11-05", "05:10");
   assert.equal(backups.due(), true);
   assert.equal((await backups.run()).ok, true);
   t += 20 * 60_000;
   assert.equal(backups.due(), false, "once a night");
-  t = Date.parse("2026-11-05T10:00:00Z");
+  t = localTime("2026-11-05", "13:30");
   assert.equal(backups.due(), false, "not in the day");
   store.setKv("backup:last", JSON.stringify({ at: new Date(t - 2 * 3600_000).toISOString(), ok: false, error: "x" }));
   assert.equal(backups.due(), false, "a recent backup is enough, even after a failed try");
-  t = Date.parse("2026-11-06T10:00:00Z");
+  t = localTime("2026-11-06", "13:30");
   assert.equal(backups.due(), true, "a failed night does not wait for the next");
-  const other = createBackups({ store, dbFile, dataDir: dir, config: () => ({ hour: "3" }), now: () => Date.parse("2026-11-06T23:40:00Z"), log: {} });
+  const other = createBackups({ store, dbFile, dataDir: dir, config: () => ({ hour: "3" }), now: () => localTime("2026-11-07", "03:10"), log: {} });
   store.deleteKv("backup:last");
-  assert.equal(other.due(), true, "03:10 Tehran");
+  assert.equal(other.due(), true, "03:10 local");
 });
 
 test("a backup survives writes from another connection and clears what a restart left", async () => {

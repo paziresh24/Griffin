@@ -10,7 +10,7 @@ import { createApp } from "../src/app.mjs";
 import { openStore } from "../src/db.mjs";
 
 const agents = [
-  { id: "karsara-kazemi-example-org", name: "یارا", owner: "علیرضا کاظمی", connected: true },
+  { id: "karsara-kazemi-example-org", name: "یارا", owner: "کاربر یک کاظمی", connected: true },
   { id: "griffin-hosseini-example-org", name: "نوا", owner: "ابوالفضل حسینی", connected: true },
 ];
 

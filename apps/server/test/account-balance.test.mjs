@@ -58,3 +58,17 @@ test("an account no run has reported on is neither preferred nor avoided", () =>
 test("nothing usable: the list is returned as it was, for the limit handling to choose", () => {
   assert.deepEqual(balanceAccounts(list.slice(0, 4), opts({ usable: () => false })).chosen, null);
 });
+
+// 2026-11-24: a fresh week with a busy 5-hour window (35%) is still the roomier account against a week at 32%.
+test("the 5-hour window counts only once it is hot; the week decides otherwise", () => {
+  const now = Date.now();
+  const later = now / 1000 + 3600;
+  const w = (five, week) => ({ five_hour: { utilization: five, resetsAt: later }, seven_day: { utilization: week, resetsAt: later } });
+  assert.equal(Math.round(accountLoad(w(0.35, 0.07), now)), 7);
+  assert.equal(Math.round(accountLoad({ seven_day: { utilization: 0.32, resetsAt: later } }, now)), 32);
+  assert.equal(Math.round(accountLoad(w(0.8, 0.07), now)), 80);
+  const loads = { a: accountLoad(w(0.35, 0.07), now), b: accountLoad({ seven_day: { utilization: 0.32, resetsAt: later } }, now) };
+  const list = [{ provider: "b", model: "opus" }, { provider: "a", model: "opus" }];
+  const r = balanceAccounts(list, { isPlain: () => true, usable: () => true, loadOf: (id) => loads[id] });
+  assert.equal(r.chosen, "a");
+});

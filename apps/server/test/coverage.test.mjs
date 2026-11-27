@@ -101,7 +101,7 @@ test("guardTeamTools refuses team-only writes (MR, purge, kubectl apply) the own
   for (const [name, args] of [
     ["gitlab_propose", { project: "x", action: "edit" }],
     ["arvan_cache_purge", { domain: "example.com", urls: ["https://x"] }],
-    ["debug_exec", { command: "kubectl -n hojat-khajavi apply -f backup.yaml" }],
+    ["debug_exec", { command: "kubectl -n team-ns apply -f backup.yaml" }],
     ["gitlab_mr", { action: "merge", iid: 1 }],
   ]) {
     const out = await guarded[name].execute(args);
@@ -109,7 +109,7 @@ test("guardTeamTools refuses team-only writes (MR, purge, kubectl apply) the own
     assert.match(out.content[0].text, /request_full_access/, name);
   }
   assert.deepEqual(ran, []);
-  await guarded.debug_exec.execute({ command: "kubectl -n hojat-khajavi get backups.postgresql.cnpg.io" });
+  await guarded.debug_exec.execute({ command: "kubectl -n team-ns get backups.postgresql.cnpg.io" });
   await guarded.gitlab_mr.execute({ action: "view", iid: 1 });
   assert.deepEqual(ran.map(([name]) => name), ["debug_exec", "gitlab_mr"]);
   assert.equal(asks.isWaiting("c6"), false);

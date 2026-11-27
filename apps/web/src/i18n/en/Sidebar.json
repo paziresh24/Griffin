@@ -82,5 +82,6 @@
   "بخش‌های دیگر": "More sections",
   "بیشتر": "More",
   "تنظیم بخش‌های منو…": "Customize menu sections…",
-  "نتیجه‌ها ({n})": "Results ({n})"
+  "نتیجه‌ها ({n})": "Results ({n})",
+  "آخرین اجرای این گفتگو با خطا تمام شد (خطای سرور یا پر شدن اکانت)": "The last run of this chat ended with an error (server error or account full)"
 }

@@ -49,5 +49,19 @@
   "هزینهٔ پلن‌ها در هفته": "Plans' weekly cost",
   "{n} اکانت × {usd}؛ مصرف ≈ {x} برابر": "{n} accounts × {usd}; usage ≈ {x}x",
   "مدل‌ها": "Models",
-  "اکانت‌ها با ایمیل یا شناسهٔ اکانتشان در Anthropic یکی می‌شوند؛ اکانتی که فقط با توکن وصل است ایمیل ندارد و می‌توانید با مداد اسمش را بگذارید. «تازه» توکن بدون خواندن از کش است؛ «با کش» همان چیزی است که API و ابزارهایی مثل ccusage می‌شمارند. هزینه با قیمت لیست API حساب می‌شود (خواندن از کش، نوشتن در کش، خروجی و ورودی هرکدام با نرخ خودشان؛ ضریب = قیمت خروجی نسبت به Sonnet). پلن‌ها ثابت‌اند، پس هزینه مقیاس مقایسه است، نه صورتحساب. هر نصب هر ۱۵ دقیقه از دیتابیس خودش گزارش می‌دهد؛ گزارشِ قدیمی‌تر از یک روز در جمع‌ها و اکانت‌ها حساب نمی‌شود.": "Accounts are grouped by their email or their account id at Anthropic; an account connected by token only has no email, so name it once with the pencil. «Fresh» is tokens without cache reads; «with cache» is what the API and tools like ccusage count. Cost is at API list price (input, output, cache writes and cache reads each at their own rate; weight = output price relative to Sonnet). The plans are flat-rate, so cost is a scale to compare by, not a bill. Each install reports every 15 minutes from its own database; a report older than a day counts in no total or account."
+  "اکانت‌ها با ایمیل یا شناسهٔ اکانتشان در Anthropic یکی می‌شوند؛ اکانتی که فقط با توکن وصل است ایمیل ندارد و می‌توانید با مداد اسمش را بگذارید. «تازه» توکن بدون خواندن از کش است؛ «با کش» همان چیزی است که API و ابزارهایی مثل ccusage می‌شمارند. هزینه با قیمت لیست API حساب می‌شود (خواندن از کش، نوشتن در کش، خروجی و ورودی هرکدام با نرخ خودشان؛ ضریب = قیمت خروجی نسبت به Sonnet). پلن‌ها ثابت‌اند، پس هزینه مقیاس مقایسه است، نه صورتحساب. هر نصب هر ۱۵ دقیقه از دیتابیس خودش گزارش می‌دهد؛ گزارشِ قدیمی‌تر از یک روز در جمع‌ها و اکانت‌ها حساب نمی‌شود.": "Accounts are grouped by their email or their account id at Anthropic; an account connected by token only has no email, so name it once with the pencil. «Fresh» is tokens without cache reads; «with cache» is what the API and tools like ccusage count. Cost is at API list price (input, output, cache writes and cache reads each at their own rate; weight = output price relative to Sonnet). The plans are flat-rate, so cost is a scale to compare by, not a bill. Each install reports every 15 minutes from its own database; a report older than a day counts in no total or account.",
+  "ورود خراب": "Login broken",
+  "وارد نشده": "Not signed in",
+  "اکانت دیگر": "Other account",
+  "اکانت نامعلوم": "Unknown account",
+  "اکانت‌های Claude شرکت روی هر نصب": "Company Claude accounts on each install",
+  "{full} از {all} نصب همهٔ {n} اکانت را دارند. اکانت شرکت = اکانتی با ایمیل که روی دست‌کم سه نصب وارد شده، یا اکانتی که این‌جا اضافه کرده‌اید. هر نصب همین را در «چک و تعمیر» خودش به صاحبش نشان می‌دهد.": "{full} of {all} installs have all {n} accounts. A company account is one with an email signed in on at least three installs, or one you added here. Each install shows the same to its owner under «Check and repair».",
+  "بیرون از اکانت‌های شرکت": "Not a company account",
+  "بقیهٔ موتورهای Claude": "Other Claude engines",
+  "{have} از {total}": "{have} of {total}",
+  " · {n} بار وارد شده": " · signed in {n} times",
+  " (خراب)": " (broken)",
+  "{n} جای خالی یا خاموش": "{n} empty or off",
+  "اکانت شرکت": "Company account",
+  "اکانت نامعلوم: ورود قدیمی با توکن که شناسهٔ اکانت را نمی‌دهد": "Unknown account: an old token login that does not name its account"
 }

@@ -20,9 +20,10 @@ export function mergeSeen(previous, next) {
 }
 
 export function seenRoutes(app, { store }) {
-  const state = () => store.getKv(KEY) || null;
+  const keyOf = (c) => (c?.get?.("authUser") ? `${KEY}:user:${c.get("authUser").id}` : KEY);
+  const state = (c) => store.getKv(keyOf(c)) || null;
   app.get("/api/seen", (c) => {
-    const saved = state();
+    const saved = state(c);
     if (!saved) return c.json({ seen: null, rev: 0 });
     if (Number(c.req.query("have")) === saved.rev) return c.json({ unchanged: true, rev: saved.rev });
     return c.json({ seen: saved.map, rev: saved.rev });
@@ -33,7 +34,7 @@ export function seenRoutes(app, { store }) {
   app.put("/api/seen", async (c) => {
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body.set !== "object" || body.set === null || Array.isArray(body.set)) return c.json({ error: "بدنهٔ JSON با set لازم است." }, 400);
-    const saved = state();
+    const saved = state(c);
     if (body.init === true && saved) return c.json({ seen: saved.map, rev: saved.rev });
     const map = { ...(saved?.map || {}) };
     let changed = false;
@@ -52,7 +53,7 @@ export function seenRoutes(app, { store }) {
     apply(body.set, false);
     if (Object.keys(map).length > MAX_CHATS) return c.json({ error: "تعداد گفتگوها از حد بیشتر است." }, 400);
     const rev = (saved?.rev || 0) + (changed || !saved ? 1 : 0);
-    if (changed || !saved) store.setKv(KEY, { map, rev, at: new Date().toISOString() });
+    if (changed || !saved) store.setKv(keyOf(c), { map, rev, at: new Date().toISOString() });
     return c.json({ rev, ...(body.init === true ? { seen: map } : {}) });
   });
 }

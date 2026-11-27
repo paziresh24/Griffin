@@ -7,6 +7,7 @@ import { BRAND } from "../brand.js";
 import { byDay, describeUpdate, formatSize, formatWhen, offerState } from "../update.js";
 import { onNewVersion, reloadNow } from "../new-version.js";
 import { t, isRtl } from "../i18n.js";
+import { isMember } from "../auth-me.js";
 import { useFlag } from "../ui-prefs.js";
 
 // The command that updates an install this app can only tell about (update.manual).
@@ -34,6 +35,7 @@ const GLOWED = "griffin.updateGlowed"; // the release whose arrival the sidebar 
 // بازدنش ریستارت انجام بشه»): one icon at the top of the page that lights up with a release; a click applies it.
 
 export function UpdateNotice({ place = "sidebar" }) {
+  if (isMember()) return null;
   const inSettings = useFlag("updateInSettings");
   const top = useFlag("updateTopButton");
   if (place === "sidebar" && (inSettings || top)) return null;
@@ -46,7 +48,7 @@ export function useUpdateDot() {
   const inSettings = useFlag("updateInSettings") && !useFlag("updateTopButton");
   const [waiting, setWaiting] = useState(false);
   useEffect(() => {
-    if (!inSettings) return undefined;
+    if (!inSettings || isMember()) return undefined;
     let live = true;
     const ask = () => api("/api/update").then((u) => live && setWaiting(["offered", "ready", "failed", "download-failed"].includes(offerState(u))), () => {});
     ask();

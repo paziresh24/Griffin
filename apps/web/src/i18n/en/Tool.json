@@ -218,5 +218,11 @@
   "برداشتن واکنش": "remove reaction",
   "نتیجه نیامد.": "The result did not load.",
   "تلاش دوباره": "Try again",
-  "بارگذاری…": "Loading…"
+  "بارگذاری…": "Loading…",
+  "خواندن تنظیمات برنامه": "Read app settings",
+  "تغییر تنظیمات برنامه": "Change app settings",
+  "فهرست موتورها": "List engines",
+  "مدیریت موتورها": "Manage engines",
+  "فهرست اتصال‌ها": "List connections",
+  "مدیریت اتصال‌ها": "Manage connections"
 }

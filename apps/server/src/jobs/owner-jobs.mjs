@@ -1,7 +1,7 @@
-// Owner jobs with the owner's tools: a job the owner made can run with his full toolset. Each job
-// has a mode: the chat's mode list plus «محدود» (one picker for chats and jobs, and a «بدون پرسیدن»
-// job must not answer «I have no access»; this replaces the install switch OWNER_JOBS_FULL_TOOLS).
-// For a job whose prompt the owner wrote himself:
+// Owner jobs with the owner's tools (from Karsara, where a job the owner made runs with the full
+// toolset). Each job has a mode: the chat's mode list plus «محدود» (owner 2026-10-19: one picker for
+// chats and jobs, and a «بدون پرسیدن» job must not answer «I have no access»; this replaces the
+// install switch OWNER_JOBS_FULL_TOOLS). For a job whose prompt the owner wrote himself:
 //   agent («بدون پرسیدن»): the tools of his attended chats, and nothing asks, as in his own chat.
 //   auto / ask / edits / plan: the same tools, but a gated call asks him (the guard's approval
 //     question, closed unanswered after OWNER_JOB_ASK_MS, or earlier when the job's own timeout ends
@@ -21,12 +21,13 @@
 // The verdict is taken twice: when the job is written (jobWriterOf records "unknown" for a chat
 // that is not the owner's at that moment) and again when it runs (fullTools).
 //
-// Hook point (Telegram origin): `writerVerdict(rootChatId, writerChatId)` may only VETO
+// Hook point (Karsara !79, Telegram origin): `writerVerdict(rootChatId, writerChatId)` may only VETO
 // a writer chat that already passed the structural checks — false for, e.g., a chain made out of
 // someone else's Telegram message. Any other answer changes nothing; it can never make a chat the
 // owner's.
 
 import path from "node:path";
+import { heavyKey } from "../model-policy.mjs";
 import { thirdPartyKey } from "../related.mjs";
 
 // The install switch the modes replaced: read once, by migrateJobModes, to keep each old job as it ran.
@@ -90,37 +91,53 @@ export function ownerWroteJob(job, { store = null, ownerRooted = () => false, wr
 export function createOwnerJobs({ store, ownerRooted = () => false, writerVerdict = () => null } = {}) {
   function ownerJobOf(chatId) {
     if (!chatId) return null;
+    // A delegated sub-chat carries its parent agent as caller, so the writer's chain is judged
+    // from its root (the conversation the owner started), not from the sub-chat's own row.
     const rootId = store?.rootChatId?.(chatId) || chatId;
     const root = store?.getChat?.(rootId);
     if (!root?.job_id || root.caller !== "scheduler" || root.sim) return null;
     const job = store.getJob?.(root.job_id);
-    if (!job || jobMode(job.mode) === "limited") return null;
-    // A delegated sub-chat carries its parent agent as caller, so the writer's chain is judged
-    // from its root (the conversation the owner started), not from the sub-chat's own row.
-    const checks = { store, ownerRooted, writerVerdict };
-    if (!ownerWroteJob(job, checks)) return null;
     // A run started by hand (jobs_run, the jobs page) is judged by who started it too: the same
     // verdict as for a writer. A scheduled run has no starter (kv absent).
-    const by = store.getKv?.(`jobrunby:${rootId}`);
-    if (by != null && !ownerWroteJob({ options: { promptChatId: by } }, checks)) return null;
-    return job;
+    return ownersRun(job, store.getKv?.(`jobrunby:${rootId}`)) ? job : null;
+  }
+  function ownersRun(job, by = null) {
+    if (!job || jobMode(job.mode) === "limited") return false;
+    const checks = { store, ownerRooted, writerVerdict };
+    if (!ownerWroteJob(job, checks)) return false;
+    return by == null || ownerWroteJob({ options: { promptChatId: by } }, checks);
   }
   const fullTools = (chatId) => Boolean(ownerJobOf(chatId));
   const bypass = (chatId) => jobMode(ownerJobOf(chatId)?.mode, "limited") === "agent";
-  return { fullTools, bypass };
+  /**
+   * The model, effort and heavy-model confirmation an owner job's run chat starts with (owner
+   * 2026-11-24: a job made in his Opus chat ran on Sonnet/medium). Like a side chat (app.mjs), it
+   * inherits them from the chat that wrote the job — only when that chat is still his (the same
+   * verdict as fullTools, by: who started the run by hand) and holds his second confirmation
+   * (model-policy.mjs heavyok). Read at run time, not copied onto the job: a job whose writer chat is
+   * gone is no longer an owner job at all. null = today's defaults (Sonnet/medium).
+   */
+  function runChoice(job, by = null) {
+    if (!ownersRun(job, by)) return null;
+    const writer = store?.getChat?.(String(job.options?.promptChatId || ""));
+    const heavyOk = writer && store.getKv?.(heavyKey(writer.id));
+    if (!heavyOk?.model && !heavyOk?.effort) return null;
+    return { model: writer.model || null, effort: writer.effort || null, heavyOk };
+  }
+  return { fullTools, bypass, runChoice };
 }
 
 /**
  * What Claude Code is started with (index.mjs). fileAccess comes from runAccess: an owner job has
  * it like his attended chats, so with CLAUDE_CODE=on it gets full Claude Code — Bash included,
- * which no approval gates — and the same state guard (STATE_GUARD, on by
+ * which no approval gates (parity with Karsara) — and the same state guard (STATE_GUARD, on by
  * default). ownerJob tells the provider to say "the owner's scheduled job, unattended" instead of
  * "the owner's own chat".
  */
 //
 // In an owner job the guard also refuses commands that NAME the data folder (owner token, database,
 // secrets.key, engine keys) or `jobClosed` (the broker socket) as a literal path, reads included.
-// This is a speed bump, NOT a boundary (a deliberate choice): a path built at run time
+// This is a speed bump, NOT a boundary (owner decision 2026-10-14): a path built at run time
 // (string concatenation, base64, shell variables) passes, so an owner job's Bash runs with the
 // owner's full authority — his token, his database, the platform tools, every setting. A real
 // boundary would be running job Bash in the sandbox container (no data folder, no broker socket).
@@ -149,8 +166,8 @@ export function claudeCodeOptions({ fileAccess, claudeCodeOn, stateGuardOn, stat
  */
 // bypass: an owner job in «بدون پرسیدن» — no guard question, as in his own chat.
 // opsAsks: the ops room in critical mode reaches the owner on Telegram (ask_owner since 10-07), so a
-// gated step there asks him instead of being refused and handed back («the owner must do it himself in the CDN
-// panel» after he had approved, 2026-10-21).
+// gated step there asks him instead of being refused and handed back («عرفان باید خودش در پنل
+// آروان بسازد» after he had approved, 2026-10-21).
 /**
  * «بدون پرسیدن» on Claude is a full shell in every attended chat (owner 2026-11-07: «کلا شل رو در صورتی
  * که روی کلاد هست و روی حالت بدون پرسیدن به همه چتا بده»): his own, one of his that holds someone else's
@@ -164,6 +181,7 @@ export function freeShell({ provider, unattended, desk = false, inboxChat = fals
 }
 
 export function runAccess({ rootCaller, unattended, ownerJob = false, bypass = false, coverage = false, opsAsks = false }) {
+  if (String(rootCaller || "").startsWith("user:")) return { asOwner: false, guardMode: "refuse" };
   const attendedOwner = rootCaller === "owner" && !unattended;
   const asOwner = attendedOwner || Boolean(ownerJob);
   const guardMode = rootCaller === "owner" || coverage || (ownerJob && bypass) ? null : unattended && !ownerJob && !(opsAsks && rootCaller === "ops") ? "refuse" : "ask";

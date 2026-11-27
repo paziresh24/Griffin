@@ -544,7 +544,7 @@ test("private share: Telegram side — exact names only, a cold cache is warmed,
   const { takeQuiet } = await import("../src/integrations/telegram-account.mjs");
   const user = (id, first, extra = {}) => ({ className: "User", id, firstName: first, ...extra });
   const dialogs = [
-    { isUser: true, title: "علیرضا موسوی", entity: user(11, "علیرضا", { lastName: "موسوی", username: "amousavi" }) },
+    { isUser: true, title: "بهزاد موسوی", entity: user(11, "بهزاد", { lastName: "موسوی", username: "bmousavi" }) },
     { isUser: true, title: "Nora Karimi", entity: user(1, "Nora", { lastName: "Karimi" }) },
   ];
   const sent = [];
@@ -561,9 +561,9 @@ test("private share: Telegram side — exact names only, a cold cache is warmed,
     sendMessage: async (entity, options) => sent.push({ id: entity.id, options }),
   };
   const tg = telegramForShares(client);
-  const err = await tg.resolve("رضا").then(() => null, (e) => e);
+  const err = await tg.resolve("زاد").then(() => null, (e) => e);
   assert.ok(err, "a name inside another name is not a match");
-  assert.deepEqual(err.candidates, ["@amousavi"], "the owner is shown who matched, to pick");
+  assert.deepEqual(err.candidates, ["@bmousavi"], "the owner is shown who matched, to pick");
 
   cold = true;
   const text = "link https://k.example/#/p/ab__cd__ef";

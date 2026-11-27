@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AUTH_RETRY_MS, CREDIT_RETRY_MS, engineState, isCreditError, probeVerdict, rankByState, sameModelNames } from "../src/engine-state.mjs";
+import { AUTH_RETRY_MS, CREDIT_RETRY_MS, engineState, isCreditError, isFinalAuthError, probeVerdict, rankByState, sameModelNames } from "../src/engine-state.mjs";
 import { autoMovesOn, claudeLimitCode } from "../src/plan-fallback.mjs";
 import { probeOutcome } from "../src/providers/claude.mjs";
 import { classifyEngineError } from "../src/doctor.mjs";
@@ -70,38 +70,38 @@ test("the default engine keeps the agent's model only where the name means the s
 test("feedback is kept with its details, masked, and sent to the maintainer's agent when connected", async () => {
   assert.equal(feedbackReport({ text: "  " }), null);
   const r = feedbackReport(
-    { text: `دکمه کار نمی‌کند ${["sk-ant-api03-", "A".repeat(36)].join("")}`, kind: "support", browser: "Firefox", page: "#/c/abc", chatId: "abc", errors: ["TypeError: x"] },
-    { commit: "1234567890ab", owner: "سارا", install: "griffin-sara.example.com", serverErrors: [{ at: "t", line: "boom", count: 2 }] },
+    { text: "دکمه کار نمی‌کند sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", kind: "support", browser: "Firefox", page: "#/c/abc", chatId: "abc", errors: ["TypeError: x"] },
+    { commit: "1234567890ab", owner: "کاربر دو", install: "griffin-mahla.example.com", serverErrors: [{ at: "t", line: "boom", count: 2 }] },
   );
   assert.equal(r.kind, "support");
   assert.ok(!r.text.includes("AAAAAAAAAAAAAAAA"), "a pasted key never leaves masked-less");
   const msg = feedbackMessage(r);
-  for (const part of ["درخواست پشتیبانی", "سارا", "1234567890ab", "Firefox", "abc", "TypeError: x", "boom ×2"]) assert.ok(msg.includes(part), part);
+  for (const part of ["درخواست پشتیبانی", "کاربر دو", "1234567890ab", "Firefox", "abc", "TypeError: x", "boom ×2"]) assert.ok(msg.includes(part), part);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feedback-"));
   const posted = [];
-  const network = { list: () => [{ id: "support", url: "https://support.example.com", connected: true }], post: async (id, route, body) => (posted.push({ id, route, body }), { ok: true, told: false }) };
+  const network = { list: () => [{ id: "hub", url: "https://hub.example.com", connected: true }], post: async (id, route, body) => (posted.push({ id, route, body }), { ok: true, told: false }) };
   const pixel = `data:image/jpeg;base64,${Buffer.from("fake-jpeg").toString("base64")}`;
-  const fb = createFeedback({ dataDir: dir, network, supportHost: () => "support.example.com", selfHost: () => "griffin-sara.example.com", context: () => ({ owner: "سارا" }) });
+  const fb = createFeedback({ dataDir: dir, network, supportHost: () => "hub.example.com", selfHost: () => "node-2.example.com", context: () => ({ owner: "کاربر دو" }) });
   assert.deepEqual(await fb.submit({ text: "سلام", screenshot: pixel }), { ok: true, sent: true, told: false });
-  assert.deepEqual([posted[0].id, posted[0].route, posted[0].body.screenshot], ["support", "/api/public/network/feedback", pixel]);
-  assert.equal(posted[0].body.report.owner, "سارا");
+  assert.deepEqual([posted[0].id, posted[0].route, posted[0].body.screenshot], ["hub", "/api/public/network/feedback", pixel]);
+  assert.equal(posted[0].body.report.owner, "کاربر دو");
   // Not connected to the maintainer: kept here only.
   assert.equal((await createFeedback({ dataDir: dir, network: null, supportHost: () => "x" }).submit({ text: "دوم", screenshot: "javascript:alert(1)" })).sent, false);
   assert.equal(fs.readFileSync(path.join(dir, "feedback.jsonl"), "utf8").trim().split("\n").length, 2);
   fs.rmSync(dir, { recursive: true });
 });
 
-test("the maintainer's inbox: a network member's report with its picture; support also reaches the owner's Telegram, marked for the desk to ignore", async () => {
+test("the maintainer's inbox: a network member's report with its picture; support also reaches the owner's Telegram, marked for Iris to ignore", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-"));
   const told = [];
   const fb = createFeedback({ dataDir: dir, notifyOwner: async (text, shot) => told.push({ text, shot }), log: { error() {} } });
   const pixel = `data:image/png;base64,${Buffer.from("png").toString("base64")}`;
-  const report = feedbackReport({ text: "کمک", kind: "support", page: "#/c/x" }, { owner: "رضا", install: "griffin-reza.example.com" });
-  const r = await fb.receive(report, pixel, "یارا (رضا کریمی)");
+  const report = feedbackReport({ text: "کمک", kind: "support", page: "#/c/x" }, { owner: "کاربر یک", install: "node-3.example.com" });
+  const r = await fb.receive(report, pixel, "یارا (کاربر یک)");
   assert.deepEqual([r.ok, r.told], [true, true]);
-  assert.match(told[0].text, /^🤖 درخواست پشتیبانی از رضا \(griffin-reza\.example\.com\)/);
-  assert.match(told[0].text, /فرستاده از: یارا \(رضا کریمی\)/);
+  assert.match(told[0].text, /^🤖 درخواست پشتیبانی از کاربر یک \(node-3\.example\.com\)/);
+  assert.match(told[0].text, /فرستاده از: یارا \(کاربر یک\)/);
   assert.equal(told[0].shot.toString(), "png");
   // A plain feedback is only kept; a forged picture is dropped.
   await fb.receive({ ...report, kind: "feedback", text: "خوب است" }, "data:text/html;base64,PHNjcmlwdD4=", "x");
@@ -115,7 +115,7 @@ test("the maintainer's inbox: a network member's report with its picture; suppor
   // The public route takes only a member of the agents' network.
   const { Hono } = await import("hono");
   const app = new Hono();
-  const peerAuth = { authenticate: (h) => (h === "Bearer net" ? { userId: "net-griffin-reza", label: "یارا" } : h === "Bearer colleague" ? { userId: "reza", label: "x" } : { error: "invalid token", status: 401 }) };
+  const peerAuth = { authenticate: (h) => (h === "Bearer net" ? { userId: "net-node-3", label: "یارا" } : h === "Bearer colleague" ? { userId: "sadr", label: "x" } : { error: "invalid token", status: 401 }) };
   fb.routes(app, peerAuth);
   const call = (auth) => app.request("/api/public/network/feedback", { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ report: { ...report, kind: "feedback" } }) });
   assert.equal((await call("Bearer nope")).status, 401);
@@ -131,4 +131,14 @@ test("a refused login leaves routing until a new sign-in, a passing test or AUTH
   const states = { a: { state: "auth" }, b: { state: "limited", until: NOW + 1000 }, c: { state: "ok" }, d: { state: "credit" } };
   assert.deepEqual(rankByState([{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }], (id) => states[id], (x) => x.id).map((x) => x.id), ["c", "b", "a", "d"]);
   assert.equal(probeVerdict({ ok: false, cause: "bad_key" }), "auth");
+});
+
+test("a login that can never be renewed stays out of routing past AUTH_RETRY_MS (a colleague, 2026-11-19)", () => {
+  const msg = "ورود یا کلید Claude پذیرفته نشد (Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login`)";
+  assert.equal(isFinalAuthError(msg), true);
+  assert.equal(isFinalAuthError("Invalid API key"), false);
+  const later = { enabled: true, keyed: true, authAt: NOW - 3 * AUTH_RETRY_MS, now: NOW };
+  assert.equal(engineState({ ...later, authFinal: true }).state, "auth");
+  assert.equal(engineState(later).state, "ok");
+  assert.equal(engineState({ ...later, authAt: 0, authFinal: true }).state, "ok");
 });

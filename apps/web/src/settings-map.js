@@ -1,89 +1,111 @@
 // The map of Settings (owner 2026-11-01: «در نهایت احتمالا ۷-۸ تا گزینه سمت راست… نباید امکانی از دست بره»):
 // eight pages, each with its sections as tabs. A section's id is what links use (#/settings/<id>), so
 // every older link still lands on the right tab (ALIASES); nothing here knows about React or icons.
-import { FLAGS } from "./ui-prefs.js";
+import { FLAGS } from "./ui-flags.js";
 import { FEATURES, FEATURE_GROUPS } from "./settings-features.js";
 import { t } from "./i18n.js";
 
+export const SETTINGS_GROUPS = [
+  { id: "personal", label: t("شخصی") },
+  { id: "ai", label: t("هوش مصنوعی") },
+  { id: "integrations", label: t("اتصال‌ها و افزونه‌ها") },
+  { id: "system", label: t("سیستم و گزارش‌ها") },
+];
+
 export const SETTINGS_PAGES = [
   {
-    id: "status",
-    label: t("وضعیت"),
-    icon: "activity",
-    blurb: t("سلامت، آپدیت و اتصال‌ها"),
+    id: "appearance",
+    group: "personal",
+    label: t("ظاهر و گفتگو"),
+    icon: "palette",
+    blurb: t("سبک صفحه، چیدمان منو، رفتار گفتگو و اعلان"),
     sections: [
-      { id: "health", label: t("چک و تعمیر"), description: t("چک زنده و تعمیر با یک کلیک، و وضعیت اتصال‌ها.") },
-      { id: "server", label: t("وضعیت سرور"), description: t("منابع سرور و سرویس‌های گریفین.") },
+      { id: "appearance", label: t("ظاهر و چیدمان"), description: t("روی هر قسمت پیش‌نمایش بزنید تا گزینه‌هایش بیاید؛ تغییرها همان لحظه دیده می‌شوند.") },
+      { id: "chat", label: t("گفتگو و اعلان"), description: t("رفتار کادر پیام، ادامهٔ خودکار کار و اعلان روی همین دستگاه.") },
     ],
   },
   {
     id: "account",
-    label: t("حساب"),
+    group: "personal",
+    label: t("حساب و امنیت"),
     icon: "user",
-    blurb: t("نام، زبان، ورود دومرحله‌ای و نشست‌ها"),
-    sections: [{ id: "account", label: t("حساب"), description: t("نام شما در منو، زبان رابط و نشست‌های ورود.") }],
+    blurb: t("نام، زبان، ورود دومرحله‌ای، نشست‌ها و سکرت‌ها"),
+    sections: [
+      { id: "account", label: t("حساب و نشست‌ها"), description: t("نام شما در منو، زبان رابط، ورود دومرحله‌ای و نشست‌های فعال.") },
+      { id: "users", ownerOnly: true, label: t("کاربران"), description: t("افزودن همکاران و اعضای تیم با توکن شخصی؛ چت‌ها و یادداشت‌های هر کاربر جداست و موتورها مشترک‌اند.") },
+      { id: "secrets", ownerOnly: true, label: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
+    ],
   },
   {
-    id: "appearance",
-    label: t("ظاهر"),
-    icon: "palette",
-    blurb: t("سبک، لوگو و چیدمان صفحه"),
-    sections: [{ id: "appearance", label: t("ظاهر"), description: t("روی هر قسمت پیش‌نمایش بزنید تا گزینه‌هایش بیاید؛ تغییرها همان لحظه دیده می‌شوند.") }],
-  },
-  {
-    id: "chat",
-    label: t("گفتگو و اعلان"),
-    icon: "message",
-    blurb: t("رفتار گفتگو، صدا و اعلان"),
-    sections: [{ id: "chat", label: t("گفتگو و اعلان"), description: t("رفتار کادر پیام و ادامهٔ کار، و اعلان روی همین دستگاه.") }],
+    id: "engines",
+    group: "ai",
+    label: t("موتورها و سهمیه"),
+    icon: "cpu",
+    blurb: t("اکانت‌های کلاد و مدل‌ها، سهمیه و مصرف توکن"),
+    sections: [
+      { id: "providers", label: t("موتورها و اکانت‌ها"), description: t("مدیریت حساب‌های Claude، OpenAI، Codex و مدل پیش‌فرض هر موتور.") },
+      { id: "tokens", label: t("مصرف و سهمیه"), description: t("مصرف روزانهٔ توکن و وضعیت سهمیهٔ اشتراک‌ها.") },
+      // The maintainer's install only (accounting.mjs): shown when GET /api/accounting answers.
+      { id: "accounting", label: t("حسابداری مصرف"), hubOnly: true, description: t("مصرف همهٔ نصب‌ها از دیتابیس خودشان، اکانت‌های مشترک Claude و هشدارها. فقط روی همین نصب.") },
+    ],
   },
   {
     id: "assistant",
-    label: t("دستیار"),
+    group: "ai",
+    label: t("ایجنت‌ها و دانش"),
     icon: "bot",
-    blurb: t("ایجنت‌ها، موتورها، دانش و سکرت‌ها"),
+    blurb: t("پروفایل ایجنت‌ها، ابزارها و یادداشت‌های دانش"),
     sections: [
-      { id: "agents", label: t("ایجنت‌ها"), description: t("هر ایجنت پروفایل خودش را دارد: موتور، مدل و ابزارهای روشن. برای تنظیم، روی کارت بزن.") },
-      { id: "providers", label: t("موتورها"), description: t("حساب‌ها، کلیدها و مدل پیش‌فرض هر موتور.") },
-      { id: "knowledge", label: t("دانش"), description: t("فقط یادداشت‌های تأییدشده به قواعد ایجنت می‌روند.") },
-      { id: "secrets", label: t("سکرت‌ها"), description: t("کلیدهای موتورها و ابزارها، رمزنگاری‌شده روی همین سرور.") },
+      { id: "agents", label: t("ایجنت‌ها"), description: t("هر ایجنت پروفایل، توضیح و ابزارهای خودش را دارد. برای تنظیم روی کارت بزنید.") },
+      { id: "knowledge", label: t("دانش"), description: t("یادداشت‌های دائمی که دستیار در گفتگوهای بعدی از آن‌ها استفاده می‌کند.") },
     ],
   },
   {
     id: "links",
+    group: "integrations",
     label: t("اتصال‌ها"),
     icon: "plug",
-    blurb: t("پیام‌رسان‌ها، VPN، MCP، گوشی و مرورگر"),
+    blurb: t("تلگرام، بله، MCP، مرورگر، گوشی و پراکسی/VPN"),
     sections: [
       { id: "connections", label: t("پیام‌رسان‌ها"), description: t("ربات‌ها و اکانت تلگرامی که دستیار از آن‌ها پیام می‌گیرد.") },
-      { id: "proxy", label: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP، برای رسیدن به Claude، Cursor و تلگرام.") },
-      { id: "mcp", label: "MCP", description: t("سرورهای MCP شخصی شما برای Claude Code کامل.") },
-      { id: "phone", label: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد؛ ایجنت روی آن adb دارد. بدون نرم‌افزار روی کامپیوتر.") },
+      { id: "mcp", label: "MCP", description: t("سرورهای MCP شخصی شما برای اتصال به ابزارهای بیرونی.") },
       { id: "browser", label: t("مرورگر"), description: t("مرورگر خود شما از راه افزونه، و یک Chrome واقعی روی سرور که شما و ایجنت با هم در آن کار می‌کنید.") },
+      { id: "phone", label: t("گوشی"), description: t("گوشی اندرویدی که با کابل به همین کامپیوتر وصل است، از راه مرورگر (WebUSB) به ایجنت می‌رسد.") },
+      { id: "proxy", label: t("پراکسی و VPN"), description: t("لینک VPN (v2ray یا اشتراک) یا پراکسی HTTP برای رسیدن به Claude، Cursor و تلگرام.") },
     ],
   },
   {
     id: "extend",
-    label: t("بازارچه و قابلیت‌ها"),
+    group: "integrations",
+    label: t("افزونه‌ها و قابلیت‌ها"),
     icon: "store",
-    blurb: t("بخش‌ها، قابلیت‌های تازه و پیکربندی"),
+    blurb: t("بازارچهٔ بخش‌ها و کلیدهای قابلیت"),
     sections: [
-      { id: "market", label: t("بازارچه"), description: t("بخش‌های گریفین و افزونه‌ها: روشن و خاموش کردن، آمدن در منو و تنظیمات هر کدام، همه روی کارت خودش. تعارض‌ها و جابه‌جایی گفتگوها را خودش حساب می‌کند.") },
-      { id: "features", label: t("قابلیت‌ها"), description: t("هر کلید را می‌شود جدا روشن و خاموش کرد؛ علامت ؟ می‌گوید چه می‌کند. قابلیت‌های تازه برچسب «تازه» دارند و بیشترشان پیش‌فرض خاموش‌اند.") },
-      { id: "config", label: t("پیکربندی"), description: t("مقدارهایی که قبلاً متغیر محیطی بود: نام‌ها، مدل‌ها، بکاپ و آدرس‌ها.") },
+      { id: "market", label: t("بازارچه"), description: t("بخش‌های گریفین و افزونه‌ها: روشن و خاموش کردن، آمدن در منو و تنظیمات هر کدام، همه روی کارت خودش.") },
+      { id: "features", label: t("قابلیت‌ها"), description: t("هر کلید را می‌شود جدا روشن و خاموش کرد؛ علامت ؟ می‌گوید چه می‌کند. قابلیت‌های تازه برچسب «تازه» دارند.") },
+    ],
+  },
+  {
+    id: "status",
+    group: "system",
+    label: t("سیستم و سلامت"),
+    icon: "activity",
+    blurb: t("چک و تعمیر، منابع سرور و پیکربندی پیشرفته"),
+    sections: [
+      { id: "health", label: t("چک و تعمیر"), description: t("چک زنده و تعمیر با یک کلیک، آپدیت و وضعیت اتصال‌ها.") },
+      { id: "server", label: t("وضعیت سرور"), description: t("منابع سرور و سرویس‌های گریفین.") },
+      { id: "config", label: t("پیکربندی پیشرفته"), description: t("تنظیمات سیستمی، نام‌ها، مدل‌ها، بکاپ و آدرس‌ها.") },
     ],
   },
   {
     id: "reports",
-    label: t("گزارش‌ها"),
+    group: "system",
+    label: t("گزارش‌ها و بازخورد"),
     icon: "chart",
-    blurb: t("مصرف توکن، کلیک‌ها و بازخوردها"),
+    blurb: t("بازخورد همکاران و نقشهٔ کلیک‌ها"),
     sections: [
-      { id: "tokens", label: t("مصرف توکن"), description: t("توکن روزبه‌روز، به تفکیک مدل و گفتگو.") },
-      // The maintainer's install only (accounting.mjs): shown when GET /api/accounting answers.
-      { id: "accounting", label: t("حسابداری مصرف"), hubOnly: true, description: t("مصرف همهٔ نصب‌ها از دیتابیس خودشان، اکانت‌های مشترک Claude و هشدارها. فقط روی همین نصب.") },
-      { id: "clicks", label: t("نقشهٔ کلیک‌ها"), description: t("کجای صفحه بیشتر کلیک می‌شود، کدام کلیک‌ها بی‌اثرند و کدام بخش‌ها زده نمی‌شوند؛ ۱۴ روز اخیر. روی نصب نگه‌دارنده، همهٔ نصب‌ها با هم. فقط نام دکمه و بخش شمرده می‌شود، هرگز متن.") },
       { id: "feedback", label: t("بازخوردها"), description: t("بازخورد و درخواست پشتیبانی که از نصب همکاران (و همین‌جا) رسیده، با تصویر صفحه و جزئیات.") },
+      { id: "clicks", label: t("نقشهٔ کلیک‌ها"), description: t("کجای صفحه بیشتر کلیک می‌شود، کدام کلیک‌ها بی‌اثرند و کدام بخش‌ها زده نمی‌شوند؛ ۱۴ روز اخیر.") },
     ],
   },
 ];
@@ -91,22 +113,35 @@ export const SETTINGS_PAGES = [
 // What older pages, links and the Karsara list called them, and a page's own id (its first tab).
 const ALIASES = {
   profile: "account",
+  security: "account",
   notifications: "chat",
   composer: "chat",
   doctor: "health",
   status: "health",
+  system: "health",
   modules: "market",
   mybrowser: "browser",
   serverbrowser: "browser",
   assistant: "agents",
+  engines: "providers",
+  models: "providers",
   links: "connections",
   extend: "market",
-  reports: "tokens",
+  reports: "feedback",
 };
 
 export const FIRST_SECTION = "health";
+export const DEFAULT_SECTION = "providers";
 
-export const pagesFor = (hub = false) => SETTINGS_PAGES.map((page) => ({ ...page, sections: page.sections.filter((s) => hub || !s.hubOnly) }));
+const MEMBER_SECTIONS = new Set(["appearance", "account"]);
+export const pagesFor = (hub = false, member = false) =>
+  SETTINGS_PAGES.map((page) => ({
+    ...page,
+    sections: page.sections.filter((s) => {
+      if (member) return MEMBER_SECTIONS.has(s.id);
+      return hub || !s.hubOnly;
+    }),
+  })).filter((page) => page.sections.length > 0);
 
 /** A section id, an old name or a page's id → the section it means; null for anything else. */
 export function sectionId(id) {
@@ -116,8 +151,15 @@ export function sectionId(id) {
 
 export const pageOf = (id, pages = SETTINGS_PAGES) => pages.find((page) => page.sections.some((s) => s.id === id)) || null;
 
+// "#/settings/<section>" or "#/settings/<section>/<row>": the row is where a suggestion card's «برو به
+// تنظیم» lands (SettingsSuggest.jsx) — a setting's key or a flag's (settings-catalog.js `focus`).
+const SETTINGS_LINK = /^#\/settings\/([a-z-]{2,32})(?:\/([A-Za-z][A-Za-z0-9_]{1,40}))?$/;
 /** The section an address names: "#/settings/providers" → "providers"; "#/settings" names none. */
-export const linkedSection = (hash) => sectionId(/^#\/settings\/([a-z-]{2,32})$/.exec(hash || "")?.[1]);
+export const linkedSection = (hash) => sectionId(SETTINGS_LINK.exec(hash || "")?.[1]);
+/** The row an address names: "#/settings/chat/ENTER_KEY" → "ENTER_KEY"; null for none. */
+export const linkedRow = (hash) => (linkedSection(hash) ? SETTINGS_LINK.exec(hash)[2] || null : null);
+/** The address of a section, and of one row in it. */
+export const settingsLink = (section, row = null) => `#/settings/${section}${row ? `/${row}` : ""}`;
 
 /** Where «ظاهر» draws a flag. The other flags of FLAGS are parts of one choice (MERGED_FLAGS). */
 export const ZONES = [
@@ -174,30 +216,41 @@ export function settingsIndex(rows = [], pages = pagesFor(true)) {
     entries.push({ id: `page:${page.id}`, title: page.label, path: page.blurb, section: page.sections[0].id, words: fold(`${page.label} ${page.blurb}`) });
     if (page.sections.length > 1) for (const s of page.sections) entries.push({ id: `tab:${s.id}`, title: s.label, path: page.label, section: s.id, words: fold(`${s.label} ${s.description}`) });
   }
-  const appearance = pageOf("appearance", pages).label;
-  for (const flag of FLAGS) {
-    const elsewhere = Object.entries(FLAGS_ELSEWHERE).find(([, keys]) => keys.includes(flag.key))?.[0];
-    const zone = ZONES.find((z) => z.id === zoneOfFlag(flag.key));
-    entries.push({ id: `flag:${flag.key}`, title: flag.label, path: elsewhere ? pageOf(elsewhere, pages).label : `${appearance} ← ${zone?.label || ""}`, section: elsewhere || "appearance", focus: flag.key, words: fold(`${flag.label} ${flag.hint} ${flag.key}`) });
+  const appearancePage = pageOf("appearance", pages);  const appearance = appearancePage?.label || "";
+  if (appearancePage) {
+    for (const flag of FLAGS) {
+      const elsewhere = Object.entries(FLAGS_ELSEWHERE).find(([, keys]) => keys.includes(flag.key))?.[0];
+      const targetPage = elsewhere ? pageOf(elsewhere, pages) : appearancePage;
+      if (!targetPage) continue;
+      const zone = ZONES.find((z) => z.id === zoneOfFlag(flag.key));
+      entries.push({ id: `flag:${flag.key}`, title: flag.label, path: elsewhere ? targetPage.label : `${appearance} ← ${zone?.label || ""}`, section: elsewhere || "appearance", focus: flag.key, words: fold(`${flag.label} ${flag.hint} ${flag.key}`) });
+    }
   }
   for (const feature of FEATURES) {
     const row = rows.find((r) => r.key === feature.key);
     const group = FEATURE_GROUPS.find((g) => g.id === feature.group);
     const section = row?.modules?.length ? "market" : group.section;
-    entries.push({ id: `set:${feature.key}`, title: feature.title, path: `${pageOf(section, pages).label} ← ${group.label}`, section, focus: feature.key, words: fold(`${feature.title} ${feature.help} ${feature.key}`) });
+    const targetPage = pageOf(section, pages);
+    if (!targetPage) continue;
+    entries.push({ id: `set:${feature.key}`, title: feature.title, path: `${targetPage.label} ← ${group.label}`, section, focus: feature.key, words: fold(`${feature.title} ${feature.help} ${feature.key}`) });
   }
   return entries;
 }
 
-/** The best matches for what was typed: a hit in the title before one in the text. */
+/** The best matches for what was typed: main pages and tabs first, then title hits before body hits. */
 export function searchSettings(query, entries, limit = 12) {
   const parts = fold(query).split(" ").filter(Boolean);
   if (!parts.length) return [];
   const hits = entries.filter((e) => parts.every((part) => e.words.includes(part)));
   const whole = parts.join(" ");
-  const inTitle = (e) => {
+  const isNav = (e) => e.id.startsWith("page:") || e.id.startsWith("tab:");
+  const rank = (e) => {
     const title = fold(e.title);
-    return title === whole ? 0 : title.includes(whole) ? 1 : parts.every((part) => title.includes(part)) ? 2 : 3;
+    if (title === whole) return isNav(e) ? 0 : 1;
+    if (title.includes(whole)) return isNav(e) ? 2 : 4;
+    if (parts.every((part) => title.includes(part))) return isNav(e) ? 3 : 5;
+    // Matching a main page/tab's blurb (e.g. «تلگرام» in اتصال‌ها / پیام‌رسان‌ها) ranks ahead of obscure flags.
+    return isNav(e) ? 3.5 : 6;
   };
-  return hits.sort((a, b) => inTitle(a) - inTitle(b)).slice(0, limit);
+  return hits.sort((a, b) => rank(a) - rank(b)).slice(0, limit);
 }

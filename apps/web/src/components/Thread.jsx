@@ -19,7 +19,6 @@ import { filesLine, rewindChoices, textBackToBox } from "../rewind.js";
 import { AgentGlyph, EffortPicker, ModeToggle, ModelPicker, loadDoctor, useRunAccount } from "./Controls.jsx";
 import { agentMeta } from "../brand.js";
 import { pickSuggestions } from "../suggestions.js";
-import { locale, num, t, isRtl } from "../i18n.js";
 import { toast } from "sonner";
 import { countProblem, dragHasFiles, formatBytes, isImageAttachment, overLimit } from "../attachments.js";
 import { api, navigate, reloadTimeline } from "../api.js";
@@ -34,6 +33,7 @@ import { NoteRow, PersonAvatar, PersonName } from "./Telegram.jsx";
 import { isNoReply, motherName, peerFrame, reminderFrame, stripOwnerFrame, stripSender, userSide } from "../telegram.js";
 import { shiftEnterSends, submitMode, useTouchPrimary } from "../touch.js";
 import { loadDraft, saveDraft } from "../draft.js";
+import { ASK_EVENT, joinAskLink, takeAskLink } from "../ask-link.js";
 import { MAX_RECORD_MS, joinDictation, pickAudioMime, recordClock, toWav } from "../dictation.js";
 import { holdReload } from "../new-version.js";
 import { HomeNotes, ScheduledPeek, SendLater } from "./Notes.jsx";
@@ -46,7 +46,7 @@ import { WhyButton, WhyFlag, WhyPanel } from "./Why.jsx";
 import { phaseLabel } from "../run-phase.js";
 import { answerItems, chapterAnchor } from "../chat-tools.js";
 import { ChapterDivider, ChapterToc, ChatSuggestions, SuggestionCard } from "./ChatTools.jsx";
-import { tr } from "../fill.js";
+import { fill } from "../fill.js";
 import { useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
 import { MessageBoundary } from "../boundary.js";
 import { useAutosize } from "../autosize.js";
@@ -54,6 +54,7 @@ import { escCancels } from "../keys.js";
 import { clockLabel, exactTime, fullAgo } from "../elapsed.js";
 import { answerTokens } from "../tokens-format.js";
 import { MentionPart } from "./Mention.jsx";
+import { locale, t, isRtl } from "../i18n.js";
 
 const ChatContext = createContext({ chatId: null, readOnly: false, settled: { current: true } });
 
@@ -147,7 +148,7 @@ export function Thread({
   header,
   runInfo,
   readOnly = false,
-  canSide = false, // "to side chat" in the selection toolbar (App: an owner's chat, SIDE_CHAT on)
+  canSide = false, // «به چت کناری» in the selection toolbar (App: an owner's chat, SIDE_CHAT on)
   agentLabel = t("ایجنت"),
   agent = "griffin",
   fresh = false,
@@ -244,14 +245,14 @@ function LoadEarlier({ earlier, onLoad }) {
   return (
     <div className="flex justify-center py-3">
       <button ref={ref} type="button" onClick={load} disabled={busy} className="rounded-full border px-3 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-60">
-        {busy ? t("در حال بارگذاری…") : t("پیام‌های قبلی ({toLocaleString})", { toLocaleString: earlier.toLocaleString("fa-IR") })}
+        {busy ? t("در حال بارگذاری…") : t("پیام‌های قبلی ({toLocaleString})", { toLocaleString: earlier.toLocaleString(locale) })}
       </button>
     </div>
   );
 }
 
 function ThreadBody({ runInfo, readOnly, agentLabel, agent, fresh, recentTitles, onSuggestion, mode, model, onModeChange, onModelChange, effort, onEffortChange, composerTop, compact, placeholder, board, loading = false, earlier = 0, onLoadEarlier = null }) {
-  // New chat page: the box is docked at the bottom like in a chat; the owner's
+  // New chat page (owner, 2026-10-13): the box is docked at the bottom like in a chat; the owner's
   // board — or, with nothing on it, the welcome and suggestions — fills the page above it. The
   // side chat (compact) keeps its composer in the middle.
   // The first message on its way replaces the page with its bubble.
@@ -350,7 +351,7 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
   if (!homeBoard) {
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 py-6">
-        <h2 className="text-center text-lg font-medium text-foreground/90" dir="auto">{meta.blurb || meta.label}</h2>
+        <h2 className="text-center text-lg font-medium text-foreground/90" dir={isRtl ? "rtl" : "ltr"}>{meta.blurb || meta.label}</h2>
         {compact ? null : <SetupCard />}
         {composer}
         {compact ? null : <HomeNotes />}
@@ -378,8 +379,8 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
       )}
       {board ? null : (
         <motion.div variants={fadeUp} className="text-center">
-          <h2 className="text-xl font-semibold" dir="auto">{meta.label}</h2>
-          <p className="mt-1 text-sm text-muted-foreground" dir="auto">{meta.blurb}</p>
+          <h2 className="text-xl font-semibold" dir={isRtl ? "rtl" : "ltr"}>{meta.label}</h2>
+          <p className="mt-1 text-sm text-muted-foreground" dir={isRtl ? "rtl" : "ltr"}>{meta.blurb}</p>
         </motion.div>
       )}
       <motion.div variants={fadeUp} className="w-full">
@@ -406,7 +407,7 @@ function WelcomeHero({ agent, agentLabel, recentTitles, onSuggestion, mode, mode
               transition={{ delay: 0.28 + i * 0.05, type: "spring", stiffness: 380, damping: 28 }}
               onClick={() => onSuggestion?.(item.prompt)}
               className="press rounded-full border bg-card px-3.5 py-2 text-sm text-foreground/90 transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-sm"
-              dir="auto"
+              dir={isRtl ? "rtl" : "ltr"}
             >
               {item.title}
             </motion.button>
@@ -428,7 +429,7 @@ const fadeUp = {
   show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 380, damping: 28 } },
 };
 
-// «هنوز وصل نیستند» on a new chat: an engine with no working key, a messenger that
+// «هنوز وصل نیستند» on a new chat (from Karsara): an engine with no working key, a messenger that
 // is down — each with its wizard and a «بعداً» that hides that one item on this browser.
 const SETUP_LATER = "griffin.setup-later";
 const readLater = () => {
@@ -442,10 +443,10 @@ const readLater = () => {
 export function setupItems(setup, report) {
   const items = [];
   const engines = (report?.checks || []).filter((c) => c.level !== "ok" && (c.id === "engines" || c.id.startsWith("engine:")));
-  if (engines.length) for (const c of engines) items.push({ id: c.id, text: tr(c.title, c.vars), flow: "engine" });
+  if (engines.length) for (const c of engines) items.push({ id: c.id, text: fill(c.title, c.vars), flow: "engine" });
   else if (setup?.needsEngine) items.push({ id: "engines", text: t("هیچ موتور هوش مصنوعی وصل نیست"), flow: "engine" });
   for (const c of report?.checks || []) {
-    if (c.level !== "ok" && c.id.startsWith("integration:")) items.push({ id: c.id, text: tr(c.title, c.vars), flow: "telegram" });
+    if (c.level !== "ok" && c.id.startsWith("integration:")) items.push({ id: c.id, text: fill(c.title, c.vars), flow: "telegram" });
   }
   return items;
 }
@@ -477,7 +478,7 @@ function SetupCard() {
   if (karsara) {
     // Karsara's SetupRow (Karsara Setup.jsx): an icon tile, the line, «وصل کن», and ✕ for «بعداً».
     return (
-      <section className="rounded-2xl border border-warn/40 bg-warn/5 p-4" aria-label={t("هنوز وصل نیستند")}>
+      <section className="rounded-2xl border border-warn/40 bg-warn/5 p-4" aria-label={t("آماده‌سازی کارسرا")}>
         <p className="mb-3 text-sm font-medium">{t("این‌ها هنوز وصل نیستند:")}</p>
         <ul className="divide-y">
           {items.map((item) => {
@@ -561,7 +562,7 @@ function GuestNote({ from }) {
     <MessagePrimitive.Root className="group my-3 flex flex-col items-stretch">
       <div className="g-guest-note rounded-2xl bg-muted/60 px-3 py-2">
         <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <StickyNote className="size-3.5" /> {t("یادداشتِ {name} · ایجنت آن را اجرا نمی‌کند", { name: from || t("مهمان") })}
+          <StickyNote className="size-3.5" /> {t("یادداشتِ {v} · ایجنت آن را اجرا نمی‌کند", { v: from || t("مهمان") })}
         </p>
         <p className="chat-text whitespace-pre-wrap break-words leading-7" dir={chatDir(text)}>{text}</p>
       </div>
@@ -587,9 +588,9 @@ function subscribeClock(onChange) {
   };
 }
 
-// When, as a clock ("14:03", "yesterday 14:03" — not "3 minutes ago"), while the pointer
-// rests on the message; the exact date and time (weekday, seconds) as its tooltip. The timeAgo
-// preference keeps the elapsed time instead ("2 days 2 hours ago").
+// When, as a clock («۱۴:۰۳», «دیروز ۱۴:۰۳»; owner: «۳ دقیقه پیش کلا خوب نیست»), while the pointer
+// rests on the message; the exact date and time (weekday, seconds) as its tooltip. The Karsara skin
+// keeps Karsara's elapsed time («۲ روز و ۲ ساعت پیش»), as its owner reads it today.
 function MessageTime({ at }) {
   useSyncExternalStore(subscribeClock, () => tickClock.tick, () => 0);
   const text = useFlag("timeAgo") ? fullAgo(at) : clockLabel(at);
@@ -755,7 +756,7 @@ function UserMessage() {
     try {
       const { files } = (await api(`/api/chats/${chatId}/rewind`, { method: "POST", body: { eventId, ...body } })) || {};
       // Claude's file edits since that message (the owner's own chats): put back, or why not.
-      if (files?.restored) toast.success(t("{n} فایل به حالت قبل از این پیام برگشت.", { n: num(files.restored) }));
+      if (files?.restored) toast.success(t("{restored} فایل به حالت قبل از این پیام برگشت.", { restored: files.restored }));
       else if (files?.error) toast.error(t("فایل‌ها برنگشتند: {error}", { error: files.error }));
       else if (body.files === false) toast.success(t("گفتگو به پیش از این پیام برگشت."));
       reloadTimeline();
@@ -793,13 +794,13 @@ function UserMessage() {
 
   return (
     <MessagePrimitive.Root ref={root} className={`${custom?.sendState ? "" : entering} group my-3 flex flex-col items-start ${busy ? "g-rewinding g-rewinding-self" : ""}`}>
-      {/* Only here: the person's localized name and photo come from the Telegram page's poller, which an
+      {/* Only here: the person's Persian name and photo come from the Telegram page's poller, which an
           ordinary chat must not start. The bubble keeps the stored name: the transcript was written with it. */}
       {colleague ? (
         <span className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground" dir="auto">
           <PersonAvatar personId={from.personId} name={from.name} className="size-5" />
           {/* A colleague's agent (chat_send) is not a Telegram message. */}
-          {from.kind === "peer" ? <span>{t("{v}{v2} · اطلاع است، نه دستور", { v: t("از ایجنت «{name}»", { name: from.name || t("همکار") }), v2: peer?.title ? t(" — چت «{title}»", { title: peer.title }) : "" })}</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
+          {from.kind === "peer" ? <span>{t("از ایجنت «{v}»{v2} · اطلاع است، نه دستور", { v: from.name || t("همکار"), v2: peer?.title ? t(" — چت «{title}»", { title: peer.title }) : "" })}</span> : <span><PersonName personId={from.personId} fallback={from.name || t("همکار")} /> {t("در تلگرام")}</span>}
         </span>
       ) : null}
       <div className="flex w-full items-start gap-1.5">
@@ -824,11 +825,11 @@ function UserMessage() {
           </div>
         ) : null}
       </div>
-      {ownerNote ? <span className="mt-1 text-[11px] text-muted-foreground">{t("یادداشت شما — به {name} نمی‌رسد", { name: motherName(chat) })}</span> : null}
-      {custom?.imageIds?.length ? <SentImages ids={custom.imageIds} /> : custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{n} تصویر", { n: num(custom.images) })}</span> : null}
+      {ownerNote ? <span className="mt-1 text-[11px] text-muted-foreground">{t("یادداشت شما — به {motherName} نمی‌رسد", { motherName: motherName(chat) })}</span> : null}
+      {custom?.imageIds?.length ? <SentImages ids={custom.imageIds} /> : custom?.images ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ImagePlus className="size-3" /> {t("{images} تصویر", { images: custom.images })}</span> : null}
       {custom?.files?.length ? <SentFiles files={custom.files} /> : null}
       {label ? <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><ListTodo className="size-3" /> {label}</span> : null}
-      {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} /> : null}
+      {custom?.sendState ? <SendState state={custom.sendState} clientId={custom.clientId} reason={custom.sendError} /> : null}
       {busy ? <span className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" /> {t("در حال برگشت به اینجا…")}</span> : null}
       {rewindOpen ? <RewindDialog chatId={chatId} eventId={eventId} busy={busy} onRun={act} onClose={() => setRewindOpen(false)} /> : null}
       {/* Zero height: shown on hover under the bubble without moving the thread. items-start: it hangs
@@ -876,26 +877,19 @@ function CopyMessage({ text, labeled = false }) {
 }
 
 // A message still on its way (outbox.js): its state, and on a failure «ارسال دوباره» / «ویرایش».
-function SendState({ state, clientId }) {
-  const karsara = useLook() === "karsara";
-  if (state === "failed" && karsara) {
+function SendState({ state, clientId, reason }) {
+  if (state === "failed") {
+    // A failed send must not pass unnoticed: a red box with the reason and the way out (owner 2026-11-23).
     return (
-      <span className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-        <span className="flex items-center gap-1 text-bad"><AlertCircle className="size-3.5" /> {FAILED_LABEL}</span>
-        <button type="button" onClick={() => retrySend(clientId)} className="g-btn inline-flex min-h-9 items-center gap-1 rounded-lg border px-3 py-1 text-xs hover:bg-muted">
+      <div role="alert" className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-bad/50 bg-bad/10 px-3 py-2 text-xs text-bad">
+        <AlertCircle className="size-4 shrink-0" />
+        <span className="font-medium">{FAILED_LABEL}</span>
+        {reason ? <span className="min-w-0 flex-1 basis-40 text-foreground/80" dir="auto">{reason}</span> : null}
+        <button type="button" onClick={() => retrySend(clientId)} className="g-btn inline-flex min-h-9 items-center gap-1 rounded-lg border border-bad/50 bg-background px-3 py-1 text-xs text-foreground hover:bg-muted">
           <RotateCcw className="size-3.5" /> {t("ارسال دوباره")}
         </button>
         <button type="button" onClick={() => editSend(clientId)} className="min-h-9 px-2 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{t("ویرایش")}</button>
-      </span>
-    );
-  }
-  if (state === "failed") {
-    return (
-      <span className="mt-1 flex items-center gap-2 text-xs text-bad">
-        {FAILED_LABEL}
-        <button type="button" onClick={() => retrySend(clientId)} className="press rounded-md px-1.5 py-0.5 underline hover:bg-bad/10">{t("ارسال دوباره")}</button>
-        <button type="button" onClick={() => editSend(clientId)} className="press rounded-md px-1.5 py-0.5 text-muted-foreground underline hover:bg-muted">{t("ویرایش")}</button>
-      </span>
+      </div>
     );
   }
   // On its way: a quiet mark that takes no height and shows only if it lasts, so a normal send moves
@@ -1154,13 +1148,13 @@ function RunFooter({ run }) {
         </span>
       ) : null}
 
-      {/* One quiet line, like Claude's: clock and model; duration and tokens on hover. */}
+      {/* One quiet line, like Claude's (owner 2026-10-17): clock and model; duration and tokens on hover. */}
       {done && (answeredAt || model) ? (
         <span
           className="g-run-meta text-xs text-muted-foreground/80"
           title={[
-            seconds && t("طول کشید: {duration}", { duration: formatDuration(seconds) }),
-            run.usage && t("{tokens} توکن (ورودی {input} · خروجی {output})", { tokens: compactTokens(run.usage.input + run.usage.output), input: num(run.usage.input), output: num(run.usage.output) }),
+            seconds && t("طول کشید: {formatDuration}", { formatDuration: formatDuration(seconds) }),
+            run.usage && t("{compactTokens} توکن (ورودی {toLocaleString} · خروجی {toLocaleString2})", { compactTokens: compactTokens(run.usage.input + run.usage.output), toLocaleString: run.usage.input.toLocaleString(locale), toLocaleString2: run.usage.output.toLocaleString(locale) }),
           ].filter(Boolean).join(" · ") || undefined}
         >
           {[answeredAt, model].filter(Boolean).join(" · ")}
@@ -1205,7 +1199,7 @@ function browserStorage() {
   }
 }
 
-// Voice dictation: one tap records, the next stops; the clip goes to
+// Voice dictation (from Karsara): one tap records, the next stops; the clip goes to
 // /api/transcribe and the text joins what is in the box. It never sends the message. Hidden where
 // the browser cannot record (no microphone API, or a page not served over https), and until the
 // install has speech to text set up (a colleague 2026-10-24: he spoke 30 seconds into an unset one
@@ -1276,7 +1270,7 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
       else toast(t("چیزی شنیده نشد."));
       focus?.();
     } catch (error) {
-      toast.error(t("تبدیل گفتار به متن انجام نشد: {error}", { error: t(error.message) }));
+      toast.error(t("تبدیل گفتار به متن انجام نشد: {message}", { message: error.message }));
     } finally {
       if (mounted.current) setState("idle");
     }
@@ -1342,7 +1336,7 @@ function DictateButton({ value, setText, focus, size, className = "mb-1" }) {
   if (state === "recording") {
     return (
       <button type="button" onClick={stop} className={`${className} flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-red-500/15 px-2.5 text-xs`} title={t("پایان ضبط و نوشتن متن")} aria-label={t("پایان ضبط")}>
-        <span className="size-2 animate-pulse rounded-full bg-red-500" aria-hidden /> {recordClock(elapsed, locale)}
+        <span className="size-2 animate-pulse rounded-full bg-red-500" aria-hidden /> {recordClock(elapsed)}
       </button>
     );
   }
@@ -1483,7 +1477,35 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     saveDraft(browserStorage(), chatId, composerText);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerText]);
-  // Esc anywhere in this thread stops the running turn, as the stop button does.
+  // A «#/new?ask=» link (ask-link.js): its text lands in the new chat's box, above a draft that was
+  // there, focused and never sent. Only the page's own new chat takes it, not a side chat's box.
+  useEffect(() => {
+    if (chatId) return undefined;
+    const fill = () => {
+      if (rootRef.current?.closest(".side-panel")) return;
+      let tab = null;
+      try {
+        tab = window.sessionStorage;
+      } catch {
+        return;
+      }
+      const ask = takeAskLink(tab);
+      if (!ask) return;
+      // On mount the draft (effect above) is not in `boxText` yet: read it where it is kept.
+      setText(joinAskLink(ask, boxText.current || loadDraft(browserStorage(), chatId)));
+      requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange?.(ask.length, ask.length);
+      });
+    };
+    fill();
+    window.addEventListener(ASK_EVENT, fill);
+    return () => window.removeEventListener(ASK_EVENT, fill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+  // Esc anywhere in this thread stops the running turn, as the stop button does (from Karsara).
   // The box itself is assistant-ui's (cancelOnEscape); an open dialog, menu or the «/» list, or a
   // focused field, keeps its own Esc (keys.js). A side chat stops only for an Esc inside it.
   const escRunning = useRef(running);
@@ -1505,9 +1527,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     return () => window.removeEventListener("keydown", onKey, true);
   }, [aui]);
   const focusInput = () => inputRef.current?.focus();
-  // A queued message taken back with "edit" (QueuePeek): above what is in the box, like a restore.
+  // A queued message taken back with «ویرایش» (QueuePeek): above what is in the box, like a restore.
   const takeBack = (text) => {
-    setText([text, boxText.current].filter((s) => s?.trim()).join("\n"));
+    setText([text, boxText.current].filter((t) => t?.trim()).join("\n"));
     focusInput();
   };
   // Only quotes in the box (a reply with nothing typed): the composer itself cannot send an empty
@@ -1559,7 +1581,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
     ? own
     : karsara
     ? running ? t("پیام بده تا وسط کار به ایجنت برسد…") : t("کاری را شرح دهید یا سؤالی بپرسید")
-    : running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agent} بپرس…", { agent: agentLabel });
+    : running ? (hero ? t("پیام بده تا وسط کار برسد…") : t("پیام بده تا وسط کار به ایجنت برسد…")) : t("از {agentLabel} بپرس…", { agentLabel });
   const input = (
     <ComposerPrimitive.Input
       ref={inputRef}
@@ -1568,10 +1590,10 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       // A phone opens its keyboard on any focus: there the box waits for a tap (also on thread
       // switch, run start and scroll-to-bottom, which the library ties to autoFocus).
       autoFocus={!touch}
-      dir={composerText.trim() ? chatDir(composerText) : isRtl ? "rtl" : "ltr"}
+      dir={chatDir(composerText)}
       submitMode={submitMode(touch)}
       onKeyDown={onInputKey}
-      aria-label={t("پیام به {agent}", { agent: agentLabel })}
+      aria-label={t("پیام به {agentLabel}", { agentLabel })}
       placeholder={placeholder}
       className={`scrollbar-thin relative z-[1] min-w-0 resize-none bg-transparent outline-none placeholder:text-muted-foreground ${
         karsara
@@ -1592,7 +1614,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
           focusInput();
         }}
         className="pointer-events-auto ms-2 whitespace-nowrap rounded-md border px-1.5 align-middle text-[11px] leading-5 hover:border-primary hover:text-foreground pointer-coarse:px-2.5 pointer-coarse:text-xs pointer-coarse:leading-6"
-        aria-label={t("نوشتن پیشنهاد در کادر: {text}", { text: next })}
+        aria-label={t("نوشتن پیشنهاد در کادر: {next}", { next })}
         title={t("پیشنهاد را در کادر می‌نویسد؛ فرستاده نمی‌شود")}
       >
         {touch ? t("پذیرفتن") : "Tab"}
@@ -1734,9 +1756,9 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
             </button>
           ) : (
             // Send is the one filled (accent) button while it can send; empty, it is plain like the
-            // microphone.
+            // microphone (from Karsara, owner 2026-10-12).
             withLater(
-              <ComposerPrimitive.Send className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={`${t("ارسال")}${laterHint}`}>
+              <ComposerPrimitive.Send className="g-send flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:bg-transparent disabled:text-muted-foreground disabled:opacity-50" title={t("ارسال{laterHint}", { laterHint })}>
                 <ArrowUp className="size-5" />
               </ComposerPrimitive.Send>,
             )
@@ -1745,7 +1767,7 @@ function Composer({ agentLabel, variant = "dock", mode = "agent", model = "", ag
       </div>
       {nonClaude}
     </ComposerPrimitive.Root>
-    {/* Under the box: +, microphone and mode; model and effort at the far end. The box keeps its width for text. */}
+    {/* Under the box (owner, 2026-10-12): +, microphone and mode; model and effort at the far end. The box keeps its width for text. */}
     <div className="g-composer-bar mt-1.5 flex min-w-0 flex-wrap items-center gap-0.5 px-1">
       <ComposerPrimitive.AddAttachment className="g-icon-btn flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title={t("افزودن فایل یا تصویر")} aria-label={t("افزودن فایل یا تصویر")}>
         <Plus className="size-4" />

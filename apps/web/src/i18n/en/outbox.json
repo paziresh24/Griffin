@@ -1,5 +1,9 @@
 {
   "در حال ارسال…": "Sending…",
   "ارسال شد": "Sent",
-  "ارسال نشد": "Not sent"
+  "ارسال نشد": "Not sent",
+  "اتصال به سرور برقرار نشد؛ اینترنت یا VPN را بررسی کنید.": "Could not reach the server; check your internet or VPN.",
+  "درخواست‌ها زیاد است (کد ۴۲۹)؛ کمی بعد دوباره بفرستید.": "Too many requests (429); try again in a moment.",
+  "پاسخ سرور دیر رسید (کد ۴۰۸).": "The server took too long to answer (408).",
+  "خطای سرور (کد {v}).": "Server error (code {v})."
 }

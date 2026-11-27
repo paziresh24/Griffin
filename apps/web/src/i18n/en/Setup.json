@@ -82,5 +82,17 @@
   "ایجنت اصلی از این موتور استفاده کند": "Let the main agent use this engine",
   "مدل پیش‌فرض این موتور": "This engine's default model",
   "✓ (فقط پیام کوچک)": "✓ (small messages only)",
-  "سرورهای این VPN درخواست‌های بزرگ Claude را قطع می‌کنند؛ چت‌های طولانی با «اتصال قطع شد» می‌مانند. اگر این سرور بدون VPN به Claude می‌رسد، api.anthropic.com و platform.claude.com را در «همیشه مستقیم (بدون VPN)» بنویسید، یا سرور دیگری اضافه کنید.": "This VPN's servers cut large Claude requests; long chats stop with “connection dropped”. If this server reaches Claude without the VPN, put api.anthropic.com and platform.claude.com under “always direct (no VPN)”, or add another server."
+  "سرورهای این VPN درخواست‌های بزرگ Claude را قطع می‌کنند؛ چت‌های طولانی با «اتصال قطع شد» می‌مانند. اگر این سرور بدون VPN به Claude می‌رسد، api.anthropic.com و platform.claude.com را در «همیشه مستقیم (بدون VPN)» بنویسید، یا سرور دیگری اضافه کنید.": "This VPN's servers cut large Claude requests; long chats stop with “connection dropped”. If this server reaches Claude without the VPN, put api.anthropic.com and platform.claude.com under “always direct (no VPN)”, or add another server.",
+  "اشتراک ChatGPT (Codex)": "ChatGPT subscription (Codex)",
+  "اشتراک (Claude، ChatGPT یا Google)": "Subscription (Claude, ChatGPT or Google)",
+  "اشتراک Google Antigravity": "Google Antigravity subscription",
+  "اشتراک کدام سرویس را دارید؟": "Which service is your subscription with?",
+  "اگر Google AI Pro/Ultra داری": "If you have Google AI Pro/Ultra",
+  "اگر اشتراک ChatGPT (Plus/Pro/Business) داری": "If you have a ChatGPT subscription (Plus/Pro/Business)",
+  "اگر اشتراک Claude (Pro/Max)، ChatGPT (برای Codex) یا Google Antigravity دارید یا کسی اشتراکش را در اختیارتان می‌گذارد. فقط وارد حساب می‌شوید؛ کلید لازم نیست.": "If you have a Claude (Pro/Max), ChatGPT (for Codex) or Google Antigravity subscription, or someone shares theirs with you. You only sign in; no key needed.",
+  "با حساب Google وارد می‌شوی و مدل‌های Gemini را با سهمیهٔ Antigravity به کار می‌گیری؛ کلید API لازم نیست.": "Sign in with Google and use Gemini models on your Antigravity quota; no API key needed.",
+  "با همان حساب ChatGPT وارد می‌شوی و مدل‌های Codex/GPT را با سقف اشتراکت به کار می‌گیری؛ کلید API لازم نیست.": "Sign in with your ChatGPT account and use Codex/GPT models on your plan's limits; no API key needed.",
+  "هزینهٔ جدا ندارد، همان اشتراک ChatGPT است؛ ولی سقف استفادهٔ چندساعته و هفتگی دارد.": "No extra cost, it is your ChatGPT subscription; it has hourly and weekly limits.",
+  "هزینهٔ جدا ندارد، همان اشتراک Google است؛ سهمیه دارد.": "No extra cost, it is your Google subscription; it has a quota.",
+  "ورود با {label}": "Sign in with {label}"
 }

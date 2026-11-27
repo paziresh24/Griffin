@@ -1,4 +1,5 @@
-// The owner's message shows at once with its state and is stored once however often it is resent.
+// The owner's message shows at once with its state and is stored once however often it is resent
+// (from Karsara 38bedf9/62d12f9).
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -232,4 +233,16 @@ test("the first message of a new chat shows on the new chat page and follows the
   sender.landed("new-chat", [{ role: "user", text: "این را بخوان", clientId: "n" }]);
   assert.equal(outbox.forChat("new-chat").length, 0, "the timeline's copy takes over");
   assert.deepEqual(settled, [["new-chat", "sent"]]);
+});
+
+test("a failed send keeps the reason the owner can read (no network, server error, too many requests)", async () => {
+  const { sendErrorText } = await import("../src/outbox.js");
+  assert.match(sendErrorText(netError()), /اتصال/);
+  assert.match(sendErrorText(httpError(502)), /۵۰۲|502/);
+  assert.match(sendErrorText(httpError(429)), /۴۲۹|429|زیاد/);
+  const outbox = createOutbox();
+  const sender = createSender({ outbox, post: async () => { throw httpError(500); }, catchUp() {}, settle() {}, later() {} });
+  await sender.submit({ clientId: "c1", chatId: "x", text: "hi", intent: "send" });
+  assert.equal(outbox.get("c1").state, "failed");
+  assert.ok(outbox.get("c1").sendError);
 });

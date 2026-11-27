@@ -1,10 +1,10 @@
-// Config CLAUDE_HOST: the owner's full Claude Code runs on the host machine as their own user (their
-// ssh keys, kubectl, gh, git credentials, skills, CLAUDE.md, memory), not in the app container. Only the
+// Config CLAUDE_HOST: the owner's full Claude Code runs on the host machine as his own user (his ssh
+// keys, kubectl, gh, git credentials, skills, CLAUDE.md, memory), not in the app container. Only the
 // Claude Code process moves: Griffin's tools, hooks (state/file guards) and approvals still come back
 // over its stdio through the SDK's control channel (spawnClaudeCodeProcess).
 //
-// The process starts with `ssh <target>`; the host key's authorized_keys entry forces a
-// small wrapper on the host (a forced command) that reads one JSON line {cwd, args, env} from stdin
+// The process starts with `ssh <target>`; the host key's authorized_keys entry forces
+// deploy/capsule/host-claude/griffin-claude-host, which reads one JSON line {cwd, args, env} from stdin
 // and execs Claude Code there with the rest of stdin. The key, target and known_hosts are deploy-time
 // env (GRIFFIN_CLAUDE_HOST_TARGET / _KEY / _KNOWN_HOSTS / _PORT), never config: who may run on the
 // host is the deploy's call, which sections do is the owner's (config CLAUDE_HOST).
@@ -14,8 +14,8 @@ import path from "node:path";
 import { genv } from "../env.mjs";
 
 // What the host process needs from Griffin's env: the Claude login and Claude Code's own switches,
-// the proxy. Not HOME, PATH or CLAUDE_CONFIG_DIR: the host has its own.
-const FORWARD = /^(ANTHROPIC_|CLAUDE_|MCP_|DISABLE_|ENABLE_|MAX_|BASH_|https?_proxy$|HTTPS?_PROXY$|no_proxy$|NO_PROXY$)/;
+// the proxy, rtk's storage switches (RTK_TEE=0 …, config RTK_HOST). Not HOME, PATH or CLAUDE_CONFIG_DIR: the host has its own.
+const FORWARD = /^(ANTHROPIC_|CLAUDE_|MCP_|DISABLE_|ENABLE_|MAX_|BASH_|RTK_|https?_proxy$|HTTPS?_PROXY$|no_proxy$|NO_PROXY$)/;
 export const forwardEnv = (env = {}) =>
   Object.fromEntries(Object.entries(env).filter(([key, value]) => FORWARD.test(key) && key !== "CLAUDE_CONFIG_DIR" && value != null));
 
@@ -35,9 +35,9 @@ export function hostConfigDir(dir, { data = genv("DATA", "/data"), hostData = ge
   return path.join(hostData, rel);
 }
 
-// Which runs go to the host: config CLAUDE_HOST off | owner (their chats) | owner+jobs (and their jobs),
-// unless the chat itself says host or container (chats.runs_on, its menu). A chat of theirs in
-// bypass mode («no asking») always runs as their own user, like Claude Desktop, when this
+// Which runs go to the host: config CLAUDE_HOST off | owner (his chats) | owner+jobs (and his jobs),
+// unless the chat itself says host or container (chats.runs_on, its menu). A chat of his in «بدون
+// پرسیدن» (bypass) always runs as his own user, like Claude Desktop (owner 2026-10-18), when this
 // install has a host to run on. Only runs with full Claude Code: nothing else has a terminal to move.
 export function runsOnHost({ claudeCode, ownerJob = false, mode = "off", chosen = null, bypass = false }) {
   if (!claudeCode) return false;

@@ -7,7 +7,6 @@ import { foldEvents, finalText } from "@griffin/timeline";
 import { createApp } from "../src/app.mjs";
 import { openStore } from "../src/db.mjs";
 import { createRunner } from "../src/runner.mjs";
-import { seedExampleAgents } from "./fixture-agents.mjs";
 
 // Fake SDK agent: plays a scripted list of InteractionUpdates through onDelta.
 function fakeSdk(script, { holdUntilCancel = false } = {}) {
@@ -51,9 +50,8 @@ function fakeSdk(script, { holdUntilCancel = false } = {}) {
 }
 
 function setup(script, options) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-test-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  seedExampleAgents(store);
   const fake = fakeSdk(script, options);
   const runner = createRunner({ store, sdk: fake.sdk, agentOptions: () => ({}), log: {} });
   const app = createApp({ store, runner });
@@ -186,7 +184,7 @@ test("SSE replays after Last-Event-ID only", async () => {
 });
 
 test("restart resumes orphaned runs instead of leaving them as errors", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-test-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-test-"));
   try {
     const file = path.join(dir, "db.sqlite");
     let store = openStore(file);
@@ -231,9 +229,8 @@ test("rejects bad input", async () => {
 
 test("ask_owner waits for the owner's answer; late answers become a message", async () => {
   const { createAsks, ASK_TOOL } = await import("../src/asks.mjs");
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-ask-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-ask-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  seedExampleAgents(store);
   const asks = createAsks();
   const toolResults = [];
   let sends = 0;
@@ -250,7 +247,7 @@ test("ask_owner waits for the owner's answer; late answers become a message", as
             async cancel() {},
             async wait() {
               if (sends === 1) {
-                const result = await options.local.customTools[ASK_TOOL].execute({ question: "کدام کلاستر؟", options: [{ label: "پروداکشن" }, { label: "دی‌آر" }] });
+                const result = await options.local.customTools[ASK_TOOL].execute({ question: "کدام کلاستر؟", options: [{ label: "مبین" }, { label: "آسیا" }] });
                 toolResults.push(JSON.parse(result.content[0].text));
               }
               await sendOptions.onDelta({ update: { type: "text-delta", text: "باشه" } });
@@ -273,17 +270,17 @@ test("ask_owner waits for the owner's answer; late answers become a message", as
     await until(() => asks.isWaiting(chat.id));
     assert.equal(runner.isActive(chat.id), true, "run stays active while the question waits");
 
-    const answered = await app.request(`/api/chats/${chat.id}/answer`, json({ selected: ["پروداکشن"], text: "فقط api-core" }));
+    const answered = await app.request(`/api/chats/${chat.id}/answer`, json({ selected: ["مبین"], text: "فقط p24core" }));
     assert.deepEqual(await answered.json(), { delivered: "tool" });
     await until(() => !runner.isActive(chat.id));
-    assert.deepEqual(toolResults, [{ answered: true, answer: "پروداکشن — فقط api-core", selected: ["پروداکشن"] }]);
+    assert.deepEqual(toolResults, [{ answered: true, answer: "مبین — فقط p24core", selected: ["مبین"] }]);
 
     // Nobody is waiting any more: the answer is sent as a normal follow-up message.
-    const late = await app.request(`/api/chats/${chat.id}/answer`, json({ question: "کدام کلاستر؟", text: "دی‌آر هم ببین" }));
+    const late = await app.request(`/api/chats/${chat.id}/answer`, json({ question: "کدام کلاستر؟", text: "آسیا هم ببین" }));
     assert.equal(late.status, 202);
     await until(() => sends === 2 && !runner.isActive(chat.id));
     const userTexts = store.eventsAfter(chat.id, 0).filter((e) => e.type === "user").map((e) => e.data.text);
-    assert.equal(userTexts.at(-1), "پاسخ به سؤالت «کدام کلاستر؟»: دی‌آر هم ببین");
+    assert.equal(userTexts.at(-1), "پاسخ به سؤالت «کدام کلاستر؟»: آسیا هم ببین");
 
     assert.equal((await app.request(`/api/chats/${chat.id}/answer`, json({}))).status, 400);
   } finally {
@@ -311,8 +308,8 @@ test("an answer posted before ask_owner starts waiting is delivered to the quest
   const early = asks.waitForQuestion("c2", { timeoutMs: 2_000, stillActive: () => active, pollMs: 10 });
   const pending = new Promise((resolve) => setTimeout(() => resolve(asks.tool("c2").execute({ question: "کدام کلاستر؟" })), 50));
   assert.equal(await early, true);
-  assert.equal(asks.answer("c2", { answer: "دی‌آر", selected: ["دی‌آر"] }), true);
-  assert.deepEqual(JSON.parse((await (await pending)).content[0].text), { answered: true, answer: "دی‌آر", selected: ["دی‌آر"] });
+  assert.equal(asks.answer("c2", { answer: "آسیا", selected: ["آسیا"] }), true);
+  assert.deepEqual(JSON.parse((await (await pending)).content[0].text), { answered: true, answer: "آسیا", selected: ["آسیا"] });
 
   // Run ends without the tool ever waiting: give up so the caller sends a follow-up message.
   const never = asks.waitForQuestion("c3", { timeoutMs: 2_000, stillActive: () => active, pollMs: 10 });
@@ -331,7 +328,11 @@ test("timeline snapshot is folded server-side and oversized old events are compa
     store.appendEvent(chat.id, runId, "tool.done", { callId: "c1", name: "s3_get", args: {}, result: { value: { content: [{ image: { data: bytes } }] } } });
     store.appendEvent(chat.id, runId, "run.finished", { status: "finished" });
     const { clip } = await import("../src/updates.mjs");
-    assert.equal(store.compactLargeEvents((d) => clip(d)), 1);
+    // Bounded slice outside the oversized event's id touches nothing; slice covering it compacts it.
+    const maxId = store.maxEventId();
+    assert.equal(store.compactLargeEvents((d) => clip(d), 64 * 1024, { afterId: maxId, uptoId: maxId + 100 }), 0);
+    assert.equal(store.compactLargeEvents((d) => clip(d), 64 * 1024, { afterId: 0, uptoId: maxId }), 1);
+    assert.equal(store.compactLargeEvents((d) => clip(d)), 0);
     const res = await app.request(`/api/chats/${chat.id}/timeline`);
     const { timeline } = await res.json();
     assert.equal(timeline.messages.length, 2);
@@ -345,18 +346,19 @@ test("timeline snapshot is folded server-side and oversized old events are compa
 test("an answer given before the agent starts waiting is held for that question, not queued as a duplicate", async () => {
   const { createAsks } = await import("../src/asks.mjs");
   const asks = createAsks();
-  asks.holdEarly("c1", { answer: "پروداکشن", selected: ["پروداکشن"] });
+  asks.holdEarly("c1", { answer: "مبین", selected: ["مبین"] });
   const pending = asks.tool("c1").execute({ question: "کدام کلاستر؟" });
-  assert.deepEqual(JSON.parse((await pending).content[0].text), { answered: true, answer: "پروداکشن", selected: ["پروداکشن"] });
+  assert.deepEqual(JSON.parse((await pending).content[0].text), { answered: true, answer: "مبین", selected: ["مبین"] });
   assert.equal(asks.cancel("c1"), null, "consumed");
 
-  asks.holdEarly("c2", { answer: "دی‌آر" });
-  assert.deepEqual(asks.cancel("c2"), { answered: true, answer: "دی‌آر", selected: [] }, "run ended without asking: returned for delivery as a message");
+  asks.holdEarly("c2", { answer: "آسیا" });
+  assert.deepEqual(asks.cancel("c2"), { answered: true, answer: "آسیا", selected: [] }, "run ended without asking: returned for delivery as a message");
 });
 
 test("PATCH agent switches persona on an open chat and clears the SDK handle", async () => {
   const { store, app, cleanup } = setup([{ type: "text-delta", text: "ok" }]);
   try {
+    store.upsertAgentProfile({ id: "platform", label: "Platform", domain: "platform", tools: ["web_search"] });
     const created = await (await app.request("/api/chats", json({ text: "سلام", agent: "griffin" }))).json();
     await until(() => !store.runningRuns().length);
     const chat = store.getChat(created.chat.id);
@@ -413,9 +415,8 @@ test("provider comes from agent profile; chat PATCH provider is ignored", async 
 });
 
 test("agents list includes peer agents that ran via ask_agent children", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-agents-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-agents-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  seedExampleAgents(store);
   try {
     const parent = store.createChat({ title: "root", agent: "griffin" });
     const runId = store.startRun(parent.id);
@@ -437,13 +438,12 @@ test("agents list includes peer agents that ran via ask_agent children", () => {
 });
 
 test("chats list and chat get include ask_agent children with live run status", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "platform-children-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-children-"));
   const store = openStore(path.join(dir, "db.sqlite"));
-  seedExampleAgents(store);
   try {
     const parent = store.createChat({ title: "root", agent: "griffin" });
     const child = store.createChat({
-      title: "← گریفین: کار حسابداری",
+      title: "← گریفین: کار سپیدار",
       agent: "platform",
       caller: "griffin",
       parentChatId: parent.id,

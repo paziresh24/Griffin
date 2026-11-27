@@ -4,10 +4,12 @@ import path from "node:path";
 import { PROVIDER_OPENAI } from "./ids.mjs";
 import { stripProductSignature } from "../identity.mjs";
 import { SIGNATURE_RE } from "../persona.mjs";
+import { PLAN_TRANSPORTS } from "./plan-transports.mjs";
+import { createAdaptiveLimiter, sleepAbortable } from "./adaptive-limiter.mjs";
 
 export { PROVIDER_OPENAI };
 
-// OpenAI-compatible chat-completions provider (any /v1 endpoint: OpenAI, LiteLLM, OpenRouter, Z.ai…).
+// OpenAI-compatible chat-completions provider (any /v1 endpoint: OpenAI, LiteLLM, freebucks…).
 // Same agent contract as cursor.mjs/claude.mjs: create/resume return an agent whose send()
 // emits Cursor-shaped InteractionUpdates through onDelta and settles a run promise.
 
@@ -74,15 +76,41 @@ const PROMISE_TAIL =
 const CONTINUE_NUDGE =
   "[تذکر سیستمی] پیام آخرت قول کاری را داد که هنوز انجام نشده، و هیچ زیرکاری هم در جریان نیست — بعد از این پیام کسی بیدارت نمی‌کند. " +
   "همین حالا همان کار را با ابزار انجام بده و جواب نهایی را بنویس؛ اگر واقعاً نمی‌شود، مانع را دقیق بگو.";
+const EMPTY_TURN_NUDGE =
+  "[تذکر سیستمی] نوبت قبلی بدون متن یا فراخوانی ابزار تمام شد (احتمالاً فقط فکر یا توقف خالی). کار را ادامه بده یا نتیجهٔ نهایی را کوتاه به فارسی بنویس.";
+const MALFORMED_TOOL_NUDGE =
+  "[تذکر سیستمی] فراخوانی ابزار در نوبت قبلی نامعتبر بود و اجرا نشد. دوباره با آرگومان معتبر ابزار را صدا بزن یا نتیجهٔ نهایی را به فارسی بنویس.";
 
 const SIGNATURE_TAIL = new RegExp(`\\s*—\\s*${SIGNATURE_RE}\\s*$`, "u");
+
+// 2026-11-25 evidence (bakhtnama): GLM sometimes replaces a real answer with its own internal
+// compression artifact — <entity type="SECTION_HEADER">…<entity type="PLAINTEXT_SNIPPET">… half
+// sentences and "برای درک کامل، به محیط عملیاتی مراجعه کنید" — a summary of the model's own
+// context, not an answer to the user. A final turn that looks like that must never be shown as
+// the answer: retry in-band (up to 2), then fail loudly instead of the leak.
+const LEAK_MARKERS = [
+  /<entity\s+type\s*=\s*["']section_header["'][^>]*>/i,
+  /<entity\s+type\s*=\s*["']plaintext_snippet["'][^>]*>/i,
+  /<entity\s+type\s*=\s*["'](?!(?:section_header|plaintext_snippet)["'])[a-z_]+["'][^>]*>/i,
+  /برای\s*درک\s*کامل[،,]?\s*(?:به\s*)?محیط\s*عملیاتی/i,
+];
+export function looksLikeLeakedContext(text) {
+  const value = String(text || "").trim();
+  if (value.length < 40) return false;
+  let hits = 0;
+  for (const marker of LEAK_MARKERS) if (marker.test(value)) hits += 1;
+  return hits >= 2;
+}
+const LEAKED_ANSWER_NUDGE =
+  "[تذکر سیستمی] پاسخ قبلی‌ات به‌جای جوابِ کاربر، قطعهٔ داخلی فشرده‌سازی/کانتکست خودت بود (تگ‌های entity یا «برای درک کامل…»). " +
+  "همین سؤال را با جواب واقعی و کامل به فارسی پاسخ بده؛ هیچ تگ یا placeholder داخلی در متن جواب نگذار.";
 
 export function promisesWork(text) {
   const clean = stripProductSignature(String(text || "").replace(SIGNATURE_TAIL, "")).trim();
   if (!clean) return false;
   // Only the closing sentence counts: an offer («اگر خواستید اعمال می‌کنم») or a question is fine.
   const last = clean.split(/(?<=[.!؟?\n])\s+/u).filter(Boolean).slice(-2).join(" ").slice(-220);
-  // An offer, a question, or a decision left to a human («بگویید و اجرا می‌کنم», «با تأیید شما») is fine.
+  // An offer, a question, or a decision left to a human («بگویید و اجرا می‌کنم», «با تأیید عرفان») is fine.
   if (/[؟?]\s*$/.test(last) || /(^|\s)(اگر|اگه|در صورت|if you|بگویید|بگید|با شماست|تأیید|تایید)(\s|$)/i.test(last)) return false;
   return PROMISE_TAIL.test(last);
 }
@@ -122,8 +150,8 @@ const SUMMARY_RULES =
 
 const SESSION_DIR = ".griffin-openai-sessions";
 const FALLBACK_SYSTEM =
-  "You are Griffin, an AI agent. Facts come from your tools, never from memory. " +
-  "Answer in the user's language, short, result first.";
+  "You are an operations agent. Facts come from your tools, never from memory. " +
+  "Talk Persian, short, result first.";
 
 export function createOpenAIProvider({
   apiKey,
@@ -144,9 +172,16 @@ export function createOpenAIProvider({
   clearAtTokens = CLEAR_AT_TOKENS,
   clearKeep = CLEAR_KEEP,
   errorStreak = ERROR_STREAK,
+  // A subscription engine (subscription-auth.mjs): plan = "codex" | "antigravity", credentials({force})
+  // resolves the signed-in grant with a fresh access token. Same tool loop, the plan's own wire.
+  plan = null,
+  credentials = null,
+  rateLimiter = null,
   log = console,
 } = {}) {
   const root = String(baseUrl || "").replace(/\/+$/, "");
+  const transport = plan ? PLAN_TRANSPORTS[plan] || null : null;
+  const limiter = rateLimiter || createAdaptiveLimiter();
   const sessions = new Map(); // agentId -> { messages: [] } (OpenAI messages; system rebuilt per send)
 
   const authHeaders = () => ({
@@ -352,12 +387,25 @@ export function createOpenAIProvider({
   // A stream that goes silent (2026-09-24: 5+ minutes mid-thought, only the 15-minute stale sweep
   // would have ended it) is aborted after idleMs and the round retried once — only when no answer
   // text went out yet, so a retry never duplicates what the user already saw.
-  async function requestCompletion(payload, { signal, emit }) {
+  async function requestCompletion(payload, { signal, emit, sessionId }) {
     for (let attempt = 0; ; attempt += 1) {
+      const slot = await limiter.acquire(signal);
+      let released = false;
+      const done = () => {
+        if (released) return;
+        released = true;
+        slot.release();
+      };
       try {
-        return await requestOnce(payload, { signal, emit });
+        const result = await requestOnce(payload, { signal, emit, sessionId });
+        limiter.onSuccess(slot.used);
+        done();
+        return result;
       } catch (error) {
-        if (signal?.aborted) throw error;
+        if (signal?.aborted) {
+          done();
+          throw error;
+        }
         // 429: the endpoint asked us to slow down — wait and send the same round again. Failing the
         // run dropped a colleague's answer when several chats ran at once (2026-09-25 eval: 2 of 10).
         // A spent plan (Z.ai "Usage limit reached", code 1308/1310) does not come back in a minute:
@@ -378,7 +426,10 @@ export function createOpenAIProvider({
         if (spent || autoFallback) {
           error.code = spent ? "plan_limit" : "engine_unavailable";
           error.autoFallback = autoFallback;
-          if (autoFallback) throw error;
+          if (autoFallback) {
+            done();
+            throw error;
+          }
         }
         const limited = error?.status === 429 || /rate limit|too many requests/i.test(String(error?.message));
         // A dropped connection or a gateway 5xx is the network, not the model: retry the same round.
@@ -389,19 +440,31 @@ export function createOpenAIProvider({
             `${error?.message} ${error?.cause?.code || ""} ${error?.cause?.message || ""}`,
           );
         if ((limited || transient) && !error?.partialText && attempt < 6) {
-          const wait = Math.min(error.retryAfterMs || 2_000 * 2 ** attempt, 60_000);
-          log.error?.(`[openai] ${limited ? "rate limited" : `transient error (${error?.message})`} — retry in ${Math.round(wait / 1000)}s`);
+          let wait;
+          if (limited) {
+            // Shrink concurrency and arm the shared cooldown BEFORE releasing this slot so queued
+            // chats do not burst onto the upstream API in the instant between catch and release.
+            wait = limiter.onRateLimit(error.retryAfterMs);
+            done();
+            const snap = limiter.snapshot();
+            log.error?.(`[openai] rate limited — retry in ${Math.round(wait / 1000)}s (window=${snap.limit}, pace=${snap.paceMs}ms, queued=${snap.queued})`);
+          } else {
+            done();
+            wait = Math.min(error.retryAfterMs || 2_000 * 2 ** attempt, 60_000);
+            log.error?.(`[openai] transient error (${error?.message}) — retry in ${Math.round(wait / 1000)}s`);
+          }
           await emit?.({ type: "api-retry", attempt: attempt + 1, maxRetries: 6, delayMs: wait, status: error?.status ?? (limited ? 429 : null) });
-          await new Promise((resolve) => setTimeout(resolve, wait));
+          if (!limited) await sleepAbortable(wait, signal);
           continue;
         }
+        done();
         if (!error?.stalled || error.partialText || attempt >= 1) throw error;
         log.error?.(`[openai] stream idle ${Math.round(idleMs / 1000)}s — retrying the round`);
       }
     }
   }
 
-  async function requestOnce(payload, { signal, emit }) {
+  async function requestOnce(payload, { signal, emit, sessionId }) {
     const idle = new AbortController();
     const onOuter = () => idle.abort();
     signal?.addEventListener?.("abort", onOuter, { once: true });
@@ -413,7 +476,7 @@ export function createOpenAIProvider({
     };
     poke();
     try {
-      return await requestStream(payload, { signal: idle.signal, emit, poke, state });
+      return await requestStream(payload, { signal: idle.signal, emit, poke, state, sessionId });
     } catch (error) {
       if (idle.signal.aborted && !signal?.aborted) {
         throw Object.assign(new Error(`openai stream stalled (${Math.round(idleMs / 1000)}s without data)`), { stalled: true, partialText: state.text });
@@ -427,13 +490,40 @@ export function createOpenAIProvider({
     }
   }
 
-  async function requestStream(payload, { signal, emit, poke, state }) {
-    const response = await fetchImpl(`${root}/chat/completions`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ ...payload, stream: true }),
-      signal,
-    });
+  // This account's own model list (Antigravity: which families and effort variants it runs), kept ten
+  // minutes; a request names the variant the account really has (transport.resolve).
+  let catalogCache = null;
+  async function planCatalog(grant, { fresh = false } = {}) {
+    if (!fresh && catalogCache && Date.now() - catalogCache.at < 10 * 60_000) return catalogCache.value;
+    const value = await transport.catalog(grant, { baseUrl: root, fetchImpl });
+    catalogCache = { at: Date.now(), value };
+    return value;
+  }
+
+  // One request on a subscription engine; a 401 gets one forced token refresh and a second try.
+  async function planResponse(payload, { signal, sessionId }) {
+    for (let attempt = 0; ; attempt += 1) {
+      const grant = await credentials({ force: attempt > 0 });
+      if (transport.resolve) {
+        const catalog = await planCatalog(grant).catch(() => null);
+        payload = { ...payload, model: transport.resolve(payload.model, payload.reasoning_effort, catalog) };
+      }
+      const req = transport.request(payload, grant, { baseUrl: root, sessionId });
+      const response = await fetchImpl(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(req.body), signal });
+      if (response.status !== 401 || attempt > 0) return response;
+      await response.body?.cancel?.().catch(() => {});
+    }
+  }
+
+  async function requestStream(payload, { signal, emit, poke, state, sessionId }) {
+    const response = transport
+      ? await planResponse(payload, { signal, sessionId })
+      : await fetchImpl(`${root}/chat/completions`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ ...payload, stream: true }),
+          signal,
+        });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       let parsed = null;
@@ -449,6 +539,7 @@ export function createOpenAIProvider({
         retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null,
       });
     }
+    if (transport) return withLiveFlags(await transport.consume(response.body, emit, { poke, state }), true);
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("event-stream")) {
       const json = await response.json();
@@ -465,6 +556,9 @@ export function createOpenAIProvider({
     const out = { text: "", reasoning: "", toolCalls: [], usage: null, finishReason: null };
     const acc = new Map(); // sse tool_call index -> { id, name, argsStr, emittedStarted }
     let thinkingStartedAt = null;
+    let prefixHeld = true;
+    let heldText = "";
+    let suppressedStream = false;
     let buffer = "";
     const decoder = new TextDecoder();
 
@@ -506,8 +600,28 @@ export function createOpenAIProvider({
         if (typeof delta.content === "string" && delta.content) {
           await endThinking();
           out.text += delta.content;
-          state.text = true;
-          await emit({ type: "text-delta", text: delta.content });
+          if (suppressedStream) {
+            // Suppress streaming when the opening starts with `<entity` so leaked summaries never hit the UI.
+          } else if (prefixHeld) {
+            heldText += delta.content;
+            const trimmed = heldText.trimStart();
+            if (!trimmed) {
+              // Wait for the first non-whitespace token.
+            } else if (/^<entity\b/i.test(trimmed)) {
+              prefixHeld = false;
+              suppressedStream = true;
+            } else if (trimmed.length < 8 && "<entity".startsWith(trimmed.toLowerCase())) {
+              // Could still become `<entity`; hold briefly.
+            } else {
+              prefixHeld = false;
+              state.text = true;
+              await emit({ type: "text-delta", text: heldText });
+              heldText = "";
+            }
+          } else {
+            state.text = true;
+            await emit({ type: "text-delta", text: delta.content });
+          }
         }
         for (const fragment of delta.tool_calls || []) {
           const index = fragment.index ?? 0;
@@ -526,6 +640,11 @@ export function createOpenAIProvider({
       }
     }
     await endThinking();
+    if (prefixHeld && heldText) {
+      state.text = true;
+      await emit({ type: "text-delta", text: heldText });
+      heldText = "";
+    }
     for (const [index, slot] of [...acc.entries()].sort((a, b) => a[0] - b[0])) {
       out.toolCalls.push({
         id: slot.id || `call-${index}`,
@@ -535,7 +654,7 @@ export function createOpenAIProvider({
         emittedStarted: slot.emittedStarted,
       });
     }
-    return withLiveFlags(out, true);
+    return { ...out, liveText: !suppressedStream, liveReasoning: true };
   }
 
   function makeAgent(sessionId, options) {
@@ -622,12 +741,15 @@ export function createOpenAIProvider({
           let errorRun = 0;
           let errorNudged = false;
           let continueNudged = false;
+          let emptyRetries = 0;
+          let leakRetries = 0;
           try {
             if (!apiKey) throw new Error("OpenAI API key missing");
             if (!root) throw new Error("OpenAI base url missing");
             const modelId = sendOptions.model?.id || options.model?.id || defaultModel;
             // xhigh/max are Claude levels; an OpenAI-style endpoint gets its own top level.
-            const effort = { xhigh: "high", max: "high" }[sendOptions.effort] || sendOptions.effort || reasoningEffort;
+            // Antigravity has its own xhigh variants (transport.resolve picks them): the level goes as is.
+            const effort = (transport?.resolve ? null : { xhigh: "high", max: "high" }[sendOptions.effort]) || sendOptions.effort || reasoningEffort;
             const system = systemPrompt(options, sendOptions.mode);
             session.messages.push({ role: "user", content: toUserContent(message) });
             committed = session.messages.length;
@@ -661,7 +783,7 @@ export function createOpenAIProvider({
                     ],
                     ...(tools.length ? { tools } : {}),
                   },
-                  { signal: flowSignal(), emit },
+                  { signal: flowSignal(), emit, sessionId: agentId },
                 );
               } catch (error) {
                 // A nudge aborts the in-flight request; the loop continues with the note in-band.
@@ -697,18 +819,77 @@ export function createOpenAIProvider({
                 await emit({ type: "thinking-delta", text: completion.reasoning });
                 await emit({ type: "thinking-completed", thinkingDurationMs: 0 });
               }
-              if (completion.text && completion.liveText === false) {
-                await emit({ type: "text-delta", text: completion.text });
-              }
               if (!completion.toolCalls.length) {
-                if (!completion.text && !completion.usage && !completion.reasoning) throw new Error("empty completion from openai endpoint");
-                session.messages.push({ role: "assistant", content: completion.text || "" });
-                if (!abort.signal.aborted && takeSteered()) {
+                const hasText = Boolean(String(completion.text || "").trim());
+                const badFinish = /malformed|unexpected_tool/i.test(String(completion.finishReason || ""));
+                // A "full" answer that is really the model's own compression/context leak (entity
+                // tags, half sentences, "برای درک کامل…") is worse than empty. Opening `<entity`
+                // streams are held back in consumeSse so nothing hits the UI before the check; if
+                // a leak happened mid-answer, retry in-band (up to 2), then fail loudly (bogus_answer).
+                const leaked = hasText && looksLikeLeakedContext(completion.text);
+                if (leaked && leakRetries < 2) {
+                  leakRetries += 1;
+                  log.error?.(`[openai] answer looks like a leaked context summary (${leakRetries}/2) — retrying with a nudge`);
+                  session.messages.push({ role: "user", content: LEAKED_ANSWER_NUDGE });
+                  if (completion.liveText !== false) await emit({ type: "text-delta", text: "\n\n" });
+                  continue;
+                }
+                if (leaked) {
+                  if (committed != null && session.messages.length > committed) session.messages.length = committed;
+                  throw Object.assign(new Error("answer replaced by model-internal summary (context leak)"), { code: "bogus_answer" });
+                }
+                if (abort.signal.aborted) {
+                  if (hasText) {
+                    if (completion.liveText === false) await emit({ type: "text-delta", text: completion.text });
+                    session.messages.push({ role: "assistant", content: completion.text });
+                    persistSession(agentId, session, options?.stateDir || options?.cwd);
+                  } else if (committed != null && session.messages.length > committed) {
+                    session.messages.length = committed;
+                  }
+                  finish({ status: "cancelled" });
+                  return;
+                }
+                if (!hasText) {
+                  if (!completion.text && !completion.usage && !completion.reasoning) {
+                    throw Object.assign(new Error("empty completion from openai endpoint"), { code: "no_answer" });
+                  }
+                  if (takeSteered()) {
+                    await emit({ type: "user-message-appended" });
+                    continue;
+                  }
+                  // Gemini / Antigravity can end a turn with thinking-only, usageMetadata only, or
+                  // MALFORMED_FUNCTION_CALL (no visible text, no tool calls). Never save an empty
+                  // assistant turn (geminiRequest drops it and glues adjacent user turns) and never
+                  // finish silently as "finished": nudge in-band up to 2 times, else surface no_answer.
+                  if (emptyRetries < 2) {
+                    emptyRetries += 1;
+                    log.error?.(
+                      `[openai] empty assistant turn (finishReason=${completion.finishReason || "none"}, reasoning=${completion.reasoning ? completion.reasoning.length : 0}) — retrying (${emptyRetries}/2)`,
+                    );
+                    session.messages.push({ role: "user", content: badFinish ? MALFORMED_TOOL_NUDGE : EMPTY_TURN_NUDGE });
+                    continue;
+                  }
+                  throw Object.assign(
+                    new Error(`empty completion from openai endpoint (${completion.finishReason || "no text"})`),
+                    { code: "no_answer" },
+                  );
+                }
+                if (completion.liveText === false) await emit({ type: "text-delta", text: completion.text });
+                session.messages.push({ role: "assistant", content: completion.text });
+                if (takeSteered()) {
                   await emit({ type: "user-message-appended" });
                   await emit({ type: "text-delta", text: "\n\n" });
                   continue;
                 }
-                if (!continueNudged && !abort.signal.aborted && promisesWork(completion.text) && !(Number(options?.pendingWork?.()) > 0)) {
+                if (badFinish && emptyRetries < 2) {
+                  emptyRetries += 1;
+                  log.error?.(`[openai] malformed tool call after text (finishReason=${completion.finishReason}) — continuing (${emptyRetries}/2)`);
+                  session.messages.push({ role: "user", content: MALFORMED_TOOL_NUDGE });
+                  committed = session.messages.length;
+                  await emit({ type: "text-delta", text: "\n\n" });
+                  continue;
+                }
+                if (!continueNudged && promisesWork(completion.text) && !(Number(options?.pendingWork?.()) > 0)) {
                   continueNudged = true;
                   log.error?.("[openai] final answer promises unfinished work with nothing pending — continuing the run");
                   session.messages.push({ role: "user", content: CONTINUE_NUDGE });
@@ -717,8 +898,11 @@ export function createOpenAIProvider({
                   continue;
                 }
                 persistSession(agentId, session, options?.stateDir || options?.cwd);
-                finish({ status: abort.signal.aborted ? "cancelled" : "finished" });
+                finish({ status: "finished" });
                 return;
+              }
+              if (completion.text && completion.liveText === false) {
+                await emit({ type: "text-delta", text: completion.text });
               }
               session.messages.push({
                 role: "assistant",
@@ -727,6 +911,8 @@ export function createOpenAIProvider({
                   id: call.id,
                   type: "function",
                   function: { name: call.name, arguments: call.argsStr || "{}" },
+                  // Gemini 3's thoughtSignature (plan-transports.mjs): sent back with the call next round.
+                  ...(call.signature ? { signature: call.signature } : {}),
                 })),
               });
               let outcomes;
@@ -806,7 +992,12 @@ export function createOpenAIProvider({
             }
             finish({
               status: abort.signal.aborted ? "cancelled" : "error",
-              error: { message: String(error?.message || error), ...(error?.code === "plan_limit" || error?.code === "engine_unavailable" ? { code: error.code, ...(typeof error.autoFallback === "boolean" ? { autoFallback: error.autoFallback } : {}) } : {}) },
+              error: {
+                message: String(error?.message || error),
+                ...(error?.code === "plan_limit" || error?.code === "engine_unavailable" || error?.code === "no_answer" || error?.code === "bogus_answer"
+                  ? { code: error.code, ...(typeof error.autoFallback === "boolean" ? { autoFallback: error.autoFallback } : {}) }
+                  : {}),
+              },
             });
           }
         })();
@@ -857,7 +1048,14 @@ export function createOpenAIProvider({
   return {
     id: PROVIDER_OPENAI,
     defaultModel,
+    // A subscription engine: its secret is the sign-in grant, not a key (doctor.mjs probes it with health()).
+    plan: transport ? plan : null,
     async listModels() {
+      if (transport) {
+        const grant = await credentials();
+        if (transport.catalog) return (await planCatalog(grant, { fresh: true })).models.map((m) => ({ ...m, provider: PROVIDER_OPENAI }));
+        return (await transport.models(grant, { baseUrl: root, fetchImpl })).map((m) => ({ ...m, provider: PROVIDER_OPENAI }));
+      }
       if (!apiKey || !root) return [];
       const response = await fetchImpl(`${root}/models`, {
         method: "GET",
@@ -874,6 +1072,16 @@ export function createOpenAIProvider({
       const started = Date.now();
       if (!apiKey) return { ok: false, error: "no openai api key" };
       if (!root) return { ok: false, error: "no openai base url" };
+      // A subscription engine: the sign-in still renews and the plan's backend answers with its models.
+      if (transport) {
+        try {
+          const grant = await credentials();
+          const list = await transport.models(grant, { baseUrl: root, fetchImpl });
+          return { ok: true, status: 200, ms: Date.now() - started, models: list.length };
+        } catch (error) {
+          return { ok: false, status: error?.status ?? null, error: error?.code === "auth" ? "http_401" : error?.status ? `http_${error.status}` : String(error?.cause?.code || error?.message || error), ms: Date.now() - started };
+        }
+      }
       try {
         const response = await fetchImpl(`${root}/models`, {
           method: "GET",
@@ -893,6 +1101,15 @@ export function createOpenAIProvider({
     // Plan quota (5-hour + weekly windows). Z.ai exposes it on the account host, not the coding
     // path — derive the origin from baseUrl. Returns null for any other OpenAI-compatible endpoint.
     async usage() {
+      // A subscription engine: the plan's own windows (Codex wham/usage, Antigravity's per-model quota).
+      if (transport?.usage) {
+        try {
+          const grant = await credentials();
+          return { provider: PROVIDER_OPENAI, windows: await transport.usage(grant, { baseUrl: root, fetchImpl }) };
+        } catch (error) {
+          return { error: error?.status ? `http ${error.status}` : String(error?.message || error) };
+        }
+      }
       if (!apiKey || !/\bz\.ai\b/.test(root)) return null;
       const origin = root.replace(/\/api\/.*$/, "");
       try {
@@ -1051,8 +1268,12 @@ function stableStringify(value) {
 }
 
 function errorText(body) {
-  const message = body?.error?.message || body?.error || body?.message;
+  const message = body?.error?.message || body?.error || body?.message || (typeof body?.detail === "string" ? body.detail : body?.detail?.message);
   if (!message) return "";
   const hint = body?.error?.hint ? ` (${body.error.hint})` : "";
-  return `${String(message)}${hint}`;
+  // Google (Antigravity) asks the account holder to verify the account — «Verify your account to continue.»
+  // with the link only in details; without it the person cannot act (Ms. Mansouri, 2026-11-22).
+  const verify = (Array.isArray(body?.error?.details) ? body.error.details : []).map((d) => d?.metadata?.validation_url).find((u) => typeof u === "string" && /^https:\/\/accounts\.google\.com\//.test(u));
+  const link = verify ? ` — حساب گوگل باید یک بار تأیید شود: این لینک را با همان حساب باز کنید: ${verify}` : "";
+  return `${String(message)}${hint}${link}`;
 }

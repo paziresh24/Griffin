@@ -108,7 +108,7 @@ export function telegramChatRoutes(api, { integrations, store }) {
     const { client, entity } = await peer(c);
     const limit = Math.min(Math.max(Number(c.req.query("limit")) || 80, 1), 200);
     const before = Number(c.req.query("before")) || 0;
-    const { Api } = await import("telegram");
+    const { Api } = await import("teleproto");
     const [list, dialogs] = await Promise.all([
       client.getMessages(entity, { limit, ...(before ? { offsetId: before } : {}) }),
       client.invoke(new Api.messages.GetPeerDialogs({ peers: [new Api.InputDialogPeer({ peer: entity })] })).catch(() => null),
@@ -126,7 +126,7 @@ export function telegramChatRoutes(api, { integrations, store }) {
     if (!id) return c.json({ error: "messageId لازم است" }, 400);
     const emoji = typeof body.emoji === "string" && body.emoji.length <= 8 ? body.emoji : null;
     const { client, entity } = await peer(c);
-    const { Api } = await import("telegram");
+    const { Api } = await import("teleproto");
     await client.invoke(new Api.messages.SendReaction({ peer: entity, msgId: id, reaction: emoji ? [new Api.ReactionEmoji({ emoticon: emoji })] : [] }));
     return c.json({ ok: true });
   }));

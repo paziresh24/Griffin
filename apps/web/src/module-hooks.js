@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api.js";
+import { isMember } from "./auth-me.js";
 import { filterQuery, parseModuleRoute, translateManifest } from "./modules.js";
 
 // The module hooks: what is on (fetched on page load, after a switch in the marketplace, and when the
@@ -9,6 +10,7 @@ let cache = null;
 const listeners = new Set();
 let inflight = null;
 function load() {
+  if (isMember()) return Promise.resolve();
   if (inflight) return inflight;
   inflight = api("/api/modules")
     .then((data) => {
@@ -41,6 +43,7 @@ export function useModuleList() {
     () => cache,
   );
   useEffect(() => {
+    if (isMember()) return undefined;
     if (cache === null) load();
     // A module switched on elsewhere (another tab, the API) reaches this open page when the owner
     // comes back to it, not only on the next page load.
@@ -97,7 +100,7 @@ const BADGES_MS = 60_000;
 export function useModuleBadges(enabled = true) {
   const [badges, setBadges] = useState({});
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled || isMember()) return undefined;
     let stopped = false;
     const read = () => api("/api/modules/badges").then((d) => { if (!stopped) setBadges(d?.badges || {}); }, () => {});
     read();

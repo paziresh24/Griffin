@@ -51,7 +51,8 @@ test("one account failing to answer does not stop the others", async () => {
   });
   await loads.refresh();
   assert.equal(loads.loadOf("a"), null);
-  assert.equal(loads.loadOf("b"), 12);
+  // A cool 5-hour window (12%) does not count; the week (3%) does.
+  assert.equal(loads.loadOf("b"), 3);
 });
 
 test("roomiestAccount: least used usable account; ties keep order; none usable is null", () => {
@@ -59,4 +60,9 @@ test("roomiestAccount: least used usable account; ties keep order; none usable i
   assert.equal(roomiestAccount(["a", "b", "c"], { usable: (id) => id !== "c", loadOf: (id) => load[id] }), "b");
   assert.equal(roomiestAccount(["a", "b"], { usable: () => true, loadOf: () => null }), "a");
   assert.equal(roomiestAccount(["a"], { usable: () => false, loadOf: () => 0 }), null);
+});
+
+test("planLoad: a 5-hour window below 70% does not count against the week", () => {
+  assert.equal(planLoad(raw(35, 7), NOW), 7);
+  assert.equal(planLoad(raw(85, 7), NOW), 85);
 });

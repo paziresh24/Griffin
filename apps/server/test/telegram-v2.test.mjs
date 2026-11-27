@@ -1405,7 +1405,7 @@ test("an owner chat that wrote to a person is one of their threads: the mother h
 test("a chat of his that never wrote to the person is still a candidate: the mother sees its topic and can hand the message over", async () => {
   const { store, runner, sends, acc, desk, watched, cleanup } = setup();
   try {
-    const mahla = watched("1401", "مهلا");
+    const mahla = watched("1401", "کاربر دو");
     const setupChat = store.createChat({ title: "راه‌اندازی پنل", agent: "griffin" });
     store.appendEvent(setupChat.id, null, "user", { text: "پنل مالی را هم مثل بقیه راه بنداز", ownerText: true });
     const other = store.createChat({ title: "بررسی دیسک", agent: "griffin" });
@@ -1419,7 +1419,7 @@ test("a chat of his that never wrote to the person is still a candidate: the mot
     assert.match(note, new RegExp(`chat ${other.id} «بررسی دیسک»`));
     assert.doesNotMatch(note, new RegExp(`chat ${mother}\\b`), "the mother chat itself is not a candidate");
 
-    const tools = createMotherTools({ store, runner, chatId: mother, name: "مهلا", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(mother, c, n) });
+    const tools = createMotherTools({ store, runner, chatId: mother, name: "کاربر دو", sendToPerson: () => ({}), forwardToChat: (c, n) => desk.forwardToChat(mother, c, n) });
     assert.deepEqual(parse(await tools.forward_to_chat.execute({ chat: setupChat.id })), { forwarded: true, chat: setupChat.id, title: "راه‌اندازی پنل" });
     assert.equal(sends.at(-1).chatId, setupChat.id);
     assert.match(sends.at(-1).text, /mahla@example\.com/);

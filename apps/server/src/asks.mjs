@@ -73,7 +73,7 @@ const inputSchema = {
     question: {
       type: "string",
       description:
-        "One short question in everyday Persian, the way you would ask a colleague out loud: who wants what, what you would do, OK? — e.g. «خانم X می‌خوان … ؛ برای این کار باید روی گیت‌وی یه route اضافه کنم. اوکیه؟». No table/column/pod/tool names, IDs or JSON; the detail goes in `detail` or lives in the chat link.",
+        "One short question in everyday Persian, the way you would ask a colleague out loud: who wants what, what you would do, OK? — e.g. «خانم اردانی می‌خوان … ؛ برای این کار باید روی گیت‌وی cilium یه route اضافه کنم. اوکیه؟». No table/column/pod/tool names, IDs or JSON; the detail goes in `detail` or lives in the chat link.",
     },
     detail: {
       type: "string",
@@ -197,18 +197,24 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
   function rootIsUnwatched(rootId) {
     const root = store?.getChat?.(rootId);
     if (!root) return false;
-    // The ops room is unattended too, but its own question is the one thing that must reach the
-    // owner (a finding like «storage fills within 24 hours» once died here). It asks, with a timeout.
+    // The ops room is unattended too, but in "critical" mode its question is the one thing that must
+    // reach the owner (2026-10-08: «S3 آسیا ظرف ۲۴ ساعت پر می‌شود» died here). It asks, with a timeout.
     return root.caller === "scheduler" || Boolean(root.job_id);
   }
 
   function enqueue(chatId, question, args = {}) {
     const target = targetOf(chatId);
-    const audience = args.audience === REQUESTER ? REQUESTER : OWNER;
-    // Approvals for irreversible calls (via guard) are still refused in the ops room; only its own
-    // question to the owner goes out.
+    const rootRow = store?.getChat?.(target);
+    const isMemberChat = String(rootRow?.caller || "").startsWith("user:");
+    if (isMemberChat && args.via === "guard") {
+      return Promise.resolve({
+        answered: false,
+        reason: "این عملیات فقط با مجوز مدیر نصب (Owner) مجاز است و برای حساب کاربر عضو غیرفعال است.",
+      });
+    }
+    const audience = isMemberChat || args.audience === REQUESTER ? REQUESTER : OWNER;
     const ownerJobApproval = args.via === "guard" && rootIsUnwatched(target) && Boolean(ownerJobApprovals(target));
-    if ((rootIsUnwatched(target) && !ownerJobApproval) || (args.via === "guard" && store?.getChat?.(target)?.caller === "ops")) {
+    if ((rootIsUnwatched(target) && !ownerJobApproval) || (args.via === "guard" && rootRow?.caller === "ops")) {
       return Promise.resolve({
         answered: false,
         reason: "nobody is watching this chain (scheduler/job/ops root) — decide yourself or refuse",
@@ -306,7 +312,7 @@ export function createAsks({ store = null, onSettled = () => {}, log = console, 
       });
       pending.get(target).push(item);
       // The messenger bridge delivers from this, not from tool.started: providers that stream
-      // tool arguments (openai-compatible) log tool.started with empty args, so no question ever reached
+      // tool arguments (openai/Z.ai) log tool.started with empty args, so no question ever reached
       // Telegram after 2026-09-24's engine switch. This carries the real text and audience.
       store?.appendEvent?.(target, null, "ask.pending", {
         question, options: args.options, multiSelect: args.multiSelect, audience, fromChatId: chatId, askId: item.id, via: item.via, ...(detail ? { detail } : {}),

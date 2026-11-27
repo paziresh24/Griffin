@@ -1,4 +1,4 @@
-// Host install: Griffin runs on the owner's machine as their own user, outside Docker.
+// Host install (deploy/host): Griffin runs on the owner's machine as his own user, outside Docker.
 // Each container assumption it needs changed is a setting; with none set, the image's behaviour holds.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -50,8 +50,8 @@ test("GRIFFIN_CLAUDE_LOGIN=claude-code: the base account uses Claude Code's own 
   const options = await withEnv({ ANTHROPIC_API_KEY: "sk-ant-api-leftover", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-leftover", CLAUDE_CONFIG_DIR: "/home/someone/acct", HOME: "/home/someone" }, () => runOptions(key));
   assert.equal(options.env.ANTHROPIC_API_KEY, undefined, "no API key reaches Claude Code");
   assert.equal(options.env.CLAUDE_CODE_OAUTH_TOKEN, undefined, "no OAuth token either: the login folder decides");
-  assert.equal(options.env.CLAUDE_CONFIG_DIR, "/home/someone/acct", "their login folder is passed through");
-  assert.equal(options.env.HOME, "/home/someone", "their HOME is passed through");
+  assert.equal(options.env.CLAUDE_CONFIG_DIR, "/home/someone/acct", "his login folder is passed through");
+  assert.equal(options.env.HOME, "/home/someone", "his HOME is passed through");
   assert.equal((await claude.createClaudeProvider({ apiKey: key }).health()).ok, true, "health does not ping the API with the marker");
 });
 
@@ -59,12 +59,17 @@ test("with a real key, Claude Code still gets exactly that key (container defaul
   const options = await withEnv({ ANTHROPIC_API_KEY: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined }, () => runOptions("sk-ant-oat-test"));
   assert.equal(options.env.CLAUDE_CODE_OAUTH_TOKEN, "sk-ant-oat-test");
   assert.equal(options.env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(options.pathToClaudeCodeExecutable, undefined, "no GRIFFIN_CLAUDE_BIN: the SDK's bundled Claude Code");
+  // No GRIFFIN_CLAUDE_BIN: the SDK's bundled Claude Code, started below the app (agent-priority.mjs).
+  const exe = options.pathToClaudeCodeExecutable;
+  if (exe) assert.match(fs.readFileSync(exe, "utf8"), /claude-agent-sdk[^'"]*\/claude'/, "the wrapper starts the bundled binary");
 });
 
 test("GRIFFIN_CLAUDE_BIN runs a host-installed Claude Code", async () => {
   const options = await withEnv({ GRIFFIN_CLAUDE_BIN: "/home/someone/.local/bin/claude" }, () => runOptions("sk-ant-oat-test"));
-  assert.equal(options.pathToClaudeCodeExecutable, "/home/someone/.local/bin/claude");
+  const exe = options.pathToClaudeCodeExecutable;
+  assert.ok(exe === "/home/someone/.local/bin/claude" || fs.readFileSync(exe, "utf8").includes("'/home/someone/.local/bin/claude'"), "the host binary, directly or through the low-priority wrapper");
+  const direct = await withEnv({ GRIFFIN_CLAUDE_BIN: "/home/someone/.local/bin/claude", GRIFFIN_AGENT_NICE: "off" }, () => runOptions("sk-ant-oat-test"));
+  assert.equal(direct.pathToClaudeCodeExecutable, "/home/someone/.local/bin/claude", "GRIFFIN_AGENT_NICE=off: no wrapper");
 });
 
 test("Settings → MCP servers edits the .claude.json Claude Code reads: inside CLAUDE_CONFIG_DIR when set", () => {

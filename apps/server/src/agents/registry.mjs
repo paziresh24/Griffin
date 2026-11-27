@@ -12,6 +12,11 @@ import { genv } from "../env.mjs";
 
 export const DEFAULT_AGENT = "griffin";
 
+export function isSpecialistTool(name) {
+  const n = String(name);
+  return n.startsWith("arvan_") || n.startsWith("nsin_");
+}
+
 /** Tools that exist in every install, with no broker and no credentials. */
 export const CORE_TOOLS = [
   "ask_owner",

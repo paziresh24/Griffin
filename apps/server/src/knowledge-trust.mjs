@@ -5,7 +5,7 @@ import { telegramOriginKey } from "./db.mjs";
 import { telegramOrigin } from "./chat-origin.mjs";
 
 // Which chats may auto-trust the notes they wrote (GRIFFIN_KNOWLEDGE_AUTO_TRUST=1, knowledge.mjs
-// injectableNotes). The review gate exists against knowledge poisoning: text
+// injectableNotes; from Karsara MR !66). The review gate exists against knowledge poisoning: text
 // from someone other than the owner (a colleague, a Telegram message, a web page, another chat)
 // must not become a standing instruction. So a chat is CLEAN only when nothing visible in it could
 // have carried such text into the model's context — decided from the chat row and its stored
@@ -32,7 +32,7 @@ export const SAFE_TOOLS = Object.freeze([
   // file names and files hold anyone's words: others' commits, vendored text), repo_git / repo_push (others' commits, remote answers),
   // related_chat_send, ask_agent, delegate, subtasks, feed_read, team_threads, incidents_*.
   "knowledge_write", "knowledge_list", "knowledge_edit", "knowledge_delete", "ask_owner", "visualize", "show_media", "chat_suggest",
-  "chat_dismiss_suggestion", "chat_chapter", "todo_write", "chat_plan", "owner_task", "jobs_create",
+  "chat_dismiss_suggestion", "chat_chapter", "settings_suggest", "todo_write", "chat_plan", "owner_task", "jobs_create",
   "jobs_delete", "jobs_run", "agent_tools_list", "agent_tools_enable",
   "agent_tools_disable", "agent_settings_get", "agent_settings_set", "list_agents",
   "repo_edit", "repo_write",
@@ -47,7 +47,7 @@ export const THIRD_PARTY_MARK = "محتوای شخص ثالث";
 export const shellYesKey = (chatId) => `shell-yes:${chatId}`;
 export const THIRD_PARTY_USER_PREFIXES = Object.freeze(["📥", "[همان درخواست‌کننده"]);
 // A hand-off another owner chat sent with chat_send (owner-chat-tools.mjs): that chat's agent wrote
-// it, maybe from content this chat never saw, so it taints like a colleague's text.
+// it, maybe from content this chat never saw, so it taints like a colleague's text (Karsara too).
 export const CHAT_SEND_PREFIX = "پیام از چت «";
 const TAINT_PREFIXES = Object.freeze([...THIRD_PARTY_USER_PREFIXES, CHAT_SEND_PREFIX]);
 // A user event carrying `from` was written by someone else (runner.send); only owner_web is his.

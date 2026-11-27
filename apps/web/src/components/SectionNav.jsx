@@ -12,6 +12,7 @@ import { Command } from "cmdk";
 import { AlarmClock, ChevronUp, Command as CommandIcon, Grip, MessageCircle, MessageSquare, PanelLeftClose, Pin, PinOff, Plus, Radar, Search, Settings2, Store, TerminalSquare, Users } from "lucide-react";
 import { orderNav } from "../drag.js";
 import { moduleNavItems, sectionOn } from "../modules.js";
+import { isMember } from "../auth-me.js";
 import { useModuleBadges, useModuleList, useModuleRoute } from "../module-hooks.js";
 import { badgeText } from "../chat-tools.js";
 import { NAV_ITEMS, setUiPrefs, useUiPrefs } from "../ui-prefs.js";
@@ -19,7 +20,7 @@ import { isPlainClick } from "../sidebar-width.js";
 import { navigate } from "../api.js";
 import { MODULE_ICONS } from "./ModulePage.jsx";
 import { useNavDrag } from "./SidebarDrag.jsx";
-import { t, isRtl } from "../i18n.js";
+import { locale, t, isRtl } from "../i18n.js";
 
 export const NAV_TARGETS = {
   telegram: { section: "telegram", icon: MessageCircle, path: "/telegram" },
@@ -41,6 +42,7 @@ export const navStyleOf = (flags) => (["launcher", "rail", "menu"].includes(flag
 
 /** Every section that is on, in the dragged order, with what the owner hid and how to reorder. */
 export function useSections() {
+  const member = isMember();
   const { flags } = useUiPrefs();
   const moduleRoute = useModuleRoute();
   const moduleList = useModuleList();
@@ -49,7 +51,7 @@ export function useSections() {
   const badges = useModuleBadges(hasBadge);
   const moduleItems = moduleNavItems(moduleList).map((i) => ({ ...i, icon: MODULE_ICONS[i.icon] || MODULE_ICONS.puzzle, section: `m:${i.module}:${i.page}`, badge: badges[`${i.module}:${i.page}`] || 0 }));
   // The core sections are modules too (modules/telegram, …): one that is off here is not offered.
-  const items = orderNav([...NAV_ITEMS.filter((item) => sectionOn(moduleList, item.id)).map((item) => ({ ...item, ...NAV_TARGETS[item.id] })), ...moduleItems], flags.navOrder);
+  const items = member ? [] : orderNav([...NAV_ITEMS.filter((item) => sectionOn(moduleList, item.id)).map((item) => ({ ...item, ...NAV_TARGETS[item.id] })), ...moduleItems], flags.navOrder);
   return {
     flags,
     items,
@@ -182,7 +184,7 @@ export function NavLauncher({ go, activeSection }) {
               </button>
             </div>
           </div>
-          <div className="g-sn-pop-foot">{pinnedCount ? t("{toLocaleString} بخش سنجاق شده", { toLocaleString: pinnedCount.toLocaleString("fa-IR") }) : t("هیچ بخشی سنجاق نشده؛ بالای فهرست فقط «جدید» است.")}</div>
+          <div className="g-sn-pop-foot">{pinnedCount ? t("{toLocaleString} بخش سنجاق شده", { toLocaleString: pinnedCount.toLocaleString(locale) }) : t("هیچ بخشی سنجاق نشده؛ بالای فهرست فقط «جدید» است.")}</div>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

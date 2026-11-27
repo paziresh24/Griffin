@@ -12,8 +12,9 @@ export const DEFAULT_PROVIDER = PROVIDER_CURSOR;
 const FACTORY = {
   [PROVIDER_CURSOR]: (a, builtinTools) => createCursorProvider({ apiKey: a.apiKey, defaultModel: a.model || "auto", builtinTools }),
   // a.endpoint (claude-endpoint.mjs): Claude Code against another vendor's Anthropic-compatible endpoint.
-  [PROVIDER_CLAUDE]: (a) => createClaudeProvider({ apiKey: a.apiKey, defaultModel: a.model || (a.endpoint ? a.endpoint.defaultModel : "sonnet"), endpoint: a.endpoint || null }),
-  [PROVIDER_OPENAI]: (a) => createOpenAIProvider({ apiKey: a.apiKey, baseUrl: a.baseUrl, defaultModel: a.model || "gpt-4o-mini", reasoningEffort: a.reasoningEffort || "" }),
+  [PROVIDER_CLAUDE]: (a) => createClaudeProvider({ apiKey: a.apiKey, defaultModel: a.model || (a.endpoint ? a.endpoint.defaultModel : "sonnet"), endpoint: a.endpoint || null, egress: a.egress || null, safety: a.safety || null }),
+  // a.plan (subscription-auth.mjs): a ChatGPT/Codex or Antigravity sign-in instead of a key.
+  [PROVIDER_OPENAI]: (a) => createOpenAIProvider({ apiKey: a.apiKey, baseUrl: a.baseUrl, defaultModel: a.model || "gpt-4o-mini", reasoningEffort: a.reasoningEffort || "", plan: a.plan || null, credentials: a.credentials || null }),
 };
 
 /** One provider object per engine account: accounts = [{ id, apiKey, baseUrl, model, reasoningEffort, endpoint }]. */

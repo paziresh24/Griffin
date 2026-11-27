@@ -33,3 +33,12 @@ test("a chat run that ends on a closed organization moves on like a refused logi
 test("the engines test reads a closed organization as a bad login, so the account leaves routing", () => {
   assert.equal(classifyEngineError({ text: ORG_OFF }), "bad_key");
 });
+
+const HELD = "API Error: Your account can't receive replies from Claude right now. Please visit the Anthropic Verification Portal to continue.";
+test("an account held for verification is a refused login everywhere, worded for its owner", () => {
+  assert.equal(oneShotError(HELD).code, AUTH_FAILED_CODE);
+  const failure = resultFailure({ type: "result", subtype: "success", is_error: true, result: HELD });
+  assert.equal(failure.code, AUTH_FAILED_CODE);
+  assert.match(failure.message, /تأیید هویت/);
+  assert.equal(classifyEngineError({ text: HELD }), "bad_key");
+});

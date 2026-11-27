@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { griffinStatePaths, stateGuard } from "../src/providers/state-guard.mjs";
 
-// A review of the state and instruction guards listed conditions in the state guard that were broader or
+// The second review of !24/!25 (2026-10-14) listed conditions in the state guard that were broader or
 // narrower than their own comments. One test per condition: what it must refuse, and what stays allowed.
 
 function setup() {
@@ -109,27 +109,28 @@ test("other tools: a relative path argument into the store is refused", () => {
   assert.equal(g("SomeTool", { out_dir: "./elsewhere" }), null);
 });
 
-test("guard review: big brace expansions under a literal folder that cannot reach the store stay allowed", () => {
+test("review of !26: big brace expansions under a literal folder that cannot reach the store stay allowed", () => {
   const e = setup();
   for (const command of ["mkdir -p /tmp/out/{1..100}", "mkdir -p logs/{2020..2026}/{01..12}", "touch ./f{0..99}.txt", "mkdir -p /tmp/t/{a,b,c}/{d,e,f}/{g,h,i}/{j,k,l}"]) allowed(e.guard(), command);
   refused(e.guard(), `cp /tmp/x /{${Array.from({ length: 70 }, (_, i) => `d${i}`).join(",")}}/knowledge`);
   refused(e.guard(), `cp /tmp/x /tmp/{${Array.from({ length: 70 }, (_, i) => `d${i}`).join(",")}}/../..${e.notes}`);
 });
 
-test("guard review: a destructive word that is only a search pattern is not a command", () => {
+test("review of !26: a destructive word that is only a search pattern is not a command", () => {
   const e = setup();
   allowed(e.guard(), `grep -rn 'chmod' ${e.workspace.replace("/workspace", "")}`);
   allowed(e.guard(), "grep -rln 'rm -rf' /");
   refused(e.guard(), `sudo rm -rf ${e.workspace}`);
   refused(e.guard(), `timeout 5 rm -rf ${e.workspace}`);
+  refused(e.guard(), `rtk bypass rm -rf ${e.workspace}`); // rtk runs the command that follows it, like timeout
 });
 
-test("guard review: option prefixes GNU accepts, and gawk's file-writing options", () => {
+test("review of !26: option prefixes GNU accepts, and gawk's file-writing options", () => {
   const e = setup();
   for (const command of [`sort --co=sh ${e.notes}/good.md`, `sort --o=/tmp/x ${e.notes}/good.md`, `git -C ${e.knowledgeRoot} grep --op=sh x`, `awk -o/tmp/p '{print}' ${e.notes}/good.md`, `awk --profile=/tmp/p '{print}' ${e.notes}/good.md`]) refused(e.guard(), command);
 });
 
-test("guard review: a long script of bare words is checked quickly", () => {
+test("review of !26: a long script of bare words is checked quickly", () => {
   const e = setup();
   const words = Array.from({ length: 4000 }, (_, i) => `word${i}`).join(" ");
   const command = `cat > /tmp/out <<EOF\n${words}\nEOF\necho ${words}`;

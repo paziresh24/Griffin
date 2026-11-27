@@ -5,11 +5,11 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cleanDir, createPreviews, localExec, previewRunsLocal, rewriteLocation } from "../src/previews.mjs";
+import { cleanDir, createPreviews, localExec, previewIdleMs, previewRunsLocal, rewriteLocation } from "../src/previews.mjs";
 
 // A kv-only store and an exec that plays the sandbox's shell: it answers the start script the way the
 // real one does (PID, READY, the log), the probe of live pids, and `hostname -i`.
-function setup({ upstreamPort = 41111, previewHost = "", publicUrl = "https://app.example.com", script = null, ...extra } = {}) {
+function setup({ upstreamPort = 41111, previewHost = "", publicUrl = "https://iris.example.com", script = null, ...extra } = {}) {
   const kv = new Map();
   const store = {
     getKv: (key) => (kv.has(key) ? JSON.parse(kv.get(key)) : null),
@@ -125,17 +125,16 @@ test("a port that stays closed leaves it starting, with a note", async () => {
   assert.match(body.note, /preview_logs/);
 });
 
-test("the limit on live previews, and stopping frees a slot", async () => {
+test("the limit on live previews: a third start makes room instead of failing", async () => {
   const s = setup({ maxLive: 2 });
   const tools = s.previews.tools("c1");
   const a = JSON.parse((await tools.preview_start.execute({})).content[0].text);
+  s.tick(1000);
   await tools.preview_start.execute({});
   const third = await tools.preview_start.execute({});
-  assert.equal(third.isError, true);
-  assert.match(third.content[0].text, /stop one first/);
-  await tools.preview_stop.execute({ id: a.id });
+  assert.equal(third.isError, undefined);
   assert.ok(s.calls.some((c) => c.includes("kill -TERM")));
-  assert.equal((await tools.preview_start.execute({})).isError, undefined);
+  assert.equal(s.previews.get(a.id).status, "stopped");
 });
 
 test("the proxy: prefix stripped, cookie and headers cleaned, redirect and csp rewritten", async () => {
@@ -154,9 +153,9 @@ test("the proxy: prefix stripped, cookie and headers cleaned, redirect and csp r
     const { rec } = await s.previews.start({ chatId: "c1", command: "x" });
     // The fake upstream listens on an ephemeral port; point the record at it.
     rec.port = up.port;
-    const base = `https://app.example.com/p/${rec.token}`;
+    const base = `https://iris.example.com/p/${rec.token}`;
 
-    const res = await s.previews.handle(new Request(`${base}/a/b?x=1`, { headers: { cookie: "karsara_session=SECRET; keep=1", "x-forwarded-proto": "https", authorization: "Bearer own" } }));
+    const res = await s.previews.handle(new Request(`${base}/a/b?x=1`, { headers: { cookie: "app_session=SECRET; keep=1", "x-forwarded-proto": "https", authorization: "Bearer own" } }));
     assert.equal(res.status, 200);
     assert.equal(await res.text(), "<h1>hi</h1>");
     assert.equal(seen[0].url, "/a/b?x=1");
@@ -181,8 +180,8 @@ test("the proxy: prefix stripped, cookie and headers cleaned, redirect and csp r
     assert.equal(bare.status, 308);
     assert.equal(bare.headers.get("location"), `/p/${rec.token}/`);
 
-    assert.equal(await s.previews.handle(new Request("https://app.example.com/api/chats")), null, "not a preview request: carry on");
-    const unknown = await s.previews.handle(new Request("https://app.example.com/p/AAAAAAAAAAAAAAAAAAAAAAAA/"));
+    assert.equal(await s.previews.handle(new Request("https://iris.example.com/api/chats")), null, "not a preview request: carry on");
+    const unknown = await s.previews.handle(new Request("https://iris.example.com/p/AAAAAAAAAAAAAAAAAAAAAAAA/"));
     assert.equal(unknown.status, 404);
   } finally {
     up.server.close();
@@ -199,7 +198,7 @@ test("a body is forwarded to the app", async () => {
     const s = setup();
     const { rec } = await s.previews.start({ chatId: "c1" });
     rec.port = up.port;
-    const res = await s.previews.handle(new Request(`https://app.example.com/p/${rec.token}/api`, { method: "POST", body: JSON.stringify({ a: 1 }), headers: { "content-type": "application/json" }, duplex: "half" }));
+    const res = await s.previews.handle(new Request(`https://iris.example.com/p/${rec.token}/api`, { method: "POST", body: JSON.stringify({ a: 1 }), headers: { "content-type": "application/json" }, duplex: "half" }));
     assert.equal(await res.text(), "ok");
     assert.equal(got, '{"a":1}');
   } finally {
@@ -211,7 +210,7 @@ test("a dead app is a 502 page that retries while it is starting", async () => {
   const s = setup({ script: (c) => (c.includes("setsid nohup") ? "PID 5\nTIMEOUT\n---LOG\n\n" : undefined) });
   const { rec } = await s.previews.start({ chatId: "c1" });
   rec.port = 1; // nothing listens there
-  const res = await s.previews.handle(new Request(`https://app.example.com/p/${rec.token}/`));
+  const res = await s.previews.handle(new Request(`https://iris.example.com/p/${rec.token}/`));
   assert.equal(res.status, 502);
   assert.match(await res.text(), /location\.reload/);
 });
@@ -220,7 +219,7 @@ test("a stopped preview answers 410", async () => {
   const s = setup();
   const { rec } = await s.previews.start({ chatId: "c1" });
   await s.previews.stop(rec.id);
-  const res = await s.previews.handle(new Request(`https://app.example.com/p/${rec.token}/`));
+  const res = await s.previews.handle(new Request(`https://iris.example.com/p/${rec.token}/`));
   assert.equal(res.status, 410);
 });
 
@@ -252,11 +251,11 @@ test("preview host: own origin, no sandbox, routed by prefix, referer and cookie
     assert.deepEqual(seen, ["/", "/assets/app.js", "/dashboard"]);
 
     // On the app's own host a preview path is refused (it would run unsandboxed next to the session).
-    const wrongHost = await s.previews.handle(new Request(`https://app.example.com/p/${rec.token}/`));
+    const wrongHost = await s.previews.handle(new Request(`https://iris.example.com/p/${rec.token}/`));
     assert.equal(wrongHost.status, 404);
 
     // Unrouted on the preview host: only what never uses the app's cookie stays open.
-    const api = await s.previews.handle(new Request("https://prev.example.com/api/chats", { headers: { cookie: "karsara_session=stale" } }));
+    const api = await s.previews.handle(new Request("https://prev.example.com/api/chats", { headers: { cookie: "app_session=stale" } }));
     assert.equal(api.status, 404);
     const post = await s.previews.handle(new Request("https://prev.example.com/anything", { method: "POST", body: "x" }));
     assert.equal(post.status, 404);
@@ -290,7 +289,7 @@ test("a websocket handshake is tunnelled to the app", async () => {
     const client = net.connect(front.address().port, "127.0.0.1");
     const chunks = [];
     client.on("data", (d) => chunks.push(d));
-    client.write(`GET /p/${rec.token}/hmr HTTP/1.1\r\nhost: app.example.com\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: karsara_session=S\r\nsec-websocket-key: x\r\n\r\n`);
+    client.write(`GET /p/${rec.token}/hmr HTTP/1.1\r\nhost: iris.example.com\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: app_session=S\r\nsec-websocket-key: x\r\n\r\n`);
     await new Promise((resolve) => setTimeout(resolve, 150));
     client.write("ping");
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -317,7 +316,7 @@ test("tick: a process that is gone, an idle preview, an old stopped record", asy
   s.tick(3600_001);
   await s.previews.tick();
   assert.equal(s.previews.get(b.id).status, "stopped");
-  assert.match(s.previews.get(b.id).reason, /2 hours/);
+  assert.match(s.previews.get(b.id).reason, /1 hour\b/, "the reason names the idle time in force");
 
   s.tick(25 * 3600_000);
   await s.previews.tick();
@@ -360,8 +359,8 @@ test("a host per preview: the token is the first label, nothing to route", async
     assert.equal(moved.headers.get("location"), "/new", "no prefix to add");
 
     assert.equal((await s.previews.handle(new Request("https://ffffffffffffffffffffffffffffffff.pv.example.com/"))).status, 404);
-    assert.equal(await s.previews.handle(new Request("https://app.example.com/api/chats")), null, "the app's host is not touched");
-    assert.equal((await s.previews.handle(new Request(`https://app.example.com/p/${rec.token}/`))).status, 404);
+    assert.equal(await s.previews.handle(new Request("https://iris.example.com/api/chats")), null, "the app's host is not touched");
+    assert.equal((await s.previews.handle(new Request(`https://iris.example.com/p/${rec.token}/`))).status, 404);
   } finally {
     up.server.close();
   }
@@ -397,7 +396,7 @@ test("runner: local start, look and stop of a real static server", { skip: !hasT
   const { rec, outcome } = await previews.start({ chatId: "c1", dir: tmp, command: 'env > env.txt; exec python3 -m http.server "$PORT" --bind 127.0.0.1', waitSec: 15 });
   try {
     assert.equal(outcome, "ready");
-    const res = await previews.handle(new Request(`https://nova.example.com/p/${rec.token}/`));
+    const res = await previews.handle(new Request(`https://iris.example.com/p/${rec.token}/`));
     assert.equal(res.status, 200);
     assert.match(await res.text(), /<h1>hi<\/h1>/);
     assert.doesNotMatch(fs.readFileSync(path.join(tmp, "env.txt"), "utf8"), /SECRET_TOKEN/, "the app's env does not reach the preview");
@@ -406,4 +405,36 @@ test("runner: local start, look and stop of a real static server", { skip: !hasT
     await previews.stop(rec.id);
   }
   assert.equal(previews.get(rec.id).status, "stopped");
+});
+
+test("idle: by default a preview lives a full day without a look (owner 2026-11-18: 2 hours was too short)", async () => {
+  const s = setup();
+  const a = (await s.previews.start({ chatId: "c1" })).rec;
+  s.tick(23 * 3600_000);
+  await s.previews.tick();
+  assert.equal(s.previews.get(a.id).status, "running", "still up after 23 hours");
+  s.tick(3600_001);
+  await s.previews.tick();
+  assert.equal(s.previews.get(a.id).status, "stopped");
+  assert.match(s.previews.get(a.id).reason, /24 hours/);
+});
+
+test("idle: PREVIEW_IDLE_HOURS sets the default; a bad value falls back to 24", () => {
+  assert.equal(previewIdleMs({ PREVIEW_IDLE_HOURS: "6" }), 6 * 3600_000);
+  assert.equal(previewIdleMs({}), 24 * 3600_000);
+  assert.equal(previewIdleMs({ PREVIEW_IDLE_HOURS: "zero" }), 24 * 3600_000);
+  assert.equal(previewIdleMs({ PREVIEW_IDLE_HOURS: "0" }), 24 * 3600_000);
+});
+
+test("full house: a new preview stops the one looked at least recently instead of failing (previews now live a day)", async () => {
+  const s = setup({ maxLive: 2 });
+  const a = (await s.previews.start({ chatId: "c1", title: "a" })).rec;
+  s.tick(60_000);
+  const b = (await s.previews.start({ chatId: "c1", title: "b" })).rec;
+  s.tick(60_000);
+  const c = (await s.previews.start({ chatId: "c1", title: "c" })).rec;
+  assert.equal(s.previews.get(c.id).status, "running");
+  assert.equal(s.previews.get(a.id).status, "stopped", "the least recently seen made room");
+  assert.match(s.previews.get(a.id).reason, /room/);
+  assert.equal(s.previews.get(b.id).status, "running");
 });

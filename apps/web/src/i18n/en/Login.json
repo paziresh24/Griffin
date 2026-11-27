@@ -4,5 +4,6 @@
   "سرور در دسترس نیست.": "Can't reach the server.",
   "گریفین": "Griffin",
   "ورود با توکن Owner": "Sign in with the owner token from data/owner.token on the server",
-  "ورود": "Sign in"
+  "ورود": "Sign in",
+  "ورود با توکن": "Sign in with your access token"
 }

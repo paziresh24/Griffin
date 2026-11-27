@@ -26,7 +26,7 @@ export async function api(path, { method = "GET", body } = {}) {
 }
 
 function answered(status, data) {
-  if (status === 401) window.dispatchEvent(new Event("griffin:unauthorized"));
+  if (status === 401) window.dispatchEvent(new Event("sokan:unauthorized"));
   // The install requires two-step sign-in and it is not set up yet (auth.mjs): the setup screen shows.
   if (status === 403 && data?.setupRequired) window.dispatchEvent(new Event("griffin:setup-2fa"));
   if (status < 200 || status >= 300) throw new ApiError(status, data);
@@ -135,6 +135,7 @@ export function useChats() {
         const source = new EventSource("/api/stream");
         source.addEventListener("chats", loadSoon);
         source.addEventListener("inbox", () => window.dispatchEvent(new Event(INBOX_EVENT)));
+        source.addEventListener("prefs", (ev) => window.dispatchEvent(new CustomEvent("griffin:settings-changed", { detail: { kind: ev.data || "all" } })));
         return source;
       },
       onOpen: load,
@@ -335,7 +336,7 @@ function subscribeHash(callback) {
 // that section: a link to send someone (2026-10-27: «یه لینک بده اکانت جدید کلاد اضافه کنن» → /#/settings/providers).
 export function usePageRoute() {
   const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
-  const match = /^#\/(settings(?:\/[a-z-]{2,32})?|jobs|agents(?:\/new)?|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?|m\/[a-z0-9-]{2,32}\/[a-z0-9-]{1,40}(?:\/[A-Za-z0-9_.-]{1,80})?)$/.exec(hash); // a module page may take one argument, like modules.js ROUTE
+  const match = /^#\/(settings(?:\/[a-z-]{2,32}(?:\/[A-Za-z][A-Za-z0-9_]{1,40})?)?|jobs|agents(?:\/new)?|telegram(?:\/[0-9a-f-]{36})?|incidents|peers(?:\/[\w.-]{1,64})?|workbench|inbox(?:\/\d{1,20})?|setup(?:\/\w+)?|m\/[a-z0-9-]{2,32}\/[a-z0-9-]{1,40}(?:\/[A-Za-z0-9_.-]{1,80})?)$/.exec(hash); // a module page may take one argument, like modules.js ROUTE
   return match ? match[1].split("/")[0] : null;
 }
 

@@ -586,7 +586,7 @@ test("chat_archive clears the owner's list but keeps this, pinned and running ch
   const listed = JSON.parse((await kit.tools(here.id).chat_list.execute({})).content[0].text);
   assert.equal(listed.find((r) => r.id === here.id).current, true);
   assert.equal(listed.find((r) => r.id === old.id).link, `https://x/#/c/${old.id}`);
-  const read = await kit.tools(here.id).chat_read.execute({ chatId: `https://karsara-x.example.com/#/c/${old.id}` });
+  const read = await kit.tools(here.id).chat_read.execute({ chatId: `https://node-x.example.com/#/c/${old.id}` });
   assert.ok(!read.isError, "a pasted chat link reads that chat");
   const out = JSON.parse((await kit.tools(here.id).chat_archive.execute({ all: true })).content[0].text);
   assert.equal(out.archived, 1);

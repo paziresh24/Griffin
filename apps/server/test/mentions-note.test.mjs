@@ -16,7 +16,7 @@ function setup(t) {
     store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  const network = { list: () => [{ id: "karsara-kazemi-example-org", name: "یارا", owner: "علیرضا کاظمی", connected: true }, { id: "off-agent", name: "خاموش", connected: false }] };
+  const network = { list: () => [{ id: "karsara-kazemi-example-org", name: "یارا", owner: "کاربر یک کاظمی", connected: true }, { id: "off-agent", name: "خاموش", connected: false }] };
   return { store, note: createMentionNote({ store, network }) };
 }
 

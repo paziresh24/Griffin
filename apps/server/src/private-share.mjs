@@ -5,7 +5,7 @@ import { PERSONA } from "./persona.mjs";
 import { sendQuiet } from "./integrations/telegram-account.mjs";
 import { rememberShareSend } from "./integrations/share-sends.mjs";
 
-// Private share: the owner gives ONE chat to ONE named person (config
+// Private share: the owner gives ONE chat to ONE named person (Karsara owner, 2026-10-13; ported from
 // PRIVATE_SHARE, default off). The invite link
 // and a one-time code go to that person's Telegram from the owner's own account; typing the code
 // binds the link to that device (a later code, again to that person, moves it to a new device and the
@@ -39,12 +39,12 @@ const sameHash = (a, b) => typeof a === "string" && typeof b === "string" && a.l
 /**
  * The owner's Telegram account as the share routes use it. The recipient must be ONE PERSON: a
  * group or channel would hand the chat to everyone in it. A name must match a person's dialog title
- * exactly (Persian names often contain other names: «رضا» is inside «علیرضا»); a partial match is
+ * exactly (Persian names often contain other names: «رضا» is inside «کاربر یک»); a partial match is
  * refused with the candidates, for the owner to pick — the invite goes out at once, so never guess.
  */
 // searchRequest(q) builds Telegram's own people search (contacts.Search); injectable for tests.
 async function defaultSearchRequest(q) {
-  const { Api } = await import("telegram");
+  const { Api } = await import("teleproto");
   return new Api.contacts.Search({ q, limit: 10 });
 }
 
@@ -59,7 +59,7 @@ const GLOBAL_PAUSE_MS = 60_000;
 // store: where the sent ids are kept (share-sends.mjs); markSent(id): the live echo of this send is ours.
 export function telegramForShares(client, { searchRequest = defaultSearchRequest, now = Date.now, store = null, markSent = null } = {}) {
   // Known = a Telegram contact of the owner. Being in the recent chats is not enough: anyone can
-  // write first and land there.
+  // write first and land there (from Karsara).
   const isContact = (e) => Boolean(e?.contact || e?.mutualContact);
   if (!accountState.has(client)) accountState.set(client, { dialogs: null, dialogsAt: 0, globalPausedUntil: 0 });
   const state = accountState.get(client);
@@ -380,7 +380,7 @@ export function registerOwnerShareRoutes(app, { store, guestTelegram, publicUrl 
     }
     if (!peer?.peerId) return c.json({ error: "این گیرنده در تلگرامِ شما پیدا نشد." }, 400);
     // Someone outside the owner's contacts: a similar name is not enough — the owner confirms the
-    // exact @username, and without one it cannot be confirmed.
+    // exact @username, and without one it cannot be confirmed (from Karsara).
     if (peer.known !== true) {
       if (!peer.username) return c.json({ error: "این شخص در مخاطبان شما نیست و نامِ کاربری ندارد؛ اول او را در تلگرام به مخاطبان اضافه کنید." }, 400);
       const typed = String(body?.confirmUsername ?? "").trim().replace(/^@/, "").toLowerCase();

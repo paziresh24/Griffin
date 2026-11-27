@@ -140,16 +140,27 @@ export function Choice({ label, value, options, onChange, disabled = false }) {
   );
 }
 
-/** A page's tabs. They wrap instead of scrolling sideways: nothing is hidden past the edge of a phone. */
+/** A page's tabs. Segmented track so secondary tabs are immediately clear and never lost on phones. */
 export function Tabs({ label, tabs, value, onChange }) {
   return (
-    <div role="tablist" aria-label={label} className="g-settings-strip mb-6 flex flex-wrap gap-1.5">
-      {tabs.map((tab) => (
-        <button key={tab.id} type="button" role="tab" aria-selected={value === tab.id} aria-current={value === tab.id ? "page" : undefined} onClick={() => onChange(tab.id)} className={`press relative rounded-full px-3.5 py-1.5 text-sm transition-colors ${value === tab.id ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-          {value === tab.id ? <motion.span layoutId="settings-tab" className="g-nav-bar absolute inset-0 rounded-full bg-muted" transition={{ type: "spring", stiffness: 500, damping: 38 }} /> : null}
-          <span className="relative">{tab.label}</span>
-        </button>
-      ))}
+    <div role="tablist" aria-label={label} className="g-settings-strip mb-6 inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-border/70 bg-muted/40 p-1">
+      {tabs.map((tab) => {
+        const active = value === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-current={active ? "page" : undefined}
+            onClick={() => onChange(tab.id)}
+            className={`press relative rounded-lg px-3.5 py-1.5 text-xs sm:text-sm transition-colors ${active ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
+            {active ? <motion.span layoutId="settings-tab" className="g-nav-bar absolute inset-0 rounded-lg border border-border/60 bg-background shadow-xs" transition={{ type: "spring", stiffness: 500, damping: 38 }} /> : null}
+            <span className="relative">{tab.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

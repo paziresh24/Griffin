@@ -59,23 +59,23 @@ function install(host, net, extra = {}) {
 test("NETWORK_ADMIT=owner: a new member is made disabled with a card for the owner; a known one is untouched", async () => {
   const hosts = {};
   const net = (url, init = {}) => { const u = new URL(url); return hosts[u.host].app.request(u.pathname, init); };
-  const a = (hosts["a.example.org"] = install("a.example.org", net));
-  const b = (hosts["b.example.org"] = install("b.example.org", net, { admit: "owner" }));
+  const a = (hosts["a.example.com"] = install("a.example.com", net));
+  const b = (hosts["b.example.com"] = install("b.example.com", net, { admit: "owner" }));
   const settle = () => new Promise((r) => setTimeout(r, 50));
-  await a.n.hello("https://b.example.org");
+  await a.n.hello("https://b.example.com");
   for (let i = 0; i < 10; i++) await settle();
-  assert.equal(b.users.get("net-a-example-org")?.enabled, false, "B holds A until its owner turns it on");
+  assert.equal(b.users.get("net-a-example-com")?.enabled, false, "B holds A until its owner turns it on");
   const tasks = b.kv.get("ownertasks") || [];
   assert.equal(tasks.length, 1);
-  assert.match(tasks[0].title, /a\.example\.org/);
+  assert.match(tasks[0].title, /a\.example\.com/);
   // The owner turns it on; a later hello from A does not turn it off again or add a second card.
-  b.users.get("net-a-example-org").enabled = true;
-  await a.n.hello("https://b.example.org");
+  b.users.get("net-a-example-com").enabled = true;
+  await a.n.hello("https://b.example.com");
   for (let i = 0; i < 10; i++) await settle();
-  assert.equal(b.users.get("net-a-example-org").enabled, true);
+  assert.equal(b.users.get("net-a-example-com").enabled, true);
   assert.equal((b.kv.get("ownertasks") || []).length, 1);
   // Default (auto) keeps today's behaviour.
-  assert.equal(a.users.get("net-b-example-org")?.enabled, true);
+  assert.equal(a.users.get("net-b-example-com")?.enabled, true);
 });
 
 test("a new agent that meets one member meets the whole network, and they all meet it", async () => {
@@ -89,7 +89,6 @@ test("a new agent that meets one member meets the whole network, and they all me
   for (let i = 0; i < 10; i++) await settle();
   assert.deepEqual(b.n.connected().map((x) => x.url), ["https://c.example.com"]);
   await a.n.hello("https://b.example.com");
-  await b.n.hello("https://a.example.com");
   for (let i = 0; i < 20; i++) await settle();
   assert.deepEqual(a.n.connected().map((x) => x.url).sort(), ["https://b.example.com", "https://c.example.com"]);
   assert.ok(c.n.connected().some((x) => x.url === "https://a.example.com"), "C knows the newcomer");
@@ -114,7 +113,6 @@ test("a hello sent in someone else's name does not cut their working link", asyn
   const b = (hosts["b.example.com"] = install("b.example.com", net));
   const settle = () => new Promise((r) => setTimeout(r, 50));
   await a.n.hello("https://b.example.com");
-  await b.n.hello("https://a.example.com");
   for (let i = 0; i < 10; i++) await settle();
   // A third party asks B to say hello to "A": B mints a token, A refuses it (no hello pending).
   await b.app.request("/api/public/network/hello", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: "https://a.example.com" }) });
@@ -149,9 +147,9 @@ test("an install with the network off has no card, refuses hello and token, and 
   assert.equal((await app.request("/api/public/network/card")).status, 200);
 });
 
-// A peer agent asked, got «auth-required», ended its turn: the late answer must still reach it.
+// 2026-10-19: a colleague's agent asked, got «auth-required», ended its turn and never heard the answer.
 test("an answer that outlives network_ask wakes the chat that asked", async () => {
-  const kv = new Map([["network:agents", { "b-example-com": { id: "b-example-com", url: "https://b.example.com", name: "گریفین", owner: "Owner" } }]]);
+  const kv = new Map([["network:agents", { "b-example-com": { id: "b-example-com", url: "https://b.example.com", name: "آیریس", owner: "صاحب‌کار" } }]]);
   const store = { getKv: (k) => kv.get(k) ?? null, setKv: (k, v) => kv.set(k, v), deleteKv: (k) => kv.delete(k), getChat: (id) => (id === "chat-1" ? { id } : null) };
   const secrets = { get: () => "grf_tokenforbxxxxxxxxxxxxxxxx", set() {} };
   let polls = 0;
@@ -184,30 +182,30 @@ test("an answer that outlives network_ask wakes the chat that asked", async () =
 test("a token the other install no longer knows (set up again) is replaced by a new handshake, and the ask goes through", async () => {
   const hosts = {};
   const net = (url, init = {}) => { const u = new URL(url); return hosts[u.host].app.request(u.pathname, init); };
-  const a = (hosts["a.example.org"] = install("a.example.org", net));
-  const b = (hosts["b.example.org"] = install("b.example.org", net));
+  const a = (hosts["a.example.com"] = install("a.example.com", net));
+  const b = (hosts["b.example.com"] = install("b.example.com", net));
   const settle = () => new Promise((r) => setTimeout(r, 50));
-  await a.n.hello("https://b.example.org");
+  await a.n.hello("https://b.example.com");
   for (let i = 0; i < 10; i++) await settle();
-  const before = a.secrets.get("network__b-example-org") ?? [...a.secrets.values()][0];
+  const before = a.secrets.get("network__b-example-com") ?? [...a.secrets.values()][0];
   assert.ok(before, "A holds a token for B");
   // B's data reset: every token it ever gave is gone.
   for (const c of b.clients) c.revoked = true;
-  const r = await a.n.ask("b-example-org", "هنوز وصلیم؟");
+  const r = await a.n.ask("b-example-com", "هنوز وصلیم؟");
   assert.equal(r.state, "completed");
-  assert.match(r.answer, /from net-a-example-org/);
+  assert.match(r.answer, /from net-a-example-com/);
   assert.ok(b.clients.some((c) => !c.revoked), "B issued a fresh token");
 });
 
-// 2026-10-20: Jafari renamed her agent; colleagues kept the old name, and saw no logo or colour.
+// 2026-10-20: a colleague renamed her agent; colleagues kept the old name, and saw no logo or colour.
 test("a member's rename, colour and logo are read again from its card, not only when we connected", async () => {
-  const kv = new Map([["network:agents", { "b-example-org": { id: "b-example-org", url: "https://b.example.org", name: "قدیمی", owner: "خانم جعفری" } }]]);
-  // 2026-10-24: Ghorbani renamed «مانا»; his chats on other installs stayed under the old peer label.
-  const users = new Map([["net-b-example-org", { id: "net-b-example-org", label: "قدیمی (خانم جعفری)" }]]);
+  const kv = new Map([["network:agents", { "b-example-com": { id: "b-example-com", url: "https://b.example.com", name: "قدیمی", owner: "همکار ب" } }]]);
+  // 2026-10-24: Barghi renamed «مانا»; his chats on other installs stayed under the old peer label.
+  const users = new Map([["net-b-example-com", { id: "net-b-example-com", label: "قدیمی (همکار ب)" }]]);
   const store = { getKv: (k) => kv.get(k) ?? null, setKv: (k, v) => kv.set(k, v), deleteKv: (k) => kv.delete(k), getPeerUser: (id) => users.get(id) || null, setPeerUserLabel: (id, label) => (users.get(id).label = label) };
   const secrets = { get: () => "grf_tokenforbxxxxxxxxxxxxxxxx", set() {}, delete() {} };
   const svg = '<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#0f766e"/><script>alert(1)</script></svg>';
-  const card = { url: "https://b.example.org", name: "نو", latin: "Nou", owner: "خانم جعفری", product: "Karsara", color: "#0f766e" };
+  const card = { url: "https://b.example.com", name: "نو", latin: "Nou", owner: "همکار ب", product: "Karsara", color: "#0f766e" };
   const fetchFn = async (url) => {
     const path = new URL(url).pathname;
     if (path === "/api/public/network/card") return new Response(JSON.stringify(card), { headers: { "content-type": "application/json" } });
@@ -215,14 +213,14 @@ test("a member's rename, colour and logo are read again from its card, not only 
     return new Response(JSON.stringify({ agents: [] }), { headers: { "content-type": "application/json" } });
   };
   const app = new Hono();
-  const n = createNetwork({ store, peerAuth: {}, secrets, env: { GRIFFIN_NETWORK_DOMAINS: "example.org", GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => "https://a.example.org", fetchFn, log: { log() {}, error() {} } });
+  const n = createNetwork({ store, peerAuth: {}, secrets, env: { GRIFFIN_NETWORK_DOMAINS: DOMAINS.join(","), GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => "https://a.example.com", fetchFn, log: { log() {}, error() {} } });
   n.ownerRoutes(app);
   await n.refresh();
   const [b] = n.list();
   assert.equal(b.name, "نو");
-  assert.equal(users.get("net-b-example-org").label, "نو (خانم جعفری)", "its chats are headed with the new name");
+  assert.equal(users.get("net-b-example-com").label, "نو (همکار ب)", "its chats are headed with the new name");
   assert.equal(b.color, "#0f766e");
-  assert.match(b.icon, /^\/api\/network\/b-example-org\/icon\.svg\?v=[0-9a-f]{8}$/);
+  assert.match(b.icon, /^\/api\/network\/b-example-com\/icon\.svg\?v=[0-9a-f]{8}$/);
   const res = await app.request(b.icon);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "image/svg+xml");
@@ -248,12 +246,12 @@ function pair(extraB = {}) {
     return hosts[u.host].app.request(u.pathname, init);
   };
   const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, text: msg.text }) };
-  const a = (hosts["a.example.org"] = install("a.example.org", net, { chats: ["chat-1"], runner }));
-  const b = (hosts["b.example.org"] = install("b.example.org", net, extraB));
+  const a = (hosts["a.example.com"] = install("a.example.com", net, { chats: ["chat-1"], runner }));
+  const b = (hosts["b.example.com"] = install("b.example.com", net, extraB));
   return { a, b, sent };
 }
 const connectPair = async (a) => {
-  await a.n.hello("https://b.example.org");
+  await a.n.hello("https://b.example.com");
   for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 30));
 };
 const waitFor = async (check, ms = 2000) => {
@@ -269,17 +267,17 @@ test("a member that is stopping for an update says so; a message to it waits and
   assert.equal(card.presence.commit, "abc123456789");
 
   await b.n.leave(); // B's SIGTERM: it tells A first
-  assert.equal(a.n.statusOf("b-example-org").state, "updating");
+  assert.equal(a.n.statusOf("b-example-com").state, "updating");
   assert.equal((await (await b.app.request("/api/public/network/card")).json()).presence.state, "updating");
   b.down = true;
 
-  const r = await a.n.tools("chat-1").network_ask.execute({ agent: "b-example-org", message: "سلام" });
+  const r = await a.n.tools("chat-1").network_ask.execute({ agent: "b-example-com", message: "سلام" });
   assert.equal(r.state, "queued");
   assert.equal(r.agentStatus, "updating");
   assert.match(r.note, /Telegram/);
   assert.equal(a.n.pending("chat-1"), 1);
-  assert.equal(a.n.list().find((x) => x.id === "b-example-org").status.state, "updating");
-  assert.equal(a.n.list().find((x) => x.id === "b-example-org").queued, 1);
+  assert.equal(a.n.list().find((x) => x.id === "b-example-com").status.state, "updating");
+  assert.equal(a.n.list().find((x) => x.id === "b-example-com").queued, 1);
   assert.equal(sent.length, 0);
 
   b.down = false;
@@ -289,9 +287,9 @@ test("a member that is stopping for an update says so; a message to it waits and
   assert.equal(sent[0].chatId, "chat-1");
   assert.ok(sent[0].text.startsWith("[گزارش خودکار زیرکارها"));
   assert.match(sent[0].text, /در صف ماند/);
-  assert.match(sent[0].text, /b\.example\.org got: سلام from net-a-example-org/);
+  assert.match(sent[0].text, /b\.example\.com got: سلام from net-a-example-com/);
   assert.equal(a.n.pending("chat-1"), 0);
-  assert.equal(a.n.statusOf("b-example-org").state, "ready");
+  assert.equal(a.n.statusOf("b-example-com").state, "ready");
 });
 
 test("an outage nobody announced is seen by the probe (unreachable, then down); asking meanwhile queues instead of losing the message", async () => {
@@ -299,18 +297,18 @@ test("an outage nobody announced is seen by the probe (unreachable, then down); 
   await connectPair(a);
   b.down = true;
   await a.n.probeAll();
-  assert.equal(a.n.statusOf("b-example-org").state, "unreachable");
-  const r = await a.n.tools("chat-1").network_ask.execute({ agent: "b-example-org", message: "وضعیت؟" });
+  assert.equal(a.n.statusOf("b-example-com").state, "unreachable");
+  const r = await a.n.tools("chat-1").network_ask.execute({ agent: "b-example-com", message: "وضعیت؟" });
   assert.equal(r.state, "queued");
   await a.n.probeAll();
   await a.n.probeAll();
-  assert.equal(a.n.statusOf("b-example-org").state, "down");
+  assert.equal(a.n.statusOf("b-example-com").state, "down");
   assert.equal(sent.length, 0);
   b.down = false;
   await a.n.probeAll(); // the card answers again: ready, and the queue is sent
   await waitFor(() => sent.length);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].text, /b\.example\.org got: وضعیت؟/);
+  assert.match(sent[0].text, /b\.example\.com got: وضعیت؟/);
 });
 
 // 2026-10-21: four installs with no engine at all held colleagues' requests for days.
@@ -318,8 +316,8 @@ test("a member with no engine set up says so, and asking it fails at once instea
   const { a, sent } = pair({ presence: () => ({ canThink: false, noEngine: true }) });
   await connectPair(a);
   await a.n.probeAll();
-  assert.equal(a.n.statusOf("b-example-org").noEngine, true);
-  await assert.rejects(a.n.tools("chat-1").network_ask.execute({ agent: "b-example-org", message: "سلام" }), /no AI engine/);
+  assert.equal(a.n.statusOf("b-example-com").noEngine, true);
+  await assert.rejects(a.n.tools("chat-1").network_ask.execute({ agent: "b-example-com", message: "سلام" }), /no AI engine/);
   assert.equal(sent.length, 0);
 });
 
@@ -328,7 +326,7 @@ test("without a chat to wake, asking an updating member fails with the reason in
   await connectPair(a);
   await b.n.leave();
   b.down = true;
-  await assert.rejects(a.n.ask("b-example-org", "x"), /updating/);
+  await assert.rejects(a.n.ask("b-example-com", "x"), /updating/);
   assert.equal(a.n.pending("chat-1"), 0);
 });
 
@@ -336,16 +334,16 @@ test("only the member itself may announce its state, and only by the token it wa
   const { a, b } = pair();
   await connectPair(a);
   const post = (body, token) => a.app.request("/api/public/network/status", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
-  const tokenOfB = b.secrets.get("network/a-example-org");
-  assert.equal((await post({ from: "https://b.example.org", state: "updating" }, "grf_nope_nope_nope_nope_nope_nope")).status, 401);
-  assert.equal((await post({ from: "https://c.example.org", state: "updating" }, tokenOfB)).status, 403, "B cannot speak for C");
-  assert.equal((await post({ from: "https://b.example.org", state: "gone" }, tokenOfB)).status, 400);
-  assert.equal((await post({ from: "https://b.example.org", state: "updating" }, tokenOfB)).status, 200);
-  assert.equal(a.n.statusOf("b-example-org").state, "updating");
+  const tokenOfB = b.secrets.get("network/a-example-com");
+  assert.equal((await post({ from: "https://b.example.com", state: "updating" }, "grf_nope_nope_nope_nope_nope_nope")).status, 401);
+  assert.equal((await post({ from: "https://c.example.com", state: "updating" }, tokenOfB)).status, 403, "B cannot speak for C");
+  assert.equal((await post({ from: "https://b.example.com", state: "gone" }, tokenOfB)).status, 400);
+  assert.equal((await post({ from: "https://b.example.com", state: "updating" }, tokenOfB)).status, 200);
+  assert.equal(a.n.statusOf("b-example-com").state, "updating");
 });
 
 test("the follow of a task keeps waiting while its member restarts, instead of giving up", async () => {
-  const kv = new Map([["network:agents", { "b-example-org": { id: "b-example-org", url: "https://b.example.org", name: "نوا" } }]]);
+  const kv = new Map([["network:agents", { "b-example-com": { id: "b-example-com", url: "https://b.example.com", name: "آیریس" } }]]);
   const store = { getKv: (k) => kv.get(k) ?? null, setKv: (k, v) => kv.set(k, v), deleteKv: (k) => kv.delete(k), getChat: () => ({ id: "chat-1" }) };
   const secrets = { get: () => "grf_tokenforbxxxxxxxxxxxxxxxx", set() {} };
   let phase = 0;
@@ -363,11 +361,11 @@ test("the follow of a task keeps waiting while its member restarts, instead of g
   };
   const sent = [];
   const runner = { isActive: () => false, send: async (chatId, msg) => sent.push({ chatId, text: msg.text }) };
-  const n = createNetwork({ store, peerAuth: {}, secrets, runner, env: { GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => "https://a.example.org", fetchFn, log: { log() {}, error() {} }, pollGapMs: 1, retryMs: 1 });
-  const r = await n.tools("chat-1").network_ask.execute({ agent: "b-example-org", message: "کار طولانی" });
+  const n = createNetwork({ store, peerAuth: {}, secrets, runner, env: { GRIFFIN_NETWORK_DOMAINS: DOMAINS.join(","), GRIFFIN_NETWORK_SEEDS: "" }, publicUrl: () => "https://a.example.com", fetchFn, log: { log() {}, error() {} }, pollGapMs: 1, retryMs: 1 });
+  const r = await n.tools("chat-1").network_ask.execute({ agent: "b-example-com", message: "کار طولانی" });
   assert.notEqual(r.state, "completed");
   assert.equal(r.state, "working", "the task was sent; the member went away while it worked");
-  kv.set("network:status", { "b-example-org": { state: "unreachable", failures: 1 } }); // what the minute probe records
+  kv.set("network:status", { "b-example-com": { state: "unreachable", failures: 1 } }); // what the minute probe records
   await waitFor(() => sent.length, 4000);
   assert.equal(sent.length, 1, "the result came after the restart");
   assert.match(sent[0].text, /تمام شد/);
@@ -379,37 +377,37 @@ test("a member whose public name moved is followed to the new name, token and al
   const net = (url, init = {}) => {
     const u = new URL(url);
     // The old name redirects browser-style GETs to the new one, as app.mjs does for OLD_HOSTS.
-    if (moved.has(u.host) && (init.method || "GET") === "GET") return new Response(null, { status: 301, headers: { location: `https://new-b.example.org${u.pathname}` } });
-    const h = moved.has(u.host) ? "new-b.example.org" : u.host;
+    if (moved.has(u.host) && (init.method || "GET") === "GET") return new Response(null, { status: 301, headers: { location: `https://new-b.example.com${u.pathname}` } });
+    const h = moved.has(u.host) ? "new-b.example.com" : u.host;
     return hosts[h].app.request(u.pathname, init);
   };
-  const a = (hosts["a.example.org"] = install("a.example.org", net));
-  let bName = "old-b.example.org";
-  const b = install("old-b.example.org", net);
-  hosts["old-b.example.org"] = b;
+  const a = (hosts["a.example.com"] = install("a.example.com", net));
+  let bName = "old-b.example.com";
+  const b = install("old-b.example.com", net);
+  hosts["old-b.example.com"] = b;
   const settle = () => new Promise((r) => setTimeout(r, 50));
-  await a.n.hello("https://old-b.example.org");
+  await a.n.hello("https://old-b.example.com");
   for (let i = 0; i < 20; i++) await settle();
-  assert.deepEqual(a.n.connected().map((x) => x.url), ["https://old-b.example.org"]);
-  const token = a.secrets.get(`network/${agentId("old-b.example.org")}`) || [...a.secrets.values()][0];
+  assert.deepEqual(a.n.connected().map((x) => x.url), ["https://old-b.example.com"]);
+  const token = a.secrets.get(`network/${agentId("old-b.example.com")}`) || [...a.secrets.values()][0];
   assert.ok(token);
 
   // B is renamed: same install, new public name; the old name now redirects.
-  const b2 = install("new-b.example.org", net);
+  const b2 = install("new-b.example.com", net);
   b2.clients.push(...b.clients);
-  hosts["new-b.example.org"] = b2;
-  moved.add("old-b.example.org");
-  bName = "new-b.example.org";
+  hosts["new-b.example.com"] = b2;
+  moved.add("old-b.example.com");
+  bName = "new-b.example.com";
   // What B sends from its new name still carries the token A made for its old one: A knows it is B
   // (the old name redirects there), and only for that name.
-  const oldUser = `net-${agentId("old-b.example.org")}`;
-  assert.equal(await a.n.memberIs(oldUser, "new-b.example.org"), true);
-  assert.equal(await a.n.memberIs(oldUser, "c.example.org"), false);
-  assert.equal(await a.n.memberIs(`net-${agentId("c.example.org")}`, "new-b.example.org"), false);
+  const oldUser = `net-${agentId("old-b.example.com")}`;
+  assert.equal(await a.n.memberIs(oldUser, "new-b.example.com"), true);
+  assert.equal(await a.n.memberIs(oldUser, "c.example.com"), false);
+  assert.equal(await a.n.memberIs(`net-${agentId("c.example.com")}`, "new-b.example.com"), false);
   await a.n.refresh();
   for (let i = 0; i < 10; i++) await settle();
   const urls = a.n.connected().map((x) => x.url);
-  assert.deepEqual(urls, ["https://new-b.example.org"], "one entry, at the new name");
+  assert.deepEqual(urls, ["https://new-b.example.com"], "one entry, at the new name");
   assert.equal([...a.secrets.values()].includes(token), true, "the token we held came along");
   const r = await a.n.ask(agentId(bName), "سلام");
   assert.equal(r.state, "completed");
@@ -427,25 +425,39 @@ test("a file goes from one member to another's inbox; outside the workspace, a s
   fs.writeFileSync(path.join(tmp, "outside.txt"), "secret");
   const hosts = {};
   const net = (url, init = {}) => { const u = new URL(url); return hosts[u.host].app.request(u.pathname, init); };
-  const a = (hosts["a.example.org"] = install("a.example.org", net, { sendRoots: [work] }));
-  const b = (hosts["b.example.org"] = install("b.example.org", net, { inboxDir: inbox }));
+  const a = (hosts["a.example.com"] = install("a.example.com", net, { sendRoots: [work] }));
+  const b = (hosts["b.example.com"] = install("b.example.com", net, { inboxDir: inbox }));
   const settle = () => new Promise((r) => setTimeout(r, 50));
-  await a.n.hello("https://b.example.org");
+  await a.n.hello("https://b.example.com");
   for (let i = 0; i < 10; i++) await settle();
-  const r = await a.n.sendFile("b-example-org", path.join(work, "فیش.pdf"));
+  const r = await a.n.sendFile("b-example-com", path.join(work, "فیش.pdf"));
   assert.equal(r.ok, true);
-  assert.ok(r.remotePath.startsWith(path.join(inbox, "a-example-org")));
+  assert.ok(r.remotePath.startsWith(path.join(inbox, "a-example-com")));
   assert.equal(fs.readFileSync(r.remotePath, "utf8"), "%PDF-1.4 slip");
   assert.match(path.basename(r.remotePath), /فیش\.pdf$/);
-  await assert.rejects(a.n.sendFile("b-example-org", path.join(tmp, "outside.txt")), /inside this install's workspace/);
-  await assert.rejects(a.n.sendFile("b-example-org", path.join(work, "..", "work", "..", "outside.txt")), /inside this install's workspace/);
+  await assert.rejects(a.n.sendFile("b-example-com", path.join(tmp, "outside.txt")), /inside this install's workspace/);
+  await assert.rejects(a.n.sendFile("b-example-com", path.join(work, "..", "work", "..", "outside.txt")), /inside this install's workspace/);
   // A stranger without a member token gets nothing.
-  const bad = await b.app.request("/api/public/network/file", { method: "POST", headers: { authorization: "Bearer nope", "x-network-from": "https://a.example.org" }, body: "x" });
+  const bad = await b.app.request("/api/public/network/file", { method: "POST", headers: { authorization: "Bearer nope", "x-network-from": "https://a.example.com" }, body: "x" });
   assert.equal(bad.status, 401);
   // An install with no inbox takes no files.
-  const c = install("c.example.org", net);
+  const c = install("c.example.com", net);
   assert.equal((await c.app.request("/api/public/network/file", { method: "POST", body: "x" })).status, 404);
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test("card skills and peers list require a valid member token (invalid Bearer token must not leak skills or peers)", async () => {
+  const { a, b } = pair();
+  await connectPair(a);
+  const anonCard = await (await a.app.request("/api/public/network/card")).json();
+  assert.equal(anonCard.skills, undefined);
+  const badTokenCard = await (await a.app.request("/api/public/network/card", { headers: { authorization: "Bearer invalid-token" } })).json();
+  assert.equal(badTokenCard.skills, undefined, "invalid token object must not coerce to truthy withSkills");
+  assert.equal((await a.app.request("/api/public/network/peers")).status, 401);
+  assert.equal((await a.app.request("/api/public/network/peers", { headers: { authorization: "Bearer invalid-token" } })).status, 401);
+  const tokenForB = b.secrets.get("network/a-example-com");
+  const authedPeers = await a.app.request("/api/public/network/peers", { headers: { authorization: `Bearer ${tokenForB}` } });
+  assert.equal(authedPeers.status, 200);
 });
 
 test("invalid token on /card never leaks skills and /peers requires a valid member token", async () => {

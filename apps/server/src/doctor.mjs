@@ -1,17 +1,59 @@
 import fs from "node:fs";
-import { kindOf } from "./providers/ids.mjs";
 import { CLAUDE_CODE_LOGIN } from "./providers/claude.mjs";
 import { isCreditError } from "./engine-state.mjs";
 import { resetFromText } from "./plan-fallback.mjs";
 import { maskText } from "./redact.mjs";
 
-// Self-check and self-repair. Born from a fresh install where a Claude subscription token went in
-// as an API key, health said ok, and every run finished empty. The doctor probes each engine for real, reads the last runs, and
+// Self-check and self-repair (owner 2026-10-12: «اصلاح خودش توسط خودش»; a colleague's fresh
+// install «درست کار نمیکنه»: a Claude subscription token went in as an API key, health said ok,
+// and every run finished empty). The doctor probes each engine for real, reads the last runs, and
 // knows a few safe fixes; heal() applies the ones that cannot make things worse on its own.
 // Every pass also tells the owner (owner 2026-11-05: «توانایی اعلام و در صورت امکان رفع خطاها»): what
 // broke and stayed broken for two passes, what it fixed by itself, and what came back.
 //
 // Titles are fixed Persian strings with {vars} (the web UI translates them); `detail` is raw text.
+
+// The company's Claude accounts on this install, as the accounting hub last told it (accounting.mjs
+// KV_COMPANY; owner 2026-11-23: «همه گریفین ها همه اکانت های کلاد که شرکت ارائه میده رو داشته باشن»):
+// one check «N از M», one line per account that is missing or whose login broke, and each Claude
+// engine named by its account so «claude-7» says whose it is.
+const COMPANY_FRESH_MS = 2 * 86_400_000;
+export function companyChecks(company, now = Date.now()) {
+  const out = { checks: [], names: {} };
+  if (!company || !Array.isArray(company.accounts) || !company.accounts.length) return out;
+  if (!Number.isFinite(Date.parse(company.at)) || now - Date.parse(company.at) > COMPANY_FRESH_MS) return out;
+  const who = (a) => a.email || a.name || String(a.org || "").slice(0, 8);
+  for (const a of company.accounts) for (const id of a.ids || []) out.names[id] = `${who(a)}، اکانت شرکت`;
+  for (const e of company.extras || []) {
+    if (e.why === "other") out.names[e.id] = `${e.email || String(e.org || "").slice(0, 8)}، بیرون از اکانت‌های شرکت`;
+    else if (e.why === "noid") out.names[e.id] = "اکانتش معلوم نیست";
+  }
+  const lack = company.accounts.filter((a) => a.state !== "ok");
+  const have = company.accounts.length - lack.length;
+  const line = (a) => `${who(a)}: ${a.state === "broken" ? (a.broken === "credit" ? "پرداخت یا اعتبارش تمام شده" : "ورودش منقضی شده؛ یک بار دیگر وارد شوید") : "وارد نشده"}`;
+  out.checks.push({
+    id: "company-accounts",
+    level: lack.length ? "warn" : "ok",
+    title: lack.length ? "اکانت‌های Claude شرکت: {have} از {total} وصل است" : "هر {total} اکانت Claude شرکت وصل است",
+    vars: { have, total: company.accounts.length },
+    detail: lack.length
+      ? `${lack.map(line).join("\n")}\nبا همهٔ اکانت‌ها، کارها بین آن‌ها پخش می‌شود و وقتی یکی پر شد کار نمی‌ماند. از «افزودن موتور» با همان ایمیل وارد شوید.`
+      : null,
+    ...(lack.length ? { fix: { id: "wizard", title: "افزودن اکانت Claude", manual: true } } : {}),
+  });
+  // A login that never said whose account it is (an old token): signing in again names it.
+  const unknown = (company.extras || []).filter((e) => e.why === "noid" && e.enabled && !e.broken);
+  if (unknown.length) {
+    out.checks.push({
+      id: "company-accounts:unknown",
+      level: "warn",
+      title: "معلوم نیست موتور {engines} با کدام اکانت Claude وصل است",
+      vars: { engines: unknown.map((e) => e.id).join("، ") },
+      detail: "ورود قدیمی با توکن است و شناسهٔ اکانت را نمی‌دهد. اگر یکی از اکانت‌های شرکت است، یک بار حذف و با «افزودن موتور» دوباره وارد شوید تا شناخته شود؛ اگر اکانت شخصی شماست، همین‌طور بماند.",
+    });
+  }
+  return out;
+}
 
 const RECENT_ERRORS = [];
 let consoleHooked = false;
@@ -40,7 +82,7 @@ export function classifyEngineError({ status = 0, text = "", network = false } =
   if (status === 402 || /quota|credit|insufficient|balance|usage limit|hit your limit/i.test(t)) return "quota";
   // Too many requests right now: the key works, the engine is just busy.
   if (status === 429 || /rate limit|too many requests|concurren/i.test(t)) return "busy";
-  if (status === 401 || /invalid[ _-]?(api[ _-]?)?key|unauthori[sz]ed|authentication|invalid x-api-key|invalid bearer|organization has disabled|subscription access (?:is |has been )?disabled|disabled claude subscription access/i.test(t)) return "bad_key";
+  if (status === 401 || /invalid[ _-]?(api[ _-]?)?key|unauthori[sz]ed|authentication|invalid x-api-key|invalid bearer|organization has disabled|subscription access (?:is |has been )?disabled|disabled claude subscription access|can(?:'|’|no)t receive replies from claude|verification portal/i.test(t)) return "bad_key";
   if (status === 404 || /model.*(not found|does not exist|unknown)|unknown model/i.test(t)) return "model";
   if (status === 403) return "forbidden";
   return "other";
@@ -86,16 +128,18 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     }
   }
 
-  // A real call per engine — reachability alone said «ok» for a rejected key.
+  // A real call per engine — reachability alone said «ok» for a rejected key (2026-10-12).
   // Every probe's verdict also goes to onProbe: index.mjs stores a spent plan or credit for routing.
-  async function probeEngine(id) {
-    const result = await probeOnce(id);
+  // `optIn` is set by whoever asks for a real spend (index.mjs testEngine with fresh=1); without it a
+  // Claude account only probes if the install turned CLAUDE_PROBE on (claude-safety.mjs).
+  async function probeEngine(id, { optIn = false } = {}) {
+    const result = await probeOnce(id, { optIn });
     try {
       onProbe(id, result);
     } catch {}
     return result;
   }
-  async function probeOnce(id) {
+  async function probeOnce(id, { optIn = false } = {}) {
     const started = now();
     const key = providerKey(id);
     const config = providerConfig(id) || {};
@@ -103,8 +147,16 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     if (!key) return done({ ok: false, cause: "no_key" });
     let r;
     // Several accounts share a kind (claude, claude-2 …): branch on the kind, keep the account's own key.
-    const kind = kindOf(id) || id;
-    if (kind === "openai") {
+    const kind = providers[id]?.kind || id;
+    if (kind === "openai" && providers[id]?.plan) {
+      // A subscription engine (Codex / Antigravity): the stored secret is the sign-in grant, never a key
+      // for api.openai.com — sending it there read «Incorrect API key» and marked the sign-in expired
+      // (2026-11-22). The provider's own health() renews the grant and asks the plan's backend.
+      const h = await providers[id].health().catch((error) => ({ ok: false, error: String(error?.message || error) }));
+      if (h?.ok) return done({ ok: true, status: h.status || 200, plan: providers[id].plan });
+      const status = Number(h?.status) || (h?.error === "http_401" ? 401 : Number(String(h?.error || "").match(/^http_(\d+)$/)?.[1]) || 0);
+      r = { ok: false, status, text: String(h?.error || "no answer") };
+    } else if (kind === "openai") {
       const base = String(config.baseUrl || openaiBaseUrl() || "https://api.openai.com/v1").replace(/\/+$/, "");
       const model = config.model || providers[id]?.defaultModel;
       if (!model) return done({ ok: false, cause: "model", detail: "no default model" });
@@ -123,7 +175,7 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
       }, 30_000);
     } else if (kind === "claude" && typeof providers[id]?.probe === "function") {
       // A real tiny turn (claude.mjs probe): a spent plan or credit shows only there.
-      const p = await providers[id].probe();
+      const p = await providers[id].probe({ optIn });
       if (p?.ok) return done({ ok: true, status: 200, ...(key === CLAUDE_CODE_LOGIN ? { login: "claude-code" } : {}) });
       if (p?.state) return done({ ok: false, cause: p.state, state: p.state, until: p.until || null, detail: p.detail });
       r = { ok: false, status: 0, text: p?.detail || "no answer", network: p?.detail === "timeout" };
@@ -162,8 +214,9 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
 
   // Runs whose root is a person or a job, newest first: errors and «finished with nothing».
   function recentRuns(limit = 30) {
-    // node:sqlite is synchronous: a scan of a large events table froze the whole app for minutes.
-    // Runs come from the runs index; output is probed per run through the chat index with LIMIT 1.
+    // node:sqlite is synchronous: a scan of the events table froze a 1.2 GB production app for
+    // minutes (2026-10-12). Runs come from the runs index; output is probed per run through the
+    // chat index with LIMIT 1.
     const rows = store.db.prepare(
       `SELECT r.id, r.chat_id, r.status, r.error, r.started_at, r.shown
          FROM runs r JOIN chats c ON c.id = r.chat_id
@@ -198,10 +251,20 @@ export function createDoctor({ store, runner, providers, providerKey, providerCo
     if (!working.length) {
       add({ id: "engines", level: "error", title: "هیچ موتوری کار نمی‌کند — ایجنت‌ها نمی‌توانند جواب بدهند", fix: { id: "wizard", title: "راه‌اندازی موتور", manual: true } });
     }
-    for (const e of engines) {
-      if (e.ok) add({ id: `engine:${e.id}`, title: "موتور {engine} سالم است", vars: { engine: e.id } });
-      else if (e.cause !== "no_key") add({ id: `engine:${e.id}`, level: "error", title: "موتور {engine}: {why}", vars: { engine: e.id, why: CAUSE_ADVICE[e.cause] || e.cause }, detail: e.detail, cause: e.cause });
+    let company = null;
+    try {
+      const raw = store.getKv("company-accounts");
+      company = companyChecks(typeof raw === "string" ? JSON.parse(raw) : raw, now());
+    } catch {
+      company = companyChecks(null);
     }
+    // «claude-7 (x@y، اکانت شرکت)»: the slot named by its account.
+    const engineName = (id) => (company.names[id] ? `${id} (${company.names[id]})` : id);
+    for (const e of engines) {
+      if (e.ok) add({ id: `engine:${e.id}`, title: "موتور {engine} سالم است", vars: { engine: engineName(e.id) } });
+      else if (e.cause !== "no_key") add({ id: `engine:${e.id}`, level: "error", title: "موتور {engine}: {why}", vars: { engine: engineName(e.id), why: CAUSE_ADVICE[e.cause] || e.cause }, detail: e.detail, cause: e.cause });
+    }
+    for (const c of company.checks) add(c);
 
     // Agents on an engine that does not answer.
     for (const profile of store.listAgentProfiles()) {

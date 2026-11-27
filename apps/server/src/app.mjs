@@ -1,4 +1,5 @@
 import { stallMiddleware } from "./stall.mjs";
+import { canUserAccessChat, memberApiGuard, registerUserRoutes, userCaller } from "./users.mjs";
 import { readBuildCommit, readChangelog } from "./build-commit.mjs";
 import { handoffDismissed } from "./handoff.mjs";
 import { startSuggestedChat } from "./suggest-start.mjs";
@@ -289,11 +290,22 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     auth.routes(app);
     app.use("/api/*", auth.middleware);
   } else {
-    // Local demo / AUTH=off: UI still calls /api/auth/me; answer as already signed in.
     app.get("/api/auth/me", (c) => c.json({ authenticated: true }));
     app.post("/api/auth/login", (c) => c.json({ ok: true }));
     app.post("/api/auth/logout", (c) => c.json({ ok: true }));
   }
+  app.use("/api/*", memberApiGuard());
+  const enforceChatOwner = async (c, next) => {
+    const authUser = c.get?.("authUser");
+    if (!authUser) return next();
+    const id = c.req.param("id");
+    if (!id || id === "search" || id === "delete-archived") return next();
+    if (!canUserAccessChat(store, authUser, id)) return c.json({ error: "chat not found" }, 404);
+    return next();
+  };
+  app.use("/api/chats/:id", enforceChatOwner);
+  app.use("/api/chats/:id/*", enforceChatOwner);
+  registerUserRoutes(app, { store, readJson });
   // The running version and what changed (the web shows the news once after an update).
   let changes;
   app.get("/api/version", (c) => {
@@ -328,34 +340,33 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     return value;
   };
   app.get("/api/chats", (c) => {
+    const authUser = c.get?.("authUser") || null;
     const archived = c.req.query("archived") === "1";
-    const personId = c.req.query("person") || null;
-    const value = reusedList(`${archived ? 1 : 0}|${personId || ""}`, () => {
+    const personId = !authUser ? (c.req.query("person") || null) : null;
+    const cacheKey = `${authUser ? `u:${authUser.id}` : "owner"}|${archived ? 1 : 0}|${personId || ""}`;
+    const value = reusedList(cacheKey, () => {
       const childrenByParent = childChatsByParent(store);
       const reads = listReads(store);
       const withChildren = (chat) => publicChat(reads, chat, childrenByParent.get(chat.id));
       if (personId) return { chats: store.listChatsForPerson(personId, { archived }).map(withChildren) };
-      // sideChat: the SIDE_CHAT switch (config.mjs) rides on the list the web reloads on every change.
-      return { chats: store.listChatsBySource({ archived }).map(withChildren), ...(archived ? {} : { archiveStamp: store.archiveStamp?.() ?? null }), sideChat: sideChat(), privateShare: Boolean(privateShare()), nextStepReturns: nextStepReturns() === true, enterKey: enterKey() === "shiftEnter" ? "shiftEnter" : "enter" };
+      const userId = authUser?.id || null;
+      return { chats: store.listChatsBySource({ archived, userId }).map(withChildren), ...(archived ? {} : { archiveStamp: store.archiveStamp?.({ userId }) ?? null }), sideChat: sideChat(), privateShare: authUser ? false : Boolean(privateShare()), nextStepReturns: nextStepReturns() === true, enterKey: enterKey() === "shiftEnter" ? "shiftEnter" : "enter" };
     });
     return c.json(value);
   });
 
-  // Chats whose messages hold the sidebar's search text (db.mjs events_fts); the sidebar shows the
-  // ones it already lists, so this says nothing about a chat the owner cannot see there. Off
-  // (CHAT_SEARCH_MESSAGES, the default) the sidebar matches titles only, as before.
   app.get("/api/chats/search", (c) => {
     if (!searchMessages()) return c.json({ ids: [], hits: [], on: false });
-    // hits: [{ id, snippet?, loose? }] — the text around the match, so the row says why it matched.
-    const hits = store.searchChatHits(String(c.req.query("q") || "").slice(0, 200));
+    const authUser = c.get?.("authUser") || null;
+    const hits = store.searchChatHits(String(c.req.query("q") || "").slice(0, 200), { userId: authUser?.id || null });
     return c.json({ ids: hits.map((h) => h.id), hits, on: true });
   });
 
   // Everything waiting for the owner, from every chain, for the main page (inbox.mjs).
   app.get("/api/inbox", (c) => c.json(buildInbox({ store, asks, isActive: (chatId) => runner.isActive(chatId) })));
 
-  // A chore the assistant left the owner: done or let go, it leaves the board either way. Access
-  // they granted wakes the conversation that asked, so the agent carries on with the work itself.
+  // A chore Iris left him: done or let go, it leaves the board either way. Access he granted wakes
+  // the conversation that asked, so the agent carries on with the work itself.
   app.post("/api/inbox/chores/:id", async (c) => {
     const { action } = await readJson(c);
     if (action !== "done" && action !== "dismiss") return c.json({ error: "action must be done or dismiss" }, 400);
@@ -379,46 +390,51 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   // The owner's chat groups, in their order. A group holds chats only through chats.group_id.
   const groupName = (value) => (typeof value === "string" ? value.trim().slice(0, 60) : "");
   // looseAt: where «بدون گروه» sits among them (null = last), set by drag and drop like the groups.
-  app.get("/api/groups", (c) => c.json({ groups: store.listGroups(), looseAt: store.looseGroupAt() }));
+  app.get("/api/groups", (c) => {
+    const userId = c.get?.("authUser")?.id || null;
+    return c.json({ groups: store.listGroups({ userId }), looseAt: store.looseGroupAt({ userId }) });
+  });
   app.put("/api/groups/order", async (c) => {
-    if (!store.orderGroups((await readJson(c)).order)) return c.json({ error: "order must list every group id once, plus \"none\" at most once" }, 400);
-    return c.json({ groups: store.listGroups(), looseAt: store.looseGroupAt() });
+    const userId = c.get?.("authUser")?.id || null;
+    if (!store.orderGroups((await readJson(c)).order, { userId })) return c.json({ error: "order must list every group id once, plus \"none\" at most once" }, 400);
+    return c.json({ groups: store.listGroups({ userId }), looseAt: store.looseGroupAt({ userId }) });
   });
   app.post("/api/groups", async (c) => {
+    const userId = c.get?.("authUser")?.id || null;
     const name = groupName((await readJson(c)).name);
     if (!name) return c.json({ error: "name required" }, 400);
-    return c.json({ group: store.createGroup(name) }, 201);
+    return c.json({ group: store.createGroup(name, { userId }) }, 201);
   });
   app.patch("/api/groups/:id", async (c) => {
-    if (!store.getGroup(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const userId = c.get?.("authUser")?.id || null;
+    if (!store.getGroup(c.req.param("id"), { userId })) return c.json({ error: "not found" }, 404);
     const name = groupName((await readJson(c)).name);
     if (!name) return c.json({ error: "name required" }, 400);
-    return c.json({ group: store.renameGroup(c.req.param("id"), name) });
+    return c.json({ group: store.renameGroup(c.req.param("id"), name, { userId }) });
   });
   app.delete("/api/groups/:id", (c) => {
-    if (!store.deleteGroup(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const userId = c.get?.("authUser")?.id || null;
+    if (!store.deleteGroup(c.req.param("id"), { userId })) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
   });
 
   // A new chat's settings as the composer sent them: { error } or what createChatWith takes.
   // Shared by POST /api/chats and a note («بعداً») that starts a new chat.
-  const newChatSettings = (body) => {
+  const newChatSettings = (body, { userId = null } = {}) => {
     const agent = typeof body.agent === "string" && knownAgent(body.agent) ? body.agent : DEFAULT_AGENT;
     const profile = store.getAgentProfile?.(agent);
     // sim: a dry-run chat (sim.mjs) — optionally as a colleague's thread (caller team, unlinked).
-    const sim = body.sim === true;
+    const sim = !userId && body.sim === true;
     // The repo is fixed before the first run makes the chat's worktree. No repo field = the default
     // repo for an owner chat; "" = none.
     const repo = typeof body.repo === "string" ? body.repo : !sim ? defaultRepo() : null;
     if (repo && !isValidRepo(repo)) return { error: "unknown repo" };
     // «+» on a group's heading: the new chat starts in that group.
     let groupId = typeof body.groupId === "string" && body.groupId ? body.groupId : null;
-    if (groupId && !store.getGroup(groupId)) return { error: "unknown group" };
-    // A module's page may name a folder for its chats (openChat.folder): found by name, made once, so a
-    // module's chats sit together instead of filling the recent list.
+    if (groupId && !store.getGroup(groupId, { userId })) return { error: "unknown group" };
     const folder = typeof body.folder === "string" ? body.folder.trim().slice(0, 40) : "";
     if (!groupId && folder && typeof body.module === "string" && /^[a-z][a-z0-9-]{1,31}$/.test(body.module)) {
-      groupId = (store.listGroups().find((g) => g.name === folder) || store.createGroup(folder)).id;
+      groupId = (store.listGroups({ userId }).find((g) => g.name === folder) || store.createGroup(folder, { userId })).id;
     }
     // A stronger model or a higher effort starts a chat only when the owner confirmed it by hand
     // (model-policy.mjs); otherwise the chat opens on the default, Sonnet at «medium».
@@ -435,7 +451,8 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
         agent,
         provider: normalizeProvider(splitModel(body.model)?.provider || profile?.provider),
         sim,
-        caller: sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
+        caller: userId ? userCaller(userId) : sim && body.caller === COVERAGE_CALLER ? COVERAGE_CALLER : "owner",
+        ...(userId ? { userId } : {}),
       },
       effort: heavyOk || !isHeavyEffort(effort) ? effort : null,
       repo: repo || null,
@@ -460,14 +477,14 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   registerUploadRoutes(app, uploads, readJson);
 
   app.post("/api/chats", async (c) => {
+    const authUser = c.get?.("authUser") || null;
     const body = await readJson(c);
     const input = parseMessage(body, uploads);
     if (input.error) return c.json({ error: input.error }, 400);
-    const settings = newChatSettings(body);
+    const settings = newChatSettings(body, { userId: authUser?.id || null });
     if (settings.error) return c.json({ error: settings.error }, 400);
     const chat = createChatWith(settings, typeof body.title === "string" && body.title ? body.title : titleFrom(input.text));
-    // The page's id for the first message: its bubble gives way when the timeline holds that id.
-    const sent = await runner.send(chat.id, { ...input, clientId: clientIdOf(body), ownerText: true, note: tagged(input.text, chat) });
+    const sent = await runner.send(chat.id, { ...input, clientId: clientIdOf(body), ownerText: !authUser, note: tagged(input.text, chat) });
     notePdfs(store, chat.id, input.files);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
   });
@@ -480,7 +497,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       ? { ...input, text: coverageOwnerNote(store.getPerson?.(chat.person_id)?.display_name, input.text) }
       : input;
 
-  // --- Notes («بعداً»): the owner writes a message now and sends it later — by hand,
+  // --- Notes («بعداً», from Karsara): the owner writes a message now and sends it later — by hand,
   // or at a time chosen relative to now. Into an existing chat (queued behind its run if one is
   // active) or as the first message of a new chat with the composer's settings.
   const NOTE_OPTION_KEYS = ["repo", "model", "agent", "mode", "effort", "groupId"];
@@ -515,14 +532,14 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     };
 
   /** Runs one note (claimed first, so it runs once). Returns { note, chat } or { error, status, note? }. */
-  const runNote = async (id, { scheduled = false } = {}) => {
-    const row = store.getNote(id);
+  const runNote = async (id, { scheduled = false, userId = undefined } = {}) => {
+    const row = store.getNote(id, { userId });
     if (!row) return { error: "not found", status: 404 };
+    const ownerUserId = row.user_id || null;
     if (!store.claimNote(row.id)) return { error: `already ${row.status}`, status: 409 };
     let created = null;
-    // A timed note tells the owner (Telegram) that it ran — or that it did not; one run by hand does not.
     const tell = (note, outcome) =>
-      scheduled && note && !reminderMessage(row) ? Promise.resolve().then(() => onNoteRun?.(note, outcome)).catch((failure) => console.error(`[notes] onNoteRun: ${failure.message}`)) : null;
+      scheduled && !ownerUserId && note && !reminderMessage(row) ? Promise.resolve().then(() => onNoteRun?.(note, outcome)).catch((failure) => console.error(`[notes] onNoteRun: ${failure.message}`)) : null;
     const fail = async (error, status = 400) => {
       // A new chat made for this attempt goes with it: a retry makes its own, never a second one.
       if (created) store.deleteChat(created.id);
@@ -534,17 +551,15 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       let chat;
       if (row.chat_id) {
         chat = store.getChat(row.chat_id);
-        if (!chat) return await fail("چتِ مقصد دیگر وجود ندارد", 404);
-        // Through the runner, not the messages route: the owner is not typing now, so a note never
-        // answers an open question. "queue" waits behind an active run, else starts one.
+        if (!chat || (ownerUserId && chat.user_id !== ownerUserId)) return await fail("چتِ مقصد دیگر وجود ندارد", 404);
         const reminder = reminderMessage(row);
         if (reminder) await runner.send(chat.id, { text: reminder, images: [], intent: "queue", from: { kind: "reminder" } });
-        else await runner.send(chat.id, { ...ownerFramed(chat, { text: row.text, images: [] }), intent: "queue", ownerText: true });
+        else await runner.send(chat.id, { ...ownerFramed(chat, { text: row.text, images: [] }), intent: "queue", ownerText: !ownerUserId });
       } else {
-        const settings = newChatSettings(row.options ? JSON.parse(row.options) : {});
+        const settings = newChatSettings(row.options ? JSON.parse(row.options) : {}, { userId: ownerUserId });
         if (settings.error) return await fail(settings.error);
         chat = created = createChatWith(settings, titleFrom(row.text));
-        await runner.send(chat.id, { text: row.text, images: [], ownerText: true });
+        await runner.send(chat.id, { text: row.text, images: [], ownerText: !ownerUserId });
       }
       const note = publicNote(store.finishNote(row.id, { startedChatId: chat.id }));
       const fresh = store.getChat(chat.id);
@@ -569,29 +584,34 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     },
   };
 
-  app.get("/api/notes", (c) => c.json({ notes: store.listNotes().map(publicNote) }));
+  app.get("/api/notes", (c) => {
+    const userId = c.get?.("authUser")?.id || null;
+    return c.json({ notes: store.listNotes({ userId }).map(publicNote) });
+  });
 
   app.post("/api/notes", async (c) => {
+    const authUser = c.get?.("authUser") || null;
+    const userId = authUser?.id || null;
     const body = await readJson(c);
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text) return c.json({ error: "text required" }, 400);
     if (text.length > MAX_TEXT) return c.json({ error: "text too long" }, 400);
     const chatId = typeof body.chatId === "string" && body.chatId ? body.chatId : null;
-    if (chatId && !store.getChat(chatId)) return c.json({ error: "chat not found" }, 404);
+    if (chatId && (authUser ? !canUserAccessChat(store, authUser, chatId) : !store.getChat(chatId))) return c.json({ error: "chat not found" }, 404);
     const runAt = parseRunAt(body.runAt);
     if (runAt?.error) return c.json({ error: runAt.error }, 400);
     let options = null;
     if (!chatId) {
       options = noteOptions(body.options);
-      // Checked now, so a wrong choice is refused while the owner is still looking.
-      const settings = newChatSettings(options);
+      const settings = newChatSettings(options, { userId });
       if (settings.error) return c.json({ error: settings.error }, 400);
     }
-    return c.json({ note: publicNote(store.createNote({ text, chatId, options, runAt: runAt ?? null })) }, 201);
+    return c.json({ note: publicNote(store.createNote({ text, chatId, options, runAt: runAt ?? null, userId })) }, 201);
   });
 
   app.patch("/api/notes/:id", async (c) => {
-    const row = store.getNote(c.req.param("id"));
+    const userId = c.get?.("authUser")?.id || null;
+    const row = store.getNote(c.req.param("id"), { userId });
     if (!row) return c.json({ error: "not found" }, 404);
     const body = await readJson(c);
     const patch = {};
@@ -610,12 +630,15 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   });
 
   app.delete("/api/notes/:id", (c) => {
-    if (!store.deleteNote(c.req.param("id"))) return c.json({ error: "not found" }, 404);
+    const userId = c.get?.("authUser")?.id || null;
+    const row = store.getNote(c.req.param("id"), { userId });
+    if (!row || !store.deleteNote(row.id)) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
   });
 
   app.post("/api/notes/:id/run", async (c) => {
-    const result = await runNote(c.req.param("id"));
+    const userId = c.get?.("authUser")?.id || null;
+    const result = await runNote(c.req.param("id"), { userId });
     if (result.error) return c.json({ error: result.error, ...(result.note ? { note: result.note } : {}) }, result.status);
     return c.json(result, 201);
   });
@@ -671,15 +694,15 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     const chat = { ...row, run_status: last?.status ?? null, run_started_at: last?.started_at ?? null };
     // Tokens per model only here, not in the list: summed from the cached fold (the same one the
     // timeline route serves; a warm entry reads only events after it, by events_chat).
-    // usage: input + output (Griffin's header); usageBilled: everything billed (the karsara skin's header
-    // counts it that way).
+    // usage: input + output (Griffin's header); usageBilled: everything billed (the Karsara skin's, as
+    // Karsara's header counts it).
     const { messages } = (await timelines.get(chat.id)).timeline;
     const usage = usageByModel(messages);
     const usageBilled = usageByModel(messages, { billed: true });
     return c.json({ chat: { ...publicChat(store, chat, childChatsOf(store, chat.id)), usage, usageBilled }, active: runner.isActive(chat.id) });
   });
 
-  // Context gauge (engine-agnostic): the last run's prompt tokens over the window.
+  // Context gauge (Karsara C7, engine-agnostic): the last run's prompt tokens over the window.
   // ponytail: one window for every model (GRIFFIN_CONTEXT_WINDOW, default 200k); a per-model table
   // when models with other windows are in use. «خلاصه‌سازی» is the existing /compact command.
   app.get("/api/chats/:id/context", async (c) => {
@@ -731,8 +754,9 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
 
   // Permanent delete: only an archived owner chat that is not running (owner 2026-10-20: the archive
   // menu had «خروج از بایگانی» but no way to drop a chat for good). Its worktree goes with the startup sweep.
-  const dropArchivedChat = (chat) => {
-    if (!chat?.archived || (chat.caller || "owner") !== "owner") return "not archived";
+  const dropArchivedChat = (chat, authUser = null) => {
+    const owned = authUser ? chat?.user_id === authUser.id : (chat?.caller || "owner") === "owner" && !chat?.user_id;
+    if (!chat?.archived || !owned) return "not archived";
     const family = [chat.id, ...store.listSideChats(chat.id).map((side) => side.id), ...store.listChildChatIds(chat.id)];
     if (family.some((id) => runner.isActive(id))) return "busy";
     store.deleteChat(chat.id);
@@ -742,7 +766,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   app.delete("/api/chats/:id", (c) => {
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return c.json({ error: "not found" }, 404);
-    const refused = dropArchivedChat(chat);
+    const refused = dropArchivedChat(chat, c.get?.("authUser") || null);
     if (refused === "busy") return c.json({ error: "busy" }, 409);
     if (refused) return c.json({ error: "only an archived chat can be deleted; archive it first" }, 409);
     return c.json({ ok: true });
@@ -750,14 +774,17 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
 
   // Bulk: the given ids, or (no ids) every archived chat. A chat that is not archived or still running is skipped.
   app.post("/api/chats/delete-archived", async (c) => {
+    const authUser = c.get?.("authUser") || null;
     const body = await readJson(c);
-    const ids = Array.isArray(body.ids) ? body.ids.filter((id) => typeof id === "string") : store.listChats({ archived: true }).map((chat) => chat.id);
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((id) => typeof id === "string")
+      : store.listChats({ archived: true, userId: authUser?.id || null }).map((chat) => chat.id);
     const deleted = [];
     const skipped = [];
     for (const id of ids) {
       const chat = store.getChat(id);
-      if (!chat) continue; // already gone with its parent
-      (dropArchivedChat(chat) ? skipped : deleted).push(id);
+      if (!chat) continue;
+      (dropArchivedChat(chat, authUser) ? skipped : deleted).push(id);
     }
     return c.json({ deleted, skipped });
   });
@@ -772,7 +799,8 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     if (typeof body.archived === "boolean") patch.archived = body.archived;
     if (body.groupId === null) patch.groupId = null;
     else if (typeof body.groupId === "string") {
-      if (!store.getGroup(body.groupId)) return c.json({ error: "unknown group" }, 400);
+      const userId = c.get?.("authUser")?.id || null;
+      if (!store.getGroup(body.groupId, { userId })) return c.json({ error: "unknown group" }, 400);
       patch.groupId = body.groupId;
     }
     if (CHAT_MODES.has(body.mode)) patch.mode = body.mode;
@@ -815,7 +843,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       if (ok.model || ok.effort) store.setKv(heavyKey(chat.id), ok);
       else store.deleteKv(heavyKey(chat.id));
     }
-    if ("runsOn" in body) {
+    if ("runsOn" in body && !c.get?.("authUser")) {
       if (body.runsOn !== null && !RUNS_ON.includes(body.runsOn)) return c.json({ error: "runsOn: host, container or null" }, 400);
       patch.runsOn = body.runsOn;
     }
@@ -846,14 +874,16 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     return c.json({ chat: publicChat(store, updated) });
   });
 
-  // Moving an open chat to another repo («تغییر پوشه» after a confirmation that says
+  // Moving an open chat to another repo (from Karsara: «تغییر پوشه» after a confirmation that says
   // what stays behind). GET ?repo= says what a move would leave behind; POST { repo } moves. The old
   // tree is set aside untouched, never deleted. Owner chats with a repo of their own only.
   const folderRequest = (c, repo) => {
     const chat = store.getChat(c.req.param("id"));
     if (!chat) return { response: c.json({ error: "not found" }, 404) };
     if (!folderSwitch) return { response: c.json({ error: "not available" }, 501) };
-    if (chat.side_of || chat.parent_chat_id || (chat.caller || "owner") !== "owner" || !chat.repo) {
+    const authUser = c.get?.("authUser") || null;
+    const ownedChat = authUser ? chat.user_id === authUser.id : (chat.caller || "owner") === "owner";
+    if (chat.side_of || chat.parent_chat_id || !ownedChat || !chat.repo) {
       return { response: c.json({ error: "this chat has no folder of its own" }, 400) };
     }
     const target = typeof repo === "string" ? repo.trim() : "";
@@ -909,7 +939,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       return c.json({ delivered: "compacted" }, 202);
     }
     // The run is parked on a question to the owner: a typed message answers it instead of waiting
-    // in the queue for the answer the owner believes they just gave. Not a "/" command.
+    // in the queue for the answer the owner believes they just gave (from Karsara). Not a "/" command.
     // With files, the text answers and the files follow as the next message (they cannot ride an
     // answer, and the question would otherwise stay open while they wait behind it).
     const answerText = input.files?.length ? `${input.text}\n\n[${input.files.length} فایل پیوست در پیام بعدی می‌رسد]` : input.text;
@@ -940,8 +970,9 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       const framed = ownerFramed(chat, input);
       const sending = (async () => {
         try {
-          if (chat.caller !== "owner") noteOwnerOrder(store, chat.id, input.text);
-          const out = await runner.send(chat.id, { ...framed, intent, clientId, ownerText: true, note: tagged(input.text, chat) });
+          const authUser = c.get?.("authUser") || null;
+          if (!authUser && chat.caller !== "owner") noteOwnerOrder(store, chat.id, input.text);
+          const out = await runner.send(chat.id, { ...framed, intent, clientId, ownerText: !authUser, note: tagged(input.text, chat) });
           notePdfs(store, chat.id, input.files);
           return { status: 202, body: out };
         } catch (error) {
@@ -1008,7 +1039,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     return c.json({ ok: true });
   });
 
-  // The «undelivered» name for the same thing (the karsara skin and older scripts): a kept message is an
+  // Karsara's name for the same thing (its web and colleagues' scripts): a kept message is an
   // «undelivered» one. Owner chats only; not while a run is open (the list may still change).
   app.delete("/api/chats/:id/undelivered/:msgId", (c) => {
     const chat = store.getChat(c.req.param("id"));
@@ -1073,7 +1104,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     }
   });
 
-  // MCP servers of a chat's open Claude Code process, and their reconnect / on-off.
+  // MCP servers of a chat's open Claude Code process (from Karsara), and their reconnect / on-off.
   // Settings uses the newest open process: an MCP server's live state exists only inside one.
   app.get("/api/chats/:id/mcp", async (c) => {
     const chat = store.getChat(c.req.param("id"));
@@ -1133,7 +1164,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     return c.json({ ok: true });
   });
 
-  // Side chats: an aside next to an owner's chat. It starts with that chat's
+  // Side chats (from Karsara): an aside next to an owner's chat. It starts with that chat's
   // conversation as context (index.mjs seedMessages) and never writes into it.
   app.get("/api/chats/:id/sides", (c) => {
     const chat = store.getChat(c.req.param("id"));
@@ -1157,6 +1188,8 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       mode: parent.mode || "auto",
       agent: parent.agent || DEFAULT_AGENT,
       provider: normalizeProvider(parent.provider),
+      caller: parent.caller || "owner",
+      userId: parent.user_id || null,
       sideOf: parent.id,
     });
     if (parent.effort) store.updateChat(chat.id, { effort: parent.effort });
@@ -1164,12 +1197,12 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     if (parentOk) store.setKv(heavyKey(chat.id), parentOk);
     // Changes files unless the owner turned «اجازهٔ تغییر فایل» off for this side chat (literal false).
     setSideAllowEdits(store, chat.id, body?.allowEdits !== false);
-    const sent = await runner.send(chat.id, { ...input, ownerText: true, note: tagged(input.text, chat) });
+    const sent = await runner.send(chat.id, { ...input, ownerText: !c.get?.("authUser"), note: tagged(input.text, chat) });
     notePdfs(store, chat.id, input.files);
     return c.json({ chat: publicChat(store, store.getChat(chat.id)), ...sent }, 201);
   });
 
-  // Chats an agent suggested with chat_suggest. Nothing runs until the owner starts one.
+  // Chats an agent suggested with chat_suggest (from Karsara). Nothing runs until the owner starts one.
   app.get("/api/suggestions", (c) => {
     const status = c.req.query("status") || null;
     if (status && !["open", "started", "dismissed"].includes(status)) return c.json({ error: "invalid status" }, 400);
@@ -1237,7 +1270,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
     const edited = typeof body.text === "string" ? body.text.trim() : "";
     const moved = store.getKv(`repomove:${chat.id}`);
     if (moved?.noteId && eventId <= moved.noteId) return c.json({ error: "این گفتگو بعد از آن پیام به ریپوی دیگری رفته؛ برگشت به قبل از آن ممکن نیست" }, 409);
-    // What to take back: the files, the conversation, or both (default). dryRun
+    // What to take back (from Karsara): the files, the conversation, or both (default). dryRun
     // previews the files without changing anything, for the dialog's choices.
     const wantFiles = body.files !== false;
     const wantConversation = body.conversation !== false || Boolean(edited);
@@ -1331,7 +1364,8 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
 
   app.get("/api/media/:id", (c) => {
     const media = store.getMedia?.(c.req.param("id"));
-    if (!media) return c.json({ error: "not found" }, 404);
+    const authUser = c.get?.("authUser") || null;
+    if (!media || (authUser && !canUserAccessChat(store, authUser, media.chat_id))) return c.json({ error: "not found" }, 404);
     return sendMedia(c, media);
   });
 
@@ -1363,7 +1397,8 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
 
   app.get("/api/charts/:id", (c) => {
     const chart = store.getChart(c.req.param("id"));
-    if (!chart) return c.json({ error: "not found" }, 404);
+    const authUser = c.get?.("authUser") || null;
+    if (!chart || (authUser && !canUserAccessChat(store, authUser, chart.chat_id))) return c.json({ error: "not found" }, 404);
     return c.json({ chart });
   });
 
@@ -1384,7 +1419,7 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   // The composer's «/» list: Griffin's own commands, and on Claude its session's commands and skills.
   // Also the engine of the chat's next run (routing is too costly to run for every chat in the list).
   app.get("/api/commands", (c) => {
-    // No chat: the new-chat page, on the engine a new chat would run on.
+    // No chat: the new-chat page, on the engine a new chat would run on (as Karsara lists it there).
     const chat = store.getChat(c.req.query("chat") || "") || null;
     const engine = runner.engineOf?.(chat) ?? null;
     const local = [
@@ -1402,7 +1437,11 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
   app.post("/api/chats/:id/fork", async (c) => {
     const parent = store.getChat(c.req.param("id"));
     if (!parent) return c.json({ error: "not found" }, 404);
-    if (!ownerTyped(store, parent)) return c.json({ error: "owner's main chats only" }, 403);
+    const authUser = c.get?.("authUser") || null;
+    const canFork = authUser
+      ? parent.user_id === authUser.id && !parent.parent_chat_id && !parent.side_of && !parent.job_id
+      : ownerTyped(store, parent);
+    if (!canFork) return c.json({ error: "owner's main chats only" }, 403);
     const body = await readJson(c);
     const chat = await forkChat({ store, runner, parent, runId: typeof body.runId === "string" ? body.runId : "" });
     if (chat.error) return c.json({ error: chat.error }, chat.status);
@@ -1543,7 +1582,13 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
       let wake = null;
       let dirtyChats = false;
       let dirtyInbox = false;
-      const onChats = () => {
+      let dirtyPrefs = null;
+      const authUser = c.get?.("authUser") || null;
+      const onChats = (evt) => {
+        if (authUser) {
+          if (evt?.userId && evt.userId !== authUser.id) return;
+          if (evt?.chatId && !canUserAccessChat(store, authUser, evt.chatId)) return;
+        }
         dirtyChats = true;
         wake?.();
       };
@@ -1551,15 +1596,22 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
         dirtyInbox = true;
         wake?.();
       };
+      const onPrefs = (payload) => {
+        dirtyPrefs = payload?.kind || "all";
+        wake?.();
+      };
       store.bus.on("chats", onChats);
-      store.bus.on("inbox", onInbox);
+      if (!authUser) {
+        store.bus.on("inbox", onInbox);
+        store.bus.on("prefs", onPrefs);
+      }
       stream.onAbort(() => wake?.());
       try {
         while (!stream.aborted && live()) {
           await waitFor(Math.min(15_000, sessionRecheckMs), (resolve) => (wake = resolve));
           wake = null;
           if (stream.aborted || !live()) break;
-          if (!dirtyChats && !dirtyInbox) {
+          if (!dirtyChats && !dirtyInbox && !dirtyPrefs) {
             await stream.writeSSE({ event: "ping", data: "" });
             continue;
           }
@@ -1571,10 +1623,16 @@ export function createApp({ store, runner, heldToDefaults = () => false, timelin
             dirtyInbox = false;
             await stream.writeSSE({ event: "inbox", data: "changed" });
           }
+          if (dirtyPrefs) {
+            const kind = dirtyPrefs;
+            dirtyPrefs = null;
+            await stream.writeSSE({ event: "prefs", data: kind });
+          }
         }
       } finally {
         store.bus.off("chats", onChats);
         store.bus.off("inbox", onInbox);
+        store.bus.off("prefs", onPrefs);
       }
     });
   });
@@ -1752,7 +1810,7 @@ function publicChat(store, chat, children = null) {
     ...(chat.repo ? { branch: branchOfTree(chat.worktree_path) || branchName(chat.id), worktreePath: chat.worktree_path || null } : {}),
     // Kept messages waiting for «ارسال دوباره» (oldest first); the thread's retry notice follows it.
     kept: keptIds(store, chat.id),
-    // Other names for the same list (the karsara skin, older scripts).
+    // Karsara's names for the same list (its web, migrated installs' scripts).
     undeliveredIds: keptIds(store, chat.id),
     pendingUndelivered: keptIds(store, chat.id).length,
     pinned: Boolean(chat.pinned),

@@ -62,7 +62,7 @@ test("routing: LAN and Iran stay direct; only the providers and Telegram ride th
   assert.equal(rules[1].outboundTag, "direct");
   const providers = rules[2];
   assert.equal(providers.balancerTag, "best");
-  for (const d of ["domain:anthropic.com", "domain:cursor.sh", "domain:openrouter.ai", "domain:t.me", "domain:api.z.ai"]) assert.ok(providers.domain.includes(d), d);
+  for (const d of ["domain:anthropic.com", "domain:cursor.sh", "domain:openrouter.ai", "domain:t.me", "domain:api.z.ai", "domain:chatgpt.com", "domain:daily-cloudcode-pa.googleapis.com", "domain:oauth2.googleapis.com"]) assert.ok(providers.domain.includes(d), d);
   for (const d of ["domain:example.ir", "domain:llm.example.ir", "domain:host.docker.internal", "domain:github.com"]) assert.ok(!providers.domain.includes(d), `${d} must not ride the VPN`);
   assert.deepEqual(rules[3].ip, TELEGRAM_CIDRS);
   // Everything that matched nothing is direct.

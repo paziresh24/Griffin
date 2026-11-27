@@ -25,7 +25,7 @@ test("the map has only the families this run has, names them all, and tells the 
 });
 
 test("the rules say browser_* is Playwright and a scripted test runs in the sandbox, not in Bash", () => {
-  const rules = buildRules({ tools: ["browser_open"] });
+  const rules = buildRules({ tools: ["browser_open", "debug_exec"] });
   assert.match(rules, /this IS your Playwright/);
   assert.match(rules, /debug_exec \{host:"sandbox"\}, never Bash/);
   assert.match(capabilityMap(["browser_open"]), /driven by Playwright/);
@@ -43,8 +43,8 @@ test("an unknown tool still shows, with its description's first sentence", () =>
 });
 
 test("the subagent brief carries the binding rules and the map, and the hook hands it over", async () => {
-  const brief = subagentBrief(["infisical_upsert", "kube_get"], { ownerName: "Alex" });
-  assert.match(brief, /subagent of /);
+  const brief = subagentBrief(["infisical_upsert", "kube_get"], { ownerName: "Erfan" });
+  assert.match(brief, /subagent of Iris/);
   assert.match(brief, /Secrets move only through Infisical/);
   assert.match(brief, /owner's local time/);
   assert.match(brief, /Report ONCE/);
@@ -56,6 +56,13 @@ test("the subagent brief carries the binding rules and the map, and the hook han
 test("the full owner map stays small (it is in every request)", () => {
   const map = capabilityMap(SEEN);
   assert.ok(map.length < 11_000, `map is ${map.length} chars`);
+});
+
+test("capabilityMap groups workspace_* and mcp__* tools cleanly", () => {
+  const map = capabilityMap(["workspace_list", "workspace_read", "mcp__p24-support__get_ticket", "mcp__board__list_tasks"]);
+  assert.match(map, /workspace_\*/);
+  assert.match(map, /mcp__\*/);
+  assert.doesNotMatch(map, /Other tools here:/);
 });
 
 test("an install without Infisical is never told to use it, and times follow the owner's zone", () => {

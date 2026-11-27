@@ -430,7 +430,7 @@ function hopRunner(store, script, { keepNoSession = false } = {}) {
   return { runner, sends };
 }
 
-test("same-model account move keeps the session (one config folder, only the token differs)", async () => {
+test("same-model account move opens a fresh session with the move note instead of resuming Account A's session", async () => {
   const { store, done } = setup();
   const { runner, sends } = hopRunner(store, async (n, options) => {
     if (n === 2) {
@@ -446,8 +446,10 @@ test("same-model account move keeps the session (one config folder, only the tok
     await runner.send(chat.id, { text: "ok do it" });
     await until(() => runsDone(store, chat.id, 3));
     assert.equal(sends[1].agentId, sends[0].agentId);
-    assert.equal(sends[2].agentId, sends[1].agentId, "the hop resumes the same session");
-    assert.equal(sends[2].message, "ok do it", "the session has the history: no lead note needed");
+    assert.notEqual(sends[2].agentId, sends[1].agentId, "the hop must not resume Account A's session UUID on Account B");
+    assert.match(sends[2].message, /سقف پلن حساب Claude پر شد و همین مدل روی حساب دوم ادامه می‌دهد/);
+    assert.match(sends[2].message, /- mcp:telegram_send /);
+    assert.match(sends[2].message, /ok do it$/);
     assert.deepEqual(events(store, chat.id, "run.started")[2].data.movedFrom, { from: "Claude", account: "دوم" });
   } finally {
     done();
@@ -567,7 +569,7 @@ test("review: curly apostrophes and bare wording still count; «reached your con
   assert.equal(autoMovesOn("x", { status: "rejected" }), true);
   assert.equal(new Date(resetFromText("You've hit your weekly limit · resets Nov 3, 2am (UTC)", Date.UTC(2026, 10, 1))).toISOString(), "2026-11-03T02:00:00.000Z");
   assert.equal(new Date(resetFromText("· resets Jan 2, 12pm (UTC)", Date.UTC(2026, 11, 30))).toISOString(), "2027-01-02T12:00:00.000Z");
-  // Every spent plan moves, without a rate_limit_event too («Platform HA», 2026-11-01).
+  // Every spent plan moves, without a rate_limit_event too («HA drill», 2026-11-01).
   for (const t of ["You've hit your weekly limit · resets Nov 3, 2am (UTC)", "You're out of extra usage", "Your org is out of usage"]) assert.equal(autoMovesOn(t), true, t);
 });
 

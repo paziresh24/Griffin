@@ -68,7 +68,7 @@ test("a refused login says what to do, in Persian", () => {
   assert.equal(error.code, "auth_failed");
 });
 
-// Mr. Khajavi 2026-10-29: claude-5's login had expired; the runner never moved its runs because the
+// a colleague 2026-10-29: claude-5's login had expired; the runner never moved its runs because the
 // error carried no code.
 test("an expired OAuth login is a refused login the runner can act on", () => {
   const error = resultFailure({ subtype: "success", is_error: true, result: "OAuth session expired and could not be refreshed. Please run /login" });

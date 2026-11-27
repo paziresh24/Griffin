@@ -1,6 +1,7 @@
-// Pure logic for the chat tools (suggested chats, chapters). No React and no DOM here,
+import { isMember } from "./auth-me.js";
+import { locale, t } from "./i18n.js";
+// Pure logic for the chat tools from Karsara (suggested chats, chapters). No React and no DOM here,
 // so node tests can import it directly.
-import { num, t } from "./i18n.js";
 //
 // Server contract:
 //   GET  /api/suggestions?status=open -> { suggestions: [{ id, fromChatId, fromChatTitle, title, tldr, prompt, promptSha, repo, model, status, createdAt }] }
@@ -52,7 +53,7 @@ export function suggestionView(part, override, item) {
   };
 }
 
-/** "Start chat" works for any open suggestion whose prompt is loaded; opening the full text is optional. */
+/** «شروع چت» works for any open suggestion whose prompt is loaded; opening «متن کامل» is optional. */
 export function canStartSuggestion(view) {
   return Boolean(view && view.status === "open" && view.prompt && view.promptSha);
 }
@@ -72,10 +73,10 @@ export function suggestionAnchor(id) {
   return `sg-${String(id).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 }
 
-/** Badge text: empty for zero, capped at 9+. */
+/** Badge text: empty for zero, capped at ۹+. */
 export function badgeText(count) {
   if (!count || count < 1) return "";
-  return count > 9 ? `${num(9)}+` : num(count);
+  return count > 9 ? `${(9).toLocaleString(locale)}+` : count.toLocaleString(locale);
 }
 
 /**
@@ -130,6 +131,7 @@ export function createSuggestionStore(api) {
     },
     getState: () => state,
     async refresh() {
+      if (isMember()) { set({ items: [], loaded: true }); return; }
       try {
         const data = await api(suggestionPaths.list());
         set({ items: Array.isArray(data?.suggestions) ? data.suggestions : [], loaded: true });

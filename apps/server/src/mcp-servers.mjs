@@ -131,6 +131,8 @@ export function createMcpServers({ file = claudeJsonPath() } = {}) {
       write({ ...state, mcpServers: servers });
     },
     list: () => Object.entries(serversOf(read())).map(([name, s]) => publicServer(name, s)),
+    // Unmasked server definitions for the server-side MCP client (never returned to a browser or agent).
+    listRaw: () => Object.entries(serversOf(read())).map(([name, s]) => ({ name, ...s })),
     // `previous` renames: the old entry's stored secrets carry over to the new name.
     save({ name, previous, server }) {
       name = String(name || "").trim();

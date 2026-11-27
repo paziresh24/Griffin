@@ -4,7 +4,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createOpenAIProvider } from "../src/providers/openai.mjs";
+import { createOpenAIProvider, looksLikeLeakedContext } from "../src/providers/openai.mjs";
 import { normalizeProvider, PROVIDER_OPENAI } from "../src/providers/ids.mjs";
 import { createProviders } from "../src/providers/index.mjs";
 
@@ -282,7 +282,7 @@ describe("openai-compatible provider", () => {
     const updates = [];
     const run = await agent.send("start", { onDelta: ({ update }) => updates.push(update.type) });
     while (!release) await new Promise((r) => setTimeout(r, 5));
-    assert.equal(await run.steer("also check the replica"), "complete_delivered");
+    assert.equal(await run.steer("also check yazd"), "complete_delivered");
     release();
     const result = await run.wait();
     assert.equal(result.status, "finished");
@@ -291,7 +291,7 @@ describe("openai-compatible provider", () => {
     assert.ok(read > updates.lastIndexOf("tool-call-completed") && read < updates.indexOf("text-delta"));
     const roles = mock.requests.at(-1).body.messages.map((m) => m.role);
     assert.deepEqual(roles, ["system", "user", "assistant", "tool", "user"]);
-    assert.match(JSON.stringify(mock.requests.at(-1).body.messages.at(-1).content), /also check the replica/);
+    assert.match(JSON.stringify(mock.requests.at(-1).body.messages.at(-1).content), /also check yazd/);
     assert.equal(await run.steer("too late"), "revert_to_followup");
   });
 
@@ -683,5 +683,119 @@ describe("openai provider: dropped connection", () => {
       server.closeAllConnections?.();
       server.close();
     }
+  });
+});
+
+describe("looksLikeLeakedContext", () => {
+  it("flags the bakhtnama-style GLM context leak", () => {
+    const leak = [
+      "<entity type=\"SECTION_HEADER\">استودیو ویرایش</entity>",
+      "<entity type=\"PLAINTEXT_SNIPPET\">دکمه‌ها و خطوط اشتراکی… برای درک کامل، به محیط عملیاتی مراجعه کنید",
+    ].join("\n");
+    assert.equal(looksLikeLeakedContext(leak), true);
+  });
+
+  it("does not flag a normal Persian answer", () => {
+    assert.equal(looksLikeLeakedContext("بررسی کردم و مشکل از کش بود؛ الان درست شده است و لطفاً یک بار امتحان کنید."), false);
+  });
+
+  it("does not flag short or empty text", () => {
+    assert.equal(looksLikeLeakedContext(""), false);
+    assert.equal(looksLikeLeakedContext("<entity type=\"x\">"), false);
+  });
+
+  it("needs two independent markers, not one", () => {
+    assert.equal(looksLikeLeakedContext("برای درک کامل، به محیط عملیاتی مراجعه کنید" + "ی".repeat(40)), false);
+    assert.equal(looksLikeLeakedContext('<entity type="SECTION_HEADER">عنوان بخش در مستندات</entity> توضیح معمولی'), false);
+  });
+});
+
+describe("context-leak guard retry", () => {
+  let mock;
+  let baseUrl;
+
+  before(async () => {
+    mock = createMockOpenAI();
+    await new Promise((resolve) => mock.server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${mock.server.address().port}/v1`;
+  });
+
+  after(() => {
+    mock.server.closeAllConnections?.();
+    mock.server.close();
+  });
+
+  it("suppresses streamed <entity leak, nudges once, and finishes with only the clean answer", async () => {
+    let served = 0;
+    let nudgesSeen = 0;
+    mock.on((req, res) => {
+      if (String(req.body?.messages?.at(-1)?.content || "").includes("[تذکر سیستمی]")) nudgesSeen += 1;
+      served += 1;
+      if (served === 1) {
+        sse(
+          res,
+          textChunks(
+            "<ent",
+            'ity type="SECTION_HEADER">استودیو ویرایش</entity>\n',
+            '<entity type="PLAINTEXT_SNIPPET">… برای درک کامل، به محیط عملیاتی مراجعه کنید',
+          ),
+          { delayMs: 0 },
+        );
+        return { raw: true };
+      }
+      sse(res, textChunks("پاسخ واقعی به کاربر"), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = providerFor(baseUrl, { model: "glm-5.3" });
+    const { result, updates } = await runSend(provider.create({ cwd: tempWorkspace(), rules: "R" }), "سؤال تستی");
+    assert.equal(result.status, "finished");
+    assert.equal(served, 2);
+    assert.ok(nudgesSeen >= 1);
+    const emittedText = updates
+      .filter((u) => u.type === "text-delta")
+      .map((u) => u.text)
+      .join("");
+    assert.equal(emittedText, "پاسخ واقعی به کاربر");
+  });
+
+  it("fails with bogus_answer after 2 retries without leaking text", async () => {
+    let served = 0;
+    mock.on((req, res) => {
+      served += 1;
+      sse(
+        res,
+        textChunks(
+          '<entity type="SECTION_HEADER">بخش</entity>',
+          '<entity type="PLAINTEXT_SNIPPET">… برای درک کامل، به محیط عملیاتی مراجعه کنید',
+        ),
+        { delayMs: 0 },
+      );
+      return { raw: true };
+    });
+    const provider = providerFor(baseUrl, { model: "glm-5.3" });
+    const { result, updates } = await runSend(provider.create({ cwd: tempWorkspace(), rules: "R" }), "سؤال تستی");
+    assert.equal(result.status, "error");
+    assert.equal(result.error?.code, "bogus_answer");
+    assert.equal(served, 3);
+    const emittedText = updates
+      .filter((u) => u.type === "text-delta")
+      .map((u) => u.text)
+      .join("");
+    assert.equal(emittedText, "");
+  });
+
+  it("streams normal replies starting with '<' without suppression", async () => {
+    mock.on((req, res) => {
+      sse(res, textChunks("<no", "te>متن عادی و سالم برای کاربر</note>"), { delayMs: 0 });
+      return { raw: true };
+    });
+    const provider = providerFor(baseUrl, { model: "glm-5.3" });
+    const { result, updates } = await runSend(provider.create({ cwd: tempWorkspace(), rules: "R" }), "سؤال تستی");
+    assert.equal(result.status, "finished");
+    const emittedText = updates
+      .filter((u) => u.type === "text-delta")
+      .map((u) => u.text)
+      .join("");
+    assert.equal(emittedText, "<note>متن عادی و سالم برای کاربر</note>");
   });
 });

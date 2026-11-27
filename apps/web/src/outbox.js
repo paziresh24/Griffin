@@ -1,17 +1,25 @@
+import { t } from "./i18n.js";
 // The owner's messages on their way to the server, shown in the thread at once with their state:
-// "sending…", then "sent", or on a failure a red mark with "send again". Before this
+// «در حال ارسال…», then «ارسال شد», or on a failure a red mark with «ارسال دوباره». Before this
 // the bubble appeared only when the live stream echoed the message back, so a message sent while
-// the stream was dead left the box and showed nowhere. Each message
+// the stream was dead left the box and showed nowhere (from Karsara, 2026-10-11). Each message
 // carries a client id; the server stores a resend with the same id only once (app.mjs), and the
 // bubble gives way to the server's copy as soon as the timeline holds that id.
-import { t } from "./i18n.js";
-
 export const SENDING_LABEL = t("در حال ارسال…");
 export const SENT_LABEL = t("ارسال شد");
 export const FAILED_LABEL = t("ارسال نشد");
 
 // How long a sent message may wait for its echo before the timeline is fetched directly.
 const ECHO_WAIT_MS = 4000;
+
+// Why a send failed, in words the owner can act on (shown beside «ارسال نشد»).
+export function sendErrorText(error) {
+  const status = error?.status;
+  if (!status) return t("اتصال به سرور برقرار نشد؛ اینترنت یا VPN را بررسی کنید.");
+  if (status === 429) return t("درخواست‌ها زیاد است (کد ۴۲۹)؛ کمی بعد دوباره بفرستید.");
+  if (status === 408) return t("پاسخ سرور دیر رسید (کد ۴۰۸).");
+  return t("خطای سرور (کد {v}).", { v: String(status) });
+}
 
 export function newClientId() {
   try {
@@ -94,6 +102,7 @@ export function mergeOutbox(messages, entries) {
       at: e.at,
       clientId: e.clientId,
       sendState: e.state,
+      sendError: e.sendError || null,
     })),
   ];
 }
@@ -122,7 +131,7 @@ export function createSender({ outbox, post, catchUp, settle, later = (fn, ms) =
     } catch (error) {
       if (!outbox.get(clientId)) return; // it arrived in the timeline meanwhile: delivered
       if (retryableError(error)) {
-        outbox.update(clientId, { state: "failed" });
+        outbox.update(clientId, { state: "failed", sendError: sendErrorText(error) });
         return;
       }
       outbox.remove(clientId);

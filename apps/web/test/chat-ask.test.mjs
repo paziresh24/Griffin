@@ -26,3 +26,14 @@ test("both server-side asking tools are drawn with the card", () => {
   assert.ok(ASKS_INSIDE.has("request_full_access"));
   assert.ok(ASKS_INSIDE.has("request_owner_chat"));
 });
+
+test("answerKey: Enter sends and Shift+Enter breaks the line on a keyboard; touch is the reverse", async () => {
+  const { answerKey } = await import("../src/touch.js");
+  const key = (o) => ({ key: "Enter", ...o });
+  assert.equal(answerKey(false, key({})), "send");
+  assert.equal(answerKey(false, key({ shiftKey: true })), "newline");
+  assert.equal(answerKey(false, key({ isComposing: true })), null);
+  assert.equal(answerKey(false, { key: "a" }), null);
+  assert.equal(answerKey(true, key({})), "newline");
+  assert.equal(answerKey(true, key({ ctrlKey: true })), "send");
+});

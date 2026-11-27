@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { CONFIG_SCHEMA } from "../../server/src/config.mjs";
-import { FLAGS, navStyleFlags } from "../src/ui-prefs.js";
+import { FLAGS, navStyleFlags } from "../src/ui-flags.js";
 import { FEATURES, FEATURE_GROUPS, blockedBy, featureDepth, featureOf, featureOn, isFresh, isSwitch } from "../src/settings-features.js";
 import {
   FLAGS_ELSEWHERE, MERGED_FLAGS, SETTINGS_PAGES, ZONES,
@@ -48,8 +48,15 @@ test("links from before the merge land on the right tab", () => {
   assert.equal(sectionId("nothing"), null);
   assert.equal(linkedSection("#/settings/providers"), "providers");
   assert.equal(linkedSection("#/settings/assistant"), "agents", "a page's id opens its first tab");
+  assert.equal(linkedSection("#/settings/engines"), "providers");
   assert.equal(linkedSection("#/settings"), null);
-  assert.equal(pageOf("providers").id, "assistant");
+  assert.equal(pageOf("providers").id, "engines");
+  assert.equal(pageOf("secrets").id, "account");
+  assert.equal(pageOf("config").id, "status");
+  // Non-technical users searching «تلگرام» or «کلاد» should reach the main section first, not deep flags.
+  const idx = settingsIndex();
+  assert.equal(searchSettings("تلگرام", idx)[0].section, "connections");
+  assert.equal(searchSettings("کلاد", idx)[0].section, "providers");
 });
 
 test("a link to a section says it in the address; nothing leaves it in storage for Settings to find", () => {

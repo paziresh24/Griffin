@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { DEFAULT_TZ, formatDuration, nextCron, nextInterval, parseCron, parseDuration } from "./cron.mjs";
 
 // What can start a job. Today: a schedule, or the owner pressing "run now". A new kind only has to
@@ -48,6 +49,35 @@ export const TRIGGERS = {
     describe: () => "فقط وقتی خودت اجرا کنی",
     nextAt: () => null,
   },
+};
+
+// An event from outside (a support system saying «a user wrote»). The URL token is the credential
+// (like an incident webhook source). Only the listed `fields` of the body ever reach the agent — as
+// short scalars — never the body itself, so a user's text inside an event cannot become an instruction.
+//   token          generated once, kept on update
+//   fields         dot paths copied from the body ("ticket.id"); at most 8
+//   keyField       the field that names "the same thing" (a ticket): one run per key at a time,
+//                  an event for a key that is running is coalesced and re-run once after it
+//   actions        optional allow-list for body.action; other events are ignored
+//   match          {path: value}: the event must carry all of these (e.g. the assignee), else it is ignored
+//   maxConcurrent  runs of this job at once (1..10)
+const PATH = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,4}$/;
+TRIGGERS.webhook = {
+  label: "رویداد (وبهوک)",
+  validate(config = {}) {
+    const token = typeof config.token === "string" && /^[A-Za-z0-9_-]{24,64}$/.test(config.token) ? config.token : randomBytes(24).toString("base64url");
+    const fields = (Array.isArray(config.fields) ? config.fields : []).map(String).filter((f) => PATH.test(f)).slice(0, 8);
+    const keyField = typeof config.keyField === "string" && PATH.test(config.keyField) ? config.keyField : fields[0] || null;
+    const actions = (Array.isArray(config.actions) ? config.actions : []).map(String).filter((a) => /^[A-Za-z0-9_]{1,60}$/.test(a)).slice(0, 20);
+    const match = {};
+    for (const [k, v] of Object.entries(config.match && typeof config.match === "object" ? config.match : {}).slice(0, 8)) {
+      if (PATH.test(k) && ["string", "number"].includes(typeof v)) match[k] = String(v).slice(0, 60);
+    }
+    const n = Math.round(Number(config.maxConcurrent));
+    return { token, fields, keyField, actions, match, maxConcurrent: Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 3 };
+  },
+  describe: (config) => `با هر رویداد وبهوک${config?.actions?.length ? ` (${config.actions.join("، ")})` : ""}`,
+  nextAt: () => null,
 };
 
 export function validateTrigger(type, config) {

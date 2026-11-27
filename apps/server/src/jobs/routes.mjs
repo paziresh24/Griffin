@@ -33,6 +33,23 @@ export function jobRoutes(app, jobs, { targets = () => [] } = {}) {
 
   app.get("/api/jobs/:id/runs", (c) => c.json({ runs: jobs.runs(c.req.param("id"), 20) }));
 
+  // Event jobs: the URL token is the credential, so this lives under /api/public/. Answers at once
+  // (202); the run happens in the background. Only the job's listed fields reach the agent.
+  app.post("/api/public/jobs/hook/:token", async (c) => {
+    const job = jobs.byHookToken(c.req.param("token"));
+    if (!job) return c.json({ error: "not found" }, 404);
+    const raw = await c.req.text();
+    if (raw.length > 256 * 1024) return c.json({ error: "too large" }, 413);
+    let payload = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return c.json({ error: "bad json" }, 400);
+    }
+    const result = jobs.fire(job.id, payload && typeof payload === "object" ? payload : {});
+    return c.json({ ok: true, ...(result || {}) }, 202);
+  });
+
   // Fire now, without waiting for the answer: the UI follows the run in the job's history.
   app.post("/api/jobs/:id/run", (c) => {
     const id = c.req.param("id");

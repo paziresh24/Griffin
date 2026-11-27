@@ -8,7 +8,6 @@ import { api, apiPiece, catchUpTimeline, navigate } from "./api.js";
 import { createSender, mergeOutbox, newClientId, outbox } from "./outbox.js";
 import { holdReload } from "./new-version.js";
 import { unwrapResult } from "./result.js";
-import { t } from "./i18n.js";
 import { holdSending, loadDraft, recoverSending, releaseSending, saveDraft } from "./draft.js";
 import { quoteStore, sendBody } from "./quotes.js";
 import { retryableRunId } from "./side.js";
@@ -16,6 +15,7 @@ import { collectChapters } from "./chat-tools.js";
 import { noteMessage } from "./telegram.js";
 import { guestMessage } from "./guest.js";
 import { FileAttachmentAdapter, ImageAttachmentAdapter, attachmentPayload, countProblem, createUploads, filesShown } from "./attachments.js";
+import { t } from "./i18n.js";
 
 export { unwrapResult };
 
@@ -69,13 +69,13 @@ export function returnToBox(chatId, text) {
 const errorHandlers = new Map(); // chatId -> onError
 
 // One sender for the page: a message keeps its state (outbox.js) after the owner moves to another
-// chat and back. Each message carries a client id, so "send again" never stores it twice.
+// chat and back. Each message carries a client id, so «ارسال دوباره» never stores it twice.
 const sender = createSender({
   outbox,
   post: async (entry) => {
     const out = await api(`/api/chats/${entry.chatId}/messages`, { method: "POST", body: { ...entry.payload, intent: entry.intent, clientId: entry.clientId } });
     // The text answered an open question but its files could not follow: say so (server app.mjs).
-    if (out?.filesError) errorHandlers.get(entry.chatId)?.(new Error(t("پاسخ رسید ولی فایل‌ها نرسیدند: {error}", { error: out.filesError })));
+    if (out?.filesError) errorHandlers.get(entry.chatId)?.(new Error(t("پاسخ رسید ولی فایل‌ها نرسیدند: {filesError}", { filesError: out.filesError })));
     return out;
   },
   catchUp: catchUpTimeline,
@@ -243,7 +243,7 @@ export function GriffinRuntime({ chatId, timeline, settings, kept = [], onError,
 
   const runtime = useExternalStoreRuntime(adapter);
   const sendQuotes = adapter.sendQuotes;
-  // settings: what a new chat would start with (the composer's "later" keeps it with the note).
+  // settings: what a new chat would start with (the composer's «بعداً» keeps it with the note).
   // The thread's chapter list (chat_chapter) for the floating table of contents.
   const chapters = useMemo(() => collectChapters(messages), [messages]);
   const runtimeChat = useMemo(() => ({ chatId, boxId, sendQuotes, settings, chapters }), [chatId, boxId, sendQuotes, settings, chapters]);
@@ -265,7 +265,7 @@ function convertMessage(message) {
       role: "user",
       content: [{ type: "text", text: message.text }],
       createdAt: message.at ? new Date(message.at) : undefined,
-      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, imageIds: message.imageIds || null, files: message.files || null, clientId: message.clientId || null, sendState: message.sendState || null, from: message.from || null, legacy: "legacyBehind" in message } },
+      metadata: { custom: { intent: message.intent || null, queueState: message.queueState || null, images: message.images || 0, imageIds: message.imageIds || null, files: message.files || null, clientId: message.clientId || null, sendState: message.sendState || null, sendError: message.sendError || null, from: message.from || null, legacy: "legacyBehind" in message } },
     };
   }
   return {

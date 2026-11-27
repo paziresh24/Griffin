@@ -60,6 +60,7 @@ test("createCustomAgent refuses bad names, ids, tools and duplicates", () => {
   refuse({ label: "" }, /name refused/);
   refuse({ domain: "" }, /domain is required/);
   refuse({ id: "owner" }, /reserved/);
+  refuse({ id: "griffin" }, /reserved/);
   refuse({ id: "peer-x" }, /reserved|agent id/);
   refuse({ id: "A" }, /agent id/);
   refuse({ tools: ["rm_everything"] }, /unknown tools/);
@@ -116,6 +117,107 @@ test("agent_create asks the owner first and only the owner's own chat may make o
   assert.equal(store.getAgentProfile("translator"), null);
   const builtIn = await tools("بله").agent_delete.execute({ id: "griffin" }, { chatId: "c1" });
   assert.equal(builtIn.isError, true);
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("agent_create in the owner's own chat that read a file asks with the whole instructions; a colleague's chat is still refused", async () => {
+  const { store, dir } = tempStore();
+  const asked = [];
+  const tools = ({ clean = false, owner = true } = {}) =>
+    createAgentSettingsTools({
+      store,
+      catalogNames: () => CATALOG,
+      mayRename: () => clean,
+      ownerChat: () => owner,
+      confirm: async (_chat, question, detail) => {
+        asked.push({ question, detail });
+        return { answered: true, answer: "بله" };
+      },
+      engine,
+    });
+  const args = { label: "پاسخگو", domain: "کار همکاران", id: "liaison", instructions: "از فایل آمده: فقط بخوان", tools: ["dns_lookup"] };
+
+  const colleague = await tools({ owner: false }).agent_create.execute(args, { chatId: "c1" });
+  assert.equal(colleague.isError, true);
+  assert.match(colleague.content[0].text, /not the owner's own/);
+  assert.match(colleague.content[0].text, /ایجنت تازه/, "the refusal names where the owner makes one by hand");
+  assert.equal(asked.length, 0);
+
+  const tooLong = await tools().agent_create.execute({ ...args, instructions: "x".repeat(3801) }, { chatId: "c1" });
+  assert.equal(tooLong.isError, true);
+  assert.match(tooLong.content[0].text, /agents page/);
+  assert.equal(asked.length, 0, "instructions the card cannot show in full never reach the owner");
+
+  const read = await tools().agent_create.execute(args, { chatId: "c1" });
+  assert.equal(read.isError, undefined);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0].detail, /از فایل آمده: فقط بخوان/, "the owner sees the instructions before saying yes");
+  assert.ok(store.getAgentProfile("liaison"));
+
+  const cleanChat = await tools({ clean: true }).agent_create.execute({ ...args, id: "liaison-2" }, { chatId: "c1" });
+  assert.equal(cleanChat.isError, undefined);
+  assert.equal(asked[1].detail, null, "a clean chat's question stays as short as before");
+  store.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("renaming, editing and deleting an agent from the owner's own chat that read a file asks him; a colleague's chat is refused", async () => {
+  const { store, dir } = tempStore();
+  createCustomAgent({ store, catalogNames: CATALOG, input: { label: "پاسخگو", domain: "کار همکاران", id: "liaison", tools: ["dns_lookup"] }, ...engine });
+  const asked = [];
+  let answer = "بله";
+  const tools = ({ owner = true } = {}) =>
+    createAgentSettingsTools({
+      store,
+      catalogNames: () => CATALOG,
+      mayRename: () => false,
+      ownerChat: () => owner,
+      confirm: async (_chat, question, detail) => {
+        asked.push({ question, detail });
+        return { answered: true, answer };
+      },
+      engine,
+    });
+
+  const colleague = await tools({ owner: false }).agent_settings_set.execute({ agent: "liaison", label: "رابط همکاران" }, { chatId: "c1" });
+  assert.equal(colleague.isError, true);
+  assert.equal(asked.length, 0);
+  assert.equal(store.getAgentProfile("liaison").label, "پاسخگو");
+
+  answer = "نه";
+  const declined = await tools().agent_settings_set.execute({ agent: "liaison", label: "رابط همکاران" }, { chatId: "c1" });
+  assert.equal(declined.isError, true);
+  assert.equal(store.getAgentProfile("liaison").label, "پاسخگو");
+  assert.match(asked[0].question, /«پاسخگو» ← «رابط همکاران»/);
+
+  answer = "بله";
+  const renamed = await tools().agent_settings_set.execute({ agent: "liaison", label: "رابط همکاران" }, { chatId: "c1" });
+  assert.equal(renamed.isError, undefined);
+  assert.equal(store.getAgentProfile("liaison").label, "رابط همکاران");
+
+  const edited = await tools().agent_settings_set.execute({ agent: "liaison", instructions: "فقط بخوان" }, { chatId: "c1" });
+  assert.equal(edited.isError, undefined);
+  assert.equal(asked.at(-1).detail, "فقط بخوان", "new instructions are shown in full");
+
+  const tooLong = await tools().agent_settings_set.execute({ agent: "liaison", instructions: "x".repeat(3801) }, { chatId: "c1" });
+  assert.equal(tooLong.isError, true);
+
+  const before = asked.length;
+  const given = await tools().agent_tools_enable.execute({ agent: "liaison", tools: ["http_check"] }, { chatId: "c1" });
+  assert.equal(given.isError, undefined);
+  assert.equal(asked.length, before + 1);
+  assert.ok(store.getAgentProfile("liaison").tools.includes("http_check"));
+  const selfMgmt = await tools().agent_tools_enable.execute({ agent: "liaison", tools: ["agent_create"] }, { chatId: "c1" });
+  assert.equal(selfMgmt.isError, true, "a made agent never gets the tools that edit agents");
+  const colleagueTools = await tools({ owner: false }).agent_tools_disable.execute({ agent: "liaison", tools: ["http_check"] }, { chatId: "c1" });
+  assert.equal(colleagueTools.isError, true);
+
+  const colleagueDelete = await tools({ owner: false }).agent_delete.execute({ id: "liaison" }, { chatId: "c1" });
+  assert.equal(colleagueDelete.isError, true);
+  const deleted = await tools().agent_delete.execute({ id: "liaison" }, { chatId: "c1" });
+  assert.equal(deleted.isError, undefined);
+  assert.equal(store.getAgentProfile("liaison"), null);
   store.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });

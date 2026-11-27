@@ -1,5 +1,14 @@
 import { BROWSER_TOOL_NAMES, MY_BROWSER_TOOL_NAMES } from "../browser-names.mjs";
-import { AGENTS, CALLER_LABELS, DEFAULT_AGENT, filterTools } from "./registry.mjs";
+import {
+  AGENTS,
+  CALLER_LABELS,
+  DEFAULT_AGENT,
+  filterTools,
+  isSpecialistTool,
+} from "./registry.mjs";
+
+// Re-export for callers that need the specialist check without importing registry internals.
+export { isSpecialistTool } from "./registry.mjs";
 
 export const SELF_MGMT_TOOLS = [
   "list_agents",
@@ -31,7 +40,57 @@ export const PEER_NEVER_TOOLS = [
   "incident_source_set", "incident_assign", "incident_suggest",
 ];
 
-/** Tools the app itself provides (no broker, no credentials beyond what the owner connected). */
+const USER_NEVER_TOOLS = [
+  ...PEER_NEVER_TOOLS,
+  ...MY_BROWSER_TOOL_NAMES,
+  "debug_exec",
+  "ssh_exec",
+  "kube_secret",
+  "kube_copy_secret",
+  "infisical_projects",
+  "infisical_list",
+  "infisical_get",
+  "infisical_access",
+  "infisical_create_project",
+  "infisical_upsert",
+  "infisical_machine_identity",
+  "jobs_list",
+  "jobs_create",
+  "jobs_update",
+  "jobs_delete",
+  "jobs_run",
+  "knowledge_write",
+  "knowledge_edit",
+  "knowledge_delete",
+  "mcp_server_list",
+  "mcp_server_add",
+  "mcp_server_login",
+  "mcp_server_remove",
+  "app_settings_get",
+  "app_settings_set",
+  "engine_list",
+  "engine_manage",
+  "connection_list",
+  "connection_manage",
+  "settings_suggest",
+  "owner_task",
+  "build_tool",
+  "inbox_list",
+  "tell_owner",
+  "notify_owner",
+  "incidents_list",
+  "incident_history",
+  "incident_ack",
+  "incident_update",
+  "incident_sources",
+  "incident_source_set",
+  "incident_assign",
+  "incident_suggest",
+  "git_clone",
+  "git_fetch",
+  "git_push",
+];
+
 export const APP_TOOL_NAMES = [
   "ask_owner",
   "ask_requester",
@@ -96,6 +155,15 @@ export const APP_TOOL_NAMES = [
   "chat_suggest",
   "chat_dismiss_suggestion",
   "chat_chapter",
+  // A card of this app's own settings for the owner to press (settings-suggest.mjs), owner chats only.
+  "settings_suggest",
+  // Direct settings, appearance, engines and connections management (app-settings-tools.mjs), owner chats only.
+  "app_settings_get",
+  "app_settings_set",
+  "engine_list",
+  "engine_manage",
+  "connection_list",
+  "connection_manage",
   "consult",
   ...NETWORK_TOOL_NAMES,
   ...SELF_MGMT_TOOLS,
@@ -137,7 +205,7 @@ export function unique(list) {
 
 /**
  * Resolve which tool names this profile may use for a given caller.
- * owner / colleagues (peer:*) → profile.tools (or every catalog tool when the profile says allTools).
+ * owner / colleagues (peer:*) → profile.tools (+ allPlatform expansion against catalog).
  * scheduler / team / ops → meta.callers quota when present.
  */
 export function resolveEnabledTools(profile, { caller = "owner", catalogNames = [] } = {}) {
@@ -155,6 +223,7 @@ export function resolveEnabledTools(profile, { caller = "owner", catalogNames = 
   // Self-management edits quotas and profiles: never reachable by a non-owner, whatever a row says.
   const noSelf = (n) => !SELF_MGMT_TOOLS.includes(n);
   if (String(caller).startsWith("peer:")) return expandProfileTools(profile, catalog).filter((n) => noSelf(n) && !PEER_NEVER_TOOLS.includes(n));
+  if (String(caller).startsWith("user:")) return expandProfileTools(profile, catalog).filter((n) => noSelf(n) && !USER_NEVER_TOOLS.includes(n));
   const quota = callers[caller];
   if (!quota) return [];
   if (quota.tools === "*") return expandProfileTools(profile, catalog).filter(noSelf);
@@ -166,7 +235,6 @@ export function resolveEnabledTools(profile, { caller = "owner", catalogNames = 
 function expandProfileTools(profile, catalogNames) {
   const meta = profile.meta || {};
   const disabled = new Set(Array.isArray(meta.disabled) ? meta.disabled : []);
-  // allTools: this agent gets whatever the install has, minus what the owner switched off.
   if (meta.allTools) {
     const base = catalogNames.filter((n) => !disabled.has(n));
     return unique([...base, ...(profile.tools || []), ...SELF_MGMT_TOOLS, ...NETWORK_TOOL_NAMES]).filter((n) => !disabled.has(n));

@@ -238,8 +238,8 @@ test("an approval card for the tool names the group and who will be added", () =
 });
 
 test("the requests are real gramjs requests that serialize offline", async () => {
-  const { Api } = await import("telegram");
-  const utils = await import("telegram/Utils.js");
+  const { Api } = await import("teleproto");
+  const utils = await import("teleproto").then((m) => m.utils);
   const bigInt = (await import("big-integer")).default;
   const channel = new Api.Channel({ id: bigInt(2345678901), accessHash: bigInt(77), title: "میزان", photo: new Api.ChatPhotoEmpty(), date: 0 });
   const sent = [];

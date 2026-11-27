@@ -18,8 +18,8 @@
 //
 // A request the member did not finish within network_ask's wait (still working, or waiting for its
 // own owner's approval) is followed in the background, and its end wakes the chat that asked, the
-// way a delegated subtask does (otherwise an agent that got «auth-required» ends its turn and never
-// hears the result that comes later).
+// way a delegated subtask does (2026-10-19: a colleague's agent asked Iris, got «auth-required», ended
+// its turn; Iris finished 12 minutes later and nobody on his side ever heard of it).
 //
 // Presence (owner 2026-10-20: «ایجنتا نمیفهمن که ایجنتی در حال آپدیته … و سریع می‌رن سراغ تلگرام»): the card
 // says whether an install is ready or updating, a member that stops to restart tells the others
@@ -68,7 +68,7 @@ const OUTBOX_MAX = 40;
 export const isDownError = (error) =>
   /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timed? ?out|aborted|socket|http (404|408|502|503|504|52\d)\b/i.test(`${error?.name || ""} ${error?.message || ""} ${error?.cause?.code || ""}`);
 
-/** host → id ("agent.example.com" → "agent-example-com"), the peer user is net-<id>. */
+/** host → id ("team-a.example.com" → "team-a-example-com"), the peer user is net-<id>. */
 export const agentId = (host) => String(host).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 36);
 
 /** The origin of an address that may join, or null. */
@@ -127,7 +127,7 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
 
   // What a member shows of itself (name, owner, colour, logo) is read again from its own card: a
   // rename or a new logo there reaches this list, not only at the moment we connected (2026-10-20:
-  // A colleague renamed her agent; colleagues kept seeing the old name, and no logo or colour at all).
+  // a colleague renamed her agent; colleagues kept seeing the old name, and no logo or colour at all).
   const iconKey = (id) => `network:icon:${id}`;
   const safeColor = (value) => (isColor(value) ? String(value).trim() : null);
   async function readIcon(origin) {
@@ -728,13 +728,12 @@ export function createNetwork({ store, peerAuth, secrets, runner = null, env = {
     // Skills only to a member that shows its network token: repo names and note titles are not public.
     app.get("/api/public/network/card", (c) => {
       if (!self()) return c.json({ error: "no public address" }, 404);
-      const auth = c.req.header("authorization");
-      const member = auth ? peerAuth.authenticate(auth) : null;
-      const isMember = Boolean(member && !member.error);
-      return c.json(card({ withSkills: isMember }));
+      const authHeader = c.req.header("authorization");
+      const member = authHeader && peerAuth.authenticate ? peerAuth.authenticate(authHeader) : null;
+      return c.json(card({ withSkills: Boolean(member && !member.error) }));
     });
     app.get("/api/public/network/peers", (c) => {
-      const who = peerAuth.authenticate(c.req.header("authorization"));
+      const who = peerAuth.authenticate ? peerAuth.authenticate(c.req.header("authorization")) : null;
       if (!who || who.error) return c.json({ error: who?.error || "unauthorized" }, who?.status || 401);
       return c.json({ agents: connected().map(({ url, name, latin, owner, product }) => ({ url, name, latin, owner, product })) });
     });

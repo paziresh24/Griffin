@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Dialog, Switch } from "radix-ui";
 import { AnimatePresence, motion } from "motion/react";
-import { Activity, BarChart3, Bell, Palette, ArrowRight, Bot, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, KeyRound, Languages, Loader2, LogOut, MessageSquare, Plug, Plus, RefreshCw, Search, Send, ShieldOff, Sparkles, Store, Trash2, UserRound, X, Pencil, Undo2 } from "lucide-react";
+import { Activity, BarChart3, Bell, Cpu, Palette, ArrowRight, Bot, Check, ChevronDown, ChevronLeft, Copy, ExternalLink, KeyRound, Languages, Loader2, LogOut, MessageSquare, Plug, Plus, RefreshCw, Search, Send, ShieldOff, Sparkles, Store, Trash2, UserRound, X, Pencil, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
 import { StatusSection, Pill } from "./Health.jsx";
 import { Choice, Group, Item, SectionHeader, SettingRow, Tabs, Toggle } from "./SettingsParts.jsx";
 import { BRAND, agentMeta, readSetting, writeSetting } from "../brand.js";
-import { lang, num, setLang, t } from "../i18n.js";
 import { ProvidersSection } from "./Providers.jsx";
 import { FeedbackInbox } from "./Feedback.jsx";
 import { ClickMapSection } from "./ClickMap.jsx";
@@ -28,15 +27,18 @@ import { AppearanceSection } from "./Appearance.jsx";
 import { ModulesSection } from "./Modules.jsx";
 import { enablePush, pushSupportIssue } from "../push.js";
 import { setUiPrefs, useFlag, useLook, useUiPrefs } from "../ui-prefs.js";
-import { FIRST_SECTION, linkedSection, pageOf, pagesFor, searchSettings, sectionId, settingsIndex } from "../settings-map.js";
+import { DEFAULT_SECTION, FIRST_SECTION, SETTINGS_GROUPS, linkedRow, linkedSection, pageOf, pagesFor, searchSettings, sectionId, settingsIndex } from "../settings-map.js";
 import { blockedBy, featureDepth, featureOf, featureOn, featureValue } from "../settings-features.js";
 import { Compare } from "./SettingsPreview.jsx";
 import { agoPhrase, connectionRows } from "../karsara-shell.js";
 import { exactTime } from "../elapsed.js";
 import { ProxyStep } from "./Setup.jsx";
 import { UpdateNotice } from "./UpdateNotice.jsx";
+import { SettingsSuggestions, useSettingsAsk } from "./SettingsSuggest.jsx";
 import { TwoStepSection } from "./TwoStep.jsx";
-
+import { UsersSection } from "./UsersSection.jsx";
+import { useAuthMe } from "../auth-me.js";
+import { lang, locale, setLang, t } from "../i18n.js";
 import { askConfirm } from "../dialog.jsx";
 
 const KIND_META = {
@@ -45,7 +47,13 @@ const KIND_META = {
   telegram_account: { label: t("اکانت تلگرام"), icon: UserRound, tint: "text-sky-500 bg-sky-500/12" },
 };
 
-const PAGE_ICONS = { activity: Activity, user: UserRound, palette: Palette, message: MessageSquare, bot: Bot, plug: Plug, store: Store, chart: BarChart3 };
+const PAGE_ICONS = { activity: Activity, user: UserRound, palette: Palette, message: MessageSquare, bot: Bot, cpu: Cpu, plug: Plug, store: Store, chart: BarChart3 };
+const GROUP_TINT = {
+  personal: "bg-violet-500/12 text-violet-600 dark:text-violet-400",
+  ai: "bg-primary/12 text-primary",
+  integrations: "bg-sky-500/12 text-sky-600 dark:text-sky-400",
+  system: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
+};
 const LAST_SECTION = "griffin.settings.section";
 
 const subscribeHash = (callback) => {
@@ -55,28 +63,38 @@ const subscribeHash = (callback) => {
 const useHash = () => useSyncExternalStore(subscribeHash, () => window.location.hash);
 
 /** With no section in the address: the one picked last, or «وضعیت» when the flag asks to start there. */
-const restingSection = (fromStatus) => (fromStatus ? FIRST_SECTION : sectionId(readSetting(LAST_SECTION, "")) || FIRST_SECTION);
+const restingSection = (fromStatus) => (fromStatus ? FIRST_SECTION : sectionId(readSetting(LAST_SECTION, "")) || DEFAULT_SECTION);
 
 // The address says which section is open (#/settings/providers), so a link, the back button and a
 // phone all agree. A phone at #/settings shows the list of pages instead of a section; a computer has
 // that list beside it (owner 2026-11-01: «توی گوشی هم مضخرفه، نوار بغل اسکرول هم نمیشه»: the column had
 // no scroll of its own, so on a short screen the rows past its end could not be reached).
 export function SettingsPage({ onBack, onSection, theme, onTheme }) {
+  const me = useAuthMe();
+  const member = me?.role === "member";
   const fromStatus = useFlag("settingsList"); // «تنظیمات همیشه از «وضعیت» باز شود» (ui-prefs.js)
   const flat = useLook() === "karsara";
   const hash = useHash();
   const linked = linkedSection(hash);
   const section = linked || restingSection(fromStatus);
-  // "Usage accounting" is there only where the server has it.
+  // «حسابداری مصرف» is there only where the server has it (the maintainer's install), and
+  // /api/setup tells the sidebar gently if engines need attention without blocking render.
   const [hub, setHub] = useState(false);
+  const [engineWarn, setEngineWarn] = useState(false);
   useEffect(() => {
+    if (member) return undefined;
     let alive = true;
     api("/api/accounting").then(() => alive && setHub(true), () => {});
+    api("/api/setup").then((d) => alive && setEngineWarn(Boolean(d?.needsEngine)), () => {});
     return () => {
       alive = false;
     };
-  }, []);
-  const pages = useMemo(() => pagesFor(hub), [hub]);
+  }, [member]);
+  const pages = useMemo(() => pagesFor(hub, member), [hub, member]);
+  const groupedPages = useMemo(
+    () => SETTINGS_GROUPS.map((g) => ({ ...g, pages: pages.filter((p) => p.group === g.id) })).filter((g) => g.pages.length),
+    [pages],
+  );
   const page = pageOf(section, pages) || pages[0];
   const current = page.sections.find((s) => s.id === section) || page.sections[0];
   // The open section names the browser tab (tab-title.js).
@@ -97,6 +115,13 @@ export function SettingsPage({ onBack, onSection, theme, onTheme }) {
     setSection(entry.section);
     setFocus(entry.focus || null);
   };
+  // A suggestion card in a chat links to the row itself (#/settings/<section>/<row>): show it, once.
+  const linkedTo = linkedRow(hash);
+  useEffect(() => {
+    if (!linkedTo) return;
+    setFocus(linkedTo);
+    window.history.replaceState(null, "", `#/settings/${linked}`);
+  }, [linkedTo, linked]);
   useEffect(() => {
     if (!focus) return undefined;
     let tries = 0;
@@ -123,25 +148,57 @@ export function SettingsPage({ onBack, onSection, theme, onTheme }) {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
-      <aside className="g-settings-rail hidden min-h-0 w-60 shrink-0 flex-col border-e bg-card/50 sm:flex">
-        <div className="flex shrink-0 items-center gap-2 px-4 pb-3 pt-[max(env(safe-area-inset-top),1rem)]">
-          {backArrow(t("بازگشت"), onBack)}
-          {title}
+      <aside className="g-settings-rail hidden min-h-0 w-64 shrink-0 flex-col border-e bg-muted/20 sm:flex">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-4 pb-3 pt-[max(env(safe-area-inset-top),1rem)]">
+          <div className="flex items-center gap-2">
+            {backArrow(t("بازگشت"), onBack)}
+            {title}
+          </div>
+          <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">{t("پیکربندی")}</span>
         </div>
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-3">
           <SettingsSearch pages={pages} onOpen={open}>
-            <nav className="space-y-0.5">
-              {pages.map((p) => {
-                const Icon = PAGE_ICONS[p.icon];
-                const active = page.id === p.id;
-                return (
-                  <button key={p.id} type="button" onClick={() => setSection(p.sections[0].id)} aria-current={active ? "page" : undefined} className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors ${active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"}`}>
-                    {active ? <motion.span layoutId="settings-nav" className="g-nav-bar absolute inset-y-1.5 start-0 w-0.5 rounded-full bg-primary" /> : null}
-                    <Icon className={`size-4 shrink-0 ${active ? "text-primary" : ""}`} />
-                    <span className="min-w-0 truncate">{p.label}</span>
-                  </button>
-                );
-              })}
+            <nav className="space-y-4">
+              {groupedPages.map((group) => (
+                <div key={group.id}>
+                  <p className="mb-1.5 px-2.5 text-[11px] font-semibold tracking-wide text-muted-foreground/75">{group.label}</p>
+                  <div className="space-y-0.5">
+                    {group.pages.map((p) => {
+                      const Icon = PAGE_ICONS[p.icon] || Activity;
+                      const active = page.id === p.id;
+                      const warnDot = p.id === "engines" && engineWarn;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setSection(p.sections[0].id)}
+                          aria-current={active ? "page" : undefined}
+                          className={`group relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-colors ${
+                            active
+                              ? "bg-background font-medium text-foreground shadow-xs ring-1 ring-border/70"
+                              : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                          }`}
+                        >
+                          {active ? <motion.span layoutId="settings-nav" className="g-nav-bar absolute inset-y-2 start-0 w-0.5 rounded-full bg-primary" /> : null}
+                          <span className={`flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                            active ? (GROUP_TINT[p.group] || "bg-primary/12 text-primary") : "bg-muted/70 text-muted-foreground group-hover:text-foreground"
+                          }`}>
+                            <Icon className="size-3.5" />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-start">{p.label}</span>
+                          {warnDot ? (
+                            <span className="size-2 shrink-0 rounded-full bg-warn" title={t("نیاز به بررسی موتور")} />
+                          ) : p.sections.length > 1 ? (
+                            <span className={`text-[10px] tabular-nums ${active ? "text-muted-foreground" : "text-muted-foreground/60"}`}>
+                              {p.sections.length.toLocaleString(locale)}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </nav>
           </SettingsSearch>
         </div>
@@ -155,25 +212,37 @@ export function SettingsPage({ onBack, onSection, theme, onTheme }) {
               {title}
             </div>
             <SettingsSearch pages={pages} onOpen={open}>
-              <nav className="divide-y overflow-hidden rounded-2xl border bg-card">
-                {pages.map((p) => {
-                  const Icon = PAGE_ICONS[p.icon];
-                  return (
-                    <button key={p.id} type="button" onClick={() => setSection(p.sections[0].id)} className="press flex w-full items-center gap-3 px-4 py-3 text-start">
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/12 text-primary"><Icon className="size-[18px]" /></span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium">{p.label}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{p.blurb}</span>
-                      </span>
-                      <ChevronLeft className="rtl-mirror size-4 shrink-0 text-muted-foreground" />
-                    </button>
-                  );
-                })}
-              </nav>
+              <div className="space-y-5">
+                {groupedPages.map((group) => (
+                  <div key={group.id}>
+                    <p className="mb-2 px-1 text-xs font-semibold text-muted-foreground">{group.label}</p>
+                    <nav className="divide-y overflow-hidden rounded-2xl border bg-card">
+                      {group.pages.map((p) => {
+                        const Icon = PAGE_ICONS[p.icon] || Activity;
+                        return (
+                          <button key={p.id} type="button" onClick={() => setSection(p.sections[0].id)} className="press flex w-full items-center gap-3 px-4 py-3 text-start">
+                            <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${GROUP_TINT[p.group] || "bg-primary/12 text-primary"}`}>
+                              <Icon className="size-[18px]" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center gap-2 text-sm font-medium">
+                                <span className="truncate">{p.label}</span>
+                                {p.id === "engines" && engineWarn ? <span className="size-2 rounded-full bg-warn" /> : null}
+                              </span>
+                              <span className="block truncate text-xs text-muted-foreground">{p.blurb}</span>
+                            </span>
+                            <ChevronLeft className="rtl-mirror size-4 shrink-0 text-muted-foreground" />
+                          </button>
+                        );
+                      })}
+                    </nav>
+                  </div>
+                ))}
+              </div>
             </SettingsSearch>
           </div>
         )}
-        <div className={`g-settings-content mx-auto w-full max-w-2xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-10 ${linked ? "" : "hidden sm:block"}`}>
+        <div className={`g-settings-content mx-auto w-full max-w-3xl px-4 pb-16 pt-[max(env(safe-area-inset-top),1rem)] sm:px-8 sm:pt-8 ${linked ? "" : "hidden sm:block"}`}>
           <div className="mb-4 flex items-center gap-2 sm:hidden">
             {backArrow(t("همهٔ تنظیمات"), () => { window.location.hash = "/settings"; })}
             <h1 className="font-semibold">{t("تنظیمات")}</h1>
@@ -233,13 +302,15 @@ export function SettingsPage({ onBack, onSection, theme, onTheme }) {
               </div>
             ) : current.id === "appearance" ? (
               <AppearanceSection onSection={setSection} theme={theme} onTheme={onTheme} focus={focus} />
+            ) : current.id === "users" && !member ? (
+              <UsersSection />
             ) : current.id === "market" ? (
               <ModulesSection />
             ) : (
               <div className="space-y-6">
-                <ProfileSection />
-                <TwoStepSection />
-                <AccountSection />
+                <ProfileSection member={member} username={me?.user?.username} />
+                {member ? null : <TwoStepSection />}
+                <AccountSection member={member} />
               </div>
             )}
           </motion.div>
@@ -251,34 +322,77 @@ export function SettingsPage({ onBack, onSection, theme, onTheme }) {
 
 // The box above the pages. While something is typed its results stand in for the list below it.
 function SettingsSearch({ pages, onOpen, children }) {
+  const member = useAuthMe()?.role === "member";
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState(null);
   const asked = useRef(false);
   const load = () => {
     if (asked.current) return;
     asked.current = true;
+    if (member) { setRows([]); return; }
     api("/api/config").then((d) => setRows(d.settings || []), () => setRows([]));
   };
   const entries = useMemo(() => settingsIndex(rows || [], pages), [rows, pages]);
   const found = query.trim() ? searchSettings(query, entries) : null;
+  // «پرسش از دستیار» (settings-suggest.mjs): a sentence, or words the titles do not hold, go to the model;
+  // its cards apply nothing until the person presses «اعمال تغییر».
+  const asking = useSettingsAsk();
+  const typed = query.trim();
+  const offerAsk = !member && typed.length >= 3 && (typed.split(/\s+/).length >= 2 || !found?.length);
+  const answered = asking.query === typed ? asking : null;
+  const openFromCard = (target) => {
+    setQuery("");
+    asking.reset();
+    onOpen(target);
+  };
   return (
     <>
       <label className="relative mb-3 block">
         <Search className="pointer-events-none absolute start-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <input type="search" value={query} onFocus={load} onChange={(e) => setQuery(e.target.value)} placeholder={t("جستجو در تنظیمات")} aria-label={t("جستجو در تنظیمات")} className="w-full rounded-lg border bg-background py-1.5 pe-2 ps-8 text-sm outline-none focus:border-primary" />
+        <input
+          type="search"
+          value={query}
+          onFocus={load}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && offerAsk && !answered) asking.ask(typed);
+          }}
+          placeholder={t("جستجو، یا بگویید چه می‌خواهید")}
+          aria-label={t("جستجو در تنظیمات")}
+          className="w-full rounded-lg border bg-background py-1.5 pe-2 ps-8 text-sm outline-none focus:border-primary"
+        />
       </label>
-      {!found ? children : found.length ? (
-        <ul className="space-y-0.5">
-          {found.map((entry) => (
-            <li key={entry.id}>
-              <button type="button" onClick={() => { setQuery(""); onOpen(entry); }} className="w-full rounded-lg px-3 py-1.5 text-start hover:bg-muted/60">
-                <span className="block text-sm" dir="auto">{entry.title}</span>
-                <span className="block truncate text-[11px] text-muted-foreground">{entry.path}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : <p className="px-3 py-4 text-center text-xs text-muted-foreground">{t("چیزی پیدا نشد")}</p>}
+      {!found ? children : (
+        <>
+          {offerAsk ? (
+            <div className="mb-2">
+              {answered?.result ? (
+                <SettingsSuggestions result={answered.result} onOpen={openFromCard} />
+              ) : (
+                <button type="button" disabled={Boolean(answered?.busy)} onClick={() => asking.ask(typed)} className="press flex w-full items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-start text-sm hover:bg-muted/60 disabled:opacity-70">
+                  {answered?.busy ? <Loader2 className="size-4 shrink-0 animate-spin text-primary" /> : <Sparkles className="size-4 shrink-0 text-primary" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block">{answered?.busy ? t("در حال پیدا کردن تنظیم مناسب…") : t("پرسش از دستیار")}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground" dir="auto">{answered?.error || t("با کلمه‌های خودتان بگویید چه می‌خواهید؛ تا شما نزنید چیزی عوض نمی‌شود.")}</span>
+                  </span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {found.length ? (
+            <ul className="space-y-0.5">
+              {found.map((entry) => (
+                <li key={entry.id}>
+                  <button type="button" onClick={() => { setQuery(""); onOpen(entry); }} className="w-full rounded-lg px-3 py-1.5 text-start hover:bg-muted/60">
+                    <span className="block text-sm" dir="auto">{entry.title}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{entry.path}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : offerAsk ? null : <p className="px-3 py-4 text-center text-xs text-muted-foreground">{t("چیزی پیدا نشد")}</p>}
+        </>
+      )}
     </>
   );
 }
@@ -332,7 +446,7 @@ function ConnectionsCheck({ onSection }) {
   );
 }
 
-// Web Push on this device. The permission prompt fires only from this tap, never on
+// Web Push on this device (from Karsara). The permission prompt fires only from this tap, never on
 // page load. The lock screen shows the chat title and one short, redacted line.
 function PushSection() {
   const [status, setStatus] = useState("checking"); // checking | unsupported | off | on | busy
@@ -419,7 +533,15 @@ function ConnectionsSection({ page, meta, onTab }) {
   useEffect(() => {
     load();
     const timer = setInterval(load, 8000);
-    return () => clearInterval(timer);
+    const onChanged = (ev) => {
+      const kind = ev?.detail?.kind || "all";
+      if (kind === "connections" || kind === "settings" || kind === "all") load();
+    };
+    window.addEventListener("griffin:settings-changed", onChanged);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("griffin:settings-changed", onChanged);
+    };
   }, [load]);
 
   return (
@@ -490,7 +612,7 @@ function IntegrationRow({ integration, onChange }) {
     <>
       {meta.label}
       {integration.username ? <> · <bdi dir="ltr">@{integration.username}</bdi></> : null}
-      {isBot ? ` · ${t("{n} گفتگو", { n: num(integration.paired.length) })}` : null}
+      {isBot ? t(" · {toLocaleString} گفتگو", { toLocaleString: integration.paired.length.toLocaleString(locale) }) : null}
     </>
   );
 
@@ -634,7 +756,7 @@ function ChatPrefsSection() {
 
 // The owner's name at the foot of the sidebar (GET/PUT /api/profile). Telegram's name and photo come
 // by themselves once the account is connected; a name typed here wins, and an empty one goes back to it.
-function ProfileSection() {
+function ProfileSection({ member = false, username = "" }) {
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -669,7 +791,7 @@ function ProfileSection() {
           <span className="h-9 min-w-0 flex-1 animate-pulse rounded-xl bg-muted/70" aria-hidden />
           <span className="h-9 w-16 shrink-0 animate-pulse rounded-full bg-muted/70" aria-hidden />
         </div>
-        <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>
+        {member ? null : <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>}
       </section>
     );
   }
@@ -696,12 +818,12 @@ function ProfileSection() {
         {busy ? <Loader2 className="size-4 animate-spin" /> : t("ذخیره")}
       </button>
     </form>
-    <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>
+    {member ? (username ? <p className="mt-2 px-1 text-xs text-muted-foreground" dir="ltr">@{username}</p> : null) : <p className="mt-2 px-1 text-xs leading-5 text-muted-foreground">{t("خالی بگذارید تا نام و عکس اکانت تلگرامِ وصل‌شده بیاید.")}</p>}
     </section>
   );
 }
 
-function AccountSection() {
+function AccountSection({ member = false }) {
   const logout = () => api("/api/auth/logout", { method: "POST" }).finally(() => window.location.reload());
   const revokeAll = async () => {
     if (!(await askConfirm(t("از همهٔ دستگاه‌ها (از جمله همین) خارج شوی؟")))) return;
@@ -711,9 +833,13 @@ function AccountSection() {
   // The new token is shown here once (never stored by the page); this device stays signed in.
   const [newToken, setNewToken] = useState("");
   const rotate = async () => {
-    if (!(await askConfirm(t("توکن ورود عوض شود؟ توکن فعلی (ورود، اسکریپت‌ها و CLI) از کار می‌افتد و بقیهٔ دستگاه‌ها خارج می‌شوند.")))) return;
+    const promptText = member
+      ? t("توکن ورود شما عوض شود؟ توکن فعلی و بقیهٔ دستگاه‌ها از کار می‌افتند.")
+      : t("توکن ورود عوض شود؟ توکن فعلی (ورود، اسکریپت‌ها و CLI) از کار می‌افتد و بقیهٔ دستگاه‌ها خارج می‌شوند.");
+    if (!(await askConfirm(promptText))) return;
     try {
-      setNewToken((await api("/api/auth/rotate-token", { method: "POST" })).token);
+      const endpoint = member ? "/api/auth/my-token" : "/api/auth/rotate-token";
+      setNewToken((await api(endpoint, { method: "POST" })).token);
     } catch (e) {
       toast.error(e.message);
     }
@@ -742,8 +868,8 @@ function AccountSection() {
         />
       </Group>
       <Group title={t("نشست‌ها")}>
-        <Item icon={LogOut} title={t("خروج از این دستگاه")} subtitle={t("کوکی همین مرورگر پاک می‌شود")} onClick={logout} />
-        <Item icon={ShieldOff} tint="bg-bad/10 text-bad" title={t("خروج از همهٔ دستگاه‌ها")} subtitle={t("همهٔ نشست‌ها باطل می‌شوند؛ برای ورود دوباره توکن لازم است")} onClick={revokeAll} />
+      <Item icon={LogOut} title={t("خروج از این دستگاه")} subtitle={t("کوکی همین مرورگر پاک می‌شود")} onClick={logout} />
+      {member ? null : <Item icon={ShieldOff} tint="bg-bad/10 text-bad" title={t("خروج از همهٔ دستگاه‌ها")} subtitle={t("همهٔ نشست‌ها باطل می‌شوند؛ برای ورود دوباره توکن لازم است")} onClick={revokeAll} />}
       <Item icon={KeyRound} tint="bg-bad/10 text-bad" title={t("ریست توکن ورود")} subtitle={t("توکن تازه ساخته می‌شود؛ قبلی و بقیهٔ نشست‌ها باطل می‌شوند")} onClick={newToken ? undefined : rotate}>
         {newToken ? (
           <div className="mx-4 mb-3 rounded-xl border bg-muted/40 p-3">
@@ -821,7 +947,6 @@ export function AccountLogin({ onDone }) {
     }
   };
 
-  const [linkBefore, linkAfter] = t("در {link} یک app بساز و api_id و api_hash را اینجا بگذار.").split("{link}");
   const input = "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-primary";
   return (
     <form onSubmit={submit} className="space-y-3">
@@ -837,7 +962,7 @@ export function AccountLogin({ onDone }) {
           {preset === false ? (
             <>
               <p className="text-xs leading-5 text-muted-foreground">
-                {linkBefore}<a className="text-primary underline" href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a>{linkAfter}
+                {t("در")} <a className="text-primary underline" href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org/apps</a> {t("یک app بساز و api_id و api_hash را اینجا بگذار.")}
               </p>
               <div className="grid grid-cols-3 gap-2">
                 <input value={form.apiId} onChange={set("apiId")} required inputMode="numeric" placeholder="api_id" className={`ltr col-span-1 font-mono ${input}`} />
@@ -1039,14 +1164,14 @@ function KnowledgeSection() {
             className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ${view === id ? "bg-card font-medium shadow-sm" : "text-muted-foreground"}`}
           >
             {label}
-            <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[11px] tabular-nums">{num(counts[id])}</span>
+            <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[11px] tabular-nums">{counts[id].toLocaleString(locale)}</span>
           </button>
         ))}
       </div>
 
       {view === "trash" ? (
         trash.length ? (
-          <Group title={t("حذف‌شده · {toLocaleString}", { toLocaleString: trash.length.toLocaleString("fa") })}>
+          <Group title={t("حذف‌شده · {toLocaleString}", { toLocaleString: trash.length.toLocaleString(locale) })}>
             {trash.map((item) => (
               <Item
                 key={item.id}
@@ -1086,7 +1211,7 @@ function KnowledgeSection() {
         </p>
       ) : (
         shown.map(([agent, notes]) => (
-          <Group key={agent} title={`${agentMeta(agent).label} · ${num(notes.length)}`}>
+          <Group key={agent} title={`${agentMeta(agent).label} · ${notes.length.toLocaleString(locale)}`}>
             {notes.map((note) => {
               const key = `${agent}/${note.file}`;
               const expanded = open === key;
@@ -1097,8 +1222,8 @@ function KnowledgeSection() {
                   subtitle={
                     <>
                       {karsara && note.at ? <span title={exactTime(note.at)}>{agoPhrase(note.at)}</span> : <bdi dir="ltr">{note.at || note.file}</bdi>}
-                      {note.expires ? <> · {t("انقضا")} <bdi dir="ltr">{note.expires}</bdi></> : null}
-                      {note.autoTrusted ? <span title={t("از چتِ خودتان بدون محتوای شخص ثالث؛ بدون تأیید به چت‌های بعدی می‌رسد")}> · {t("خودکار")}</span> : null}
+                      {note.expires ? <> {t("· انقضا")} <bdi dir="ltr">{note.expires}</bdi></> : null}
+                      {note.autoTrusted ? <span title={t("از چتِ خودتان بدون محتوای شخص ثالث؛ بدون تأیید به چت‌های بعدی می‌رسد")}> {t("· خودکار")}</span> : null}
                     </>
                   }
                   onClick={() => setOpen(expanded ? null : key)}

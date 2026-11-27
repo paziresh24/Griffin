@@ -69,8 +69,8 @@ test("Karsara's revoked ids (map and per-key format) still apply; ids older than
     const v = store.getKv("session_version") || 1;
     store.setKv("session_revoked", { gone: Date.now() - 1000, ancient: Date.now() - 31 * 86_400_000 });
     store.setKv("session_revoked:old", Date.now());
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v}.gone`))).status, 401);
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v}.old`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "legacy_session", `${Date.now()}.${v}.gone`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "legacy_session", `${Date.now()}.${v}.old`))).status, 401);
     const cookie = await login(app, token);
     await app.request(`${origin}/api/auth/logout`, { method: "POST", headers: { cookie, origin } });
     const revoked = store.getKv("session_revoked");
@@ -84,12 +84,12 @@ test("a valid Karsara cookie is accepted and re-issued as Griffin's, keeping its
   const { app, store, cleanup } = setup();
   try {
     const v = store.getKv("session_version") || 1;
-    const karsara = await signed(store, "karsara_session", `${Date.now()}.${v}.sidK`);
+    const karsara = await signed(store, "legacy_session", `${Date.now()}.${v}.sidK`);
     const res = await chats(app, karsara);
     assert.equal(res.status, 200);
     const set = res.headers.getSetCookie();
     const griffin = set.find((c) => c.startsWith("griffin_session=")).split(";")[0];
-    assert.ok(set.some((c) => c.startsWith("karsara_session=;")), "the Karsara cookie is cleared");
+    assert.ok(set.some((c) => c.startsWith("legacy_session=;")), "the Karsara cookie is cleared");
     assert.match(decodeURIComponent(griffin), /\.sidK\./);
     assert.equal((await chats(app, griffin)).status, 200);
     // Logging out the re-issued cookie also kills the old Karsara one (same id).
@@ -97,14 +97,14 @@ test("a valid Karsara cookie is accepted and re-issued as Griffin's, keeping its
     assert.equal((await chats(app, karsara)).status, 401);
 
     // No session id, older than a day, or another version → refused.
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v}`))).status, 401);
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now() - 15 * 86_400_000}.${v}.x`))).status, 401);
-    assert.equal((await chats(app, await signed(store, "karsara_session", `${Date.now()}.${v + 1}.x`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "legacy_session", `${Date.now()}.${v}`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "legacy_session", `${Date.now() - 15 * 86_400_000}.${v}.x`))).status, 401);
+    assert.equal((await chats(app, await signed(store, "legacy_session", `${Date.now()}.${v + 1}.x`))).status, 401);
     // Even when the first request a migrated device makes is a live stream.
-    const stream = await app.request(`${origin}/api/stream`, { headers: { cookie: await signed(store, "karsara_session", `${Date.now()}.${v}.z`) } });
+    const stream = await app.request(`${origin}/api/stream`, { headers: { cookie: await signed(store, "legacy_session", `${Date.now()}.${v}.z`) } });
     assert.ok(stream.headers.getSetCookie().some((c) => c.startsWith("griffin_session=")));
     await stream.body.cancel();
-    const me = await app.request(`${origin}/api/auth/me`, { headers: { cookie: await signed(store, "karsara_session", `${Date.now()}.${v}.y`) } });
+    const me = await app.request(`${origin}/api/auth/me`, { headers: { cookie: await signed(store, "legacy_session", `${Date.now()}.${v}.y`) } });
     assert.equal((await me.json()).authenticated, true);
   } finally {
     cleanup();

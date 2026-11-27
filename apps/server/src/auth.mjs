@@ -5,15 +5,17 @@ import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { clientAddress, DEFAULT_TRUSTED_PROXIES, fromThisMachine, normalizeIp, trusts } from "./listen.mjs";
 import { passkeyRoutes } from "./passkeys.mjs";
 import { newRecoveryCodes, newTotpSecret, otpauthUri, recoveryHash, totpMatch } from "./totp.mjs";
+import { hashUserToken, mintUserToken, publicAppUser } from "./users.mjs";
 
 const COOKIE = "griffin_session";
-// A sign-in lasts 14 days, counted from when it was made: a cookie copied off a device is dead within
-// two weeks, and «logout» / session_version still kill it at once. A passkey makes a fresh sign-in one touch.
+// A sign-in lasts 14 days, counted from when it was made (owner 2026-11-03: «عمر لاگین رو بکن 14 روز»;
+// it was 24 hours since 2026-10-25): a cookie copied off a device is dead within two weeks, and
+// «logout» / session_version still kill it at once. A passkey makes a fresh sign-in one touch.
 const SESSION_MS = 14 * 24 * 3_600_000;
 // A Karsara install moved onto Griffin keeps its kv (session_secret, session_version,
-// session_revoked), so its devices still hold a valid karsara_session: accepted within the same
+// session_revoked), so its devices still hold a valid legacy_session: accepted within the same
 // lifetime and re-issued as Griffin's cookie on first use.
-const KARSARA_COOKIE = "karsara_session";
+const KARSARA_COOKIE = "legacy_session";
 const FAILURE_WINDOW_MS = 15 * 60_000;
 const GLOBAL_FAILURE_WINDOW_MS = 10 * 60_000;
 // Wrong second-step codes after a right token, across every address: past this many in the window,
@@ -21,8 +23,8 @@ const GLOBAL_FAILURE_WINDOW_MS = 10 * 60_000;
 const CODE_MISS_CAP = 10;
 const PENDING_SETUP_MS = 10 * 60_000;
 
-// Local owner auth with no external identity provider, so it keeps working when a shared
-// SSO is down. The owner token lives in the data volume (0600).
+// Local owner auth with no external identity provider, so it keeps working when external auth
+// (and Authentik) is down. The owner token lives in the data volume (0600).
 // Two-step sign-in (a colleague 2026-10-24: «هر کسی اون سکرت رو داشته باشه می‌تونه لاگین کنه… کل
 // پذیرش رو»): once the owner turns it on, the token alone no longer opens Griffin from the network —
 // a sign-in also needs the 6-digit code of an authenticator app (or a one-time recovery code), and
@@ -124,7 +126,10 @@ export function createAuth({
     return null;
   }
   const pendingSetups = new Map(); // session id -> { secret, expires }
-  const sessionIdOf = (value) => String(value || "").split(".")[2] || "";
+  const sessionIdOf = (value) => {
+    const parts = String(value || "").split(".");
+    return parts[0] === "u" ? parts[4] || "" : parts[2] || "";
+  };
 
   const failures = new Map(); // ip -> { count, until }
   let globalFailures = []; // failure times across every address
@@ -173,7 +178,7 @@ export function createAuth({
   // Value = issued.version[.sessionId]. A Griffin cookie from before session ids has none; it is
   // still accepted (re-issued with an id on use) so existing devices are not logged out.
   function valueValid(value, needsId = false) {
-    if (!value) return false;
+    if (!value || String(value).startsWith("u.")) return false;
     const [issued, version, sessionId] = String(value).split(".");
     if (needsId && !sessionId) return false;
     if (Date.now() - Number(issued) > SESSION_MS) return false;
@@ -216,6 +221,37 @@ export function createAuth({
     if (!valueValid(karsara, true)) return null;
     deleteCookie(c, KARSARA_COOKIE, { path: "/" });
     return issue(c, String(karsara).split(".")[2]);
+  }
+
+  function userValueState(value) {
+    if (!value || !String(value).startsWith("u.") || !store.getAppUser) return null;
+    const [, userId, issued, version, sessionId] = String(value).split(".");
+    if (!userId || !sessionId || Date.now() - Number(issued) > SESSION_MS || isRevoked(sessionId)) return null;
+    const row = store.getAppUser(userId);
+    if (!row || !row.enabled || version !== String(row.session_version || 1)) return null;
+    return { value, row, user: publicAppUser(row) };
+  }
+  async function issueUser(c, row, sessionId = crypto.randomBytes(16).toString("base64url")) {
+    const value = `u.${row.id}.${Date.now()}.${row.session_version || 1}.${sessionId}`;
+    await setSignedCookie(c, COOKIE, value, secret, {
+      httpOnly: true,
+      sameSite: "Strict",
+      secure: secure(c),
+      path: "/",
+      maxAge: SESSION_MS / 1000,
+    });
+    return value;
+  }
+  async function requireOwnerSession(c) {
+    const value = await session(c);
+    if (value) return { value, denied: null };
+    if (await userSession(c)) return { value: null, denied: c.json({ error: "owner access required" }, 403) };
+    return { value: null, denied: c.json({ error: "unauthorized" }, 401) };
+  }
+
+  async function userSession(c) {
+    const value = await getSignedCookie(c, secret, COOKIE);
+    return userValueState(value);
   }
 
   // The public name moved (OLD_HOSTS, app.mjs): the browser's cookie belongs to the old name, so the
@@ -269,6 +305,19 @@ export function createAuth({
         if (globalFailures.length >= globalFailureCap) await new Promise((resolve) => setTimeout(resolve, globalOverflowDelayMs));
         const body = await c.req.json().catch(() => ({}));
         if (!isOwnerToken(body.token)) {
+          const hash = hashUserToken(body.token);
+          const member = hash && store.findAppUserByTokenHash ? store.findAppUserByTokenHash(hash) : null;
+          if (member) {
+            if (!member.enabled) {
+              recordFailure(ip);
+              return c.json({ error: "این حساب غیرفعال شده است." }, 403);
+            }
+            failures.delete(ip);
+            const fresh = store.updateAppUser(member.id, { lastLoginAt: new Date().toISOString() }) || member;
+            deleteCookie(c, KARSARA_COOKIE, { path: "/" });
+            await issueUser(c, fresh);
+            return c.json({ ok: true, role: fresh.role || "member", user: publicAppUser(fresh) });
+          }
           const remaining = recordFailure(ip);
           return c.json({ error: "invalid token", remaining, ...(remaining ? {} : { retryAfter: FAILURE_WINDOW_MS / 1000 }) }, 401);
         }
@@ -316,15 +365,16 @@ export function createAuth({
       // login cookie itself: a Bearer token never turns it on or off, except from this machine (off,
       // for a lost phone: `curl -X POST -H "Authorization: Bearer $(cat data/owner.token)" http://127.0.0.1:<port>/api/auth/2fa/disable`).
       app.get("/api/auth/2fa", async (c) => {
-        if (!(await session(c))) return c.json({ error: "unauthorized" }, 401);
+        const { denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         const state = twoStep();
         return c.json({ enabled: Boolean(state), required: requireTwoStep, enabledAt: state?.enabledAt || null, recoveryLeft: state ? (state.recovery || []).length : 0 });
       });
 
       // A fresh app secret for this page to show (QR + text); it counts only once a code from it is confirmed.
       app.post("/api/auth/2fa/setup", async (c) => {
-        const value = await session(c);
-        if (!value) return c.json({ error: "unauthorized" }, 401);
+        const { value, denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         if (twoStep()) return c.json({ error: "already on" }, 409);
         const now = Date.now();
         for (const [id, item] of pendingSetups) if (item.expires < now) pendingSetups.delete(id);
@@ -340,8 +390,8 @@ export function createAuth({
       // Turns it on with a code from the new secret; every other device is signed out (whoever held the
       // token before now holds nothing), this page stays in, and the recovery codes are shown once.
       app.post("/api/auth/2fa/enable", async (c) => {
-        const value = await session(c);
-        if (!value) return c.json({ error: "unauthorized" }, 401);
+        const { value, denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         if (twoStep()) return c.json({ error: "already on" }, 409);
         const pending = pendingSetups.get(sessionIdOf(value));
         if (!pending || pending.expires < Date.now()) return c.json({ error: "setup expired" }, 410);
@@ -362,7 +412,8 @@ export function createAuth({
 
       // New recovery codes (the old ones stop working); needs a current code.
       app.post("/api/auth/2fa/recovery", async (c) => {
-        if (!(await session(c))) return c.json({ error: "unauthorized" }, 401);
+        const { denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         if (!twoStep()) return c.json({ error: "not on" }, 409);
         const body = await c.req.json().catch(() => ({}));
         if (!acceptCode(body.code)) return c.json({ error: "invalid code" }, 400);
@@ -378,7 +429,8 @@ export function createAuth({
         const header = c.req.header("authorization") || "";
         const fromShell = local(c) && header.startsWith("Bearer ") && isOwnerToken(header.slice(7).trim());
         if (!fromShell) {
-          if (!(await session(c))) return c.json({ error: "unauthorized" }, 401);
+          const { denied } = await requireOwnerSession(c);
+          if (denied) return denied;
           // Required on this install: only the server's shell turns it off (a lost phone), and the next sign-in sets it up again.
           if (requireTwoStep) return c.json({ error: "two-step sign-in is required on this install" }, 409);
           const body = await c.req.json().catch(() => ({}));
@@ -394,16 +446,27 @@ export function createAuth({
       // revoke-all is the every-device action.
       app.post("/api/auth/logout", async (c) => {
         for (const name of [COOKIE, KARSARA_COOKIE]) {
-          const sessionId = String((await getSignedCookie(c, secret, name)) || "").split(".")[2];
+          const sessionId = sessionIdOf(await getSignedCookie(c, secret, name));
           if (sessionId) revoke(sessionId);
           deleteCookie(c, name, { path: "/" });
         }
         return c.json({ ok: true });
       });
 
+      app.post("/api/auth/my-token", async (c) => {
+        const us = await userSession(c);
+        if (!us) return c.json({ error: "unauthorized" }, 401);
+        const token = mintUserToken();
+        const updated = store.updateAppUser(us.row.id, { tokenHash: hashUserToken(token), bumpSessionVersion: true });
+        await issueUser(c, updated);
+        c.header("cache-control", "no-store");
+        return c.json({ ok: true, token });
+      });
+
       // Ends every session on every device.
       app.post("/api/auth/revoke-all", async (c) => {
-        if (!(await session(c))) return c.json({ error: "unauthorized" }, 401);
+        const { denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         store.setKv("session_version", Number(store.getKv("session_version") || 1) + 1);
         deleteCookie(c, COOKIE, { path: "/" });
         deleteCookie(c, KARSARA_COOKIE, { path: "/" });
@@ -414,7 +477,8 @@ export function createAuth({
       // other device is signed out; this page gets a fresh cookie and the new token, once. Only the
       // page's login cookie can do it — a Bearer holder (a script, a leaked token) cannot.
       app.post("/api/auth/rotate-token", async (c) => {
-        if (!(await session(c))) return c.json({ error: "unauthorized" }, 401);
+        const { denied } = await requireOwnerSession(c);
+        if (denied) return denied;
         const token = writeOwnerToken();
         store.setKv("session_version", Number(store.getKv("session_version") || 1) + 1);
         deleteCookie(c, KARSARA_COOKIE, { path: "/" });
@@ -425,16 +489,28 @@ export function createAuth({
 
       app.get("/api/auth/me", async (c) => {
         const value = await session(c);
-        return c.json({ authenticated: Boolean(value), ...(value && setupRequired() ? { setupRequired: true } : {}) });
+        if (value) return c.json({ authenticated: true, ...(setupRequired() ? { setupRequired: true } : {}) });
+        const us = await userSession(c);
+        if (us) return c.json({ authenticated: true, role: us.user.role, user: us.user });
+        return c.json({ authenticated: false });
       });
     },
 
     // For long-lived responses (SSE): re-checks, later, what this request was authenticated with —
     // false once its session is revoked, expired or the version bumped (or the owner token changed).
     sessionChecker(c) {
+      const uval = c.get?.("userSession");
+      if (uval) return () => Boolean(userValueState(uval));
       const value = c.get?.("session");
       if (value) return () => valueValid(value);
       const header = c.req.header("authorization") || "";
+      if (header.startsWith("Bearer ") && c.get?.("authUser")) {
+        const hash = hashUserToken(header.slice(7).trim());
+        return () => {
+          const row = hash && store.findAppUserByTokenHash ? store.findAppUserByTokenHash(hash) : null;
+          return Boolean(row && row.enabled);
+        };
+      }
       const near = local(c);
       return () => header.startsWith("Bearer ") && isOwnerToken(header.slice(7).trim()) && (near || !twoStep());
     },
@@ -456,11 +532,26 @@ export function createAuth({
       // The owner token as a Bearer header is equivalent to the login cookie — it is the same
       // credential — so the CLI and scripts work without a browser session. With two-step sign-in on,
       // only from this machine: from the network the token alone is not enough any more.
-      const header = c.req.header("authorization") || "";
-      if (header.startsWith("Bearer ") && isOwnerToken(header.slice(7).trim())) {
-        if (twoStep() && !local(c)) return c.json({ error: "two-step sign-in is on: the owner token works only from the server itself" }, 401);
-        c.set?.("ownerVia", "token");
+      const us = await userSession(c);
+      if (us) {
+        c.set?.("userSession", us.value);
+        c.set?.("authUser", us.user);
         return next();
+      }
+      const header = c.req.header("authorization") || "";
+      if (header.startsWith("Bearer ")) {
+        const bearer = header.slice(7).trim();
+        if (isOwnerToken(bearer)) {
+          if (twoStep() && !local(c)) return c.json({ error: "two-step sign-in is on: the owner token works only from the server itself" }, 401);
+          c.set?.("ownerVia", "token");
+          return next();
+        }
+        const hash = hashUserToken(bearer);
+        const member = hash && store.findAppUserByTokenHash ? store.findAppUserByTokenHash(hash) : null;
+        if (member && member.enabled) {
+          c.set?.("authUser", publicAppUser(member));
+          return next();
+        }
       }
       return c.json({ error: "unauthorized" }, 401);
     },

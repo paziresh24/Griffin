@@ -1,3 +1,4 @@
+import { DEFAULT_TZ } from "./jobs/cron.mjs";
 // What this run can actually do, written from the tools it really has (2026-11-02).
 //
 // Claude Code shows every MCP tool but ~13 only as a bare name (deferred, ToolSearch loads the
@@ -7,9 +8,6 @@
 // (their prompt is Claude Code's 2.7k generic one). One line per family, only for families present,
 // with when to pick which; anything not mapped still appears (its description's first sentence),
 // so a new tool is never invisible.
-
-import { DEFAULT_TZ } from "./jobs/cron.mjs";
-import { PERSONA } from "./persona.mjs";
 
 const FAMILIES = [
   // people & decisions
@@ -26,8 +24,12 @@ const FAMILIES = [
   { names: ["network_agents", "network_ask", "network_reply", "network_connect", "network_send_file"], line: "network_agents/ask/reply/connect/send_file — colleagues' own agents (other installs): ask them about their systems; never Telegram an agent." },
   { names: ["consult"], line: "consult — a second opinion from another model/account inside this call (≤13 min)." },
   { names: ["chat_list", "chat_read", "chat_send", "chat_suggest", "chat_archive", "chat_chapter", "chat_dismiss_suggestion", "related_chat_send"], line: "chat_* — the owner's other chats: list/read one, send it a note, suggest a new chat card, archive, mark a chapter in this one." },
+  { names: ["settings_suggest"], line: "settings_suggest — show a card of matching settings for the owner to review and click." },
+  { names: ["app_settings_get", "app_settings_set"], line: "app_settings_get/set — read and directly change Griffin's appearance (look, sidebar, UI flags), owner/assistant name, and editable app config (live-synced to open tabs)." },
+  { names: ["engine_list", "engine_manage"], line: "engine_list/manage — list, add, rename, enable/disable, set default, test, start OAuth sign-in, clear limit, or remove (owner-confirmed) AI engines." },
+  { names: ["connection_list", "connection_manage"], line: "connection_list/manage — list and manage messenger integrations (rename, toggle, restart, add bot by secret reference, remove with confirmation), outgoing proxy, and egress test." },
   { names: ["peer_invite", "peer_connection"], line: "peer_invite (onboard a colleague's agent) · peer_connection (why a colleague's MCP connection dropped)." },
-  { names: ["agent_create", "agent_delete", "agent_settings_get", "agent_settings_set", "agent_tools_list", "agent_tools_enable", "agent_tools_disable", "upgrade_model"], line: "agent_* — agent profiles of this install (tools, engine) · upgrade_model (move this chat to a stronger model)." },
+  { names: ["agent_create", "agent_delete", "agent_settings_get", "agent_settings_set", "agent_tools_list", "agent_tools_enable", "agent_tools_disable", "upgrade_model"], line: "agent_* — create, delete, rename, edit (label/domain/blurb/instructions/tools) any agent profile of this install · upgrade_model (move this chat to a stronger model)." },
   // browsers & web
   { names: ["browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select", "browser_press", "browser_hover", "browser_wait", "browser_upload", "browser_eval", "browser_screenshot", "browser_console", "browser_tabs", "browser_close"], line: "browser_* — headless Chromium in the SANDBOX, driven by Playwright (this IS your Playwright; not the owner's browser): test a site like a user, work in panels without an API; `profile` keeps a login." },
   { names: ["chrome_tabs", "chrome_snapshot", "chrome_act", "chrome_eval", "chrome_screenshot", "chrome_devtools", "chrome_cdp"], line: "chrome_* — the OWNER'S OWN Chrome, with his logins (needs his extension connected): when he says «مرورگرم» or a page needs his session; console/network for debugging. Your tabs go in the «گریفین» group." },
@@ -47,7 +49,7 @@ const FAMILIES = [
   { names: ["infisical_projects", "infisical_list", "infisical_get", "infisical_upsert", "infisical_access", "infisical_create_project", "infisical_machine_identity"], line: "infisical_* — the secret manager: the ONLY way a secret moves (upsert into THEIR project, tell them the path); access audits, projects, machine identities." },
   { names: ["mikrotik_print", "mikrotik_exec", "mikrotik_ping", "mikrotik_address_list_add", "mikrotik_forward_add", "mikrotik_remove", "mikrotik_set_enabled"], line: "mikrotik_* — office/site routers: print, ping, exec, address lists, port forwards." },
   { names: ["vcenter_inventory", "vcenter_vms", "vcenter_vm_get", "vcenter_vm_create", "vcenter_customization_specs"], line: "vcenter_* — VMware vCenter: inventory, VMs, create a VM from a template." },
-  { names: ["ssh_exec"], line: "ssh_exec — one read-only shell command on any capsule/Platform server or colleague install (user griffin)." },
+  { names: ["ssh_exec"], line: "ssh_exec — one read-only shell command on any configured server over SSH (user griffin)." },
   { names: ["debug_exec"], line: "debug_exec — a real root shell (sandbox; or debug/capsule/griffin hosts): drive any API/CLI with a credential read from where it is kept (never pasted in chat) when no tool covers it. A missing tool is never the answer while you have this." },
   { names: ["dns_lookup", "http_check", "tls_check"], line: "dns_lookup · http_check (the path users take) · tls_check." },
   // CDN
@@ -56,6 +58,7 @@ const FAMILIES = [
   // code
   { names: ["gitlab_projects", "gitlab_search", "gitlab_file", "gitlab_commits", "gitlab_mrs", "gitlab_mr", "gitlab_mr_changes", "gitlab_pipeline", "gitlab_version", "gitlab_propose", "gitlab_project_member"], line: "gitlab_* — read any project (search, file, commits, MRs and their diff, pipelines); gitlab_propose opens an MR (small edit = find/replace); gitlab_project_member grants a role (asks the owner)." },
   { names: ["repo_list", "repo_read", "repo_search", "repo_edit", "repo_write", "repo_git", "repo_push"], line: "repo_* — this chat's own worktree: read/search/edit, commit (repo_git), push its branch (repo_push)." },
+  { names: ["workspace_list", "workspace_read", "workspace_search"], line: "workspace_* — read/search files in this assistant's working folder and linked `memory/*.md` notes." },
   { names: ["git_clone", "git_fetch", "git_push"], line: "git_clone (bring a GitLab project into the repos folder) · git_fetch · git_push." },
   { names: ["build_tool"], line: "build_tool — get a missing READ-ONLY capability built (owner approves once; its report comes back here)." },
   { names: ["business_docs_search", "business_docs_read"], line: "business_docs_* — the company's business documents." },
@@ -65,6 +68,7 @@ const FAMILIES = [
   { names: ["knowledge_list", "knowledge_write", "knowledge_edit", "knowledge_delete"], line: "knowledge_* — durable notes (never a secret): read a note in full, write/fix one." },
   { names: ["self_check", "self_fix"], line: "self_check (this app's real health: engines, stuck runs, messengers, disk) · self_fix (apply a fix it offered)." },
   { names: ["mcp_server_list", "mcp_server_add", "mcp_server_login", "mcp_server_remove"], line: "mcp_server_* — the owner's external MCP servers (add by Infisical reference, OAuth login)." },
+  { prefix: "mcp__", line: "mcp__* — external tools from the owner's configured MCP servers (ready to call directly)." },
   // Telegram
   { names: ["telegram_dialogs", "telegram_read", "telegram_media", "telegram_send", "telegram_edit", "telegram_delete", "telegram_create_group", "telegram_ledger", "telegram_watch_list", "send_to_person"], line: "telegram_* — the owner's own Telegram (people, groups): read, see media, send as him, edit/delete your own message (fix in place, never a second one); create a group as him and add members (only when he asked); ledger = which chat sent what." },
   { names: ["updateTodos"], line: "updateTodos — this task's step list." },
@@ -123,8 +127,6 @@ ${lines.join("\n")}${browsers}
 `;
 }
 
-// Where secrets go, in this install's own terms: Infisical only when this run really has its tools; an install
-// without it keeps keys in its own encrypted store (Settings → سکرت‌ها) and must never be told to use Infisical.
 export function secretRule(tools = []) {
   const list = Array.isArray(tools) ? tools : [];
   return list.includes("infisical_upsert")
@@ -135,11 +137,11 @@ export function secretRule(tools = []) {
 // The rules a subagent (Claude Code's Agent tool) never gets: its prompt is the generic 2.7k one.
 // Kept short: it is added to every subagent's first turn.
 export function subagentBrief(tools, { descriptions = {}, chrome = null, ownerName = "the owner" } = {}) {
-  return `You are a subagent of ${PERSONA.latin} (${PERSONA.name}), ${ownerName}'s assistant. Rules that also bind you:
+  return `You are a subagent of Iris (آیریس), ${ownerName}'s assistant on this platform. Rules that also bind you:
 ${secretRule(tools)}
 - Read-only unless your task says otherwise; anything irreversible (deleting data/PVCs/DNS, production writes, a push to a shared repo's main) is not yours to do — report it back.
 - Times you write are the owner's local time (${DEFAULT_TZ}), not UTC. Your report is read by the parent agent: facts first, short, what you checked vs what you infer.
-- Report ONCE at the end; no progress messages. To wait for something, run a waiter in the background instead of polling.
+- Report ONCE at the end; no progress messages. To wait for something, run a waiter in the background (e.g. \`wait-until\` in helper CLI) instead of polling.
 - Telegram, asking the owner and outside messages are the parent's: say in your report what should be sent or asked.
 ${capabilityMap(tools, { descriptions, chrome })}`;
 }

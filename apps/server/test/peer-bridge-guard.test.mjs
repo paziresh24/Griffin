@@ -13,7 +13,7 @@ test("a hand-made bridge to another install may not start or continue work; netw
 });
 
 test("reads of a started task, this install's own tools and everything else pass", () => {
-  for (const name of ["mcp__griffin__griffin_wait", "mcp__griffin__griffin_tasks", "mcp__griffin__griffin_limits", "mcp__griffin__griffin_cancel", "mcp__other__network_ask", "mcp__fanoos__send", "Bash", "", undefined]) {
+  for (const name of ["mcp__griffin__griffin_wait", "mcp__griffin__griffin_tasks", "mcp__griffin__griffin_limits", "mcp__griffin__griffin_cancel", "mcp__other__network_ask", "mcp__board__send", "Bash", "", undefined]) {
     assert.equal(peerBridgeRefusal(name, "other"), null, String(name));
   }
   // An install whose own server is literally named griffin keeps its own tools.

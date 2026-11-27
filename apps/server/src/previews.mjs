@@ -30,7 +30,18 @@ const KV_KEY = "previews";
 const PORT_LOW = 41000;
 const PORT_HIGH = 41999;
 const MAX_LIVE = 6;
-const IDLE_MS = 2 * 3600_000;
+// How long a preview runs without anyone looking at it (owner 2026-11-18: 2 hours was too short to
+// come back to a design review). PREVIEW_IDLE_HOURS overrides it; anything not a positive number = 24.
+export const previewIdleMs = (env = process.env) => {
+  const h = Number(env.PREVIEW_IDLE_HOURS);
+  return (Number.isFinite(h) && h > 0 ? h : 24) * 3600_000;
+};
+const IDLE_MS = previewIdleMs();
+const idleText = (ms) => {
+  if (ms < 3600_000) { const m = Math.max(1, Math.round(ms / 60_000)); return m === 1 ? "1 minute" : `${m} minutes`; }
+  const h = Math.round((ms / 3600_000) * 10) / 10;
+  return h === 1 ? "1 hour" : `${h} hours`;
+};
 const KEEP_STOPPED_MS = 24 * 3600_000;
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
 const ROUTE_COOKIE = "gp_t";
@@ -43,7 +54,7 @@ const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-au
 const NO_BODY = new Set([101, 204, 205, 304]);
 const SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock";
 // The app's own sign-in cookies never go to a page that runs somebody's code.
-const PRIVATE_COOKIES = new Set(["karsara_session", ROUTE_COOKIE]);
+const PRIVATE_COOKIES = new Set(["app_session", "legacy_session", ROUTE_COOKIE]);
 
 const shq = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const b64 = (text) => Buffer.from(String(text), "utf8").toString("base64");
@@ -270,8 +281,11 @@ exit 0
   });
 
   async function start({ chatId, command, dir, title, port, waitSec = 25 }) {
-    if (live().length >= maxLive) {
-      throw new Error(`${live().length} previews are running (the limit is ${maxLive}); stop one first: ${live().map((r) => `${r.id} «${r.title}»`).join(", ")}`);
+    // Previews now live a day, so a full house is normal: the one looked at least recently makes room
+    // instead of the new one failing.
+    while (live().length >= maxLive) {
+      const oldest = live().sort((a, b) => (a.lastSeenAt || 0) - (b.lastSeenAt || 0))[0];
+      await stop(oldest.id, `the ${maxLive} preview slots were full; the one looked at least recently made room`);
     }
     const cwd = cleanDir(dir, { base: worktreeOf(chatId), roots: dirRoots });
     const cmd = textOf(command).trim() || DEFAULT_COMMAND;
@@ -364,7 +378,7 @@ exit 0
         }
       }
     }
-    for (const rec of live()) if (now() - rec.lastSeenAt > idleMs) await stop(rec.id, "no one looked at it for 2 hours");
+    for (const rec of live()) if (now() - rec.lastSeenAt > idleMs) await stop(rec.id, `no one looked at it for ${idleText(idleMs)}`);
     for (const [id, rec] of records) {
       if ((rec.status === "stopped" || rec.status === "failed") && now() - (rec.stoppedAt || rec.createdAt) > KEEP_STOPPED_MS) {
         records.delete(id);
@@ -580,7 +594,7 @@ exit 0
     return {
       preview_start: {
         description:
-          `Run an app ${where} and show it to the owner as a live preview in the chat. \`command\` runs in \`dir\` (default: this chat's worktree) and must listen on 0.0.0.0:$PORT — $PORT is given to it (Vite: \`npm run dev -- --host 0.0.0.0 --port $PORT\`; Next: \`npx next dev -H 0.0.0.0 -p $PORT\`; Flask: \`flask run --host 0.0.0.0 --port $PORT\`). Without \`command\`, the folder is served as static files. ${local ? "Install dependencies first with your own shell (it runs on this same machine, as the same user). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from your shell." : "Install dependencies first with debug_exec (host sandbox; node is there, npm may need \`apk add npm\`). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from debug_exec."} Root-relative URLs (/assets/x.js) only work when the install has a preview host; otherwise build with relative paths (Vite \`--base ./\`). A preview stops after 2 hours without a look. On failure you get the last log lines.`,
+          `Run an app ${where} and show it to the owner as a live preview in the chat. \`command\` runs in \`dir\` (default: this chat's worktree) and must listen on 0.0.0.0:$PORT — $PORT is given to it (Vite: \`npm run dev -- --host 0.0.0.0 --port $PORT\`; Next: \`npx next dev -H 0.0.0.0 -p $PORT\`; Flask: \`flask run --host 0.0.0.0 --port $PORT\`). Without \`command\`, the folder is served as static files. ${local ? "Install dependencies first with your own shell (it runs on this same machine, as the same user). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from your shell." : "Install dependencies first with debug_exec (host sandbox; node is there, npm may need \`apk add npm\`). The owner sees the page in a card with reload, device sizes, logs and stop; you do not get the owner's link: to look at the app yourself use curl on \`localUrl\` from debug_exec."} Root-relative URLs (/assets/x.js) only work when the install has a preview host; otherwise build with relative paths (Vite \`--base ./\`). A preview stops after ${idleText(idleMs)} without a look. On failure you get the last log lines.`,
         inputSchema: {
           type: "object",
           properties: {

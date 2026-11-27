@@ -1,5 +1,5 @@
-// A status colour must not follow the palette (under a grey palette everything turned grey, even
-// the unread dot). The palette picker rewrites --primary/--accent/--brand only, so the unread
+// A status colour must not follow the palette (owner, 2026-10-19: «توی رنگ خاکستری همه‌جا خاکستری میشه،
+// حتی نقطهٔ خوانده‌نشده»). The palette picker rewrites --primary/--accent/--brand only, so the unread
 // dot, the queue badges and the running dots read --signal, which no palette sets.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -50,7 +50,7 @@ test("the «at work» dots take the theme's colour", () => {
 
 test("the agent logos beside a chat are a flag, on in both presets", () => {
   // read as text: ui-prefs.js imports react, which the test run does not need to load
-  const line = src("ui-prefs.js").split("\n").find((l) => l.includes('key: "agentLogos"'));
+  const line = src("ui-flags.js").split("\n").find((l) => l.includes('key: "agentLogos"'));
   assert.ok(line, "agentLogos flag");
   assert.match(line, /griffin: true, karsara: true/);
   assert.match(src("components/Sidebar.jsx"), /logos \? <ChatAgentGlyphs/);

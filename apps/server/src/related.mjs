@@ -173,7 +173,7 @@ export function createPeerChatTools({ store, runner, chat, generate = async () =
         const body = inertText(text);
         const fence = fenceFor(body);
         // Who sent it as the owner says the name («the agent of Ms. X»), the raw install id only beside it:
-        // «peer:net-karsara-x-example-org» alone told him nothing (2026-10-25).
+        // «peer:net-node-x-example-org» alone told him nothing (2026-10-25).
         const label = ownerLabel(store, String(caller).replace(/^peer:/, ""));
         const who = cleanLabel(label, 60);
         const sender = who && who !== String(caller).replace(/^peer:/, "") ? `ایجنت ${who} (${caller})` : caller;

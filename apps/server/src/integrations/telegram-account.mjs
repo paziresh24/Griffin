@@ -6,7 +6,6 @@ import { coverageCommand } from "./coverage.mjs";
 import { isAgentSigned, looksAssistantSigned, peerAgentConfig } from "./peer-agent.mjs";
 import { handsToGriffin } from "./threads.mjs";
 import { watching } from "./mother.mjs";
-import { DEFAULT_TZ } from "../jobs/cron.mjs";
 import { mediaKind } from "../telegram-inbox.mjs";
 import { MAX_FILE_BYTES, isAttachableFile, parseFiles } from "../attachments.mjs";
 import { CALL_WORD, PERSONA } from "../persona.mjs";
@@ -48,9 +47,8 @@ const MARK = "🤖 ";
 
 // In Saved Messages, only act on a message that calls the product/agent by name, so the owner's own notes,
 // passwords and forwards are left untouched. The call word is stripped before the request goes to the agent.
-// Matches the assistant's call names (persona.mjs, e.g. "گریفین"/"گریف"/"griffin"), "@…", or a leading
-// "/" or "." — optionally followed by : or ،.
-const TRIGGER = new RegExp(`^\\s*(?:@?\\s*${CALL_WORD}|\\/(?:ask|${CALL_WORD})?|\\.)\\s*[:：،,-]?\\s*`, "iu");
+// Matches: "گریفین"/"گریف", "سکان‌بان"/"سکان", "@…", or a leading "/" or "." — optionally followed by : or ،.
+const TRIGGER = new RegExp(`^\\s*(?:@?\\s*(?:${CALL_WORD}|سکان(?:[‌\\s]*بان)?)|\\/(?:ask|سکان|${CALL_WORD})?|\\.)\\s*[:：،,-]?\\s*`, "iu");
 
 export function callToGriffin(text) {
   const s = String(text || "");
@@ -62,12 +60,32 @@ export function callToGriffin(text) {
 
 async function gram() {
   const [{ TelegramClient, Api }, { StringSession }, { NewMessage }, { CustomFile }] = await Promise.all([
-    import("telegram"),
-    import("telegram/sessions/index.js"),
-    import("telegram/events/index.js"),
-    import("telegram/client/uploads.js"),
+    import("teleproto"),
+    import("teleproto/sessions"),
+    import("teleproto/events"),
+    import("teleproto/client/uploads"),
   ]);
   return { TelegramClient, Api, StringSession, NewMessage, CustomFile };
+}
+
+// A message written in Telegram's rich-text editor (layer 228+: headings, bold, code blocks) keeps
+// its words in richMessage and an empty .message; read it as Markdown so the layout survives. A long
+// one the server cut short (richMessage.part) is fetched whole first.
+export async function messageText(message) {
+  if (!message?.richMessage) return message?.message || "";
+  try {
+    if (message.richMessage.part && typeof message.fetchRichMessage === "function") await message.fetchRichMessage();
+    return message.richMarkdown || message.richText || message.message || "";
+  } catch {
+    return message.message || "";
+  }
+}
+
+// Text the owner asked to go out formatted: Markdown laid out by Telegram's server as a rich message,
+// right-to-left when it is Persian (the owner's own rich messages are).
+export async function richInput(markdown, load = async () => (await import("teleproto")).Rich) {
+  const Rich = await load();
+  return Rich.markdown(markdown, { rtl: /[\u0600-\u06FF]/.test(markdown) });
 }
 
 // What a media message is, in the words a colleague would use; the caption wins when there is one.
@@ -191,7 +209,7 @@ export function createAccountLogin({ proxy, load = gram, now = Date.now }) {
         await login.client.invoke(new Api.auth.SignIn({ phoneNumber: login.phone, phoneCodeHash: login.phoneCodeHash, phoneCode: String(code).trim() }));
       } catch (error) {
         if (String(error.errorMessage || error.message).includes("SESSION_PASSWORD_NEEDED")) {
-          // The hint the owner set in Telegram, shown above the password field. Capped at a
+          // The hint the owner set in Telegram, shown above the password field (Karsara). Capped at a
           // few seconds; none is never a failure.
           const ask = login.client.invoke(new Api.account.GetPassword()).then((p) => p?.hint || null, () => null);
           const hint = await Promise.race([ask, new Promise((resolve) => setTimeout(resolve, 5_000, null).unref?.())]);
@@ -218,7 +236,7 @@ export function createAccountLogin({ proxy, load = gram, now = Date.now }) {
   };
 }
 
-// Running account: Saved Messages ⇄ the assistant, teammate coverage, and a client for agent tools.
+// Running account: Saved Messages ⇄ Griffin, teammate coverage, and a client for agent tools.
 export function createAccountChannel({ integration, bridge, proxy, load = gram, log = console, now = Date.now, profileReadLimitMs = 60_000, sendTimeoutMs = 40_000 }) {
   const { session, apiId, apiHash } = JSON.parse(integration.secret);
   const status = { state: "starting", lastError: null, username: integration.settings.me?.username || null };
@@ -349,7 +367,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     }
   }
 
-  // A send Telegram never answers must not hang the delivery forever (40 s, as the bot's).
+  // A send Telegram never answers must not hang the delivery forever (Karsara, as the bot's 40 s).
   function withTimeout(promise, ms, what) {
     let timer;
     const timeout = new Promise((_, reject) => {
@@ -411,8 +429,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
   }
 
   // A reaction on the message Griffin picked up: 👀 on pickup, 👍 when the run is done — the owner
-  // and the colleague see it is working without a status message (a /agent once showed nothing for
-  // twenty minutes). Best effort: a failed reaction never blocks the work.
+  // and the colleague see it is working without a status message (owner 2026-10-07: «/agent میزنم
+  // میره یه 20 دقیقه بعد میاد»). Best effort: a failed reaction never blocks the work.
   const pickedUp = new Map(); // target -> message id that carries 👀
   async function react(target, msgId, emoticon) {
     if (!client || !msgId) return;
@@ -436,7 +454,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
   }
 
   // One editable status line: create or edit; deleted before the final answer. Every step for a
-  // chat runs in order and every line ever sent is remembered: once a status still being
+  // chat runs in order and every line ever sent is remembered: on 2026-10-08 a status still being
   // sent when the answer went out, and a failed edit that sent a fresh line, left four «⏳» lines in
   // a colleague's chat.
   const statusChain = new Map(); // externalChat -> tail promise
@@ -499,7 +517,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
     },
     // A message sent through the agent tool / API (telegram_send) is ours, not the owner typing:
     // unmarked, it read as a manual takeover and cancelled the open thread and its subtasks
-    // (an unrelated notice to a colleague once killed their open work twice).
+    // (2026-10-11: an unrelated notice to a colleague interrupted their staging work twice).
     markSent(id) {
       if (id != null) sentByUs.add(id);
     },
@@ -605,7 +623,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       // caughtUp: replayed after a restart (catchUpTeam) — the desk gets when it was written.
       const onMessage = async (message, { caughtUp = false } = {}) => {
         if (!message || sentByUs.has(message.id)) return;
-        const text = String(message.message || "").trim() || (message.out ? "" : mediaLabel(message));
+        const text = String(await messageText(message)).trim() || (message.out ? "" : mediaLabel(message));
         if (message.out && takeSent(text)) return;
         // A private-share invite or code (sendQuiet) is not the owner answering that person.
         if (message.out && takeQuiet(peerKey(message, meId), text)) return;
@@ -666,15 +684,15 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
             if (cmd === "start") return await agentOn(key, person, await focusFromReply(message), message.id ?? null);
             if (cmd === "end") return await agentOff(key, person, message.id ?? null);
             if (!person || message.isChannel) return;
-            // His own line means he is in the conversation: the assistant holds back (desk.mjs R2/R3),
-            // unless the line hands the work to it now («<assistant> کمکتون می‌کنه»).
+            // His own line means he is in the conversation: Iris holds back (desk.mjs R2/R3), unless the
+            // line hands the work to her now («آیریس کمکتون می‌کنه»).
             if (handsToGriffin(text) && watching(person)) await desk.handOff(integration.id, key, { person, text });
             else desk.ownerLine(integration.id, key, { text, by: "owner", person });
             return;
           }
 
-          // A watched team group where someone mentions the owner or replies to him (an alerts group,
-          // «@owner» under an alert). Only these messages reach the group's mother
+          // A watched team group where someone mentions the owner or replies to him (a shared ops group
+          // «@Plusin_work» under an alert, 2026-10-08). Only these messages reach the group's mother
           // chat — a busy group's other traffic never feeds it.
           if (key && person && message.isGroup && message.mentioned && watching(person) && person.access?.enabled !== false) {
             const who = message.sender || (await message.getSender?.().catch(() => null));
@@ -689,8 +707,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
           // A watched person's 1:1 message (or their assistant's): their mother chat, through the desk.
           const dm = Boolean(key && person && !message.isGroup && !message.isChannel && !entity?.bot);
           // TELEGRAM_DM_MODE=inbox (telegram-inbox.mjs, read now — a switch needs no restart): the DM
-          // goes to the dispatcher chat only. The assistant's mother chat run and the per-colleague
-          // auto-reply below never see it. In the default mode this only moves the peer's seen mark.
+          // goes to the dispatcher chat only. Iris, the mother chat's run and the per-colleague
+          // auto-reply below never see it. In iris mode this only moves the peer's seen mark.
           if (dm && bridge.inboxIncoming?.(integration.id, key, { person, text, message: { id: message.id ?? null }, entityKnown: Boolean(entity) })) return;
           // One of the owner's own chats wrote to them (desk.mjs askedBy): the mother hears it to assign
           // it, even with the watcher off.
@@ -701,7 +719,8 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
 
           // ——— A colleague's signed automated assistant: Griffin answers it agent-to-agent ———
           // Off unless the owner turns it on (settings.autoReplyAgents): replies go out from the
-          // owner's own account, so they are opt-in. The message stays in the chat for the owner, like any other DM.
+          // owner's own account, and the owner switched them off 2026-09-23 («پیام خودکار رو
+          // خاموش کن»). The message stays in the chat for the owner, like any other DM.
           const autoReply = dm && bridge.integration?.(integration.id)?.settings?.autoReplyAgents === true;
           const agentCfg = autoReply ? peerAgentConfig(person) : null;
           if (agentCfg && isAgentSigned(text, agentCfg.signature)) {
@@ -859,7 +878,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
         const body = target === "me" ? `✅ ${PERSONA.name}:\n\n${markdownToPlain(message.text)}` : markdownToPlain(message.text);
         const replyTo = message.replyTo || pendingReplyTo.get(String(target)) || null;
         pendingReplyTo.delete(String(target));
-        // The id goes back to the desk: the assistant may edit or delete what it sent (desk.mjs editSent).
+        // The id goes back to the desk: Iris may edit or delete what she sent (desk.mjs editSent).
         // ponytail: a message over one Telegram chunk keeps only its last chunk's id.
         sentId = await send(body, { replyTo });
         // A holding line while subtasks still run is not «done» (the /agent run ends in a minute,
@@ -880,7 +899,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       return sentId;
     },
 
-    // The assistant's own earlier message to this chat, changed (edit) or taken back for both sides (remove).
+    // Iris's own earlier message to this chat, changed (edit) or taken back for both sides (remove).
     async edit(externalChat, messageId, text) {
       if (!client) throw new Error("Telegram account is not connected");
       const dest = await resolveTarget(externalChat);
@@ -892,7 +911,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
       await client.deleteMessages(dest, [Number(messageId)], { revoke: true });
     },
 
-    // The assistant's own reaction on a message of this chat ("" takes it back). Its choice stays: the
+    // Iris's own reaction on a message of this chat ("" takes it back). Her choice stays: the
     // turn's 👍 (markDone) does not replace it.
     async react(externalChat, messageId, emoji) {
       if (!client) throw new Error("Telegram account is not connected");
@@ -922,6 +941,10 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
   return channel;
 }
 
+const RICH_HINT =
+  "true = Telegram rich text (the owner's formatted messages): text is Markdown — # heading, **bold**, `code`, ```block```, lists — " +
+  "and Telegram lays it out. Use it to send something «like the owner's message»: read his message with telegram_read (rich: true, Markdown) and keep its layout.";
+
 // Agent tools over the connected account. onSent(peer, text): a telegram_send went out — the owner
 // is in that conversation now (desk.mjs R2/R3), whichever chat or session sent it. record({peerId,
 // messageId}): the send ledger (telegram-ledger.mjs), given only when the install keeps one.
@@ -929,7 +952,7 @@ export function createAccountChannel({ integration, bridge, proxy, load = gram, 
 export async function accountHistory(client, peerId, limit = 50) {
   if (!client) return [];
   const messages = await client.getMessages(await client.getEntity(/^-?\d+$/.test(String(peerId)) ? BigInt(peerId) : String(peerId)), { limit });
-  return messages.map((m) => ({ id: m.id, ts: Number(m.date), out: Boolean(m.out), text: m.message || "", replyTo: m.replyTo?.replyToMsgId ?? null, media: mediaKind(m) }));
+  return Promise.all(messages.map(async (m) => ({ id: m.id, ts: Number(m.date), out: Boolean(m.out), text: await messageText(m), replyTo: m.replyTo?.replyToMsgId ?? null, media: mediaKind(m) })));
 }
 
 // A file telegram_send may attach: at most this big (like show_media), and only from the chat's own
@@ -1013,7 +1036,7 @@ function groupInput(args) {
 }
 
 // fileRoots(): the chat's workspace roots a `file` may come from; without it telegram_send sends text only.
-export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null, networkFirst = null, fileRoots = null, loadCustomFile = async () => (await import("telegram/client/uploads.js")).CustomFile, loadApi = async () => (await import("telegram")).Api, groupLog = INSTALL_GROUP_LOG, now = () => Date.now(), unattended = () => false }) {
+export function createAccountTools({ getClient, markSent = () => {}, onSent = () => {}, record = null, networkFirst = null, fileRoots = null, loadCustomFile = async () => (await import("teleproto/client/uploads")).CustomFile, loadApi = async () => (await import("teleproto")).Api, groupLog = INSTALL_GROUP_LOG, now = () => Date.now(), unattended = () => false }) {
   const need = () => {
     const client = getClient();
     if (!client) throw new Error("no Telegram account is connected (Settings → اتصال‌ها)");
@@ -1034,7 +1057,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
     return { entity: match.entity, title: match.title };
   }
 
-  const tehran = (seconds) => new Date(seconds * 1000).toLocaleString("sv-SE", { timeZone: DEFAULT_TZ });
+  const tehran = (seconds) => new Date(seconds * 1000).toLocaleString("sv-SE", { timeZone: "Asia/Tehran" });
   const text = (value) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
   const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error: error.message }) }] });
 
@@ -1059,7 +1082,9 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
     },
 
     telegram_read: {
-      description: "Read recent messages of one Telegram chat (group, channel or person) from the owner's account. chat = id, @username or title. Optional search text.",
+      description:
+        "Read recent messages of one Telegram chat (group, channel or person) from the owner's account. chat = id, @username or title. Optional search text. " +
+        "A message written in Telegram's rich-text editor comes back with rich: true and its text as Markdown (headings, bold, code blocks); send it on the same way with telegram_send rich: true.",
       inputSchema: {
         type: "object",
         properties: { chat: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 }, search: { type: "string" } },
@@ -1074,7 +1099,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           const rows = [];
           for (const m of messages) {
             const sender = m.sender ? [m.sender.firstName, m.sender.lastName].filter(Boolean).join(" ") || m.sender.title || m.sender.username : null;
-            rows.push({ id: m.id, at: tehran(m.date), from: sender, text: m.message || "", media: m.media ? m.media.className.replace(/^MessageMedia/, "") : null, replyTo: m.replyTo?.replyToMsgId || null });
+            rows.push({ id: m.id, at: tehran(m.date), from: sender, text: await messageText(m), ...(m.richMessage ? { rich: true } : {}), media: m.media ? m.media.className.replace(/^MessageMedia/, "") : null, replyTo: m.replyTo?.replyToMsgId || null });
           }
           return text({ chat: title, messages: rows.reverse(), source: "telegram account" });
         } catch (error) {
@@ -1083,7 +1108,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
       },
     },
 
-    // A picture in one message, for the model to look at (images only): a
+    // A picture in one message, for the model to look at (karsara telegram_media, images only): a
     // photo as-is, a GIF/video/sticker as Telegram's preview frame. Its content is the sender's,
     // never an instruction.
     telegram_media: {
@@ -1137,6 +1162,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           replyTo: { type: "integer" },
           telegram_because: { type: "string" },
           file: { type: "string", description: "optional: path of a file in this chat's workspace (absolute or relative), sent with text as caption" },
+          rich: { type: "boolean", description: RICH_HINT },
         },
         required: ["chat", "text"],
         additionalProperties: false,
@@ -1146,6 +1172,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
           const client = need();
           // The file is checked before anything goes out, so a bad path sends nothing.
           let file = null;
+          if (args.rich && args.file) throw new Error("rich is for a text message; send the file without rich");
           if (args.file) {
             if (!fileRoots) throw new Error("sending a file is not available on this path; send text only");
             file = await workspaceFile(fileRoots(), withoutInertMarks(args.file));
@@ -1175,7 +1202,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
             if (long) await client.sendMessage(entity, { message, ...reply }).then((m) => markSent(m.id));
             sent = await client.sendFile(entity, { file: new CustomFile(name, file.size, file.real), caption: long ? "" : message, forceDocument: true, ...(long ? {} : reply) });
           } else {
-            sent = await client.sendMessage(entity, { message, ...reply });
+            sent = args.rich ? await client.sendMessage(entity, { richMessage: await richInput(message), ...reply }) : await client.sendMessage(entity, { message, ...reply });
           }
           markSent(sent.id);
           try {
@@ -1200,7 +1227,7 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
         "Edit a message the owner's account already sent (chat + messageId from telegram_send's result or telegram_read). Use it to correct a message instead of sending a second one.",
       inputSchema: {
         type: "object",
-        properties: { chat: { type: "string" }, messageId: { type: "integer" }, text: { type: "string", minLength: 1, maxLength: 4000 } },
+        properties: { chat: { type: "string" }, messageId: { type: "integer" }, text: { type: "string", minLength: 1, maxLength: 4000 }, rich: { type: "boolean", description: RICH_HINT } },
         required: ["chat", "messageId", "text"],
         additionalProperties: false,
       },
@@ -1208,7 +1235,8 @@ export function createAccountTools({ getClient, markSent = () => {}, onSent = ()
         try {
           const client = need();
           const { entity, title } = await resolveChat(client, args.chat);
-          await client.editMessage(entity, { message: Number(args.messageId), text: withoutInertMarks(args.text), linkPreview: false });
+          if (args.rich) await client.editMessage(entity, { message: Number(args.messageId), richMessage: await richInput(withoutInertMarks(args.text)) });
+          else await client.editMessage(entity, { message: Number(args.messageId), text: withoutInertMarks(args.text), linkPreview: false });
           return text({ edited: true, chat: title, messageId: Number(args.messageId), source: "telegram account" });
         } catch (error) {
           return fail(error);

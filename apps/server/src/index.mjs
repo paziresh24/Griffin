@@ -23,7 +23,7 @@ import { createOwnerExecTrust, markOwnerExec } from "./owner-exec.mjs";
 import { brokerPaths, claudeCodeOptions, createOwnerJobs, jobWriterOf, migrateJobModes, OWNER_JOBS_FLAG, freeShell, runAccess } from "./jobs/owner-jobs.mjs";
 import { createVisualizer, VISUALIZE_TOOL } from "./charts.mjs";
 import { createShowMedia, SHOW_MEDIA_TOOL } from "./media.mjs";
-import { createPreviews, localExec, previewRunsLocal } from "./previews.mjs";
+import { createPreviews, localExec, previewIdleMs, previewRunsLocal } from "./previews.mjs";
 import { createBrowser } from "./browser.mjs";
 import { createLiveBrowser } from "./live-browser.mjs";
 import { createBrowserView } from "./browser-view.mjs";
@@ -41,11 +41,11 @@ import { buildManifest, recordManifest } from "./manifest.mjs";
 import { simulateTools } from "./sim.mjs";
 import { createRunner, keptList, ownerTyped } from "./runner.mjs";
 import { pickAccountHop, pickFallback, pickRoute, planFallbackMode, scopeSwitch } from "./plan-fallback.mjs";
-import { engineState, isCreditError, probeVerdict, rankByState } from "./engine-state.mjs";
+import { engineState, isCreditError, isFinalAuthError, probeVerdict, rankByState } from "./engine-state.mjs";
 import { archiveIdleChats } from "./idle-archive.mjs";
 import { clip } from "./updates.mjs";
 import { createTitler, STUCK_TITLE } from "./titles.mjs";
-import { accountLoad, balanceAccounts, roomiestAccount } from "./account-balance.mjs";
+import { accountLoad, balanceAccounts, roomiestAccount, SOFT_CAP } from "./account-balance.mjs";
 import { createAccountLoads } from "./account-load.mjs";
 import { createTimelineCache } from "./timeline-cache.mjs";
 import { STT_DEFAULTS, sttRoutes } from "./stt.mjs";
@@ -67,10 +67,15 @@ import { fillPersianNames } from "./integrations/fa-names.mjs";
 import { classify, confirmWithOwner, deleteGuard, fenceBackdoors, guardTools, isYes, noteOwnerAnswer, secretsGate } from "./guard.mjs";
 import { reviewChanges } from "./review.mjs";
 import { laterTool } from "./later.mjs";
-import { linkSharedMemory, repoMemoryRules } from "./shared-memory.mjs";
+import { linkSharedMemory, ownerClaudeInstructions, projectSlug, repoMemoryRules } from "./shared-memory.mjs";
+import { createWorkspaceTools } from "./workspace-tools.mjs";
+import { userIdFromCaller } from "./users.mjs";
+import { createMcpClientManager } from "./mcp-client-tools.mjs";
 import { buildSkills } from "./skills-map.mjs";
 import { RELATED_TOOL, channelOf, createPeerChatTools, createRelatedTool, lastHop, openWorkFor, relatedRules, thirdPartyKey } from "./related.mjs";
 import { createChatTools, restrictForReadOnlySide, sideIsReadOnly } from "./chat-tools.mjs";
+import { catalogNow, createSettingsSuggest, settingsSuggestTools } from "./settings-suggest.mjs";
+import { NUDGES_CONFIG, createSettingsNudges } from "./settings-nudges.mjs";
 import { createUpdates } from "./update.mjs";
 import { createUpdateCheck } from "./update-check.mjs";
 import { cloneUrl, isGitUrl } from "./repo-clone.mjs";
@@ -98,7 +103,6 @@ import { createPeerTasks } from "./peer-tasks.mjs";
 import { createMcpHandler } from "./mcp.mjs";
 import { brokerRequest, createToolSource } from "./tools.mjs";
 import { DEFAULT_AGENT } from "./agents/registry.mjs";
-import { agentPayload } from "./agents/import.mjs";
 import { griffinStatePaths } from "./providers/state-guard.mjs";
 import { hostTarget, runsOnHost } from "./providers/host-spawn.mjs";
 import { instructionPathsFor } from "./chat-origin.mjs";
@@ -128,18 +132,22 @@ import { effortOf, splitModel, ACCOUNT_ID, KINDS } from "./providers/ids.mjs";
 import { createSecretStore } from "./secrets.mjs";
 import { accountRoutes } from "./account-routes.mjs";
 import { createZaiAccount } from "./zai-account.mjs";
+import { createSubscriptionAuth, PLANS, planOf } from "./subscription-auth.mjs";
 import { createZaiQuotaCache, zaiQuotaFetch } from "./zai-usage.mjs";
 import { createPlanUsageCache } from "./plan-usage.mjs";
 import { claimReset, fetchResets, readLogin } from "./claude-resets.mjs";
 import { setupChecksRoutes } from "./setup-checks.mjs";
 import { createMcpServers } from "./mcp-servers.mjs";
 import { createMcpServerTools } from "./mcp-server-tools.mjs";
+import { createAppSettingsTools } from "./app-settings-tools.mjs";
 import { callbackUrl, createMcpOauth, registerMcpOauthCallback } from "./mcp-oauth.mjs";
 import { checkMcpServer } from "./mcp-health.mjs";
 import { createConfig } from "./config.mjs";
 import { createClaudeSignin } from "./claude-signin.mjs";
 import { accountLoginDir, isLoginDirKey, linkSharedEntries, loginDirKey, loginDirOf, mainConfigDir, removeLoginDir } from "./claude-account-dir.mjs";
+import { loginState } from "./claude-login-guard.mjs";
 import { createTokenKeeper } from "./claude-token-keeper.mjs";
+import { admission, claudeSafety, isSubscriptionKey } from "./claude-safety.mjs";
 import { createDoctor, hookConsoleErrors, recentErrors } from "./doctor.mjs";
 import { createFeedback } from "./feedback.mjs";
 import { createClicks } from "./ui-clicks.mjs";
@@ -167,9 +175,8 @@ import { accountOrg, buildReport, createAccounting, keyFingerprint, ORG, REPORT_
 const env = process.env;
 // Must run before the SDK opens any connection.
 const DATA = genv("DATA", "/data");
-// Egress proxy: env wins (GRIFFIN_PROXY for everything; CURSOR_PROXY / HTTPS_PROXY as before), else
-// <data>/proxy.json from the setup wizard. fetch follows it through setGlobalProxyFromEnv; the agent
-// SDKs' own TLS streams through egress.mjs.
+// Egress proxy: env wins, else <data>/proxy.json from the setup wizard. fetch follows it through
+// setGlobalProxyFromEnv; the agent SDKs' own TLS streams through egress.mjs.
 const PROXY_FILE = path.join(DATA, "proxy.json");
 // setGlobalProxyFromEnv({}) does not take a proxy away; the restore function of the first call does.
 let unproxied = null;
@@ -191,14 +198,12 @@ const savedProxy = () => {
     return "";
   }
 };
-const ENV_PROXY = genv("PROXY", "");
 installCursorEgress(env.CURSOR_PROXY);
 // The wizard's built-in VPN (vpn.mjs): when it has a config and nothing in the environment says
 // otherwise, Xray starts with the server and Griffin's traffic (not .ir / LAN) goes through it.
 const vpn = createVpn({ dataDir: DATA });
-const envProxy = Boolean(ENV_PROXY || env.CURSOR_PROXY || env.HTTPS_PROXY);
-if (ENV_PROXY) applyProxy(ENV_PROXY);
-else if (!envProxy && vpn.configured()) {
+const envProxy = Boolean(env.CURSOR_PROXY || env.HTTPS_PROXY);
+if (!envProxy && vpn.configured()) {
   Object.assign(process.env, VPN_ENV);
   vpn.start();
   applyProxy(VPN_ENV.HTTPS_PROXY);
@@ -232,39 +237,53 @@ function openaiApiKey() {
 }
 
 fs.mkdirSync(DATA, { recursive: true });
-const secrets = createSecretStore({ dataDir: DATA });
-// A fresh install gives the built-in agent the engine whose key is present, so the first chat works
-// with whichever key the owner brought (Claude when there is none yet: the setup wizard signs it in).
-// Existing profiles are never changed.
-const seedProvider = secrets.get("engine/claude") || anthropicApiKey()
-  ? "claude"
-  : secrets.get("engine/openai") || openaiApiKey() || genv("OPENAI_BASE_URL") ? "openai" : "claude";
 prepareAgentWorkspaces(WORKSPACE);
 // Streamed text/thinking pieces of a chat are written as one row per ~120 ms (db.mjs appendEvent);
 // GRIFFIN_EVENT_COALESCE_MS=0 writes every piece as it comes, as before.
-const store = openStore(resolveDbPath(DATA), { seedProvider, coalesceMs: Number(process.env.GRIFFIN_EVENT_COALESCE_MS ?? 120) || 0 });
+const store = openStore(resolveDbPath(DATA), { coalesceMs: Number(process.env.GRIFFIN_EVENT_COALESCE_MS ?? 120) || 0 });
 bindPersonaStore(store);
+const secrets = createSecretStore({ dataDir: DATA });
 // Sign-in of the owner's OAuth MCP servers (mcp-oauth.mjs): tokens renewed before a run and every 10 minutes.
 const mcpOauth = createMcpOauth({ mcp: createMcpServers(), secrets, log: (line) => console.error(`[mcp] ${line}`) });
+const mcpClientManager = createMcpClientManager({ log: console });
 setInterval(() => mcpOauth.ensureFresh().catch(() => {}), 10 * 60_000).unref();
 const config = createConfig({ store });
-const refreshWorkspaces = () => {
-  const profiles = store.listAgentProfiles();
-  prepareAgentWorkspaces(WORKSPACE, {
-    agents: profiles.map((p) => p.id),
-    profiles: Object.fromEntries(profiles.map((p) => [p.id, p])),
-  });
-};
-refreshWorkspaces();
-const compacted = store.compactLargeEvents((data) => clip(data));
-if (compacted) console.log(`[store] compacted ${compacted} oversized events`);
+// One-time cleanup of oversized historical events: NEVER scan the whole multi-GB events table
+// synchronously before server.listen (caused 120s+ cold-boot timeouts on .46). Run after boot in
+// small id-bounded slices and persist the cursor in kv so each event is checked at most once.
+const LARGE_EVENT_CURSOR_KEY = "compact:large_events_upto";
+function scheduleLargeEventCompaction() {
+  const CHUNK = 5_000;
+  let cursor = Number(store.getKv(LARGE_EVENT_CURSOR_KEY) || 0) || 0;
+  const ceiling = store.maxEventId();
+  if (cursor >= ceiling) return;
+  let totalChanged = 0;
+  const step = () => {
+    const upto = Math.min(ceiling, cursor + CHUNK);
+    try {
+      totalChanged += store.compactLargeEvents((data) => clip(data), 64 * 1024, { afterId: cursor, uptoId: upto });
+      cursor = upto;
+      store.setKv(LARGE_EVENT_CURSOR_KEY, String(cursor));
+    } catch (error) {
+      console.error("[store] background large-event compaction failed:", error?.message || error);
+      return;
+    }
+    if (cursor < ceiling) {
+      const next = setTimeout(step, 50);
+      next.unref?.();
+    } else if (totalChanged) {
+      console.log(`[store] compacted ${totalChanged} oversized events`);
+    }
+  };
+  const first = setTimeout(step, 5_000);
+  first.unref?.();
+}
+scheduleLargeEventCompaction();
 
-// The broker is optional. Without it Griffin still runs: chats, agents, jobs, charts, files and
-// messengers all live in this process; only the credential-holding infrastructure tools are absent.
-const BROKER_SOCKET = genv("BROKER_SOCKET", "/run/griffin/broker.sock");
-const brokerWanted = Boolean(BROKER_SOCKET) && genv("BROKER", "on") !== "off";
-const toolSource = createToolSource({ socketPath: brokerWanted ? BROKER_SOCKET : null, store });
-const brokerEnabled = () => brokerWanted && toolSource.available();
+const toolSource = createToolSource({
+  socketPath: genv("BROKER_SOCKET", "/run/griffin/broker.sock"),
+  store,
+});
 
 // Modules (modules/<id>/, docs/modules.md): what a person or a team adds to this install without
 // touching the core: agents, tools, pages. Which ones are on is the MODULES config key; empty = none.
@@ -280,11 +299,11 @@ const modules = await createModuleHost({
   setConfig: (patch) => config.set(patch),
   onChange: () => store.bus.emit("chats", { type: "modules" }),
   defaultProvider: DEFAULT_PROVIDER,
-  // Settings → MCP servers, for a module that declares one in requires.mcp (it reads its key here).
+  // Settings → MCP servers, for a module that declares one in requires.mcp (tickets reads its key here).
   mcpServers: createMcpServers(),
   // api.jobs for a module that declared requires.jobs: the jobs are made further down, so it is read late.
   jobs: () => jobs,
-  // api.complete for a module that declared requires.ai (e.g. to summarise with it).
+  // api.complete for a module that declared requires.ai (tickets summarises with it).
   complete: (prompt) => titleText(prompt),
 });
 modules.seedAgents();
@@ -297,7 +316,7 @@ for (const m of modules.status().filter((x) => x.enabled)) console.log(`[modules
 // integrationsHolder breaks the cycle: asks needs to tell integrations a question closed, but
 // integrations itself is constructed later (it takes asks as an argument). tasksHolder is the
 // same trick: a finished run anywhere settles open peer tasks immediately instead of waiting for
-// the 5-minute sweep.
+// the 5-minute sweep (2026-09-28: a peer task sat "working" for minutes after its chat was done).
 const integrationsHolder = { current: null };
 // The Telegram inbox (telegram-inbox.mjs) needs the runner, which needs to know the inbox chat.
 const inboxHolder = { current: null };
@@ -358,14 +377,13 @@ const approvePendingKnowledge = () => {
 };
 approvePendingKnowledge();
 // A business knowledge repo (AGENTS.md + docs/ at origin/main), readable by every caller including
-// peers (business-docs.mjs). Off unless GRIFFIN_BUSINESS_DOCS_REPO names a
+// peers (business-docs.mjs, for shared docs). Off unless GRIFFIN_BUSINESS_DOCS_REPO names a
 // checkout: no tools, no names in any catalog (agent settings, /api/tool-catalog), no prompt line.
 const businessDocs = businessDocsFeature({ config: businessDocsConfig(), store });
-// The owner's git clones: a chat may work on one, in its own worktree and branch
+// The owner's git clones (from Karsara): a chat may work on one, in its own worktree and branch
 // under <REPOS_ROOT>/_wt. The broker and the sandbox see the same path.
 const REPOS_ROOT = path.resolve(genv("REPOS_ROOT", path.join(WORKSPACE, "repos")));
-// The repo a new chat from the web composer starts on (GRIFFIN_DEFAULT_REPO; none unless set). Read on
-// each use, so the picker's «پیش‌فرض کن» and Settings apply without a restart.
+// The repo a new chat from the web composer starts on (the owner can pick another or none).
 const defaultRepoName = () => {
   const name = genv("DEFAULT_REPO", "");
   return isValidRepoName(REPOS_ROOT, name) ? name : null;
@@ -392,6 +410,7 @@ const myBrowser = createMyBrowser({ store, log: (line) => console.log(`[mybrowse
 const previewLocal = previewRunsLocal({ setting: genv("PREVIEW_RUNNER", "auto") });
 if (previewLocal) console.log("[preview] no sandbox here: previews run on this machine");
 const previews = createPreviews({
+  idleMs: previewIdleMs({ PREVIEW_IDLE_HOURS: genv("PREVIEW_IDLE_HOURS") }),
   store,
   exec: previewLocal ? (command) => localExec(command) : (command) => callBrokerTool("debug_exec", { host: "sandbox", command }, 125_000),
   enabled: () => genv("PREVIEW", "on") !== "off",
@@ -428,18 +447,10 @@ const visualizer = createVisualizer({
   },
 });
 
-// One tool-less completion (chat titles, the thread classifier's fallback, change reviewers): the
-// OpenAI-compatible engine when it has a key, else Claude, else nothing ("" keeps the old title).
-async function generateText(prompt, { model = null, effort: forced = null, timeoutMs = 30_000, engine = null, strict = false } = {}) {
-  if (genv("DEMO") === "1") return /[\u0600-\u06FF]/.test(prompt.split("Question:")[1] || "") ? "گفتگوی نمایشی" : "Demo chat";
-  const useClaude = engine === PROVIDER_CLAUDE || (!engine && !providerKey(PROVIDER_OPENAI));
-  if (useClaude) {
-    if (!quickClaude()) {
-      if (strict) throw new Error("no Claude account can answer now");
-      return "";
-    }
-    return claudeQuick(prompt, model || genv("TITLE_CLAUDE_MODEL", "haiku"));
-  }
+// Chat titles: one tool-less completion on the OpenAI-compatible engine (GLM flash), like Karsara's
+// Haiku title run. It used to spin up a Cursor agent per chat, which failed once Cursor hit its cap.
+async function generateText(prompt, { model = null, effort: forced = null, timeoutMs = 30_000, strict = false } = {}) {
+  if (genv("DEMO") === "1") return "گفتگوی نمایشی";
   const config = providerConfig(PROVIDER_OPENAI);
   const baseUrl = (config.baseUrl ?? genv("OPENAI_BASE_URL", "")) || "https://api.openai.com/v1";
   // A switched-off account is not asked at all (owner 2026-10-29: «z.ai رو خاموش کن چون کلا دیگه اکانتشو
@@ -447,13 +458,13 @@ async function generateText(prompt, { model = null, effort: forced = null, timeo
   const key = openaiOn() ? providerKey(PROVIDER_OPENAI) : "";
   // strict (the change reviewers): a missing key is an error, not the title placeholder, which no verdict parser can read.
   if (!key && strict) throw new Error("OpenAI-compatible account off or keyless");
-  if (!key) return "";
+  if (!key) return "گفتگو";
   const effort = config.reasoningEffort ?? genv("OPENAI_REASONING_EFFORT", "");
   const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: model || genv("TITLE_MODEL", "") || config.model || genv("OPENAI_MODEL", "") || providers[PROVIDER_OPENAI]?.defaultModel,
+      model: model || genv("TITLE_MODEL", "") || config.model || genv("OPENAI_MODEL", ""),
       messages: [{ role: "user", content: prompt }],
       ...(effort ? { reasoning_effort: forced || "low" } : {}),
     }),
@@ -462,22 +473,23 @@ async function generateText(prompt, { model = null, effort: forced = null, timeo
   if (!res.ok) throw new Error(`title http ${res.status}`);
   return (await res.json()).choices?.[0]?.message?.content || "";
 }
-// The two change reviewers (review.mjs): different engines so one model's blind spot is not the
-// other's. Both need a working key; with fewer than two engines there is no gate
-// (review.mjs skips it), and it only runs with GRIFFIN_REVIEW=on.
+// The two change reviewers (review.mjs): different vendors so one model's blind spot is not the
+// other's. Claude on its plan limit falls back to a second GLM model — still two independent asks.
 function changeReviewers() {
-  if (genv("REVIEW") !== "on") return [];
-  const reviewers = [];
-  const openai = providerKey(PROVIDER_OPENAI) && !isLimited(PROVIDER_OPENAI);
-  if (openai) {
-    reviewers.push({ label: "بازبین OpenAI-compatible", ask: (prompt) => generateText(prompt, { engine: PROVIDER_OPENAI, model: genv("REVIEW_OPENAI_MODEL", "") || null, effort: "medium", timeoutMs: 90_000, strict: true }) });
+  // No OpenAI-compatible account on: two Claude models, still two asks.
+  if (!openaiOn() && quickClaude()) {
+    return [
+      { label: "بازبین Claude", ask: (prompt) => claudeQuick(prompt, genv("REVIEW_CLAUDE_MODEL", "sonnet")) },
+      { label: "بازبین Claude opus", ask: (prompt) => claudeQuick(prompt, "opus") },
+    ];
   }
-  if (quickClaude()) {
-    reviewers.push({ label: "بازبین Claude", ask: (prompt) => claudeQuick(prompt, genv("REVIEW_CLAUDE_MODEL", "sonnet")) });
-    // No OpenAI-compatible account on: two Claude models, still two asks.
-    if (!openai) reviewers.push({ label: "بازبین Claude opus", ask: (prompt) => claudeQuick(prompt, "opus") });
-  }
-  return reviewers;
+  const glm = { label: "بازبین GLM", ask: (prompt) => generateText(prompt, { model: genv("REVIEW_GLM_MODEL", "glm-5.3"), effort: "medium", timeoutMs: 90_000, strict: true }) };
+  const flash = { label: "بازبین GLM-flash", ask: (prompt) => generateText(prompt, { model: "glm-5.3-flash", effort: "high", timeoutMs: 90_000, strict: true }) };
+  // A reviewer that times out twice falls back to `fallback`, else the other reviewer decides alone.
+  const second = quickClaude()
+    ? { label: "بازبین Claude", ask: (prompt) => claudeQuick(prompt, genv("REVIEW_CLAUDE_MODEL", "sonnet")), fallback: flash }
+    : flash;
+  return [glm, second];
 }
 // The Claude account that can answer now (enabled, keyed, not at its plan limit, not out of credit, login
 // not refused) with the most room left, as chats pick theirs (account-balance.mjs) — not the first in the
@@ -494,7 +506,7 @@ function quickClaude(skip = new Set()) {
 // line («OAuth session expired…») stays in the log (a colleague 2026-11-04: the backlog draft showed it).
 // kv: telegram_create_group's record of the groups this install made lately (telegram-account.mjs).
 const TELEGRAM_GROUPS_KV = "telegram-groups-made";
-const NO_QUICK_CLAUDE = "حساب Claude این نصب الان جواب نمی‌دهد (ورودش منقضی شده یا اعتبارش تمام است)؛ از صفحهٔ موتورها دوباره وارد شوید.";
+const NO_QUICK_CLAUDE ="حساب Claude این نصب الان جواب نمی‌دهد (ورودش منقضی شده یا اعتبارش تمام است)؛ از صفحهٔ موتورها دوباره وارد شوید.";
 async function claudeQuick(prompt, model) {
   const tried = new Set();
   let last = null;
@@ -504,7 +516,7 @@ async function claudeQuick(prompt, model) {
       return await claudeOneShot({ apiKey: account.key, model, prompt });
     } catch (error) {
       const message = String(error?.message || error);
-      if (error?.code === "auth_failed") store.setKv(`auth:${account.id}`, Date.now());
+      if (error?.code === "auth_failed") markAuthRefused(account.id, message);
       else if (/credit balance/i.test(message)) store.setKv(`credit:${account.id}`, String(Date.now()));
       else throw error;
       console.error(`[${account.id}] one-shot refused (${message}) — next account`);
@@ -516,7 +528,7 @@ async function claudeQuick(prompt, model) {
 // Folded timelines in memory: opening a chat, titling it and delivering its answer read only new events.
 const timelines = createTimelineCache({ store });
 // No OpenAI-compatible key (a capsule on Claude only): Claude Haiku names the chat, as in Karsara.
-// It used to answer «گفتگو» for every chat.
+// It used to answer «گفتگو» for every chat (Ms. Mansouri, 2026-10-17).
 // No account that can answer: no title now (a later run tries again), no error per chat.
 // The OpenAI-compatible endpoint at its rate limit (429, 2026-10-22: eight chats left untitled) hands over to Haiku.
 const titleText = (prompt) => {
@@ -526,6 +538,40 @@ const titleText = (prompt) => {
   return generateText(prompt).catch((error) => (quickClaude() ? haiku() : Promise.reject(error)));
 };
 const maybeTitle = createTitler({ store, timelines, generate: titleText });
+// «بپرس» in Settings and settings_suggest in the owner's chats (settings-suggest.mjs): Claude Sonnet reads
+// Persian complaints best; without a Claude account that can answer, the OpenAI-compatible engine.
+const settingsAsk = async (prompt) => {
+  if (genv("DEMO") === "1") return JSON.stringify({ picks: [{ id: "set:ENTER_KEY", value: "shiftEnter", why: "اینتر دیگر پیام را نمی‌فرستد و فقط خط بعد می‌رود." }], none: "" });
+  if (quickClaude()) {
+    try {
+      return await claudeQuick(prompt, "sonnet");
+    } catch (error) {
+      if (!openaiOn() || !providerKey(PROVIDER_OPENAI)) throw error;
+    }
+  }
+  if (!openaiOn() || !providerKey(PROVIDER_OPENAI)) throw new Error(NO_QUICK_CLAUDE);
+  return generateText(prompt, { effort: "low", timeoutMs: 60_000, strict: true });
+};
+const suggestSettings = createSettingsSuggest({
+  catalog: () => catalogNow({ config, store, owners: modules.configOwners(), skin: currentProduct().skin }),
+  ask: settingsAsk,
+});
+// A setting offered from how the owner works (settings-nudges.mjs): SETTINGS_NUDGES, off by default.
+const settingsNudges = createSettingsNudges({
+  store,
+  catalog: () => catalogNow({ config, store, owners: modules.configOwners(), skin: currentProduct().skin }),
+  isOwnChat: (chat) => isOwnerChat(store, chat),
+  enabled: () => genv(NUDGES_CONFIG, "off") === "on" && genv("DEMO") !== "1",
+});
+const refreshNudge = () => {
+  try {
+    settingsNudges.refresh();
+  } catch (error) {
+    console.error(`[settings-nudge] ${error.message}`);
+  }
+};
+setTimeout(refreshNudge, 3 * 60_000).unref();
+setInterval(refreshNudge, 6 * 60 * 60_000).unref();
 // Named the moment its first run starts, from the question (like Claude Code), not when the answer is done;
 // the question's event is written before the run starts (runner send). onFinished below retries a miss.
 store.bus.on("chats", (change) => {
@@ -545,9 +591,9 @@ const demoSdk = demo ? (await import("./demo-sdk.mjs")).demoSdk : null;
 // Keys live only in 0600 files under DATA and are never sent back to the browser.
 // OpenAI-compatible endpoints the owner switches between; keyFile = the key already on disk for it.
 const OPENAI_PRESETS = [
-  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyFile: "openai.api-key" },
-  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", keyFile: "openrouter.api-key" },
   { id: "zai", label: "Z.ai Coding Plan", baseUrl: "https://api.z.ai/api/coding/paas/v4", keyFile: "zai.api-key" },
+  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", keyFile: "openai-official.api-key" },
+  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", keyFile: "openrouter.api-key" },
   // A model on this machine; Ollama ignores the key, the wizard stores a placeholder.
   { id: "ollama", label: "Ollama (local)", baseUrl: "http://host.docker.internal:11434/v1", keyFile: "ollama.api-key" },
 ];
@@ -614,6 +660,17 @@ function setDefaultEngine(id) {
 // A claude-* account with settings { endpoint: "zai" } runs Claude Code on that vendor's
 // Anthropic-compatible endpoint (providers/claude-endpoint.mjs); the base "claude" account never does.
 const claudeEndpoint = (id) => (kindOf(id) === PROVIDER_CLAUDE && id !== PROVIDER_CLAUDE ? endpointOf(providerConfig(id)) : null);
+// An openai-* account with settings { plan: "codex" | "antigravity" } signs in with that subscription
+// (subscription-auth.mjs) instead of a key; its secret is the OAuth grant. The base "openai" never does.
+const planAccount = (id) => (kindOf(id) === PROVIDER_OPENAI && id !== PROVIDER_OPENAI ? planOf(providerConfig(id).plan) : null);
+const subscriptions = createSubscriptionAuth({
+  secrets,
+  onConnected: (id) => {
+    if (accounts().some((a) => a.id === id && !a.enabled)) saveAccounts(accounts().map((a) => (a.id === id ? { ...a, enabled: true } : a)));
+    clearEngineMarks(id);
+    reconfigureProviders();
+  },
+});
 
 function providerKey(id) {
   const stored = secrets.get(`engine/${id}`);
@@ -636,13 +693,18 @@ function buildProviders() {
         || (base && kind === PROVIDER_OPENAI ? genv("OPENAI_MODEL", "") : "")
         || (base && kind === PROVIDER_CURSOR ? env.CURSOR_MODEL || "" : "")
         || (base && kind === PROVIDER_CLAUDE ? env.CLAUDE_MODEL || "" : "");
+      const plan = planAccount(id);
       return {
         id,
         apiKey: providerKey(id),
-        baseUrl: config.baseUrl ?? (base && kind === PROVIDER_OPENAI ? genv("OPENAI_BASE_URL", "") : ""),
-        model,
+        baseUrl: plan ? plan.baseUrl : config.baseUrl ?? (base && kind === PROVIDER_OPENAI ? genv("OPENAI_BASE_URL", "") : ""),
+        model: model || (plan ? plan.model : ""),
         reasoningEffort: config.reasoningEffort ?? (base && kind === PROVIDER_OPENAI ? genv("OPENAI_REASONING_EFFORT", "") : ""),
         endpoint: claudeEndpoint(id),
+        // This account's own fixed exit and clock (claude.mjs accountEgressEnv): empty for an account
+        // nobody pinned, so it behaves exactly as before.
+        egress: { proxyUrl: config.proxyUrl || "", timezone: config.timezone || "" },
+        ...(plan ? { plan: plan.id, credentials: (opts) => subscriptions.credentials(id, opts) } : {}),
       };
     }),
     builtinTools: TOOLS,
@@ -652,14 +714,14 @@ function buildProviders() {
 
 // A new engine account of a kind ("claude-2", "claude-work" …); an endpoint preset makes it a
 // claude-* account on that vendor (claude-endpoint.mjs). Returns its id, or null for a bad slug.
-function addAccount(kind, { slug = "", label = "", endpoint = null } = {}) {
+function addAccount(kind, { slug = "", label = "", endpoint = null, config = null } = {}) {
   const s = String(slug || "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 16);
   const list = accounts();
   let id = s ? `${kind}-${s}` : `${kind}-2`;
   for (let n = 2; list.some((a) => a.id === id); n += 1) id = s ? `${kind}-${s}${n}` : `${kind}-${n}`;
   if (!ACCOUNT_ID.test(id)) return null;
   saveAccounts([...list, { id, label: String(label || "").trim().slice(0, 40), enabled: true }]);
-  store.setKv(`provider:${id}`, JSON.stringify(endpoint ? endpointSettings({}, endpoint).next || {} : {}));
+  store.setKv(`provider:${id}`, JSON.stringify(config || (endpoint ? endpointSettings({}, endpoint).next || {} : {})));
   reconfigureProviders();
   return id;
 }
@@ -686,12 +748,12 @@ function reconfigureProviders() {
 // on Cursor and stayed there after the wizard set up Claude: four installs had «ایجنت روی cursor است
 // که کار نمی‌کند» and one had no engine its agent could use (2026-10-21).
 // An account out of credit counts as dead too (it stays so until a new key), but only an account
-// that can answer now takes the agent then (2026-10-21: a colleague's MR explainer moved from Cursor
+// that can answer now takes the agent then (2026-10-21: Mr. Sadr's MR explainer moved from Cursor
 // onto his out-of-credit «claude»).
 function rehomeProfiles() {
   if (demo) return;
   // Claude first, then the profile's own kind, then anything: an agent on Claude never lands on GLM
-  // while another Claude account answers (a colleague's moved to their «openai» first, 2026-10-21).
+  // while another Claude account answers (Mr. Sadr's moved to his «openai» first, 2026-10-21).
   const all = accounts().filter((a) => a.enabled && a.kind !== PROVIDER_CURSOR);
   const pick = (kind, ok) => all.find((a) => a.kind === PROVIDER_CLAUDE && ok(a)) || all.find((a) => a.kind === kind && ok(a)) || all.find(ok);
   for (const profile of store.listAgentProfiles()) {
@@ -712,8 +774,10 @@ function engineHosts() {
   for (const a of accounts()) {
     if (!a.enabled) continue;
     const base = a.id === a.kind;
-    if (a.kind === PROVIDER_OPENAI) urls.push(providerConfig(a.id).baseUrl ?? (base ? genv("OPENAI_BASE_URL", "") : ""));
+    if (a.kind === PROVIDER_OPENAI) urls.push(planAccount(a.id)?.baseUrl || (providerConfig(a.id).baseUrl ?? (base ? genv("OPENAI_BASE_URL", "") : "")));
     urls.push(claudeEndpoint(a.id)?.baseUrl);
+    // A subscription's sign-in renews through its vendor's token host.
+    if (planAccount(a.id)?.id === "antigravity") urls.push("https://oauth2.googleapis.com", "https://www.googleapis.com");
   }
   return urls.filter(Boolean);
 }
@@ -722,6 +786,14 @@ vpn.setHosts(engineHosts());
 // The provider and model a chat's next run actually uses: the agent profile decides, the chat's own
 // model overrides, the env default fills in. The same answer labels run.started, so the UI shows the
 // real model instead of "auto".
+// Colleague threads alone run on Claude (GRIFFIN_TEAM_PROVIDER/MODEL): the owner has one Pro
+// account (2026-10-08 «تا حد امکان از GLM استفاده کنه»). Owner chats, jobs, the ops room and the
+// subtasks a thread delegates stay on the agent profile (GLM) — the heavy digging is there.
+// Order: a model the chat pinned in the picker ("claude:sonnet") → the colleague-thread routing
+// (TEAM_* for the thread, TEAM_SUB_* for the subtasks it delegates) → the agent profile.
+// A provider whose plan limit is hit (kv limited:<provider>) is skipped until it resets:
+// Claude → the profile's provider (GLM); GLM → Claude Haiku (GLM_FALLBACK_MODEL), the cheapest
+// Claude, so Griffin never goes silent when one plan runs dry (2026-10-08).
 const limitedUntil = (provider) => store.getKv(`limited:${provider}`) || 0;
 const isLimited = (provider) => limitedUntil(provider) > Date.now();
 // Out of credit (engine-state.mjs): kv credit:<id> = when it was seen; cleared by a new key, a
@@ -729,7 +801,19 @@ const isLimited = (provider) => limitedUntil(provider) > Date.now();
 const creditAt = (provider) => Number(store.getKv(`credit:${provider}`)) || 0;
 // A refused login or key (engine-state.mjs AUTH_RETRY_MS): kv auth:<id> = when it was seen; cleared the same way.
 const authAt = (provider) => Number(store.getKv(`auth:${provider}`)) || 0;
+// The refusal said the login can never be renewed: no time-based retry (engine-state.mjs isFinalAuthError).
+const authFinal = (provider) => store.getKv(`authfinal:${provider}`) === "1";
+// A refused login: out of routing for AUTH_RETRY_MS, or for good (until a sign-in, a new key or a passing
+// test) when the refusal says it can never be renewed or the account's login file holds no tokens —
+// Claude Code blanks them when Anthropic rejects a refresh, so «OAuth session expired and could not be
+// refreshed» from an empty login never heals by itself (a colleague, 2026-11-23: claude, claude-2 and
+// claude-4 were empty, retried every 30 minutes, and each chat's next message failed on one of them).
+const markAuthRefused = (id, message) => {
+  store.setKv(`auth:${id}`, Date.now());
+  if (isFinalAuthError(message) || loginState(loginDirOf(providerKey(id)))?.empty) store.setKv(`authfinal:${id}`, "1");
+};
 const clearEngineMarks = (id) => {
+  store.deleteKv(`authfinal:${id}`);
   store.deleteKv(`limited:${id}`);
   store.deleteKv(`credit:${id}`);
   store.deleteKv(`auth:${id}`);
@@ -740,7 +824,7 @@ const clearEngineMarks = (id) => {
 //   3. the agent's ordered model list (meta.models, set on the Agents page) — "account:model" or
 //      just "account" for that account's default model
 //   4. the agent's provider/model
-//   5. the old one-way fallback: OpenAI-compatible → Claude (FALLBACK_CLAUDE_MODEL), anything else → the OpenAI-compatible engine
+//   5. the old one-way fallback: GLM → Claude Haiku, anything else → the OpenAI-compatible engine
 //   6. any other usable account, base accounts first
 // A plan limit marks the account limited (kv limited:<id>) and the run retries on the next usable
 // candidate, so «Claude account 1 hit its limit» just moves to account 2 (owner 2026-10-12).
@@ -810,20 +894,37 @@ function engineOrder() {
 // (it still runs when it is the chat's own first engine), and with «same kind only» a chat moves only
 // to an account of its first engine's kind — plain Claude logins, Claude on another vendor's endpoint,
 // OpenAI-compatible and Cursor are four kinds (owner 2026-11-14: «فقط بین اکانت‌های کلاد سوییچ بشه»).
-const switchKind = (id) => (claudeEndpoint(id) ? "claude-endpoint" : kindOf(id));
+const switchKind = (id) => (claudeEndpoint(id) ? "claude-endpoint" : planAccount(id) ? `plan-${planAccount(id).id}` : kindOf(id));
 const switchSameKind = () => store.getKv("engine-switch-same-kind") === "1";
 function routedCandidates(chat) {
   const list = modelCandidates(chat);
-  if (consultOf(store, chat?.id)) return list;
+  if (consultOf(store, chat?.id) || !modelHold()) return list;
   const home = list.find((c) => accountEnabled(c.provider) && keyedAccount(c.provider));
   const byId = new Map(accounts().map((a) => [a.id, a]));
+  // Background errands (a scheduled job, a summary, a subagent's own chat) do not burn a subscription
+  // plan at all when CLAUDE_BACKGROUND_OFF is on (the default, claude-safety.mjs): a plan that works
+  // around the clock looks like a farm, not a person. They go to another enabled engine; when none is
+  // available they still run on the subscription account rather than not at all — the feature stays.
+  if (safetyNow().backgroundOff && isBackgroundChat(chat)) {
+    const offSubscription = list.filter((c) => !plainClaude(c.provider) || !isOAuthKey(providerKey(c.provider)));
+    const usableNow = offSubscription.filter((c) => accountEnabled(c.provider) && keyedAccount(c.provider));
+    if (usableNow.length) {
+      return scopeSwitch(usableNow, { home, auto: (id) => byId.get(id)?.auto !== false, kind: switchKind, sameKind: switchSameKind() });
+    }
+  }
   return scopeSwitch(list, { home, auto: (id) => byId.get(id)?.auto !== false, kind: switchKind, sameKind: switchSameKind() });
+}
+// A chat nobody is watching: written by the scheduler, or one of a specialist's own errands.
+function isBackgroundChat(chat) {
+  if (!chat) return false;
+  if (chat.jobId) return true;
+  return ["scheduler", "job", "subagent"].includes(String(chat.caller || ""));
 }
 // Plain Claude logins run Sonnet at «medium» unless the owner confirmed a stronger model or effort
 // for this chat by hand (model-policy.mjs). A consult asks for its model explicitly and keeps it.
 function modelCandidates(chat) {
   const list = rawModelCandidates(chat);
-  if (consultOf(store, chat?.id) || !modelHold()) return list;
+  if (consultOf(store, chat?.id)) return list;
   const ok = (chat?.id && store.getKv(heavyKey(chat.id))) || {};
   return list.map((c) => (plainClaude(c.provider) ? clampCandidate(c, ok) : c));
 }
@@ -849,7 +950,7 @@ const consultAccounts = (provider, model) =>
     check: (id) => checkSuggestModel(id, model, null),
     lists: async (id) => (await models(id).catch(() => [])).some((m) => m.id === model),
   });
-const stateOf = (id) => engineState({ enabled: accountEnabled(id), keyed: Boolean(providerKey(id)) || demo, limitedUntil: limitedUntil(id), creditAt: creditAt(id), authAt: authAt(id) });
+const stateOf = (id) => engineState({ enabled: accountEnabled(id), keyed: Boolean(providerKey(id)) || demo, limitedUntil: limitedUntil(id), creditAt: creditAt(id), authAt: authAt(id), authFinal: authFinal(id) });
 const usableAccount = (id) => stateOf(id).state === "ok";
 // PLAN_FALLBACK=ask (plan-fallback.mjs; owner install): an owner's own chat never moves to another
 // engine by itself at a plan limit — a card asks first. Chats nobody types into (jobs, colleagues'
@@ -884,29 +985,384 @@ const accountLoads = createAccountLoads({
   fetchUsage: (id) => providers[id]?.planUsage?.() ?? null,
   runLoad: (id) => accountLoad(providers[id]?.lastWindows?.()),
   runAt: (id) => providers[id]?.lastWindowsAt?.() || 0,
+  runWindows: (id) => providers[id]?.lastWindows?.() ?? null,
 });
 function claudeLoad(id) {
   return accountLoads.loadOf(id);
 }
-if (genv("DEMO") !== "1" && genv("ACCOUNT_BALANCE", "on") !== "off") accountLoads.start();
+
+// ---- How many runs sit on one subscription account at once (claude-safety.mjs) ----------------
+// A plan carrying a dozen chats at once looks like a farm, and the plan's own 5h window empties faster
+// than a person could spend it. Past CLAUDE_MAX_CONCURRENT a run on the same OAuth account waits; the
+// chat itself stays open, nothing is dropped. An API-key account is billed per token and is never
+// paced — it behaves exactly as before.
+//
+// The count comes from the store's own record of each running chat's last run (lastRunProviders, one
+// query for all of them). It must NOT come from routeModel: routing calls this, so asking the router
+// inside here recurses until the stack ends (found by the quality pass 2026-11-25, before it shipped).
+const safetyNow = () => claudeSafety(genv);
+// A subscription login (sk-ant-oat… setup-token OR full `claude auth login` directory) is the only
+// kind that carries a plan to protect. API-key accounts are billed per token and are never paced.
+const isOAuthKey = isSubscriptionKey;
+const runsOnAccount = (id) => {
+  const running = runner?.activeChatIds?.() || [];
+  if (!running.length) return 0;
+  const placed = store.lastRunProviders ? store.lastRunProviders(running) : new Map();
+  let n = 0;
+  for (const chatId of running) if (placed.get(chatId) === id) n += 1;
+  return n;
+};
+// An account added in the last CLAUDE_WARMUP_DAYS is «new»: it may not burn its whole week at once.
+const accountAgeDays = (id) => {
+  const added = Number(providerConfig(id).addedAt || 0);
+  return added ? (Date.now() - added) / 86_400_000 : null;
+};
+// One account's room, computed once per pick: the routing filter and its `usable` callback both need
+// it, and calling it twice meant two counts and two config reads for the same answer.
+function accountRoom(id, cache = null) {
+  if (!plainClaude(id) || !isOAuthKey(providerKey(id))) return { ok: true };
+  if (cache?.has(id)) return cache.get(id);
+  const room = admission(safetyNow(), { concurrent: runsOnAccount(id), load: claudeLoad(id), ageDays: accountAgeDays(id) });
+  cache?.set(id, room);
+  return room;
+}
+// The timer that reads every account's plan windows is OFF by default (claude-safety.mjs, owner
+// 2026-11-25: a 15-minute poll on five banned accounts was one of the patterns). A person's
+// 「تازه‌سازی» still reads one account (POST /api/providers/:id/usage) and a run's own report
+// still fills the load, so routing keeps working — it just stops asking Anthropic on a clock.
+if (genv("DEMO") !== "1" && genv("ACCOUNT_BALANCE", "on") !== "off" && claudeSafety(genv).usagePoll) accountLoads.start();
 function routeModel(chat) {
   const ask = asksBeforeSwitch(chat);
   const list = ask ? balancedCandidates(chat) : rankByState(balancedCandidates(chat), stateOf);
-  return pickRoute(list, { usable: usableAccount, enabled: accountEnabled, keyed: keyedAccount, ask, kindOf, broken: (id) => stateOf(id).state === "auth" }) || { provider: DEFAULT_PROVIDER, model: "auto", effort: null };
+  // A subscription account already carrying its share of runs is skipped here, so the next chat lands
+  // on another account (or another engine) instead of stacking a third run on one plan. Background
+  // errands are the first to be pushed off a subscription account (CLAUDE_BACKGROUND_OFF).
+  // One room per account for this pick (not two counts and two config reads per candidate).
+  const rooms = new Map();
+  const room = (id) => accountRoom(id, rooms);
+  const roomy = list.filter((c) => room(c.provider).ok);
+  const usable = (id) => usableAccount(id) && room(id).ok;
+  const picked = pickRoute(roomy.length || !list.some((c) => plainClaude(c.provider)) ? roomy : list, {
+    usable,
+    enabled: accountEnabled,
+    keyed: keyedAccount,
+    ask,
+    kindOf,
+    broken: (id) => stateOf(id).state === "auth",
+  });
+  return picked || { provider: DEFAULT_PROVIDER, model: "auto", effort: null };
 }
 const accountName = (id) => accounts().find((a) => a.id === id)?.label || claudeEndpoint(id)?.label || (kindOf(id) === PROVIDER_CLAUDE ? "Claude" : id);
 const runModel = routeModel;
 rehomeProfiles();
 // The name a person sees for an engine account: the one it was given, else its kind and number
 // («Claude · 2»), never the raw id («claude-2»). The usage panels use it (owner 2026-10-19).
+// A label or a login written as an email shows only the part before «@» (owner 2026-11-23: «اسم اکانت‌ها
+// از قبل از @»); an account with no label is named by the email it signed in with.
+const beforeAt = (s) => String(s || "").trim().replace(/@.*$/, "");
+const accountEmail = (id) => (planAccount(id) ? subscriptions.identity(id)?.email : store.getKv(`account-email:${id}`)) || "";
 function engineLabel(id) {
   const account = accounts().find((a) => a.id === id);
-  if (account?.label) return account.label;
+  if (account?.label) return beforeAt(account.label);
+  const email = beforeAt(accountEmail(id));
+  if (email) return email;
   const endpoint = claudeEndpoint(id)?.label;
   if (endpoint) return endpoint;
   const kind = account?.kind || kindOf(id) || String(id).split("-")[0];
   const kindName = { claude: "Claude", openai: "OpenAI-compatible", cursor: "Cursor" }[kind] || kind;
   return id === kind ? kindName : `${kindName} · ${String(id).slice(kind.length + 1)}`;
+}
+
+// Shared engine helpers used by both the Settings HTTP routes and the agent's engine_* tools.
+const claudeSigninHolder = { current: null };
+
+function mergeAccountInfo(id, liveAccount) {
+  let cached = null;
+  try {
+    const raw = store.getKv(`account-info:${id}`);
+    cached = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : null;
+  } catch {
+    cached = null;
+  }
+  const savedEmail = store.getKv(`account-email:${id}`) || "";
+  const live = liveAccount && typeof liveAccount === "object" ? liveAccount : null;
+  if (live) {
+    const merged = {
+      email: live.email || cached?.email || savedEmail || null,
+      name: live.name || cached?.name || null,
+      plan: live.plan || cached?.plan || null,
+      org: live.org || cached?.org || null,
+      method: live.method || cached?.method || null,
+    };
+    const hasLiveDetail = Boolean(live.email || live.name || live.plan || live.org);
+    if (merged.email && store.getKv(`account-email:${id}`) !== merged.email) store.setKv(`account-email:${id}`, merged.email);
+    if (merged.email || merged.name || merged.plan || merged.org || merged.method) {
+      store.setKv(`account-info:${id}`, JSON.stringify(merged));
+    }
+    return { ...merged, cached: !hasLiveDetail && Boolean(cached?.email || savedEmail) };
+  }
+  if (cached || savedEmail) {
+    return {
+      email: cached?.email || savedEmail || null,
+      name: cached?.name || null,
+      plan: cached?.plan || null,
+      org: cached?.org || null,
+      method: cached?.method || null,
+      cached: true,
+    };
+  }
+  return null;
+}
+
+// What preceded every ban we know of, counted rather than guessed: a login that had to be redone, an
+// exit that changed, a plan that hit its ceiling, an answer that came back as «region». Each is a
+// count in kv, so it survives restarts and a person can see the shape on the Engines page. Nothing
+// here sends anything, and nothing here is a verdict — a fresh account legitimately has zeroes.
+// A value stored with setKv comes back parsed; older rows were written as JSON strings, so an object
+// may arrive either way. One place to be tolerant of both (2026-11-25: setKv stores JSON itself).
+function parseStoredKv(value) {
+  if (value == null) return null;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+const RISK_WINDOW_DAYS = 14;
+const RISK_SIGNALS = ["login-reset", "egress-change", "cap", "region"];
+const EMPTY_COUNT = { count: 0, at: 0 };
+function riskOf(id, cfg, cache = null) {
+  // Four prepared single-key reads. A batched `WHERE key IN (...)` was measured at these sizes and is
+  // SLOWER than four getKv calls (the statement is not cached and the planner picks another index), so
+  // the plain reads stay; a per-render cache keeps it to one read per account per payload.
+  const read =
+    cache?.get(id) ||
+    ((name) => {
+      const v = parseStoredKv(store.getKv(`risk:${id}:${name}`));
+      return v && typeof v === "object" ? v : EMPTY_COUNT;
+    });
+  cache?.set(id, read);
+  const loginReset = read("login-reset");
+  const egressChange = read("egress-change");
+  const capHits = read("cap");
+  const regionBlock = read("region");
+  const since = Date.now() - RISK_WINDOW_DAYS * 86_400_000;
+  const recent = (r) => (r.at && r.at >= since ? r.count : 0);
+  const notes = [];
+  if (recent(loginReset)) notes.push("لاگین این اکانت دوباره انجام شده");
+  if (recent(egressChange)) notes.push("خروجی/آی‌پی این اکانت عوض شده");
+  if (recent(regionBlock)) notes.push("پاسخ «منطقه» از سمت سرویس آمده");
+  if (recent(capHits) >= 3) notes.push("مکرر به سقف پلن خورده");
+  if (!cfg.proxyUrl) notes.push("آی‌پی ثابت اختصاصی ندارد");
+  return {
+    windowDays: RISK_WINDOW_DAYS,
+    loginReset: recent(loginReset),
+    egressChange: recent(egressChange),
+    capHits: recent(capHits),
+    regionBlock: recent(regionBlock),
+    pinnedEgress: Boolean(cfg.proxyUrl),
+    notes,
+  };
+}
+// One bump of a signal, called from the few places that already see it. setKv stores JSON itself, so
+// the object goes in as-is (storing JSON.stringify of it doubled the encoding).
+function noteRisk(id, name, extra = 1) {
+  try {
+    const key = `risk:${id}:${name}`;
+    let cur = store.getKv(key) || EMPTY_COUNT;
+    if (typeof cur === "string") {
+      try {
+        cur = JSON.parse(cur);
+      } catch {
+        cur = EMPTY_COUNT;
+      }
+    }
+    if (!cur || typeof cur !== "object") cur = EMPTY_COUNT;
+    store.setKv(key, { count: (Number(cur.count) || 0) + extra, at: Date.now() });
+  } catch {}
+}
+
+async function buildProvidersPayload({ includeModels = true } = {}) {
+  const profiles = store.listAgentProfiles();
+  // One read cache for every account's four risk counters: the page renders one card per engine and
+  // reloads on each state change, so this must be one query per account, not four.
+  const riskCache = new Map();
+  const list = await Promise.all(
+    accounts().filter((a) => !a.removed).map(async (account) => {
+      const { id, kind } = account;
+      const p = providers[id];
+      const cfg = providerConfig(id);
+      const [health, modelList, liveAccount] = await Promise.all([
+        // At most 8 s each: one engine behind a filtered network must not hold the whole page.
+        account.enabled && p ? withinTime(p.health(), 8_000, () => ({ ok: false, error: "timeout" })).catch((error) => ({ ok: false, error: String(error?.message || error) })) : { ok: false, error: "disabled" },
+        includeModels && account.enabled && p ? withinTime(models(id), 8_000, () => []).catch(() => []) : [],
+        // The Claude login's email, org and plan (claude auth status), merged with cached KV fallback.
+        account.enabled && typeof p?.account === "function" ? withinTime(p.account(), 8_000, () => null).catch(() => null) : null,
+      ]);
+      const signedInAs = planAccount(id) ? subscriptions.identity(id) : kind === PROVIDER_CLAUDE && !claudeEndpoint(id) ? mergeAccountInfo(id, liveAccount) : liveAccount;
+      let limit = null;
+      try {
+        limit = parseStoredKv(store.getKv(`limitseen:${id}`));
+      } catch {
+        limit = null;
+      }
+      const usage = plainClaude(id) ? accountLoads.usageOf(id) : null;
+      return {
+        id,
+        kind,
+        label: account.label || "",
+        name: engineLabel(id),
+        enabled: account.enabled,
+        removable: true,
+        auto: account.auto,
+        hasKey: Boolean(providerKey(id)),
+        keyIn: secrets.has(`engine/${id}`) ? "secrets" : providerKey(id) ? "legacy" : null,
+        defaultModel: p?.defaultModel || null,
+        baseUrl: kind === PROVIDER_OPENAI ? cfg.baseUrl ?? (id === kind ? genv("OPENAI_BASE_URL", "") : "") : claudeEndpoint(id)?.baseUrl || null,
+        endpoint: claudeEndpoint(id)?.id || null,
+        endpointLabel: claudeEndpoint(id)?.label || null,
+        // A ChatGPT/Codex or Antigravity sign-in (subscription-auth.mjs), with who is signed in.
+        plan: planAccount(id)?.id || null,
+        reasoningEffort: kind === PROVIDER_OPENAI ? cfg.reasoningEffort ?? (id === kind ? genv("OPENAI_REASONING_EFFORT", "") : "") : null,
+        // This account's own fixed exit and clock (claude.mjs accountEgressEnv): empty means it
+        // shares the install's path, exactly as before.
+        proxyUrl: cfg.proxyUrl || "",
+        timezone: cfg.timezone || "",
+        limitedUntil: isLimited(id) ? limitedUntil(id) : null,
+        lastLimit: limit,
+        // Account-health signals, counted for the card on the Engines page (owner 2026-11-25: five
+        // subscription accounts were banned; these are the shapes that preceded it). Read-only
+        // bookkeeping — nothing here sends anything to Anthropic.
+        risk: plainClaude(id) && isOAuthKey(providerKey(id)) ? riskOf(id, cfg, riskCache) : null,
+        // ok / limited / credit / no_key / off (engine-state.mjs); the list comes in this order.
+        state: stateOf(id).state,
+        creditAt: stateOf(id).state === "credit" ? creditAt(id) : null,
+        isDefault: defaultEngine() === id,
+        signedInAs,
+        usage,
+        health,
+        models: modelList.map((m) => ({ id: m.id, name: m.name || m.id })),
+        // The agents whose next chat would run here now (no agent has an engine of its own).
+        agents: profiles
+          .filter((a) => routeModel({ agent: a.id, caller: "owner" }).provider === id)
+          .map((a) => ({ id: a.id, label: a.label, model: a.model || null })),
+      };
+    }),
+  );
+  return {
+    providers: rankByState(list, stateOf, (p) => p.id),
+    defaultEngine: defaultEngine(),
+    switchSameKind: switchSameKind(),
+    kinds: KINDS,
+    presets: OPENAI_PRESETS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })),
+    plans: Object.values(PLANS).map(({ id, label }) => ({ id, label })),
+    claudeEndpoints: CLAUDE_ENDPOINTS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })),
+  };
+}
+
+function updateEngineAccount(id, body) {
+  if (!kindOf(id)) return { status: 404, error: "unknown provider" };
+  const kind = kindOf(id);
+  if (planAccount(id) && ((typeof body.apiKey === "string" && body.apiKey.trim()) || typeof body.preset === "string" || typeof body.baseUrl === "string")) {
+    return { status: 400, error: `${planAccount(id).label} با ورود به حساب وصل می‌شود، نه کلید یا آدرس؛ «ورود» را بزنید.` };
+  }
+  if (Object.keys(body).length === 1 && typeof body.label === "string") {
+    saveAccounts(accounts().map((a) => (a.id === id ? { ...a, label: body.label.trim().slice(0, 40) } : a)));
+    return { status: 200, ok: true };
+  }
+  const next = { ...providerConfig(id) };
+  if (kind === PROVIDER_OPENAI && typeof body.preset === "string") {
+    const preset = OPENAI_PRESETS.find((p) => p.id === body.preset);
+    if (!preset) return { status: 400, error: "unknown preset" };
+    next.baseUrl = preset.baseUrl;
+    if (!secrets.has(`engine/${id}`)) next.keyFile = preset.keyFile;
+  }
+  if (kind === PROVIDER_CLAUDE && typeof body.endpoint === "string") {
+    const set = endpointSettings(next, body.endpoint, { base: id === PROVIDER_CLAUDE, hasSecret: secrets.has(`engine/${id}`) });
+    if (set.error) return { status: 400, error: set.error };
+    for (const key of Object.keys(next)) delete next[key];
+    Object.assign(next, set.next);
+  }
+  if (kind === PROVIDER_OPENAI && typeof body.baseUrl === "string") {
+    if (body.baseUrl && !/^https?:\/\/[^\s]+$/.test(body.baseUrl)) return { status: 400, error: "invalid base URL" };
+    next.baseUrl = body.baseUrl.trim();
+  }
+  if (kind === PROVIDER_OPENAI && typeof body.reasoningEffort === "string") {
+    if (!["", "low", "medium", "high"].includes(body.reasoningEffort)) return { status: 400, error: "invalid reasoning effort" };
+    next.reasoningEffort = body.reasoningEffort;
+  }
+  // This account's own fixed exit and clock (claude.mjs accountEgressEnv). Empty clears it back to
+  // the install's shared path. Only http(s)/socks5 URLs: a typo here would send the account out from
+  // the server's own address, which is the one thing this must never do.
+  if (typeof body.proxyUrl === "string") {
+    const url = body.proxyUrl.trim();
+    if (url && !/^(https?|socks5h?):\/\/[^\s/]+/i.test(url)) {
+      return { status: 400, error: "آدرس پروکسی باید با http:// یا socks5:// شروع شود" };
+    }
+    // Moving an account to another exit is one of the shapes that preceded a ban: counted, so the
+    // Engines page can show it (riskOf). Changing it once is normal; changing it often is not.
+    if (providerConfig(id).proxyUrl !== url) noteRisk(id, "egress-change");
+    next.proxyUrl = url;
+  }
+  if (typeof body.timezone === "string") {
+    const tz = body.timezone.trim();
+    if (tz) {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      } catch {
+        return { status: 400, error: `منطقهٔ زمانی نامعتبر: ${tz}` };
+      }
+    }
+    next.timezone = tz;
+  }
+  const modelVal = body.model !== undefined ? body.model : body.defaultModel;
+  if (typeof modelVal === "string") next.model = modelVal.trim().slice(0, 120);
+  if (typeof body.apiKey === "string" && body.apiKey.trim()) {
+    secrets.set(`engine/${id}`, body.apiKey.trim(), { note: `engine ${id}` });
+    delete next.keyFile;
+  }
+  if (typeof body.enabled === "boolean" || typeof body.label === "string" || typeof body.auto === "boolean" || (typeof body.apiKey === "string" && body.apiKey.trim())) {
+    saveAccounts(accounts().map((a) => (a.id === id ? {
+      ...a,
+      removed: false,
+      ...(a.removed ? { enabled: true } : {}),
+      ...(typeof body.auto === "boolean" ? { auto: body.auto } : {}),
+      ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+      ...(typeof body.label === "string" ? { label: body.label.trim().slice(0, 40) } : {}),
+    } : a)));
+  }
+  if (body.clearLimit === true) clearEngineMarks(id);
+  if (body.default === true) setDefaultEngine(id);
+  store.setKv(`provider:${id}`, JSON.stringify(next));
+  reconfigureProviders();
+  return { status: 200, ok: true };
+}
+
+function removeEngineAccount(id) {
+  const list = accounts();
+  if (!list.some((a) => a.id === id && !a.removed)) return { status: 404, error: "unknown provider" };
+  if (KINDS.includes(id)) {
+    saveAccounts(list.map((a) => (a.id === id ? { ...a, enabled: false, removed: true, label: "" } : a)));
+    secrets.delete(`engine/${id}`);
+    store.deleteKv(`provider:${id}`);
+    store.deleteKv(`account-info:${id}`);
+    clearEngineMarks(id);
+    if (store.getKv("engine-default") === id || store.getKv("claude-active") === id) {
+      store.deleteKv("engine-default");
+      store.deleteKv("claude-active");
+    }
+    reconfigureProviders();
+    return { status: 200, ok: true };
+  }
+  saveAccounts(list.filter((a) => a.id !== id));
+  secrets.delete(`engine/${id}`);
+  removeLoginDir(DATA, id);
+  store.deleteKv(`provider:${id}`);
+  store.deleteKv(`account-info:${id}`);
+  if (store.getKv("engine-default") === id) store.deleteKv("engine-default");
+  reconfigureProviders();
+  return { status: 200, ok: true };
 }
 
 // The Telegram /model menu (integrations/manager.mjs modelMenu → modelChoices): each distinct
@@ -1040,6 +1496,8 @@ const runner = createRunner({
     store.setKv(`limited:${limited}`, until);
     // Per-account usage for the engines page: when it last hit its limit and until when.
     store.setKv(`limitseen:${limited}`, JSON.stringify({ at: Date.now(), until }));
+    // A plan repeatedly pushed to its ceiling is one of the shapes that preceded a ban (riskOf).
+    if (plainClaude(limited)) noteRisk(limited, "cap");
     const next = runModel(chat).provider;
     console.error(`[${limited}] plan limit until ${new Date(until).toISOString()} — chat ${chat?.id} moves to ${next}`);
     return next !== limited;
@@ -1047,7 +1505,7 @@ const runner = createRunner({
   // A refused login: out of routing (sidebar alert «دوباره وارد شوید»), the turn tries the next account.
   onAuthFailed: (chat, error, used) => {
     const failed = used || runModel(chat).provider;
-    store.setKv(`auth:${failed}`, Date.now());
+    markAuthRefused(failed, error?.message);
     const next = runModel(chat).provider;
     console.error(`[${failed}] login refused — chat ${chat?.id} moves to ${next}`);
     return next !== failed;
@@ -1089,7 +1547,9 @@ const runner = createRunner({
   shellHeld: (chat) => chatTrust.heldOthersWords(chat.id),
   providerFor: (chat) => providers[runModel(chat).provider] || providers[DEFAULT_PROVIDER],
   agentOptions: async (chat) => {
-    if (genv("CLAUDE_CODE", "on") === "on") await mcpOauth.ensureFresh().catch(() => {});
+    if (genv("CLAUDE_CODE", "on") === "on" || createMcpServers().list().length > 0) {
+      await mcpOauth.ensureFresh().catch(() => {});
+    }
     const agent = chat.agent || DEFAULT_AGENT;
     const caller = chat.caller || "owner";
     const profile = store.getAgentProfile(agent);
@@ -1113,7 +1573,7 @@ const runner = createRunner({
       "telegram_create_group",
     ]);
     const settingsTools = bindChatTools(
-      createAgentSettingsTools({ store, catalogNames: () => catalogForSettings, mayRename: (chatId) => chatTrust.ownerRooted(chatId) && chatTrust.isCleanChat(chatId) && !store.getKv(thirdPartyKey(chatId)), confirm: (chatId, question) => asks.confirm(chatId, { question }), engine: { isEngine: (id) => Boolean(kindOf(id)), splitModel } }),
+      createAgentSettingsTools({ store, catalogNames: () => catalogForSettings, mayRename: (chatId) => chatTrust.ownerRooted(chatId) && chatTrust.isCleanChat(chatId) && !store.getKv(thirdPartyKey(chatId)), ownerChat: (chatId) => chatTrust.ownerRooted(chatId) && !chatTrust.heldOthersWords(chatId) && !store.getKv(thirdPartyKey(chatId)), confirm: (chatId, question, detail = null) => asks.confirm(chatId, { question, detail }), engine: { isEngine: (id) => Boolean(kindOf(id)), splitModel } }),
       chat.id,
     );
 
@@ -1201,6 +1661,8 @@ const runner = createRunner({
       // Run an app in the sandbox and show it live in the chat (previews.mjs).
       if (genv("PREVIEW", "on") !== "off" && genv("DEMO") !== "1") Object.assign(customTools, previews.tools(chat.id));
       Object.assign(customTools, createChatTools({ store, chatId: chat.id, isValidRepo: (repo) => isValidRepoName(REPOS_ROOT, repo), checkModel: checkSuggestModel }));
+      // A settings card for the owner to press (settings-suggest.mjs); the agent itself changes nothing.
+      Object.assign(customTools, settingsSuggestTools(suggestSettings));
       // consult: another model answers inside one call (peers.mjs; it refuses in sub-chats itself).
       customTools[CONSULT_TOOL] = peersHolder.current.consultTool(chat.id);
       // The owner's own Chrome (my-browser.mjs), once a browser has been paired.
@@ -1235,6 +1697,110 @@ const runner = createRunner({
         return body;
       };
       Object.assign(customTools, createMcpServerTools({ store, chatId: chat.id, oauth: mcpOauth, publicUrl: genv("PUBLIC_URL", ""), callTool, ownProjects, askedGet }));
+      const readInfisical = async ({ projectId, environment, path: p, name }) => {
+        const data = await askedGet({ ...(projectId ? { projectId } : {}), environment: environment || "prod", path: p || "/", name });
+        return data?.value ?? data?.secretValue ?? "";
+      };
+      Object.assign(customTools, createAppSettingsTools({
+        store,
+        config,
+        skin: currentProduct().look || "griffin",
+        secrets,
+        readInfisical,
+        confirm: (targetChatId, q) => asks.ask(targetChatId, q),
+        mcpServers: createMcpServers(),
+        providersApi: {
+          list: ({ includeModels = false } = {}) => buildProvidersPayload({ includeModels }),
+          setGlobal: async ({ sameKind }) => {
+            if (sameKind) store.setKv("engine-switch-same-kind", "1");
+            else store.deleteKv("engine-switch-same-kind");
+          },
+          add: async ({ kind, label, slug, plan, preset, baseUrl, endpoint, defaultModel, apiKey }) => {
+            const planObj = plan ? planOf(plan) : null;
+            if (plan && (!planObj || kind !== PROVIDER_OPENAI)) throw new Error("plan فقط روی openai می‌تواند codex یا antigravity باشد.");
+            const id = planObj
+              ? addAccount(kind, { slug: String(slug || planObj.id), label: label ?? planObj.label, config: { plan: planObj.id, model: planObj.model } })
+              : addAccount(kind, { slug: String(slug || preset || ""), label });
+            if (!id) throw new Error("شناسهٔ موتور نامعتبر است.");
+            const patch = {};
+            if (preset) patch.preset = preset;
+            if (baseUrl) patch.baseUrl = baseUrl;
+            if (endpoint) patch.endpoint = endpoint;
+            if (defaultModel) patch.model = defaultModel;
+            if (apiKey) patch.apiKey = apiKey;
+            if (Object.keys(patch).length) {
+              const res = updateEngineAccount(id, patch);
+              if (res.error) throw new Error(res.error);
+            }
+            return { id, kind, label: label || engineLabel(id) };
+          },
+          update: async (id, patch) => {
+            const res = updateEngineAccount(id, patch);
+            if (res.error) throw new Error(res.error);
+            return res;
+          },
+          setDefault: async (id) => {
+            if (!kindOf(id)) throw new Error("موتور ناشناخته است.");
+            setDefaultEngine(id);
+            return { defaultEngine: defaultEngine() };
+          },
+          clearLimit: async (id) => {
+            if (!kindOf(id)) throw new Error("موتور ناشناخته است.");
+            clearEngineMarks(id);
+            return { cleared: true };
+          },
+          test: async (id) => doctor.engine(id),
+          startSignin: async (id) => {
+            if (planAccount(id)) {
+              const started = await subscriptions.start(id, planAccount(id).id);
+              return { kind: "subscription", ...started };
+            }
+            if (kindOf(id) === PROVIDER_CLAUDE && !claudeEndpoint(id) && claudeSigninHolder.current) {
+              const started = await claudeSigninHolder.current.start(id);
+              return { kind: "claude", ...started };
+            }
+            throw new Error("این موتور با ورود تحت وب (OAuth) کار نمی‌کند؛ کلید API می‌خواهد.");
+          },
+          remove: async (id) => {
+            const res = removeEngineAccount(id);
+            if (res.error) throw new Error(res.error);
+            return res;
+          },
+        },
+        integrationsApi: {
+          list: () => integrations.list(),
+          add: async ({ kind, name, token, defaultAgent }) => integrations.create({ kind, name, token, ...(defaultAgent ? { defaultAgent } : {}) }),
+          update: async (id, patch) => integrations.update(id, patch),
+          restart: async (id) => integrations.restart(id),
+          remove: async (id) => integrations.remove(id),
+        },
+        proxyApi: {
+          get: () => ({ url: savedProxy(), fromEnv: Boolean(envProxy) }),
+          set: async (url) => {
+            if (url && !/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(url)) throw new Error("آدرس پراکسی باید شبیه http://host:port باشد.");
+            if (envProxy) throw new Error("پراکسی از متغیر محیطی تنظیم شده و از اینجا قابل تغییر نیست.");
+            fs.writeFileSync(PROXY_FILE, JSON.stringify({ url }));
+            if (url) applyProxy(url);
+            else clearProxy();
+          },
+          test: async () => {
+            const proxy = savedProxy() || envProxy || "";
+            const [direct, viaProxy] = await Promise.all([probeEgress(""), proxy ? probeEgress(proxy) : null]);
+            return { direct, viaProxy };
+          },
+        },
+        vpnApi: vpn ? {
+          status: async () => {
+            const st = await vpn.status?.();
+            return st ? { running: Boolean(st.running), enabled: Boolean(st.enabled), mode: st.mode || null, activeNode: st.active || st.node || null, nodeCount: Array.isArray(st.nodes) ? st.nodes.length : undefined } : null;
+          },
+        } : null,
+        devicesApi: async () => ({
+          browserPaired: Boolean(myBrowser?.paired?.()),
+          browserConnected: Boolean(myBrowser?.connected?.()),
+          phone: phone?.status?.() || null,
+        }),
+      }));
     }
     // A job this conversation made is its own to delete: no owner question for it (2026-10-13, «حذف
     // جاب — id …» reached the owner for a watcher job the agent had made itself an hour before).
@@ -1298,13 +1864,13 @@ const runner = createRunner({
     }
     // The owner's own chat has no requester but him: ask_requester there only mislabels his question.
     if (caller === "owner" && !chat.parent_chat_id) delete filtered[ASK_REQUESTER_TOOL];
-    // The global chat («🌐 … — همه»): the assistant's Telegram desk (integrations/desk.mjs).
+    // The global chat («🌐 … — همه»): Iris's Telegram desk (integrations/desk.mjs).
     const desk = !mother && caller === "owner" && isGlobalChat(store, chat.id);
     if (desk) Object.assign(filtered, integrations.desk.globalTools());
     if (caller === COVERAGE_CALLER) {
       const peerLink = store.linksForChat(chat.id).find((l) => l.external_chat && l.external_chat !== "me") || null;
       const peerChat = peerLink?.external_chat || null;
-      filtered[END_AGENT_TOOL] = createEndAgentTool({
+      if (!mother) filtered[END_AGENT_TOOL] = createEndAgentTool({
         onEnd: (note) => {
           if (peerLink) integrations.bridge.scheduleEnd(chat.id, { integrationId: peerLink.integration_id, peer: peerChat, note });
         },
@@ -1352,7 +1918,7 @@ const runner = createRunner({
     // A colleague's chat on its light model: upgrade_model moves this message to the stronger one.
     if (genv("UPGRADE_MODEL", "") && (caller === COVERAGE_CALLER || isPeerCaller(caller))) filtered[UPGRADE_TOOL] = upgradeTool(upgrades, chat.id);
     // The owner's board (todos.mjs, inbox.mjs). One todo tool per engine: Claude has TodoWrite,
-    // Cursor updateTodos; decided per run, so a fallback to the OpenAI-compatible engine gets todo_write. A chore for the
+    // Cursor updateTodos; decided per run, so a fallback to GLM gets todo_write. A chore for the
     // owner only where he reads the board (offersOwnerTask: his chains and colleagues' Telegram ones,
     // never jobs, the ops room or a peer's /mcp chain); a rehearsal records it (sim.mjs).
     if (kindOf(runModel(chat).provider) === PROVIDER_OPENAI) filtered[TODO_TOOL] = todoWriteTool({ store, chatId: chat.id });
@@ -1380,13 +1946,24 @@ const runner = createRunner({
         chatId: repoChat.id,
         currentDir: repoChat.worktree_path || null,
         onCurrent: (current) => store.updateChat(repoChat.id, { worktreePath: current }),
-        fetchRepo: brokerEnabled() ? (repo) => callBrokerTool("git_fetch", { repo }, 130_000) : null,
+        fetchRepo: (repo) => callBrokerTool("git_fetch", { repo }, 130_000),
         linkIgnored: genv("WORKTREE_LINK"),
         onNote: (note) => store.appendEvent(chat.id, null, "note", { text: note }),
       });
       const moved = store.getKv(`repomove:${repoChat.id}`);
       repoContext = { repo: repoChat.repo, dir, branch: currentWorktree(REPOS_ROOT, repoChat.id, { currentDir: dir }).branch, moved: moved?.to === repoChat.repo ? moved : null };
-      Object.assign(filtered, createRepoChatTools({ ...repoContext, push: (args) => callBrokerTool("git_push", args, 200_000), author: ownerGitAuthor }));
+      const memberUid = userIdFromCaller(rootCaller);
+      const memberRow = memberUid ? store.getAppUser?.(memberUid) : null;
+      const chatAuthor = memberRow
+        ? async () => ({ name: memberRow.display_name || memberRow.username, email: `${memberRow.username}@users.local` })
+        : ownerGitAuthor;
+      const pushFn = memberUid
+        ? (args) => {
+            if (args?.toDefault) throw new Error("پوش مستقیم روی شاخهٔ اصلی فقط برای مدیر نصب (Owner) مجاز است؛ شاخه را پوش کنید و MR باز کنید.");
+            return callBrokerTool("git_push", { ...args, toDefault: false }, 200_000);
+          }
+        : (args) => callBrokerTool("git_push", args, 200_000);
+      Object.assign(filtered, createRepoChatTools({ ...repoContext, push: pushFn, author: chatAuthor }));
     }
 
     // The same requester's open work in other channels: hand a follow-up there instead of
@@ -1420,7 +1997,7 @@ const runner = createRunner({
     if (readOnlySide) filtered = restrictForReadOnlySide(filtered);
 
     // A colleague's conversation (Telegram or their agent) that reached the owner is marked, so its
-    // «به X سپردم» / «تصمیمش با X است» can be told from one written only in its own report
+    // «به عرفان سپردم» / «تصمیمش با عرفانه» can be told from one written only in its own report
     // (owner-reach.mjs; desk.mjs send_to_person and the runner check it).
     if (rootCaller !== "owner") filtered = trackOwnerReach(filtered, { store, rootChatId });
     // Outermost: a simulation tree records side effects instead of running them (no approval
@@ -1450,6 +2027,66 @@ const runner = createRunner({
       });
     }
 
+    // Claude's own file and web tools (providers/file-scope.mjs; owner, 2026-10-13): only in the
+    // owner's own chats, and there reading only the workspace and writing only in this chat's folder —
+    // never the knowledge store, the agent's state and rules, or a worktree's .git. Any other chain
+    // (a colleague, a peer, a job, the ops room, the Telegram desk) gets none.
+    const memberWorkspaceId = userIdFromCaller(rootCaller);
+    const memberWorkspace = memberWorkspaceId ? path.join(WORKSPACE, "users", memberWorkspaceId) : null;
+    if (memberWorkspace) fs.mkdirSync(memberWorkspace, { recursive: true, mode: 0o700 });
+    const workDir = repoContext?.dir || memberWorkspace || cwd;
+    // One memory per repo, not per worktree (shared-memory.mjs).
+    if (repoContext?.repo) linkSharedMemory({ configDir: mainConfigDir(), workDir, repoDir: path.join(REPOS_ROOT, repoContext.repo) });
+    // Nor in his chat that holds someone else's message (othersHeld) — unless the chat is on «بدون
+    // پرسیدن» on Claude: then every chat gets the full shell (owner-jobs.mjs freeShell, 2026-11-07).
+    const shellFree = freeShell({ provider: kindOf(runModel(chat).provider), unattended, desk, inboxChat, rootCaller, rootMode: store.getChat(rootChatId)?.mode, fullGrant });
+    const fileAccess = shellFree && !readOnlySide
+      ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
+      : access.asOwner && !desk && !inboxChat && !othersHeld
+      ? ownerBypass && !readOnlySide
+        ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
+        : { read: [WORKSPACE], write: readOnlySide ? [] : [workDir], deny: [KNOWLEDGE_ROOT, path.join(workDir, ".git"), ...[".cursor", ".claude", ".griffin-openai-sessions", "CLAUDE.md"].map((name) => path.join(cwd, name))] }
+      : null;
+    // Config CLAUDE_HOST: the owner's full Claude Code runs on the host (providers/host-spawn.mjs). There
+    // the data folder is GRIFFIN_CLAUDE_HOST_DATA (the host path of /data), so the guards protect that.
+    const onHost = runsOnHost({ claudeCode: Boolean(fileAccess) && genv("CLAUDE_CODE", "on") === "on", ownerJob, mode: genv("CLAUDE_HOST", "off"), chosen: chat.runs_on, bypass: runsFree(chat.mode) && Boolean(hostTarget()) });
+    const runData = (onHost && genv("CLAUDE_HOST_DATA", "")) || DATA;
+    const claudeCode = claudeCodeOptions({ fileAccess, claudeCodeOn: !readOnlySide && genv("CLAUDE_CODE", "on") === "on", stateGuardOn: genv("STATE_GUARD", "off") === "on" && !ownerBypass, statePaths: () => griffinStatePaths({ knowledgeRoot: KNOWLEDGE_ROOT, data: runData, home: runData === DATA ? os.homedir() : path.join(runData, "home") }), ownerJob, dataDir: runData, jobClosed: brokerPaths(toolSource.socketPath) });
+    const usingClaudeCode = kindOf(runModel(chat).provider) === PROVIDER_CLAUDE && Boolean(claudeCode.claudeCode);
+
+    // Member user workspace file tools: confined strictly to their own WORKSPACE/users/<id> folder
+    // when no repo worktree is selected (never /data, never KNOWLEDGE_ROOT, never other users).
+    if (memberWorkspace && !repoContext && !readOnlySide && !consultOf(store, chat.id)) {
+      const wsTools = createWorkspaceTools({
+        workspaceDir: memberWorkspace,
+        memoryDir: path.join(memberWorkspace, ".memory"),
+        knowledgeRoot: KNOWLEDGE_ROOT,
+      });
+      for (const [name, def] of Object.entries(wsTools)) {
+        if (!(name in filtered)) filtered[name] = def;
+      }
+    }
+
+    // Non-Claude engines (GLM, Gemini, Codex, OpenAI-compatible) do not spawn Claude Code, so they
+    // missed workspace/memory file reading and user-scope MCP servers (~/.claude.json). Expose both
+    // safely in clean owner-authorized runs.
+    if (!usingClaudeCode && access.asOwner && fileAccess && !desk && !inboxChat && !othersHeld && !readOnlySide && !consultOf(store, chat.id)) {
+      if (!repoContext) {
+        const wsTools = createWorkspaceTools({
+          workspaceDir: cwd,
+          memoryDir: path.join(mainConfigDir(), "projects", projectSlug(cwd), "memory"),
+          knowledgeRoot: KNOWLEDGE_ROOT,
+        });
+        for (const [name, def] of Object.entries(wsTools)) {
+          if (!(name in filtered)) filtered[name] = def;
+        }
+      }
+      const mcpTools = await mcpClientManager.toolsFor(createMcpServers().listRaw());
+      for (const [name, def] of Object.entries(mcpTools)) {
+        if (!(name in filtered)) filtered[name] = def;
+      }
+    }
+
     // Rules are built from the tools this run really has (after caller filtering and guards).
     approvePendingKnowledge();
     const ruleOptions = { autoApprove: knowledgeAutoApprove(), agent, caller: quotaCaller, peers, profile, knowledgeRoot: KNOWLEDGE_ROOT, tools: Object.keys(filtered), thirdParty: Boolean(store.getKv(thirdPartyKey(chat.id))), mother: Boolean(mother), autoTrust: KNOWLEDGE_AUTO_TRUST && !desk && chatTrust.ownerRooted(chat.id), isTrustedNote: chatTrust.isTrustedNote, businessDocsLabel: "business_docs_search" in filtered ? businessDocs.promptLabel : "", toolDescriptions: Object.fromEntries(Object.entries(filtered).map(([n, d]) => [n, d?.description || ""])), chrome: access.asOwner && myBrowser.paired() ? (myBrowser.connected() ? "connected" : "paired") : null };
@@ -1457,9 +2094,21 @@ const runner = createRunner({
     // capability map and the rules that bind every agent here (capability-map.mjs, SubagentStart hook).
     const subagentContext = subagentBrief(ruleOptions.tools, { descriptions: ruleOptions.toolDescriptions, chrome: ruleOptions.chrome, ownerName: OWNER.name });
     installRules(cwd, ruleOptions);
-    // Claude Code loads the linked memory folder itself; other engines get the index here, only in owner-rooted chats.
-    const repoMemory = repoContext?.repo && kindOf(runModel(chat).provider) !== PROVIDER_CLAUDE && chatTrust.ownerRooted(chat.id) ? repoMemoryRules({ configDir: mainConfigDir(), repoDir: path.join(REPOS_ROOT, repoContext.repo) }) : "";
-    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}${repoMemory ? `\n\n${repoMemory}` : ""}` : buildRules(ruleOptions)) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "") + (ownerBypass ? BYPASS_NOTE : "") + (fullGrant ? fullAccessNote(fullGrant) : "") + (chatTrust.ownerRooted(chat.id) ? phone.promptLine() : "") + (access.asOwner && myBrowser.paired() ? myBrowser.promptLine() : "") + (shellHeldHere ? SHELL_HELD_NOTE : "");
+    // Claude Code loads CLAUDE.md and the linked memory folder itself; other engines get them here, only in owner-rooted chats.
+    const sharedBlocks = [];
+    if (!usingClaudeCode && chatTrust.ownerRooted(chat.id)) {
+      if (repoContext?.repo) {
+        const rm = repoMemoryRules({ configDir: mainConfigDir(), repoDir: path.join(REPOS_ROOT, repoContext.repo) });
+        if (rm) sharedBlocks.push(rm);
+      } else {
+        const claudeMd = ownerClaudeInstructions({ configDir: mainConfigDir(), workspaceDir: cwd });
+        if (claudeMd) sharedBlocks.push(claudeMd);
+        const wsMem = repoMemoryRules({ configDir: mainConfigDir(), repoDir: cwd, kind: "workspace", hasWorkspaceRead: "workspace_read" in filtered });
+        if (wsMem) sharedBlocks.push(wsMem);
+      }
+    }
+    const sharedContext = sharedBlocks.length ? `\n\n${sharedBlocks.join("\n\n")}` : "";
+    const rules = (repoContext ? `${buildRules(ruleOptions)}\n\n${repoRules(repoContext)}${sharedContext}` : `${buildRules(ruleOptions)}${sharedContext}`) + relatedRules(relatedOpen, channelOf(store, chat)) + (mother ? motherContext(mother.name) : desk ? globalContext() : "") + (inboxChat ? INBOX_PROMPT : "") + (ownerBypass ? BYPASS_NOTE : "") + (fullGrant ? fullAccessNote(fullGrant) : "") + (chatTrust.ownerRooted(chat.id) ? phone.promptLine() : "") + (access.asOwner && myBrowser.paired() ? myBrowser.promptLine() : "") + (shellHeldHere ? SHELL_HELD_NOTE : "");
     const seedMessages = chat.agent_id ? null : seedTurns(chat);
     // «چرا؟»: what this session starts with, kept on the chat (manifest.mjs). Never fails the run.
     try {
@@ -1486,29 +2135,6 @@ const runner = createRunner({
       console.error(`[manifest] chat ${chat.id}: ${error.message}`);
     }
 
-    // Claude's own file and web tools (providers/file-scope.mjs; owner, 2026-10-13): only in the
-    // owner's own chats, and there reading only the workspace and writing only in this chat's folder —
-    // never the knowledge store, the agent's state and rules, or a worktree's .git. Any other chain
-    // (a colleague, a peer, a job, the ops room, the Telegram desk) gets none.
-    const workDir = repoContext?.dir || cwd;
-    // One memory per repo, not per worktree (shared-memory.mjs).
-    if (repoContext?.repo) linkSharedMemory({ configDir: mainConfigDir(), workDir, repoDir: path.join(REPOS_ROOT, repoContext.repo) });
-    // Nor in his chat that holds someone else's message (othersHeld) — unless the chat is on «بدون
-    // پرسیدن» on Claude: then every chat gets the full shell (owner-jobs.mjs freeShell, 2026-11-07).
-    const shellFree = freeShell({ provider: kindOf(runModel(chat).provider), unattended, desk, inboxChat, rootCaller, rootMode: store.getChat(rootChatId)?.mode, fullGrant });
-    const fileAccess = shellFree && !readOnlySide
-      ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
-      : access.asOwner && !desk && !inboxChat && !othersHeld
-      ? ownerBypass && !readOnlySide
-        ? { read: ["/"], write: ["/"], deny: [], unrestricted: true }
-        : { read: [WORKSPACE], write: readOnlySide ? [] : [workDir], deny: [KNOWLEDGE_ROOT, path.join(workDir, ".git"), ...[".cursor", ".claude", ".griffin-openai-sessions", "CLAUDE.md"].map((name) => path.join(cwd, name))] }
-      : null;
-    // Config CLAUDE_HOST: the owner's full Claude Code runs on the host (providers/host-spawn.mjs). There
-    // the data folder is GRIFFIN_CLAUDE_HOST_DATA (the host path of /data), so the guards protect that.
-    const onHost = runsOnHost({ claudeCode: Boolean(fileAccess) && genv("CLAUDE_CODE", "on") === "on", ownerJob, mode: genv("CLAUDE_HOST", "off"), chosen: chat.runs_on, bypass: runsFree(chat.mode) && Boolean(hostTarget()) });
-    const runData = (onHost && genv("CLAUDE_HOST_DATA", "")) || DATA;
-    const claudeCode = claudeCodeOptions({ fileAccess, claudeCodeOn: !readOnlySide && genv("CLAUDE_CODE", "on") === "on", stateGuardOn: genv("STATE_GUARD", "off") === "on" && !ownerBypass, statePaths: () => griffinStatePaths({ knowledgeRoot: KNOWLEDGE_ROOT, data: runData, home: runData === DATA ? os.homedir() : path.join(runData, "home") }), ownerJob, dataDir: runData, jobClosed: brokerPaths(toolSource.socketPath) });
-
     return {
       // Engines with their own file tools (Claude, Cursor) work in the worktree; the agent's own
       // folder keeps its state (openai sessions) and rules files.
@@ -1522,8 +2148,8 @@ const runner = createRunner({
       ...claudeCode,
       ...(onHost ? { onHost: true } : {}),
       // Commits from the owner's chats carry his own GitLab identity, whatever a repo's local config
-      // or the model says (2026-10-21: a clone's user.email was a colleague's and the model copied the
-      // last commit's author — his work showed as other people's). On the host his own
+      // or the model says (a colleague 2026-10-21: a clone's user.email was a colleague's and the model copied the
+      // last commit's author — his work showed as a colleague's and another author's). On the host his own
       // gitconfig already is him.
       ...(fileAccess && !onHost ? { gitAuthor: await ownerGitAuthor() } : {}),
       // The chat's permission mode (owner 2026-10-17, as in Claude Desktop): in «auto», «ask» and «edits»
@@ -1594,9 +2220,8 @@ toolBuilderHolder.current = createToolBuilder({
 });
 
 // The clones stay current: fetched every 10 minutes and their own checkout fast-forwarded when clean
-// (agents read shared clones through it; new chat worktrees start from origin). Needs the broker.
+// (agents read platform-gitops/nakhoda through it; new chat worktrees start from origin).
 const refreshRepos = () => {
-  if (!brokerEnabled()) return;
   for (const repo of listRepos(REPOS_ROOT)) {
     callBrokerTool("git_fetch", { repo, update: true }, 130_000).catch((error) => console.error(`[repos] refresh ${repo}: ${error.message}`));
   }
@@ -1716,7 +2341,7 @@ store.bus.on("chats", (change) => {
     .finally(() => cleaning.delete(chat.id));
 });
 // Side chats run in the parent's worktree, so before the tree is checked or removed every side
-// chat is stopped, then the parent. False when a run did not stop.
+// chat is stopped, then the parent (Karsara chat-release.mjs). False when a run did not stop.
 async function releaseChatRuns(chatId) {
   const ids = [...treeBorrowers(store, chatId).map((row) => row.id), chatId];
   for (const id of ids) {
@@ -1794,7 +2419,7 @@ const folderSwitch = {
 }
 
 // What a fresh session starts with: the chat's own earlier turns, and for a side chat the main
-// chat's conversation before them (side chats). The message being sent now is added
+// chat's conversation before them (side chats, from Karsara). The message being sent now is added
 // by the provider, so a seed ending in it would say it twice.
 // The install's GitLab user (the broker's token) as a git author, or null. Cached an hour; a miss
 // (no broker, GitLab down) is asked again after five minutes.
@@ -1838,13 +2463,17 @@ async function models(provider = null) {
   }
   const byProvider = {};
   const gen = modelCacheGen;
+  // Only accounts that exist and are on: a removed or switched-off base account (cursor, openai = GLM)
+  // put its models in the picker of someone who has none (owner 2026-11-23). Each row names its account.
+  const live = new Set(accounts().filter((a) => !a.removed && a.enabled).map((a) => a.id));
   await Promise.all(
-    PROVIDERS.filter((id) => providers[id]).map(async (id) => {
+    PROVIDERS.filter((id) => providers[id] && live.has(id)).map(async (id) => {
+      const tag = (m) => ({ ...m, provider: id, accountName: engineLabel(id) });
       try {
-        byProvider[id] = (await providers[id].listModels()).map((m) => ({ ...m, provider: id }));
+        byProvider[id] = (await providers[id].listModels()).map(tag);
       } catch (error) {
         console.error(`[models:${id}]`, error?.message || error);
-        byProvider[id] = kindOf(id) === PROVIDER_CLAUDE ? (await import("./providers/claude.mjs")).claudeModelList().map((m) => ({ ...m, provider: id })) : [];
+        byProvider[id] = kindOf(id) === PROVIDER_CLAUDE ? (await import("./providers/claude.mjs")).claudeModelList().map(tag) : [];
       }
     }),
   );
@@ -1875,16 +2504,14 @@ async function usage() {
 async function health() {
   const enabled = accounts().filter((a) => a.enabled && providers[a.id]);
   const [probe, ...checks] = await Promise.all([
-    !brokerEnabled()
-      ? Promise.resolve({ ok: true, configured: false })
-      : brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
-          .then((r) => ({ ok: r.status === 200, ...r.body }))
-          .catch((error) => ({ ok: false, error: error.message })),
+    brokerRequest(toolSource.socketPath, "GET", "/probe", undefined, 15_000)
+      .then((r) => ({ ok: r.status === 200, ...r.body }))
+      .catch((error) => ({ ok: false, error: error.message })),
     ...enabled.map((a) => providers[a.id].health().catch((error) => ({ ok: false, error: String(error?.message || error) }))),
   ]);
   const engines = Object.fromEntries(enabled.map((a, i) => [a.id, { ...checks[i], kind: a.kind, label: a.label || a.id }]));
   return {
-    broker: { ok: probe.ok, configured: brokerEnabled(), ...(probe.error ? { error: probe.error } : {}) },
+    broker: { ok: probe.ok, ...(probe.error ? { error: probe.error } : {}) },
     clusters: probe.clusters || null,
     // Kept for older clients: the three base accounts, as before.
     cursor: engines.cursor || { ok: false, error: "disabled" },
@@ -1976,8 +2603,12 @@ const doctor = createDoctor({
     else if (verdict === "limited") {
       const until = result.until > Date.now() ? result.until : Date.now() + 60 * 60_000;
       store.setKv(`limited:${id}`, until);
-      store.setKv(`limitseen:${id}`, JSON.stringify({ at: Date.now(), until }));
+      store.setKv(`limitseen:${id}`, { at: Date.now(), until });
     }
+    // The account-health card counts the shapes that preceded the bans (riskOf): a login that had to be
+    // redone and a «region» answer are both visible right here in the probe's own verdict.
+    if (verdict === "auth" && plainClaude(id)) noteRisk(id, "login-reset");
+    if (result?.cause === "region" && plainClaude(id)) noteRisk(id, "region");
   },
 });
 // The engines page tests every account when it opens (a real tiny turn each): kept 10 minutes so
@@ -1985,7 +2616,23 @@ const doctor = createDoctor({
 async function testEngine(id, { fresh = false } = {}) {
   const hit = probeCache.get(id);
   if (!fresh && hit && Date.now() - hit.at < 10 * 60_000) return hit.result;
-  const result = await doctor.probeEngine(id);
+  // Since 2026-11-25 (claude-safety.mjs) spending a real message to check an account is OPT-IN:
+  // with CLAUDE_PROBE off (the default) an unprompted check only reports the account's own state.
+  // A person pressing the test button asks fresh, and gets the real turn exactly as before.
+  if (!fresh && !claudeSafety(genv).healthProbe) {
+    const st = stateOf(id);
+    const passive = {
+      id,
+      ok: st.state === "ok",
+      passive: true,
+      state: st.state,
+      ...(st.state === "ok" ? { status: 200 } : {}),
+      ...(st.until ? { until: st.until } : {}),
+    };
+    probeCache.set(id, { at: Date.now(), result: passive });
+    return passive;
+  }
+  const result = await doctor.probeEngine(id, { optIn: fresh });
   probeCache.set(id, { at: Date.now(), result });
   return result;
 }
@@ -1993,7 +2640,7 @@ async function testEngine(id, { fresh = false } = {}) {
 // before they run out. Config CLAUDE_TOKEN_KEEPER=on, per install (a colleague's first, 2026-10-28).
 const tokenKeeper = createTokenKeeper({
   dirs: () =>
-    genv("CLAUDE_TOKEN_KEEPER", "off") === "on"
+    claudeSafety(genv).tokenKeeper
       ? accounts()
           .filter((a) => a.enabled && a.kind === PROVIDER_CLAUDE && !claudeEndpoint(a.id))
           .map((a) => loginDirOf(providerKey(a.id)))
@@ -2017,17 +2664,29 @@ const push = createPush({ store, dataDir: DATA, timelines, subject: genv("PUSH_S
 if (!demo) push.attach();
 
 // Scheduled work: each job runs the agent in its own hidden chat and delivers the answer.
-// A due job whose engine (the account its agent would route to now) gets no answer at all — a dead
-// proxy, egress cut — is held overdue and fires once when the engine answers again.
+// A due job whose engine (the account its agent would route to now) gets no answer at all — Xray
+// down, egress cut — is held overdue and fires once when the engine answers again.
 const jobs = createJobs({
   store,
   runner,
   deliver: (chatId, targets, meta) => integrations.deliverChat(chatId, targets, meta),
   // An owner-job approval waiting on the owner pauses the job's timeout (jobs/owner-jobs.mjs).
   isWaiting: (chatId) => asks.isWaiting(chatId),
+  // A job the owner wrote in a chat where he confirmed a stronger model or effort runs with that
+  // chat's choice, as a side chat does (jobs/owner-jobs.mjs runChoice); every other job: Sonnet/medium.
+  runChoice: (job, by) => ownerJobs.runChoice(job, by),
+  runsWith: (job) => {
+    const choice = ownerJobs.runChoice(job);
+    const chat = { agent: job.agent, caller: "scheduler", model: job.model || choice?.model || null, effort: choice?.effort || null };
+    const route = routeModel(chat);
+    if (!plainClaude(route.provider)) return { model: route.model, effort: route.effort || null };
+    const raw = rawModelCandidates(chat).find((c) => c.provider === route.provider) || route;
+    const run = clampCandidate(raw, choice?.heavyOk || {});
+    return { model: run.model, effort: run.effort || null };
+  },
   canRun: async (job) => {
     if (demo) return true;
-    const { provider } = routeModel({ agent: job.agent, caller: "scheduler", model: job.model });
+    const { provider } = routeModel({ agent: job.agent, caller: "scheduler", model: job.model || ownerJobs.runChoice(job)?.model || null });
     const engine = providers[provider];
     if (!engine) return true;
     return !egressDown(await engine.health().catch((error) => ({ ok: false, error: String(error?.message || error) })));
@@ -2037,7 +2696,7 @@ jobs.start();
 if (genv("DEMO") !== "1") network.start();
 
 // Central usage accounting (accounting.mjs): this install reports its own usage to the maintainer's
-// install (SUPPORT_AGENT) every 15 minutes; on that install the reports of all installs are
+// install (SUPPORT_AGENT) every 15 minutes; on that install (Iris) the reports of all installs are
 // kept, put together per install and per shared Claude account, and watched for alerts.
 const urlHost = (url) => {
   try {
@@ -2047,8 +2706,12 @@ const urlHost = (url) => {
   }
 };
 // fingerprint -> {org, at}: one small Anthropic call per key every 6 hours, for the account id.
+// OFF by default since 2026-11-25 (claude-safety.mjs): a raw request with a subscription bearer
+// token on a 6-hour schedule is exactly the shape the anti-fraud looks for. The org still shows
+// when the account's own run reported it.
 const orgOfKey = new Map();
 async function keyOrg(key, fingerprint) {
+  if (!claudeSafety(genv).orgLookup) return null;
   const hit = orgOfKey.get(fingerprint);
   if (hit && Date.now() - hit.at < (hit.org ? 6 * 3600_000 : 15 * 60_000)) return hit.org;
   const org = await accountOrg(key).catch(() => null);
@@ -2077,7 +2740,7 @@ const accounting = createAccounting({
         ]);
         let limit = null;
         try {
-          limit = JSON.parse(store.getKv(`limitseen:${a.id}`) || "null");
+          limit = parseStoredKv(store.getKv(`limitseen:${a.id}`));
         } catch {
           limit = null;
         }
@@ -2116,13 +2779,7 @@ if (genv("DEMO") !== "1" && genv("ACCOUNTING", "on") !== "off") accounting.start
 
 // Incident intake: Alertmanager of every cluster → grouped incidents → Griffin's ops room (shadow).
 const incidents = createIncidentStore(store.db);
-// Incident intake needs something to poll; with no broker there are no alert sources at all.
-const opsRoom = createOpsRoom({
-  store,
-  runner,
-  incidents,
-  mode: brokerEnabled() ? genv("OPS_MODE", "record") : "off",
-});
+const opsRoom = createOpsRoom({ store, runner, incidents, mode: genv("OPS_MODE", "shadow") });
 // A colleague's Telegram report of what an open incident already shows goes to the ops room (desk.mjs).
 integrations.desk?.setOps?.({
   open: () => incidents.open(),
@@ -2132,23 +2789,19 @@ integrations.desk?.setOps?.({
   roomId: () => opsRoom.roomId(),
 });
 const readBusiness = createBusinessSource({
-  config: genv("BUSINESS_SIGNAL") ? JSON.parse(genv("BUSINESS_SIGNAL")) : null,
-  query: async (args) => {
-    const { status, body } = await brokerRequest(toolSource.socketPath, "POST", "/tools/pg_query", args, 60_000);
-    if (status !== 200 || !body?.ok) throw new Error(body?.error || `broker http ${status}`);
-    return body.result.rows || [];
+  query: async (sql) => {
+    throw new Error("business signal not configured");
   },
 });
 // Data sources (sources.mjs), Grafana-style: each install keeps its own list. The three readers that
 // were hard-wired here before are built-in kinds; they are seeded once on the platform owner's own
-// install with a broker (it holds the clusters' alerts and the vault), everyone adds the rest.
+// install (a colleague's install has neither the platform clusters), everyone adds the rest.
 const incidentSources = createSourceStore(store.db, { secrets });
 if (!store.getKv("incident_sources_seeded")) {
-  if (brokerEnabled() && incidentSources.isEmpty()) {
+  if (toolSource.available() && incidentSources.isEmpty()) {
     incidentSources.add({ id: "clusters", kind: "clusters", name: "کلاسترهای بروکر", by: "seed" });
     incidentSources.add({ id: "vault", kind: "vault", name: "خزانهٔ ابزارها", by: "seed" });
   }
-  // Incidents recorded before sources existed came from these three readers.
   if (incidentSources.get("clusters")) {
     store.db.prepare("UPDATE incidents SET source_id = CASE cluster WHEN 'business' THEN 'business' WHEN 'vault' THEN 'vault' ELSE 'clusters' END WHERE source_id IS NULL AND cluster NOT IN ('human', 'griffin')").run();
   }
@@ -2278,7 +2931,8 @@ store.bus.on("person.message", ({ personId, direction, text }) => {
 });
 
 
-// Server→broker tool call (socket, no model in the loop) — peer_invite, repos, the sandbox workbench.
+// Server→broker tool call (socket, no model in the loop) — used by peer_invite to move the minted
+// token straight into the peer's Infisical project.
 // Single-quote for a POSIX shell: wrap and escape embedded quotes.
 const shq = (v) => `'${String(v).replaceAll("'", "'\\''")}'`;
 
@@ -2338,7 +2992,6 @@ function trustedProxies() {
   }
 }
 const updates = createUpdates({ dir: path.join(DATA, "update"), current: readBuildCommit(), translate: (prompt) => titleText(prompt) });
-// A public install has no host agent: it looks at the project's GitHub itself (GRIFFIN_UPDATE_CHECK=off turns that off).
 if (genv("DEMO") !== "1") createUpdateCheck({ dir: path.join(DATA, "update"), current: readBuildCommit() }).start();
 const app = createApp({
   // The same chats modelCandidates clamps: what the picker shows is what runs (model-policy.mjs).
@@ -2408,7 +3061,6 @@ const app = createApp({
     inboxRoutes(api, inbox, { store, setMode: (mode) => { config.set({ TELEGRAM_DM_MODE: mode }); store.bus.emit("chats", { type: "config" }); } });
     // A chat's repo picker: the clones under REPOS_ROOT; a new one is cloned by the broker.
     api.get("/api/repos", (c) => c.json({ repos: listRepos(REPOS_ROOT), root: REPOS_ROOT, default: defaultRepoName() }));
-    // «پیش‌فرض کن» in the picker: the repo a new chat starts on ("" clears it).
     api.put("/api/repos/default", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       const repo = String(body.repo ?? "");
@@ -2418,7 +3070,6 @@ const app = createApp({
     });
     api.post("/api/repos/clone", async (c) => {
       const body = await c.req.json().catch(() => ({}));
-      // A git URL (GitHub, any host) is cloned by the app itself; a GitLab group/name goes to the broker.
       if (isGitUrl(body.url || body.project)) {
         try {
           return c.json(await cloneUrl({ url: body.url || body.project, root: REPOS_ROOT, name: body.name || null }), 201);
@@ -2470,62 +3121,25 @@ const app = createApp({
     });
     // Models & providers page: what each engine runs on, its health, its models, and which agents use it.
     api.get("/api/providers", async (c) => {
-      const profiles = store.listAgentProfiles();
-      const list = await Promise.all(
-        accounts().filter((a) => !a.removed).map(async (account) => {
-          const { id, kind } = account;
-          const p = providers[id];
-          const config = providerConfig(id);
-          const [health, list, signedInAs] = await Promise.all([
-            // At most 8 s each: one engine behind a filtered network must not hold the whole page.
-            account.enabled && p ? withinTime(p.health(), 8_000, () => ({ ok: false, error: "timeout" })).catch((error) => ({ ok: false, error: String(error?.message || error) })) : { ok: false, error: "disabled" },
-            account.enabled && p ? withinTime(models(id), 8_000, () => []).catch(() => []) : [],
-            // The Claude login's email and plan (claude auth status), as Karsara showed them.
-            account.enabled && typeof p?.account === "function" ? withinTime(p.account(), 8_000, () => null).catch(() => null) : null,
-          ]);
-          let limit = null;
-          try {
-            limit = JSON.parse(store.getKv(`limitseen:${id}`) || "null");
-          } catch {
-            limit = null;
-          }
-          return {
-            id,
-            kind,
-            label: account.label || "",
-            enabled: account.enabled,
-            removable: true,
-            auto: account.auto,
-            hasKey: Boolean(providerKey(id)),
-            keyIn: secrets.has(`engine/${id}`) ? "secrets" : providerKey(id) ? "legacy" : null,
-            defaultModel: p?.defaultModel || null,
-            baseUrl: kind === PROVIDER_OPENAI ? config.baseUrl ?? (id === kind ? genv("OPENAI_BASE_URL", "") : "") : claudeEndpoint(id)?.baseUrl || null,
-            endpoint: claudeEndpoint(id)?.id || null,
-            reasoningEffort: kind === PROVIDER_OPENAI ? config.reasoningEffort ?? (id === kind ? genv("OPENAI_REASONING_EFFORT", "") : "") : null,
-            limitedUntil: isLimited(id) ? limitedUntil(id) : null,
-            lastLimit: limit,
-            // ok / limited / credit / no_key / off (engine-state.mjs); the list comes in this order.
-            state: stateOf(id).state,
-            creditAt: stateOf(id).state === "credit" ? creditAt(id) : null,
-            isDefault: defaultEngine() === id,
-            signedInAs,
-            health,
-            models: list.map((m) => ({ id: m.id, name: m.name || m.id })),
-            // The agents whose next chat would run here now (no agent has an engine of its own).
-            agents: profiles
-              .filter((a) => routeModel({ agent: a.id, caller: "owner" }).provider === id)
-              .map((a) => ({ id: a.id, label: a.label, model: a.model || null })),
-          };
-        }),
-      );
-      return c.json({ providers: rankByState(list, stateOf, (p) => p.id), defaultEngine: defaultEngine(), switchSameKind: switchSameKind(), kinds: KINDS, presets: OPENAI_PRESETS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })), claudeEndpoints: CLAUDE_ENDPOINTS.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })) });
+      return c.json(await buildProvidersPayload({ includeModels: true }));
+    });
+    api.post("/api/providers/:id/usage", async (c) => {
+      const id = c.req.param("id");
+      if (!plainClaude(id)) return c.json({ usage: null });
+      await accountLoads.refreshOne(id);
+      return c.json({ usage: accountLoads.usageOf(id) });
     });
     // A new engine account: a second Claude subscription, an OpenRouter key next to Z.ai, …
     api.post("/api/providers", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       const kind = String(body.kind || "");
       if (!KINDS.includes(kind)) return c.json({ error: "kind must be cursor, claude or openai" }, 400);
-      const id = addAccount(kind, { slug: String(body.slug || body.preset || ""), label: body.label });
+      // A subscription engine: an openai-* account named after its plan, signed in afterwards.
+      const plan = body.plan ? planOf(body.plan) : null;
+      if (body.plan && (!plan || kind !== PROVIDER_OPENAI)) return c.json({ error: "plan must be codex or antigravity on an openai account" }, 400);
+      const id = plan
+        ? addAccount(kind, { slug: String(body.slug || plan.id), label: body.label ?? plan.label, config: { plan: plan.id, model: plan.model } })
+        : addAccount(kind, { slug: String(body.slug || body.preset || ""), label: body.label });
       if (!id) return c.json({ error: "invalid account id" }, 400);
       return c.json({ id }, 201);
     });
@@ -2538,29 +3152,8 @@ const app = createApp({
       return c.json({ ok: true, sameKind: body.sameKind });
     });
     api.delete("/api/providers/:id", (c) => {
-      const id = c.req.param("id");
-      const list = accounts();
-      if (!list.some((a) => a.id === id && !a.removed)) return c.json({ error: "unknown provider" }, 404);
-      // A base account (claude, openai, cursor) is an id the code knows: it is hidden and off, its key
-      // gone; its Claude login folder (the main one) is left alone.
-      if (KINDS.includes(id)) {
-        saveAccounts(list.map((a) => (a.id === id ? { ...a, enabled: false, removed: true, label: "" } : a)));
-        secrets.delete(`engine/${id}`);
-        store.deleteKv(`provider:${id}`);
-        clearEngineMarks(id);
-        if (store.getKv("engine-default") === id || store.getKv("claude-active") === id) {
-          store.deleteKv("engine-default");
-          store.deleteKv("claude-active");
-        }
-        reconfigureProviders();
-        return c.json({ ok: true });
-      }
-      saveAccounts(list.filter((a) => a.id !== id));
-      secrets.delete(`engine/${id}`);
-      removeLoginDir(DATA, id);
-      store.deleteKv(`provider:${id}`);
-      if (store.getKv("engine-default") === id) store.deleteKv("engine-default");
-      reconfigureProviders();
+      const res = removeEngineAccount(c.req.param("id"));
+      if (res.error) return c.json({ error: res.error }, res.status || 400);
       return c.json({ ok: true });
     });
     // Claude account sign-in from the browser: the token lands in the secret store, never in a response.
@@ -2600,6 +3193,7 @@ const app = createApp({
         }
       },
     });
+    claudeSigninHolder.current = claudeSignin;
     // Karsara's account/usage routes (account-routes.mjs) on these same accounts.
     const zaiKey = () => {
       for (const a of accounts().filter((x) => x.enabled)) {
@@ -2608,15 +3202,15 @@ const app = createApp({
       }
       return "";
     };
-    const planAccount = () => activeClaude() || PROVIDER_CLAUDE;
-    const planLimits = createPlanUsageCache({ fetchUsage: () => providers[planAccount()]?.planUsage?.() ?? null });
+    const planUsageAccount = () => activeClaude() || PROVIDER_CLAUDE;
+    const planLimits = createPlanUsageCache({ fetchUsage: () => providers[planUsageAccount()]?.planUsage?.() ?? null });
     const resetLogin = (account) => {
       const dir = providers[account]?.loginDir?.();
       return dir ? readLogin(dir) : null;
     };
     const claudeResets = {
-      status: (account = planAccount()) => (resetLogin(account) ? fetchResets(resetLogin(account)) : { available: false, reason: "no_login" }),
-      claim: async (grantId, account = planAccount()) => {
+      status: (account = planUsageAccount()) => (resetLogin(account) ? fetchResets(resetLogin(account)) : { available: false, reason: "no_login" }),
+      claim: async (grantId, account = planUsageAccount()) => {
         const result = await claimReset(resetLogin(account), grantId);
         if (result.result === "reset") {
           clearEngineMarks(account);
@@ -2730,58 +3324,47 @@ const app = createApp({
         return c.json({ error: error.message }, 400);
       }
     });
+    // Subscription sign-in (Codex device code, Antigravity Google sign-in) for an openai-* plan account.
+    const planOr404 = (c) => {
+      const id = c.req.param("id");
+      return planAccount(id) && accounts().some((a) => a.id === id && !a.removed) ? id : null;
+    };
+    const noPlan = (c) => c.json({ error: "این حساب ورود اشتراکی ندارد؛ فهرست موتورها را دوباره باز کنید." }, 404);
+    api.post("/api/providers/:id/plan-signin", async (c) => {
+      const id = planOr404(c);
+      if (!id) return noPlan(c);
+      try {
+        return c.json(await subscriptions.start(id, planAccount(id).id));
+      } catch (error) {
+        return c.json({ error: `صفحهٔ ورود باز نشد (${String(error?.message || error).slice(0, 200)})؛ چند ثانیه بعد دوباره بزنید.` }, 502);
+      }
+    });
+    api.get("/api/providers/:id/plan-signin", (c) => {
+      const id = planOr404(c);
+      if (!id) return noPlan(c);
+      return c.json({ ...subscriptions.status(id), signedInAs: subscriptions.identity(id) });
+    });
+    api.post("/api/providers/:id/plan-signin/code", async (c) => {
+      const id = planOr404(c);
+      if (!id) return noPlan(c);
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        return c.json(await subscriptions.submit(id, String(body?.code || "")));
+      } catch (error) {
+        return c.json({ error: String(error?.message || error).slice(0, 300) }, 400);
+      }
+    });
+    api.delete("/api/providers/:id/plan-signin", (c) => {
+      const id = planOr404(c);
+      if (!id) return noPlan(c);
+      subscriptions.cancel(id);
+      return c.json({ ok: true });
+    });
     api.patch("/api/providers/:id", async (c) => {
       const id = c.req.param("id");
-      if (!kindOf(id)) return c.json({ error: "unknown provider" }, 404);
-      const kind = kindOf(id);
       const body = await c.req.json().catch(() => ({}));
-      // A rename touches nothing the engine runs on: no provider rebuild (a run in flight keeps its agent).
-      if (Object.keys(body).length === 1 && typeof body.label === "string") {
-        saveAccounts(accounts().map((a) => (a.id === id ? { ...a, label: body.label.trim().slice(0, 40) } : a)));
-        return c.json({ ok: true });
-      }
-      const next = { ...providerConfig(id) };
-      if (kind === PROVIDER_OPENAI && typeof body.preset === "string") {
-        const preset = OPENAI_PRESETS.find((p) => p.id === body.preset);
-        if (!preset) return c.json({ error: "unknown preset" }, 400);
-        next.baseUrl = preset.baseUrl;
-        // The preset's old key file still counts until a key is pasted here.
-        if (!secrets.has(`engine/${id}`)) next.keyFile = preset.keyFile;
-      }
-      // A second Claude account on another vendor's Anthropic-compatible endpoint ("" = plain Claude again).
-      if (kind === PROVIDER_CLAUDE && typeof body.endpoint === "string") {
-        const set = endpointSettings(next, body.endpoint, { base: id === PROVIDER_CLAUDE, hasSecret: secrets.has(`engine/${id}`) });
-        if (set.error) return c.json({ error: set.error }, 400);
-        for (const key of Object.keys(next)) delete next[key];
-        Object.assign(next, set.next);
-      }
-      if (kind === PROVIDER_OPENAI && typeof body.baseUrl === "string") {
-        if (body.baseUrl && !/^https?:\/\/[^\s]+$/.test(body.baseUrl)) return c.json({ error: "invalid base URL" }, 400);
-        next.baseUrl = body.baseUrl.trim();
-      }
-      if (kind === PROVIDER_OPENAI && typeof body.reasoningEffort === "string") {
-        if (!["", "low", "medium", "high"].includes(body.reasoningEffort)) return c.json({ error: "invalid reasoning effort" }, 400);
-        next.reasoningEffort = body.reasoningEffort;
-      }
-      if (typeof body.model === "string") next.model = body.model.trim().slice(0, 120);
-      if (typeof body.apiKey === "string" && body.apiKey.trim()) {
-        secrets.set(`engine/${id}`, body.apiKey.trim(), { note: `engine ${id}` });
-        delete next.keyFile;
-      }
-      if (typeof body.enabled === "boolean" || typeof body.label === "string" || typeof body.auto === "boolean" || (typeof body.apiKey === "string" && body.apiKey.trim())) {
-        saveAccounts(accounts().map((a) => (a.id === id ? {
-          ...a,
-          removed: false,
-          ...(a.removed ? { enabled: true } : {}),
-          ...(typeof body.auto === "boolean" ? { auto: body.auto } : {}),
-          ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
-          ...(typeof body.label === "string" ? { label: body.label.trim().slice(0, 40) } : {}),
-        } : a)));
-      }
-      if (body.clearLimit === true) clearEngineMarks(id);
-      if (body.default === true) setDefaultEngine(id);
-      store.setKv(`provider:${id}`, JSON.stringify(next));
-      reconfigureProviders();
+      const res = updateEngineAccount(id, body);
+      if (res.error) return c.json({ error: res.error }, res.status || 400);
       return c.json({ ok: true });
     });
     // Secrets (Settings → Secrets, `griffin secrets`): "app" = Griffin's own encrypted store (engine
@@ -2797,16 +3380,7 @@ const app = createApp({
       { name: "arvan__api-key", note: "ArvanCloud API key (full Authorization header)" },
       { name: "nsin__api-key", note: "NSIN CDN API key" },
     ];
-    // No broker (GRIFFIN_BROKER=off or no socket): app secrets still work, tool secrets say why not —
-    // in words the owner can act on, not a bare «no broker» (a colleague 2026-11-16 installed a broker
-    // container by hand; without the shared socket volume the app still could not see it).
-    const NO_BROKER = brokerWanted
-      ? "بروکر کنار این نصب در دسترس نیست (سوکت /run/griffin/broker.sock پیدا نشد). دستور نصب را دوباره بزنید تا بروکر با حجم مشترک کنار گریفین بالا بیاید؛ بروکری که جدا اجرا شود بدون این حجم مشترک دیده نمی‌شود."
-      : "بروکر در این نصب خاموش است (GRIFFIN_BROKER=off)؛ فقط سکرت‌های خود برنامه کار می‌کنند.";
-    const brokerSecrets = (method, body) =>
-      brokerEnabled()
-        ? brokerRequest(toolSource.socketPath, method, "/secrets", body, 20_000)
-        : Promise.resolve({ status: 503, body: { error: NO_BROKER } });
+    const brokerSecrets = (method, body) => brokerRequest(toolSource.socketPath, method, "/secrets", body, 20_000);
     api.get("/api/secrets", async (c) => {
       const tools = await brokerSecrets("GET").then((r) => (r.status === 200 ? r.body : { error: r.body?.error || `http_${r.status}` })).catch((error) => ({ error: `tools broker unreachable (${error.message})` }));
       return c.json({ app: secrets.list(), tools: { backend: tools.backend || null, items: tools.items || [], error: tools.error || null }, catalog: TOOL_SECRETS });
@@ -2886,6 +3460,21 @@ const app = createApp({
       const owners = modules.configOwners();
       return c.json({ settings: config.view().map((s) => (owners[s.key] ? { ...s, modules: owners[s.key] } : s)), activeRuns: runner.activeCount() });
     });
+    // This week's setting offered from how the owner works (SETTINGS_NUDGES), and its «بعداً» / applied.
+    api.get("/api/settings/nudge", (c) => c.json({ nudge: settingsNudges.current() }));
+    api.post("/api/settings/nudge/close", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      return c.json({ ok: settingsNudges.close(String(body?.rule || ""), body?.outcome === "applied" ? "applied" : "later") });
+    });
+    // «بپرس»: what the person wrote → at most three settings, checked against the catalogue; nothing applied.
+    api.post("/api/settings/suggest", async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      try {
+        return c.json(await suggestSettings(body?.query));
+      } catch (error) {
+        return c.json({ error: String(error?.message || error) }, error?.status || 502);
+      }
+    });
     api.patch("/api/config", async (c) => {
       try {
         const result = config.set(await c.req.json().catch(() => ({})));
@@ -2942,7 +3531,7 @@ const app = createApp({
         const client = integrations.accountClient();
         if (!client) throw new Error("Telegram account is not connected");
         if (!shot) return client.sendMessage("me", { message: text, linkPreview: false });
-        const { CustomFile } = await import("telegram/client/uploads.js");
+        const { CustomFile } = await import("teleproto/client/uploads");
         // A caption holds 1024 characters: a longer text goes as its own message first.
         if (text.length > 1000) await client.sendMessage("me", { message: text, linkPreview: false });
         await client.sendFile("me", { file: new CustomFile("page.jpg", shot.length, "", shot), caption: text.length > 1000 ? "🤖 تصویر صفحه" : text });
@@ -3056,7 +3645,7 @@ const app = createApp({
       workspace: WORKSPACE,
       onImported: () => store.bus.emit("chats", { type: "import" }),
     });
-    api.get("/api/setup/proxy", (c) => c.json({ url: ENV_PROXY || savedProxy(), fromEnv: envProxy }));
+    api.get("/api/setup/proxy", (c) => c.json({ url: savedProxy(), fromEnv: envProxy }));
     api.post("/api/setup/proxy", async (c) => {
       const body = await c.req.json().catch(() => ({}));
       const url = String(body.url || "").trim();
@@ -3077,9 +3666,8 @@ const app = createApp({
     api.get("/api/approvals", (c) => c.json({ approvals: store.listApprovals({ limit: Math.min(Number(c.req.query("limit")) || 100, 500) }) }));
 
     // Owner workbench on the sandbox (no creds, no kubeconfig): a shell and a file browser. Both run as
-    // one debug_exec on host "sandbox" — the same box the agent uses. (Agents have a real browser,
-    // browser.mjs, so there is no page fetcher.)
-    // Only with a broker (it holds the sandbox's SSH key).
+    // one debug_exec on host "sandbox" — the same box the agent uses. (The page fetcher went 2026-10-24:
+    // agents have a real browser now, browser.mjs.)
     const sandbox = (command) => callBrokerTool("debug_exec", { host: "sandbox", command });
     api.post("/api/sandbox/exec", async (c) => {
       const { command, cwd } = await c.req.json().catch(() => ({}));
@@ -3402,20 +3990,6 @@ const app = createApp({
         if (body.instructions.length > MAX_INSTRUCTIONS) return c.json({ error: `دستور حداکثر ${MAX_INSTRUCTIONS} نویسه است` }, 400);
         patch.meta = { ...(patch.meta || {}), instructions: body.instructions.trim() };
       }
-      if (typeof body.allTools === "boolean") patch.allTools = body.allTools;
-      // Who may call this agent, and with which tools. Callers named here are replaced; the rest stay.
-      if (body.callers && typeof body.callers === "object") {
-        const current = store.getAgentProfile(id)?.meta?.callers || {};
-        const next = { ...current };
-        for (const [caller, quota] of Object.entries(body.callers)) {
-          if (!/^[a-z0-9][a-z0-9:_-]{0,63}$/.test(caller)) continue;
-          if (quota === null) delete next[caller];
-          else if (quota?.tools === "*") next[caller] = { tools: "*" };
-          else if (Array.isArray(quota?.tools)) next[caller] = { tools: uniqueTools(quota.tools.map(String)) };
-        }
-        if (!next.owner) next.owner = { tools: "*" };
-        patch.meta = { ...(store.getAgentProfile(id)?.meta || {}), ...(patch.meta || {}), callers: next };
-      }
       if (typeof body.provider === "string" && kindOf(body.provider)) patch.provider = body.provider;
       if (typeof body.model === "string") patch.model = body.model.trim() || null;
       if (body.model === null) patch.model = null;
@@ -3449,7 +4023,6 @@ const app = createApp({
         updated = store.updateAgentProfile(id, { meta: { callers: customCallers(updated.tools) } });
       }
       if (id === "griffin" && patch.label) renameAssistant(store, patch.label);
-      refreshWorkspaces();
       return c.json({ agent: publicProfile(updated) });
     });
     api.get("/api/tool-catalog", async (c) => {
@@ -3639,13 +4212,14 @@ app.use("*", async (c, next) => {
   if (c.res && !c.res.headers.has("cache-control")) {
     c.res.headers.set("cache-control", c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
   }
-  // A CDN may keep «no-cache» files for minutes; CDN-Cache-Control is the
+  // A CDN may keep «no-cache» files for minutes (NSIN did, with an `age`); CDN-Cache-Control is the
   // standard header it can be told to obey. Only the hashed bundles may be kept.
   if (c.res && !c.req.path.startsWith("/api/") && !c.req.path.startsWith("/assets/") && !c.res.headers.has("cdn-cache-control")) {
     c.res.headers.set("cdn-cache-control", "no-store");
   }
 });
-// Per-install look: the repo ships Griffin's mark and colours; <data>/brand/icon.svg and brand.css override them on one install.
+// Per-install look (owner 2026-10-16: a Griffin built for someone else showed Iris's logo): the repo
+// ships Griffin's mark and colours; <data>/brand/icon.svg and brand.css override them on one install.
 const BRAND_DIR = path.join(DATA, "brand");
 for (const route of ["/icon.svg", "/agents/griffin.svg"]) {
   app.get(route, async (c, next) => {
@@ -3670,21 +4244,14 @@ app.get("/manifest.webmanifest", async (c) => {
   }, 200, { "content-type": "application/manifest+json" });
 });
 app.get("/brand.css", async (c) => c.body(upgradeBrandCss(await fs.promises.readFile(path.join(BRAND_DIR, "brand.css"), "utf8").catch(() => "")), 200, { "content-type": "text/css" }));
-// The web UI is one surface among several (terminal, messengers, MCP, jobs). GRIFFIN_WEB=off runs
-// the core headless: the API, the MCP endpoint and every integration stay exactly as they are.
-const serveWeb = genv("WEB", "on") !== "off" && fs.existsSync(WEB_DIST);
-if (serveWeb) {
-  app.use("/assets/*", serveStatic({ root: WEB_DIST, precompressed: true }));
-  app.get("/assets/*", (c) => c.text("not found", 404, { "cache-control": "no-store" })); // a bundle a deploy removed: never the SPA shell
-  // The shell is served by us (not serveStatic) so brand.css / icon.svg get a version on their URL.
-  const shell = shellHandler({ webDist: WEB_DIST, brandDir: BRAND_DIR });
-  app.get("/", shell);
-  app.get("/index.html", shell);
-  app.use("/*", serveStatic({ root: WEB_DIST, precompressed: true }));
-  app.get("*", shell);
-} else {
-  app.get("/", (c) => c.json({ griffin: "headless", ui: false, api: "/api", mcp: "/mcp" }));
-}
+app.use("/assets/*", serveStatic({ root: WEB_DIST, precompressed: true }));
+app.get("/assets/*", (c) => c.text("not found", 404, { "cache-control": "no-store" })); // a bundle a deploy removed: never the SPA shell
+// The shell is served by us (not serveStatic) so brand.css / icon.svg get a version on their URL.
+const shell = shellHandler({ webDist: WEB_DIST, brandDir: BRAND_DIR });
+app.get("/", shell);
+app.get("/index.html", shell);
+app.use("/*", serveStatic({ root: WEB_DIST, precompressed: true }));
+app.get("*", shell);
 
 // Notes («بعداً») whose time has come: checked every 20 s, each run once (claimed first). They
 // live in the store, so a restart only delays a due note to the first tick after it.

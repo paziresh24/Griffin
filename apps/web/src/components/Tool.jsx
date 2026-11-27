@@ -3,7 +3,7 @@ import { DotsSpinner } from "./Spinner.jsx";
 import { AnimatePresence, motion } from "motion/react";
 import { Streamdown } from "streamdown";
 import { code } from "@streamdown/code";
-import { BRAND, agentMeta } from "../brand.js";
+import { agentMeta, BRAND } from "../brand.js";
 import { targetLook, textDir } from "../dir.js";
 import { DirBlock } from "./DirBlock.jsx";
 import { api, navigate, useRoute } from "../api.js";
@@ -18,17 +18,17 @@ import {
 import { factEntries, hasValue, isLongText, isRecord, isScalar, isUrl, keyLabel, scalarText } from "../tool-detail.js";
 import { MediaView } from "./Media.jsx";
 import { ChartCard } from "./Chart.jsx";
+import { SettingsSuggestCard } from "./SettingsSuggest.jsx";
 import { PreviewCard } from "./Preview.jsx";
 import { AgentGlyph } from "./Controls.jsx";
-import { t, num } from "../i18n.js";
-import { useLook } from "../ui-prefs.js";
+import { useFlag, useLook } from "../ui-prefs.js";
 import { sentStatus } from "../telegram.js";
 import {
   AlertTriangle, AppWindow, Boxes, Check, ChevronDown, CircleDashed, CircleHelp, Cloud, Copy, Database, Eye, EyeOff, ExternalLink, FileText, FolderTree, GitBranch,
   Globe, HardDrive, KeyRound, Lock, Network, Send, ListChecks, Loader2, PencilLine, Router, ScrollText, Search, Server, ShieldAlert, Terminal, Trash2, Workflow, X,
-  Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox, Camera, Keyboard, MousePointerClick,
+  Square, Activity, AlarmClock, CalendarClock, BookOpen, Users, Pause, Inbox, Camera, Keyboard, MousePointerClick, Settings2,
 } from "lucide-react";
-
+import { locale, t } from "../i18n.js";
 import { todoList } from "../todos.js";
 
 // Peer-call child chats of the open chat (ask_agent/delegate), so a running peer card can link to
@@ -87,7 +87,7 @@ const TOOLS = {
   send_to_person: { icon: Send, label: t("📤 فرستادن به همکار"), open: true },
   edit_sent: { icon: Send, label: t("✏️ ویرایش پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : ""), open: true },
   delete_sent: { icon: Send, label: t("🗑 برداشتن پیام فرستاده"), subtitle: (a) => (a.id != null ? `#${a.id}` : "") },
-  react: { icon: Send, label: t("واکنش روی پیام"), subtitle: (a) => `${a.emoji || t("برداشتن واکنش")}${a.id != null ? ` · #${String(a.id).replace(/^#/, "")}` : ""}` },
+  react: { icon: Send, label: t("واکنش روی پیام"), subtitle: (a) => `${a.emoji || t("برداشتن")}${a.id != null ? ` · #${String(a.id).replace(/^#/, "")}` : ""}` },
   tell_person: { icon: Send, label: t("سپردن به چت مادر"), subtitle: (a) => a.person, open: true },
   telegram_people: { icon: Users, label: t("فهرست افراد") },
   feed_read: { icon: ScrollText, label: t("گزارش‌ها") },
@@ -98,7 +98,7 @@ const TOOLS = {
   grafana_query: { icon: Database, label: t("کوئری روی دیتاسورس Grafana"), subtitle: (a) => a.datasourceUid, open: true },
   s3_list: { icon: Database, label: t("فهرست باکت S3"), subtitle: (a) => [a.bucket, a.prefix].filter(Boolean).join(" / ") },
   s3_get: { icon: FileText, label: t("دریافت فایل از S3"), subtitle: (a) => `${a.bucket}/${a.key}`, open: true },
-  mikrotik_print: { icon: Router, label: t("خواندن میکروتیک"), subtitle: (a) => [a.router, a.path, a.where && Object.entries(a.where).map(([k, v]) => `${k}=${v}`).join(" ")].filter(Boolean).join(" ") },
+  mikrotik_print: { icon: Router, label: t("خواندن میکروتیک"), subtitle: (a) => [a.router || "yazd", a.path, a.where && Object.entries(a.where).map(([k, v]) => `${k}=${v}`).join(" ")].filter(Boolean).join(" ") },
   mikrotik_ping: { icon: Router, label: t("پینگ از میکروتیک"), subtitle: (a) => a.address },
   mikrotik_forward_add: { icon: Router, label: t("افزودن port forward"), subtitle: (a) => `:${a.publicPort} → ${a.toAddress}:${a.toPort}`, open: true },
   mikrotik_address_list_add: { icon: Router, label: t("افزودن به address-list"), subtitle: (a) => `${a.list} ← ${a.address}`, open: true },
@@ -184,13 +184,8 @@ const TOOLS = {
   knowledge_list: { icon: FolderTree, label: t("فهرست دانش"), subtitle: (a) => a.agent },
   knowledge_edit: { icon: FileText, label: t("ویرایش یادداشت"), subtitle: (a) => a.file },
   knowledge_delete: { icon: FileText, label: t("حذف یادداشت"), subtitle: (a) => a.file },
-  jobs_list: { icon: FolderTree, label: t("فهرست جاب‌ها") },
-  jobs_create: { icon: FolderTree, label: t("ساخت جاب"), subtitle: (a) => a.name },
-  jobs_update: { icon: FolderTree, label: t("ویرایش جاب"), subtitle: (a) => a.name || a.id },
-  jobs_delete: { icon: FolderTree, label: t("حذف جاب"), subtitle: (a) => a.id },
-  jobs_run: { icon: FolderTree, label: t("اجرای جاب"), subtitle: (a) => a.id },
 
-  // Claude Code's own tools. Griffin's Claude engine runs only griffin MCP tools
+  // Claude Code's own tools (Karsara Tool.jsx). Griffin's Claude engine runs only griffin MCP tools
   // with Bash off, but a stray native call still gets a label and icon instead of a raw-name row.
   Bash: { icon: Terminal, label: t("اجرای دستور"), subtitle: (a) => a.command },
   Edit: { icon: PencilLine, label: t("ویرایش فایل"), subtitle: (a) => a.file_path, open: true },
@@ -262,6 +257,13 @@ const TOOLS = {
   chat_suggest: { icon: Inbox, label: t("پیشنهاد گفتگوی تازه"), subtitle: (a) => a.title },
   chat_dismiss_suggestion: { icon: X, label: t("پس‌گرفتن پیشنهاد"), subtitle: (a) => a.id },
   chat_chapter: { icon: BookOpen, label: t("فصل تازهٔ گفتگو"), subtitle: (a) => a.title },
+  settings_suggest: { icon: Settings2, label: t("پیشنهاد تنظیم"), subtitle: (a) => a.need },
+  app_settings_get: { icon: Settings2, label: t("خواندن تنظیمات برنامه") },
+  app_settings_set: { icon: Settings2, label: t("تغییر تنظیمات برنامه"), open: true },
+  engine_list: { icon: Server, label: t("فهرست موتورها") },
+  engine_manage: { icon: Server, label: t("مدیریت موتورها"), subtitle: (a) => [a.action, a.id || a.label || a.kind].filter(Boolean).join(" · "), open: true },
+  connection_list: { icon: Network, label: t("فهرست اتصال‌ها") },
+  connection_manage: { icon: Network, label: t("مدیریت اتصال‌ها"), subtitle: (a) => [a.action, a.name || a.id].filter(Boolean).join(" · "), open: true },
   // Agents, network, MCP servers, self-check.
   list_agents: { icon: Users, label: t("فهرست ایجنت‌ها") },
   agent_create: { icon: Users, label: t("ساخت ایجنت"), subtitle: (a) => a.label, open: true },
@@ -321,7 +323,7 @@ const TOOLS = {
 // A running step under the Karsara skin: a thin spinning ring instead of a spinner icon.
 const Ring = () => <DotsSpinner label={t("در حال اجرا")} shape="grid" />;
 
-// A file path shortened to its last two segments, so the one-line row stays readable.
+// A file path shortened to its last two segments, so the one-line row stays readable (Karsara).
 export function shortTarget(value) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   if (/^[A-Za-z]:[\\/]|^\//.test(text) && !text.includes(" ")) return text.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
@@ -346,13 +348,15 @@ export function ToolCard(props) {
   if (props.toolName === "ask_owner" || props.toolName === "ask_requester") return <AskCard {...props} />;
   if (ASKS_INSIDE.has(props.toolName)) return <InnerAskCard {...props} />;
   if (props.toolName === "visualize") return <ChartCard {...props} />;
+  // A settings card the owner applies with their own click (settings-suggest.mjs); the agent changed nothing.
+  if (props.toolName === "settings_suggest") return <SettingsSuggestCard {...props} />;
   if (props.toolName === "preview_start") return <PreviewCard {...props} />;
   if (props.toolName === "ask_agent") return <PeerCard {...props} />;
   if (props.toolName === "task") return <TaskCard {...props} />;
   // A consult that ran but got no answer (timeout, the asking chat stopped) is a failure on the row too.
   if (props.toolName === "consult") return <GenericToolCard {...props} isError={props.isError || props.result?.state === "failed"} />;
-  // The board's "open" scrolls to this card (focus.js): by the chore id, or by title for older ones.
-  if (props.toolName === "owner_task") return <div data-chore={props.result?.id || ""} data-chore-title={props.args?.access ? `دسترسی: ${props.args.access}` : props.args?.title || ""}><GenericToolCard {...props} /></div>; // i18n-ignore: matches the server's chore title
+  // The board's «باز کردن» scrolls to this card (focus.js): by the chore id, or by title for older ones.
+  if (props.toolName === "owner_task") return <div data-chore={props.result?.id || ""} data-chore-title={props.args?.access ? t("دسترسی: {access}", { access: props.args.access }) : props.args?.title || ""}><GenericToolCard {...props} /></div>;
   return <GenericToolCard {...props} />;
 }
 
@@ -371,10 +375,10 @@ function PeerCard({ args = {}, result, isError, status }) {
     ? children.find((child) => child.agent === args.agent && child.runStatus === "running") || null
     : null;
   const headline = running
-    ? t("{agent} در حال انجام {task}…", { agent: meta.label, task: taskLine || t("درخواست") })
+    ? t("{label} در حال انجام {v}…", { label: meta.label, v: taskLine || t("درخواست") })
     : isError
-      ? t("{agent} · خطا", { agent: meta.label })
-      : t("{agent} · انجام شد", { agent: meta.label });
+      ? t("{label} · خطا", { label: meta.label })
+      : t("{label} · انجام شد", { label: meta.label });
   // Karsara: the same content in a flat frame (a tool row, the body in its own box).
   const karsara = useLook() === "karsara";
 
@@ -491,7 +495,7 @@ function ConsultBody({ args = {}, result }) {
           <p className="mt-1 whitespace-pre-wrap break-words text-sm" dir="auto">{question}</p>
         </details>
       ) : null}
-      {failed ? <p className="text-xs text-bad" dir="auto">{t("به جواب نرسید: {error}", { error: result.error || t("خطا") })}</p> : null}
+      {failed ? <p className="text-xs text-bad" dir="auto">{t("به جواب نرسید: {v}", { v: result.error || t("خطا") })}</p> : null}
       {answer ? <PeerMarkdown text={answer} /> : failed ? null : <p className="text-xs text-muted-foreground">{t("جوابی نیامد.")}</p>}
       {result?.from || result?.consultId ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -533,7 +537,7 @@ function PeerFacts({ facts, color }) {
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
       >
-        <span>{t("{n} خروجی ابزار", { n: num(facts.length) })}</span>
+        <span>{t("{toLocaleString} خروجی ابزار", { toLocaleString: facts.length.toLocaleString(locale) })}</span>
         <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }} className="ms-auto flex">
           <ChevronDown className="size-3.5" />
         </motion.span>
@@ -632,13 +636,13 @@ function TaskCard({ args = {}, result, isError, status, callId }) {
           <Workflow className={`mt-0.5 size-4 shrink-0 ${running ? "animate-pulse text-signal" : "text-muted-foreground"}`} />
           <div className="min-w-0 flex-1 space-y-0.5">
             <p className={`font-medium leading-snug ${running ? "shimmer" : ""}`} dir="auto">
-              {running ? t("زیرایجنت در حال انجام {task}…", { task: description }) : t("زیرایجنت · {task}", { task: description })}
+              {running ? t("زیرایجنت در حال انجام {description}…", { description }) : t("زیرایجنت · {description}", { description })}
             </p>
             {!running && steps.length ? (
               <p className="text-xs text-muted-foreground">
-                {toolCount ? t("{n} ابزار", { n: num(toolCount) }) : null}
+                {toolCount ? t("{toLocaleString} ابزار", { toLocaleString: toolCount.toLocaleString(locale) }) : null}
                 {toolCount && result?.durationMs ? " · " : null}
-                {result?.durationMs ? t("{n}ث", { n: num(Math.max(1, Math.round(result.durationMs / 1000))) }) : null}
+                {result?.durationMs ? t("{toLocaleString}ث", { toLocaleString: Math.max(1, Math.round(result.durationMs / 1000)).toLocaleString(locale) }) : null}
               </p>
             ) : null}
           </div>
@@ -700,10 +704,10 @@ function taskFinalText(steps) {
 // Bash's `description`, or the `intent` a guarded call carries), else where the command ran — and the
 // raw command waits in the opened body. Running or failed, the command stays on the row too.
 const SHELL_PLACES = {
-  debug_exec: (a) => (a.host && a.host !== "sandbox" ? t("دستور روی {host}", { host: a.host }) : t("دستور در سندباکس")),
+  debug_exec: (a) => ({ debug: t("دستور روی نود کلاستر debug"), capsule: t("دستور روی کپسول"), griffin: t("دستور روی سرور گریفین") })[a.host] || (a.host && a.host !== "sandbox" ? t("دستور روی {host}", { host: a.host }) : t("دستور در سندباکس")),
   ssh_exec: (a) => (a.host ? t("دستور روی {host}", { host: a.host }) : t("دستور روی سرور")),
   kube_exec: (a) => (a.pod ? t("دستور داخل پاد {pod}", { pod: a.pod }) : t("دستور داخل پاد")),
-  mikrotik_exec: (a) => (a.router ? t("کنسول میکروتیک {router}", { router: a.router }) : t("کنسول میکروتیک")),
+  mikrotik_exec: (a) => t("کنسول میکروتیک {v}", { v: a.router || "" }).trim(),
   Bash: () => t("دستور"),
 };
 
@@ -714,7 +718,7 @@ export function stepTitle(toolName, args) {
   return own ? own.replace(/\s+/g, " ").trim() : place(args || {});
 }
 
-// One plain line for a step in progress: its own title, else "label — target" from TOOLS, else null.
+// One plain line for a step in progress: its own title, else «label — target» from TOOLS, else null.
 export function stepLine(toolName, args) {
   const own = stepTitle(toolName, args);
   if (own) return own;
@@ -756,7 +760,11 @@ function GenericToolCard({ toolName, args = {}, result, isError, status, callId 
           {target ? (
             <>
               <span aria-hidden>·</span>
-              <span dir={targetLook(target).dir} className={targetLook(target).className} title={String(target)}>{shortTarget(target)}</span>
+              {karsara ? (
+                <span dir={targetLook(target).dir} className={targetLook(target).className} title={String(target)}>{shortTarget(target)}</span>
+              ) : (
+                <span className="ltr min-w-0 truncate font-mono text-xs" title={String(target)}>{shortTarget(target)}</span>
+              )}
             </>
           ) : null}
           <span className="ms-auto flex shrink-0 items-center gap-2">
@@ -895,7 +903,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
       return diff ? <Diff text={diff} /> : <GenericDetail args={args} result={result} />;
     }
     case "read":
-      return <Code text={result?.content} footer={result?.totalLines ? t("{n} خط", { n: num(result.totalLines) }) : null} />;
+      return <Code text={result?.content} footer={result?.totalLines ? t("{totalLines} خط", { totalLines: result.totalLines }) : null} />;
     case "updateTodos":
     case "readTodos":
     case "TodoWrite":
@@ -910,13 +918,13 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
     case "kube_logs":
       return <Code text={result?.logs} />;
     case "kube_get":
-      return <Table rows={result?.items} footer={result?.truncated ? t("{shown} از {total}", { shown: num(result.items.length), total: num(result.total) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
+      return <Table rows={result?.items} footer={result?.truncated ? t("{length} از {total}", { length: result.items.length, total: result.total }) : t("{v} مورد", { v: result?.total ?? 0 })} />;
     case "kube_secret":
       return <SecretBody data={result?.data} note={`${result?.namespace}/${result?.name}`} />;
     case "infisical_get":
       return <SecretBody data={result?.value != null ? { [args.name || "value"]: result.value } : {}} note={result?.path} />;
     case "gitlab_projects":
-      return <Table rows={(result?.projects || []).map((p) => ({ path: p.path, branch: p.defaultBranch }))} columns={["path", "branch"]} footer={t("{n} پروژه", { n: num(result?.projects?.length ?? 0) })} />;
+      return <Table rows={(result?.projects || []).map((p) => ({ path: p.path, branch: p.defaultBranch }))} columns={["path", "branch"]} footer={t("{v} پروژه", { v: result?.projects?.length ?? 0 })} />;
     case "gitlab_search":
       return result?.scope === "projects"
         ? <List items={(result?.results || []).map((r) => r.path)} total={result?.results?.length} />
@@ -924,7 +932,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
           <div className="space-y-2">
             {(result?.results || []).map((r, i) => (
               <div key={i} className="rounded-md border bg-muted/40 p-2">
-                <p className="ltr text-xs text-muted-foreground">{t("پروژه {project}", { project: r.project })} · {r.path}{r.startline ? `:${r.startline}` : ""}</p>
+                <p className="ltr text-xs text-muted-foreground">{t("پروژه {project} · {path}{v}", { project: r.project, path: r.path, v: r.startline ? `:${r.startline}` : "" })}</p>
                 <pre className="ltr mt-1 overflow-x-auto whitespace-pre-wrap break-words text-xs">{r.line}</pre>
               </div>
             ))}
@@ -934,7 +942,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
     case "gitlab_file":
       return <Code text={result?.content} footer={`${result?.path} @ ${result?.ref}`} />;
     case "arvan_dns_records":
-      return <Table rows={result?.records} columns={["type", "name", "value", "ttl", "cloud"]} footer={t("{n} رکورد", { n: num(result?.total ?? 0) })} />;
+      return <Table rows={result?.records} columns={["type", "name", "value", "ttl", "cloud"]} footer={t("{v} رکورد", { v: result?.total ?? 0 })} />;
     case "arvan_dns_export":
       return <Code text={result?.bind} footer={result?.domain} />;
     case "dns_lookup":
@@ -965,7 +973,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
 
 
     case "infisical_projects":
-      return <Table rows={result?.projects} columns={["name", "id"]} footer={t("{n} پروژه", { n: num(result?.projects?.length ?? 0) })} />;
+      return <Table rows={result?.projects} columns={["name", "id"]} footer={t("{v} پروژه", { v: result?.projects?.length ?? 0 })} />;
     case "infisical_list":
       return <List items={[...(result?.folders || []).map((f) => `📁 ${f}`), ...(result?.secrets || [])]} total={(result?.folders?.length || 0) + (result?.secrets?.length || 0)} />;
     case "infisical_upsert":
@@ -999,7 +1007,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
     case "gitlab_project_member":
       return <GitlabMemberBody args={args} result={result} />;
     case "mikrotik_print":
-      return <Table rows={result?.items} footer={result?.truncated ? t("{n} مورد (بریده شد)", { n: num(result?.total ?? 0) }) : t("{n} مورد", { n: num(result?.total ?? 0) })} />;
+      return <Table rows={result?.items} footer={t("{v} مورد{v2}", { v: result?.total ?? 0, v2: result?.truncated ? t(" (بریده شد)") : "" })} />;
     case "mikrotik_ping":
       return <p className="ltr font-mono">{result?.received}/{result?.sent} {result?.times?.length ? `· ${result.times.join(" ")}` : ""}</p>;
     case "pg_query":
@@ -1009,12 +1017,12 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
           <Table
             rows={result?.rows}
             columns={result?.columns?.length ? result.columns.slice(0, 12) : undefined}
-            footer={`${result?.truncated ? t("{n} ردیف (۵۰۰ ردیف اول)", { n: num(result?.rowCount ?? 0) }) : t("{n} ردیف", { n: num(result?.rowCount ?? 0) })} · ${result?.mode === "read-write" ? t("خواندن‌ونوشتن") : t("فقط‌خواندنی")} · ${result?.database} · ${result?.ms ?? ""}ms`}
+            footer={t("{v} ردیف{v2} · {v3} · {database} · {v4}ms", { v: result?.rowCount ?? 0, v2: result?.truncated ? t(" (۵۰۰ ردیف اول)") : "", v3: result?.mode === "read-write" ? t("خواندن‌ونوشتن") : t("فقط‌خواندنی"), database: result?.database, v4: result?.ms ?? "" })}
           />
         </div>
       );
     case "telegram_dialogs":
-      return <Table rows={result?.dialogs} columns={["title", "type", "unread", "lastAt"]} footer={t("{n} گفتگو", { n: num(result?.dialogs?.length ?? 0) })} />;
+      return <Table rows={result?.dialogs} columns={["title", "type", "unread", "lastAt"]} footer={t("{v} گفتگو", { v: result?.dialogs?.length ?? 0 })} />;
     case "telegram_read":
       return (
         <ul className="scrollbar-thin max-h-96 space-y-2 overflow-y-auto">
@@ -1034,17 +1042,17 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
     case "owner_task":
       return args.why || args.detail ? <p className="whitespace-pre-wrap break-words text-sm" dir="auto">{args.why || args.detail}</p> : <p className="text-sm" dir="auto">{args.access || args.title}</p>;
     case "react":
-      return <p className="text-sm">{result?.reacted ? t("✓ {emoji} روی پیام #{id}", { emoji: result.emoji || t("واکنش برداشته شد"), id: result.id }) : result?.held ? t("نرفت: شما در گفتگو بودید یا پاسخ‌ها خاموش است") : result?.error ? t("نرفت: {error}", { error: result.error }) : t("نرفت")}</p>;
+      return <p className="text-sm">{result?.reacted ? t("✓ {v} روی پیام #{id}", { v: result.emoji || t("واکنش برداشته شد"), id: result.id }) : result?.held ? t("نرفت: شما در گفتگو بودید یا پاسخ‌ها خاموش است") : t("نرفت{v}", { v: result?.error ? `: ${result.error}` : "" })}</p>;
     case "telegram_send":
-      return <p className="text-sm">{result?.sent ? t("✓ فرستاده شد به «{chat}»", { chat: result.chat }) : result?.reason ? t("فرستاده نشد ({reason})", { reason: result.reason }) : t("فرستاده نشد")}</p>;
+      return <p className="text-sm">{result?.sent ? t("✓ فرستاده شد به «{chat}»", { chat: result.chat }) : t("فرستاده نشد{v}", { v: result?.reason ? ` (${result.reason})` : "" })}</p>;
     case "grafana_search":
-      return <Table rows={result?.dashboards} columns={["title", "folder", "uid"]} footer={t("{n} داشبورد", { n: num(result?.dashboards?.length ?? 0) })} />;
+      return <Table rows={result?.dashboards} columns={["title", "folder", "uid"]} footer={t("{v} داشبورد", { v: result?.dashboards?.length ?? 0 })} />;
     case "grafana_dashboard":
       return (
         <Table
           rows={(result?.panels || []).map((p) => ({ id: p.id, title: p.title, type: p.type, query: p.targets?.[0]?.query?.replace(/\s+/g, " ").slice(0, 80) || "" }))}
           columns={["id", "title", "type", "query"]}
-          footer={`${result?.title || ""} · ${t("{n} پنل", { n: num(result?.panels?.length ?? 0) })}`}
+          footer={t("{v} · {v2} پنل", { v: result?.title || "", v2: result?.panels?.length ?? 0 })}
         />
       );
     case "grafana_panel_query":
@@ -1055,7 +1063,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
         <Table
           rows={(result?.objects || []).map((o) => ({ key: o.key, size: o.size, lastModified: o.lastModified }))}
           columns={["key", "size", "lastModified"]}
-          footer={result?.complete ? t("{n} کلید خوانده شد", { n: num(result?.scanned ?? 0) }) : t("{n} کلید خوانده شد — کل باکت نه؛ ترتیب فقط روی همین‌ها", { n: num(result?.scanned ?? 0) })}
+          footer={t("{v} کلید خوانده شد{v2}", { v: result?.scanned ?? 0, v2: result?.complete ? "" : t(" — کل باکت نه؛ ترتیب فقط روی همین‌ها") })}
         />
       );
     case "s3_get":
@@ -1066,7 +1074,7 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
       return (
         <div className="space-y-1.5">
           <p className="text-sm" dir="auto">
-            {result?.replaced != null ? t("{toLocaleString} جایگزینی در ", { toLocaleString: Number(result.replaced).toLocaleString("fa-IR") }) : t("ویرایش ")}
+            {result?.replaced != null ? t("{toLocaleString} جایگزینی در ", { toLocaleString: Number(result.replaced).toLocaleString(locale) }) : t("ویرایش ")}
             <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
             {args.all ? t(" (همهٔ موارد)") : ""}
           </p>
@@ -1078,14 +1086,14 @@ function ToolBody({ toolName, args, result, isError, callId = null }) {
         <div className="space-y-1.5">
           <p className="text-sm" dir="auto">
             {t("نوشته شد:")} <code className="ltr font-mono text-xs">{result?.path || args.path}</code>
-            {result?.written != null ? t(" · {toLocaleString} بایت", { toLocaleString: Number(result.written).toLocaleString("fa-IR") }) : ""}
+            {result?.written != null ? t(" · {toLocaleString} بایت", { toLocaleString: Number(result.written).toLocaleString(locale) }) : ""}
           </p>
           <Diff text={buildEditDiff({ content: args.content })} />
         </div>
       );
     case "repo_read":
       return result?.binary
-        ? <p className="text-sm text-muted-foreground" dir="auto">{t("فایل باینری است ({toLocaleString} بایت)؛ متن ندارد.", { toLocaleString: Number(result.bytes || 0).toLocaleString("fa-IR") })}</p>
+        ? <p className="text-sm text-muted-foreground" dir="auto">{t("فایل باینری است ({toLocaleString} بایت)؛ متن ندارد.", { toLocaleString: Number(result.bytes || 0).toLocaleString(locale) })}</p>
         : <Code text={result?.text} footer={`${result?.path || args.path}${result?.shown ? t(" · خط {v} تا {v2} از {lines}", { v: result.shown[0], v2: result.shown[1], lines: result.lines }) : ""}${result?.cutAtBytes ? t(" · ادامهٔ فایل بریده شد") : ""}`} />;
     case "repo_list":
       return <List items={result?.files} total={result?.total} />;
@@ -1128,7 +1136,7 @@ function GrafanaResults({ value }) {
         r.error ? (
           <p key={i} className="ltr text-bad">{r.refId}: {r.error}</p>
         ) : (
-          <Table key={i} rows={r.rows} footer={[r.name || r.refId, t("{n} ردیف", { n: num(r.rowCount) }), r.truncated].filter(Boolean).join(" · ")} />
+          <Table key={i} rows={r.rows} footer={[r.name || r.refId, t("{rowCount} ردیف", { rowCount: r.rowCount }), r.truncated].filter(Boolean).join(" · ")} />
         ),
       )}
     </div>
@@ -1337,7 +1345,7 @@ function List({ items = [], total, unit = t("فایل") }) {
       <ul className="ltr scrollbar-thin max-h-72 overflow-auto font-mono text-xs leading-5">
         {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
-      {total ? <p className="mt-1 text-xs text-muted-foreground">{num(total)} {unit}</p> : null}
+      {total ? <p className="mt-1 text-xs text-muted-foreground">{total} {unit}</p> : null}
     </div>
   );
 }
@@ -1350,7 +1358,7 @@ function Table({ rows = [], columns, footer }) {
       <div className="ltr scrollbar-thin max-h-96 overflow-auto rounded-md border">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-muted">
-            <tr>{keys.map((k) => <th key={k} className="px-2 py-1 text-start font-medium whitespace-nowrap">{k}</th>)}</tr>
+            <tr>{keys.map((k) => <th key={k} className="px-2 py-1 text-left font-medium whitespace-nowrap">{k}</th>)}</tr>
           </thead>
           <tbody>
             {rows.map((row, i) => (
@@ -1419,7 +1427,7 @@ function Facts({ data, depth = 0 }) {
 function FactValue({ value, depth }) {
   if (Array.isArray(value)) {
     if (!value.length) return <span className="text-muted-foreground">{t("خالی")}</span>;
-    if (value.every(isRecord)) return <Table rows={value} footer={t("{toLocaleString} مورد", { toLocaleString: value.length.toLocaleString("fa-IR") })} />;
+    if (value.every(isRecord)) return <Table rows={value} footer={t("{toLocaleString} مورد", { toLocaleString: value.length.toLocaleString(locale) })} />;
     return (
       <ul className="list-disc space-y-0.5 ps-5">
         {value.map((item, i) => <li key={i}><FactValue value={item} depth={depth + 1} /></li>)}

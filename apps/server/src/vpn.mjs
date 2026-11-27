@@ -5,6 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
 import { connectTunnel } from "./egress.mjs";
+import { genv } from "./env.mjs";
 
 // The built-in VPN (owner 2026-10-17: «توی ویزارد بدون ایجنت هیچ جایی نمیتونن لینک ساب یا وی تو ری بدن»):
 // the wizard takes a vless/vmess/trojan/ss/http/socks link, several of them, a subscription URL or a
@@ -20,7 +21,7 @@ export const VPN_ENV = {
   CURSOR_PROXY: `http://127.0.0.1:${HTTP_PORT}`,
   HTTPS_PROXY: `http://127.0.0.1:${HTTP_PORT}`,
   HTTP_PROXY: `http://127.0.0.1:${HTTP_PORT}`,
-  NO_PROXY: "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+  NO_PROXY: "localhost,127.0.0.1,::1,.ir,example.com,.example.com,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
   GRIFFIN_TELEGRAM_SOCKS: `socks5://127.0.0.1:${SOCKS_PORT}`,
 };
 const PROXY_PROTOCOLS = new Set(["vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "hysteria2", "wireguard"]);
@@ -33,8 +34,13 @@ const MAX_SERVERS = 64;
 // direct; Telegram and the AI providers → the VPN; everything else → direct. The first and the
 // last rule are what keep a LAN address or an Iranian IP off the VPN whatever the caller sends.
 export const PRIVATE_CIDRS = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fc00::/7", "fe80::/10"];
-export const DIRECT_DOMAINS = ["domain:ir", "domain:localhost", "domain:local", "domain:internal", "full:host.docker.internal"];
-export const PROVIDER_DOMAINS = ["anthropic.com", "claude.ai", "claude.com", "cursor.sh", "cursor.com", "cursorapi.com", "openai.com", "openrouter.ai", "x.ai", "generativelanguage.googleapis.com", "telegram.org", "telegram.me", "t.me", "telegra.ph"];
+export const DIRECT_DOMAINS = ["domain:ir", "domain:example.com", "domain:localhost", "domain:local", "domain:internal", "full:host.docker.internal"];
+export const PROVIDER_DOMAINS = ["anthropic.com", "claude.ai", "claude.com", "cursor.sh", "cursor.com", "cursorapi.com", "openai.com", "openrouter.ai", "x.ai", "generativelanguage.googleapis.com",
+  // Subscription sign-ins (subscription-auth.mjs): Codex on chatgpt.com, Antigravity on Cloud Code + Google's
+  // token host. Listed here, not only from the enabled engines: a fresh card is off, and its «تست» and sign-in
+  // went out from Iran — «User location is not supported» (2026-11-22).
+  "chatgpt.com", "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com", "oauth2.googleapis.com",
+  "telegram.org", "telegram.me", "t.me", "telegra.ph"];
 // Telegram's data centres (the account client connects to these by IP).
 export const TELEGRAM_CIDRS = ["91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22", "109.239.140.0/24", "149.154.160.0/20", "185.76.151.0/24", "2001:67c:4e8::/48", "2001:b28:f23c::/48", "2001:b28:f23d::/48", "2001:b28:f23f::/48", "2a0a:f280::/32"];
 
@@ -47,7 +53,7 @@ export function proxiedHost(value) {
     return null;
   }
   if (!host || !host.includes(".") || net.isIP(host)) return null;
-  if (/(^|\.)ir$/.test(host) || /(^|\.)(paziresh24\.com|localhost|local|internal)$/.test(host)) return null;
+  if (/(^|\.)ir$/.test(host) || /(^|\.)(localhost|local|internal)$/.test(host)) return null;
   return host;
 }
 
@@ -247,10 +253,19 @@ const rulesFor = (rules, target) => {
   return [domains.length ? { type: "field", domain: domains, ...target } : null, ips.length ? { type: "field", ip: ips, ...target } : null].filter(Boolean);
 };
 
-export function xrayConfig(outbounds, { hosts = [], direct = [], proxied = [] } = {}) {
+export function xrayConfig(outbounds, { hosts = [], direct = [], proxied = [], pin = "" } = {}) {
   const proxies = outbounds.map((o, i) => ({ ...o, tag: `proxy-${i}` }));
   const many = proxies.length > 1;
   const via = many ? { balancerTag: "best" } : { outboundTag: "proxy-0" };
+  // One exit for the account, not a lottery (owner 2026-11-25: five subscription accounts were
+  // banned and every one had been used through Griffin; leastLoad hops between a dozen servers, and
+  // a subscription that changes country in the middle of a session is what an anti-fraud calls
+  // evasion). `pin` is the outbound id (or 1-based index) of the single server the vendor domains
+  // must use. Only when that server is gone does the balancer take over again — never `direct`,
+  // which would send Claude out from the server's own address.
+  const pinIdx = pin === "" ? -1 : /^\d+$/.test(String(pin)) ? Number(pin) - 1 : outbounds.findIndex((o, i) => outboundId(o) === pin || `proxy-${i}` === pin);
+  const pinned = pinIdx >= 0 && pinIdx < proxies.length ? proxies[pinIdx].tag : null;
+  const vendorVia = pinned ? { outboundTag: pinned } : via;
   const domains = [...new Set([...PROVIDER_DOMAINS, ...hosts.map(proxiedHost).filter(Boolean)])].map((d) => `domain:${d}`);
   const cfg = {
     log: { loglevel: "warning" },
@@ -264,19 +279,24 @@ export function xrayConfig(outbounds, { hosts = [], direct = [], proxied = [] } 
       ...(many ? { balancers: [{ tag: "best", selector: ["proxy-"], fallbackTag: "proxy-0", strategy: { type: "leastLoad", settings: { expected: 2, maxRTT: "4s", tolerance: 0.3 } } }] } : {}),
       // Order matters, the first match wins: the LAN and internal names, then what the owner pinned
       // direct (it beats the provider list: api.z.ai can be sent direct), then what he pinned to the
-      // VPN, then the providers and Telegram, then everything else direct.
+      // VPN, then the providers and Telegram, then everything else direct. The providers' own list
+      // goes to one fixed exit when one is pinned (vendorVia), so a session never changes country.
       rules: [
         { type: "field", ip: PRIVATE_CIDRS, outboundTag: "direct" },
         { type: "field", domain: DIRECT_DOMAINS, outboundTag: "direct" },
         ...rulesFor(direct, { outboundTag: "direct" }),
         ...rulesFor(proxied, via),
-        { type: "field", domain: domains, ...via },
+        { type: "field", domain: domains, ...vendorVia },
         { type: "field", ip: TELEGRAM_CIDRS, ...via },
         { type: "field", network: "tcp,udp", outboundTag: "direct" },
       ],
     },
   };
   if (many) cfg.burstObservatory = { subjectSelector: ["proxy-"], pingConfig: { destination: "https://www.gstatic.com/generate_204", interval: "1m", sampling: 3, timeout: "8s" } };
+  // A pinned exit that is not in this config (removed or off) falls back to the balancer; say so once
+  // so a person can see why Claude started moving between countries again.
+  cfg.__pinned = pinned || null;
+  cfg.__pinRequested = pin || null;
   return cfg;
 }
 
@@ -456,7 +476,7 @@ export function createVpn({ dataDir, env = process.env, fetchText = defaultFetch
   }
   const usable = (s) => s.live && !s.off;
   const liveServers = () => loadBook().servers.filter(usable).sort(byMs);
-  const configOf = () => xrayConfig(liveServers().map((s) => s.outbound), { hosts: loadBook().hosts, ...loadBook().rules });
+  const configOf = () => xrayConfig(liveServers().map((s) => s.outbound), { hosts: loadBook().hosts, ...loadBook().rules, pin: genv("CLAUDE_EGRESS_PIN", "") });
 
   // The app image has no /etc/ssl/certs: Xray (Go) gets Node's own root CAs, or every TLS server fails.
   const xrayEnv = () => {

@@ -752,7 +752,7 @@ test("a chat moved to another repo gets a new agent (same session) instead of th
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// 2026-10-28 (Mr. Nouri's job): two processes renewed one account's token at once and the turn died
+// 2026-10-28 (a colleague's job): two processes renewed one account's token at once and the turn died
 // with «refreshing it or exited mid-refresh». It waits, then the same turn goes once more on the same session.
 test("a token renewal race is retried once on the same session after the wait", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-refresh-"));
@@ -786,7 +786,7 @@ test("a token renewal race is retried once on the same session after the wait", 
   }
 });
 
-// Mr. Khajavi 2026-10-29: an account whose OAuth login had expired took six runs of one chat in a row.
+// a colleague 2026-10-29: an account whose OAuth login had expired took six runs of one chat in a row.
 // A refused login marks the account the run was on and the turn is tried once more elsewhere.
 test("a refused login marks its account and retries the turn once on another", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-auth-"));
@@ -811,7 +811,8 @@ test("a refused login marks its account and retries the turn once on another", a
   try {
     const chat = store.createChat({ title: "t" });
     await runner.send(chat.id, { text: "سلام", images: [] });
-    await until(() => !store.runningRuns().length && sends.length === 2);
+    // Two turns back to back: 2 s ran out on a busy CI runner (MRs !506, !507), never locally.
+    await until(() => !store.runningRuns().length && sends.length === 2, 15_000);
     assert.deepEqual(marked, ["claude-5"]);
     assert.deepEqual(sends, ["claude-5", "claude-6"]);
   } finally {

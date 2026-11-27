@@ -68,3 +68,10 @@ test("the wait has a limit", async () => {
   await loginGate(a.key, { waitMs: 300, log: () => {} });
   assert.ok(Date.now() - started >= 250 && Date.now() - started < 1500);
 });
+
+test("a login Claude Code blanked reads empty; an account with no login folder reads nothing (a colleague, 2026-11-23)", () => {
+  const { dir } = account({ accessToken: "", refreshToken: "", expiresAt: 0 });
+  assert.equal(loginState(dir).empty, true);
+  assert.equal(loginState(null), null);
+  assert.equal(loginState(path.join(dir, "missing")), null);
+});

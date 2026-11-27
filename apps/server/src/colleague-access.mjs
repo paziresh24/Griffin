@@ -62,6 +62,18 @@ export function fullAccess(store, rootChatId, now = Date.now()) {
   return null;
 }
 
+/**
+ * His grant is live on this chain's root right now — a read only (fullAccess() also ends a stale grant).
+ * The runner keys its cached session on it: tools and the «بپرس» guard are built once per session, so
+ * without this a sub-chat delegated before his yes kept refusing after it (2026-11-16: Arvan-Ban's DNS
+ * create for a colleague was refused 11 s after «granted», and the work waited 5 more hours).
+ */
+export function fullAccessLive(store, rootChatId, now = Date.now()) {
+  const grant = store.getKv?.(KEY(rootChatId));
+  if (!grant || !(Date.parse(grant.until) > now)) return false;
+  return (store.getChat(rootChatId)?.mode || "agent") === "agent";
+}
+
 /** The question he answers: who, what for, and what «اجازه بده» does — in plain Persian. */
 export function fullAccessQuestion({ who, why }) {
   return `${who ? `${who}: ` : ""}${why}\nبرای انجامش این گفتگو دسترسی بیشتری لازم دارد. اجازه می‌دهید تا ${FULL_ACCESS_HOURS} ساعت «بدون پرسیدن» با دسترسی شما کار را انجام دهد؟`;
@@ -112,7 +124,7 @@ export function ownerChatQuestion({ who, title, why, prompt }) {
 
 /**
  * request_owner_chat: full access is Griffin's tools, not his shell and keys, so a login on a server
- * stays out of a colleague's conversation (owner 2026-11-04: a colleague server disk, the assistant has no
+ * stays out of a colleague's conversation (owner 2026-11-04: the disk of 192.0.2.60, griffin has no
  * sudo, «بدون پرسیدن» changed nothing). His yes to this one job starts a chat of his own (handoff.mjs):
  * the colleague side's text is framed as evidence there and each result comes back. The colleague's
  * chain itself never gets his keys. start(row) starts the chat, notify(text, chatId) rings him.

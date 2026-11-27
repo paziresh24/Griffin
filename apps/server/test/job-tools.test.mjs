@@ -118,3 +118,19 @@ test("jobs_update and jobs_delete change the store", async () => {
     s.cleanup();
   }
 });
+
+test("jobs_create makes a webhook job and never returns its token", async () => {
+  const s = setup();
+  try {
+    const created = payload(await s.tools.jobs_create.execute({
+      name: "پاسخ لحظه‌ای", prompt: "تیکت را پردازش کن", triggerType: "webhook",
+      trigger: { fields: ["ticket.id"], actions: ["reply_received_employee"], maxConcurrent: 3 },
+    }));
+    assert.equal(created.trigger, "webhook");
+    assert.equal(created.nextAt, null);
+    assert.ok(!JSON.stringify(created).includes(s.jobs.get(created.id).trigger.token));
+    assert.deepEqual(s.jobs.get(created.id).trigger.fields, ["ticket.id"]);
+  } finally {
+    s.cleanup();
+  }
+});

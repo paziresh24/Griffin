@@ -1,10 +1,11 @@
-// Central usage accounting: one install (the hub, SUPPORT_AGENT) sees what every install of a fleet
-// spends, per install and per shared Claude account, and alerts its owner.
+// Central usage accounting (owner 2026-10-19: «یه بخش به گریفین اضافه کن که اکانتینگ ادمین رو روی
+// آیریس ارائه بده (برای بقیه در دسترس نباشه)… از دیتابیس‌های گریفین مصارف همه رو دربیاره و بگه هر
+// اینستنس چقدر مصرف داشته و آلرت بده. shared accounts»).
 //
 // Every install builds a report from its own database (the `usage` events of the last 14 days, by
 // engine account and model) plus what it knows of each Claude login: a fingerprint of the key (never
 // the key), the plan windows its last run saw, and the last limit it hit. It posts the report every
-// 15 minutes to the hub install (SUPPORT_AGENT, as feedback.mjs; unset = nothing is sent) over the agents' network,
+// 15 minutes to the maintainer's install (SUPPORT_AGENT, as feedback.mjs) over the agents' network,
 // with the token that install gave it. Only there — the hub — the reports are kept, put together
 // (per install, per Claude account) and watched: GET /api/accounting answers 404 everywhere else.
 //
@@ -29,6 +30,25 @@ const KV_INSTALLS = "accounting:installs";
 const KV_LABELS = "accounting:labels";
 const KV_ALERTED = "accounting:alerted";
 const KV_HISTORY = "accounting:alerts";
+const KV_ROSTER = "accounting:roster";
+// On every install: what the hub said of this install's Claude slots (doctor.mjs reads it).
+export const KV_COMPANY = "company-accounts";
+// An announcement from the maintainer to every install (owner 2026-11-24: «یک سیستم اعلام پیام در گریفین
+// بزار که بتونم یک انانسمنتی رو… به صورت یک کادر بالای صفحه داشته باشیم»): set on the hub, pushed to every
+// connected member at once and carried again on each usage answer (an install that was off gets it within
+// 15 minutes); each install keeps the last one it heard and its web app shows it as a bar on top.
+export const KV_ANNOUNCEMENT = "announcement";
+const LEVELS = new Set(["info", "warn", "critical"]);
+/** An announcement re-cut field by field (it crosses installs), or null. */
+export function cleanAnnouncement(a, now = new Date()) {
+  if (!a || typeof a !== "object") return null;
+  const text = str(a.text, 600).trim();
+  const id = str(a.id, 40);
+  if (!text || !/^[A-Za-z0-9_-]{4,40}$/.test(id)) return null;
+  const until = validIso(a.until);
+  if (until && Date.parse(until) <= now.getTime()) return null;
+  return { id, text, level: LEVELS.has(a.level) ? a.level : "info", at: validIso(a.at) || now.toISOString(), until };
+}
 
 const str = (v, max) => String(v ?? "").slice(0, max);
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -48,7 +68,7 @@ const installCost = (r) => (r.usage?.cost ? { last24h: num(r.usage.cost.last24h)
 
 // The account behind a key: Anthropic names its organization on every API answer
 // (anthropic-organization-id). A subscription token gets no profile (email): 403 on the profile
-// endpoint. This id is the same for every token of one account.
+// endpoint, checked 2026-10-19. This id is the same for every token of one account.
 export const ORG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export async function accountOrg(key, fetchImpl = globalThis.fetch) {
   const k = String(key || "");
@@ -424,6 +444,157 @@ export function aggregateFleet(reports, { labels = {}, now = new Date() } = {}) 
   return { at: now.toISOString(), totals, models, plan, accounts, installs };
 }
 
+// ---- The company's Claude accounts and who has them (owner 2026-11-23: «همه گریفین ها همه اکانت های
+// کلاد که شرکت ارائه میده رو داشته باشن… یه سری از بچه ها دارن فقط از یک اکانت استفاده میکنن»).
+//
+// The roster: an account (Anthropic organization) that reports an email and is signed in on at least
+// ROSTER_MIN_INSTALLS installs is one the company handed out; a personal or stray login sits on one or two.
+// The owner can pin an account in or drop one out on the hub (kv accounting:roster {add, drop}).
+// Coverage: per install, each roster account is ok / broken (login expired, payment) / off / missing,
+// and every other Claude slot is named for what it is — another account, a login with no account id,
+// an empty slot — instead of «اکانت 16 (56b685c9)».
+export const ROSTER_MIN_INSTALLS = 3;
+const lower = (v) => (v ? String(v).toLowerCase() : null);
+
+export function companyRoster(reports, { overrides = {}, labels = {}, now = new Date() } = {}) {
+  const t = now.getTime();
+  const seen = new Map(); // org -> { emails, installs }
+  for (const r of reports) {
+    if (t - Date.parse(r.at) > DAY) continue;
+    for (const a of r.accounts || []) {
+      if (a.kind !== "claude" || !a.org) continue;
+      if (!seen.has(a.org)) seen.set(a.org, { emails: new Map(), installs: new Set() });
+      const s = seen.get(a.org);
+      s.installs.add(r.install);
+      if (a.email) s.emails.set(lower(a.email), (s.emails.get(lower(a.email)) || 0) + 1);
+    }
+  }
+  const add = new Set((Array.isArray(overrides.add) ? overrides.add : []).filter((o) => ORG.test(String(o))));
+  const drop = new Set((Array.isArray(overrides.drop) ? overrides.drop : []).filter((o) => ORG.test(String(o))));
+  const out = [];
+  for (const org of new Set([...seen.keys(), ...add])) {
+    const s = seen.get(org) || { emails: new Map(), installs: new Set() };
+    const email = [...s.emails.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || null;
+    const pinned = add.has(org);
+    if (drop.has(org) || (!pinned && !(email && s.installs.size >= ROSTER_MIN_INSTALLS))) continue;
+    out.push({ org, email, name: labels[org] || email || org.slice(0, 8), installs: s.installs.size, pinned });
+  }
+  return out.sort((x, y) => String(x.name).localeCompare(String(y.name)));
+}
+
+// Accounts the roster rule left out but that more than one install uses: candidates for the owner to pin.
+export function rosterCandidates(reports, roster, { now = new Date() } = {}) {
+  const t = now.getTime();
+  const inRoster = new Set(roster.map((r) => r.org));
+  const seen = new Map();
+  for (const r of reports) {
+    if (t - Date.parse(r.at) > DAY) continue;
+    for (const a of r.accounts || []) {
+      if (a.kind !== "claude" || !a.org || inRoster.has(a.org)) continue;
+      const s = seen.get(a.org) || { org: a.org, email: null, installs: new Set() };
+      s.installs.add(r.owner || r.install);
+      s.email ||= lower(a.email);
+      seen.set(a.org, s);
+    }
+  }
+  return [...seen.values()].map((s) => ({ org: s.org, email: s.email, installs: [...s.installs] })).sort((x, y) => y.installs.length - x.installs.length);
+}
+
+/**
+ * One install's Claude slots against the roster.
+ * → { install, owner, at, have, total, accounts: [{org, email, name, state, ids, slots, last7d}], extras: [{id, why, email, org, enabled, broken, last7d}] }
+ *   state: ok | broken (auth|credit in `broken`) | missing.  why: other | noid | empty | off.
+ */
+export function installCoverage(report, roster) {
+  const claude = (report.accounts || []).filter((a) => a.kind === "claude");
+  const use = (id) => fresh(report.usage?.byAccount?.[id]?.last7d);
+  const used = new Set();
+  const accounts = roster.map((r) => {
+    const slots = claude.filter((a) => (a.org && a.org === r.org) || (r.email && lower(a.email) === r.email));
+    for (const s of slots) used.add(s.id);
+    const live = slots.filter((s) => s.enabled !== false);
+    const working = live.filter((s) => !s.broken);
+    const state = working.length ? "ok" : live.length ? "broken" : "missing";
+    return {
+      org: r.org,
+      email: r.email,
+      name: r.name,
+      state,
+      broken: state === "broken" ? live[0].broken.state : null,
+      ids: slots.map((s) => s.id),
+      slots: live.length,
+      last7d: slots.reduce((sum, s) => sum + use(s.id), 0),
+    };
+  });
+  const extras = claude
+    .filter((a) => !used.has(a.id))
+    .map((a) => ({
+      id: a.id,
+      // A slot with no key at all, one switched off, another account, or a login that never said whose it is.
+      why: !a.fingerprint ? "empty" : a.org || a.email ? "other" : a.enabled === false ? "off" : "noid",
+      email: a.email ? lower(a.email) : null,
+      org: a.org || null,
+      enabled: a.enabled !== false,
+      broken: a.broken?.state || null,
+      last7d: use(a.id),
+    }));
+  return {
+    install: report.install,
+    owner: report.owner,
+    at: report.at,
+    have: accounts.filter((a) => a.state === "ok").length,
+    total: roster.length,
+    accounts,
+    extras,
+  };
+}
+
+export function fleetCoverage(reports, roster, { now = new Date() } = {}) {
+  const t = now.getTime();
+  return reports
+    .filter((r) => t - Date.parse(r.at) <= DAY)
+    .map((r) => installCoverage(r, roster))
+    .sort((x, y) => x.have - y.have || String(x.owner || x.install).localeCompare(String(y.owner || y.install)));
+}
+
+/**
+ * The owner hears it once a day, as one message: which installs lack which company accounts, and the
+ * accounts whose login is broken everywhere (that is the account, not the installs).
+ */
+export function coverageAlerts(coverage, roster, { now = new Date() } = {}) {
+  if (!roster.length || !coverage.length) return [];
+  const out = [];
+  const day = dayOf.format(now);
+  const short = (a) => a.email?.split("@")[0] || a.name;
+  // Broken on every install that has it: the account itself (password changed, plan ended).
+  const deadEverywhere = roster.filter((r) => {
+    const rows = coverage.map((c) => c.accounts.find((a) => a.org === r.org)).filter((a) => a && a.state !== "missing");
+    return rows.length >= 2 && rows.every((a) => a.state === "broken");
+  });
+  if (deadEverywhere.length) {
+    out.push({
+      key: `roster-dead:${deadEverywhere.map((r) => r.org).sort().join(",")}:${day}`,
+      level: "critical",
+      cooldownMs: DAY,
+      text: `ورود ${deadEverywhere.map((r) => `اکانت ${r.name}`).join(" و ")} روی همهٔ نصب‌ها از کار افتاده؛ مشکل از خود اکانت است (رمز عوض شده، خارج شده یا پلنش تمام شده)، نه از نصب‌ها.`,
+    });
+  }
+  const dead = new Set(deadEverywhere.map((r) => r.org));
+  const gaps = coverage
+    .map((c) => ({ c, lack: c.accounts.filter((a) => a.state !== "ok" && !dead.has(a.org)) }))
+    .filter((g) => g.lack.length);
+  if (gaps.length) {
+    const lines = gaps.map(({ c, lack }) => `${c.owner || c.install}: ${c.have} از ${c.total} (${lack.map((a) => `${short(a)}${a.state === "broken" ? " خراب" : ""}`).join("، ")})`);
+    out.push({
+      key: `coverage:${day}`,
+      level: "warning",
+      cooldownMs: DAY,
+      text: `${gaps.length} نصب همهٔ ${roster.length} اکانت شرکت را ندارند، پس بارشان روی چند اکانت می‌ماند:\n${lines.join("\n")}\nخود هر نصب در «چک و تعمیر» همین را به صاحبش نشان می‌دهد.`,
+    });
+  }
+  return out;
+}
+
 const fmt = (n) => {
   const v = num(n);
   if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
@@ -436,7 +607,7 @@ const pctOf = (x) => `${Math.round(x * 100)}٪`;
 const whoOf = (i) => (i.owner ? `${i.owner} (${i.install})` : i.install);
 
 // A moment as the owner reads it: Tehran time, «امروز/فردا ساعت ۰۴:۳۰» or the weekday — never UTC.
-const TEHRAN = DEFAULT_TZ; // the owner's zone (GRIFFIN_TZ), the name kept for the code below
+const TEHRAN = DEFAULT_TZ;
 const dayOf = new Intl.DateTimeFormat("en-CA", { timeZone: TEHRAN });
 const clockOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 const weekdayOf = new Intl.DateTimeFormat("fa-IR", { timeZone: TEHRAN, weekday: "long" });
@@ -582,12 +753,24 @@ export function createAccounting({ store, network = null, supportHost = () => ""
       .filter((r) => r?.install && r.usage && now().getTime() - Date.parse(r.at) <= 7 * DAY);
   const labels = () => kv(KV_LABELS, {});
   const fleet = () => aggregateFleet(reports(), { labels: labels(), now: now() });
+  const rosterOverrides = () => kv(KV_ROSTER, {});
+  const roster = (list = reports()) => companyRoster(list, { overrides: rosterOverrides(), labels: labels(), now: now() });
+  // What one install is told about itself: the roster and its own slots against it.
+  function companyFor(install) {
+    const list = reports();
+    const mine = list.find((r) => r.install === install);
+    if (!mine) return null;
+    const r = roster(list);
+    return { at: now().toISOString(), roster: r.map(({ org, email, name }) => ({ org, email, name })), ...installCoverage(mine, r) };
+  }
 
   async function pushOnce() {
     const report = await collect();
     if (!report?.install) return { ok: false, reason: "this install has no public address" };
     if (isHub()) {
       keep(report);
+      const company = companyFor(report.install);
+      if (company) store.setKv(KV_COMPANY, company);
       await check();
       return { ok: true, hub: true };
     }
@@ -595,6 +778,10 @@ export function createAccounting({ store, network = null, supportHost = () => ""
     const agent = host ? network?.list?.().find((a) => a.connected && hostOf(a.url) === host) : null;
     if (!agent) return { ok: false, reason: `not connected to ${host || "a hub"}` };
     const r = await network.post(agent.id, "/api/public/network/usage", { report });
+    // The hub answers with this install's company accounts: kept for its own status page.
+    if (r?.company && Array.isArray(r.company.accounts)) store.setKv(KV_COMPANY, r.company);
+    // The hub's announcement (null = none): an older hub answers without the field, which changes nothing.
+    if (r && "announcement" in r) store.setKv(KV_ANNOUNCEMENT, cleanAnnouncement(r.announcement, now()));
     return { ok: Boolean(r?.ok) };
   }
 
@@ -602,10 +789,12 @@ export function createAccounting({ store, network = null, supportHost = () => ""
   // Each alert once per key, again after the cooldown if it still holds.
   async function check() {
     if (!isHub()) return [];
-    const current = fleetAlerts(fleet(), { ...thresholds(), now: now() });
+    const list = reports();
+    const r = roster(list);
+    const current = [...fleetAlerts(fleet(), { ...thresholds(), now: now() }), ...coverageAlerts(fleetCoverage(list, r, { now: now() }), r, { now: now() })];
     const sent = kv(KV_ALERTED, {});
     const t = now().getTime();
-    const due = current.filter((a) => a.level !== "info" && !(sent[a.key] && t - sent[a.key] < ALERT_COOLDOWN_MS));
+    const due = current.filter((a) => a.level !== "info" && !(sent[a.key] && t - sent[a.key] < (a.cooldownMs || ALERT_COOLDOWN_MS)));
     for (const a of due) sent[a.key] = t;
     for (const [k, at] of Object.entries(sent)) if (t - at > 7 * DAY) delete sent[k];
     store.setKv(KV_ALERTED, sent);
@@ -639,9 +828,31 @@ export function createAccounting({ store, network = null, supportHost = () => ""
       if (!same) return c.json({ error: "report for another install" }, 403);
       keep(report, who.label);
       check().catch((e) => log.error?.(`[accounting] check: ${e.message}`));
+      return c.json({ ok: true, company: companyFor(report.install), announcement: announcement() });
+    });
+  }
+  // The hub's push of a new announcement (or its removal) to a member.
+  function announceRoutes(app, peerAuth) {
+    app.post("/api/public/network/announcement", async (c) => {
+      if (isHub()) return c.json({ error: "the hub announces, it is not told" }, 400);
+      const who = peerAuth.authenticate(c.req.header("authorization"));
+      if (who.error) return c.json({ error: who.error }, who.status);
+      const hub = String(supportHost() || "").toLowerCase();
+      const fromHub = hub && (network?.memberIs ? await network.memberIs(who.userId, hub) : `net-${agentId(hub)}`.slice(0, 41) === who.userId);
+      if (!fromHub) return c.json({ error: "only the hub announces" }, 403);
+      const body = await c.req.json().catch(() => ({}));
+      store.setKv(KV_ANNOUNCEMENT, cleanAnnouncement(body?.announcement, now()));
       return c.json({ ok: true });
     });
   }
+  const announcement = () => cleanAnnouncement(store.getKv(KV_ANNOUNCEMENT), now());
+  // Tell every connected member now; the usage answers carry it again for the ones that were off.
+  async function pushAnnouncement(a) {
+    const members = (network?.list?.() || []).filter((m) => m.connected);
+    const results = await Promise.all(members.map((m) => network.post(m.id, "/api/public/network/announcement", { announcement: a }).then((r) => Boolean(r?.ok)).catch(() => false)));
+    return { sent: results.filter(Boolean).length, members: members.length };
+  }
+
   // The owner's own API, on the hub only (404 elsewhere: the page is not there).
   function ownerRoutes(api) {
     const hubOnly = (handler) => (c) => (isHub() ? handler(c) : c.json({ error: "accounting is on the maintainer's install only" }, 404));
@@ -649,7 +860,11 @@ export function createAccounting({ store, network = null, supportHost = () => ""
       "/api/accounting",
       hubOnly(async (c) => {
         const f = fleet();
-        return c.json({ ...f, alerts: fleetAlerts(f, { ...thresholds(), now: now() }), history: history().slice(0, 50), labels: labels() });
+        const list = reports();
+        const r = roster(list);
+        const coverage = fleetCoverage(list, r, { now: now() });
+        const alerts = [...fleetAlerts(f, { ...thresholds(), now: now() }), ...coverageAlerts(coverage, r, { now: now() })];
+        return c.json({ ...f, roster: r, coverage, candidates: rosterCandidates(list, r, { now: now() }), alerts, history: history().slice(0, 50), labels: labels() });
       }),
     );
     api.post(
@@ -677,6 +892,49 @@ export function createAccounting({ store, network = null, supportHost = () => ""
         return c.json({ labels: all });
       }),
     );
+    // The bar on top of every page, on every install; set and cleared on the hub only.
+    api.get("/api/announcement", (c) => c.json({ announcement: announcement(), canEdit: isHub() }));
+    api.put(
+      "/api/announcement",
+      hubOnly(async (c) => {
+        const body = await c.req.json().catch(() => ({}));
+        const hours = Number(body.hours);
+        const a = cleanAnnouncement({
+          id: crypto.randomBytes(6).toString("hex"),
+          text: body.text,
+          level: body.level,
+          at: now().toISOString(),
+          until: Number.isFinite(hours) && hours > 0 ? new Date(now().getTime() + Math.min(hours, 24 * 90) * 3600_000).toISOString() : null,
+        }, now());
+        if (!a) return c.json({ error: "text required" }, 400);
+        store.setKv(KV_ANNOUNCEMENT, a);
+        return c.json({ announcement: a, ...(await pushAnnouncement(a)) });
+      }),
+    );
+    api.delete(
+      "/api/announcement",
+      hubOnly(async (c) => {
+        store.setKv(KV_ANNOUNCEMENT, null);
+        return c.json({ announcement: null, ...(await pushAnnouncement(null)) });
+      }),
+    );
+    // Pin an account into the company roster (include: true), keep it out (false), or back to the rule (null).
+    api.put(
+      "/api/accounting/roster",
+      hubOnly(async (c) => {
+        const body = await c.req.json().catch(() => ({}));
+        if (!ORG.test(String(body.org || ""))) return c.json({ error: "account id (org) required" }, 400);
+        const o = rosterOverrides();
+        const add = new Set(Array.isArray(o.add) ? o.add : []);
+        const drop = new Set(Array.isArray(o.drop) ? o.drop : []);
+        add.delete(body.org);
+        drop.delete(body.org);
+        if (body.include === true) add.add(body.org);
+        else if (body.include === false) drop.add(body.org);
+        store.setKv(KV_ROSTER, { add: [...add], drop: [...drop] });
+        return c.json({ roster: roster() });
+      }),
+    );
   }
 
   function start() {
@@ -687,5 +945,5 @@ export function createAccounting({ store, network = null, supportHost = () => ""
     setInterval(() => check().catch(() => {}), PUSH_MS).unref?.();
   }
 
-  return { isHub, pushOnce, check, fleet, reports, keep, routes, ownerRoutes, start };
+  return { isHub, pushOnce, check, fleet, reports, keep, routes: (app, peerAuth) => { routes(app, peerAuth); announceRoutes(app, peerAuth); }, ownerRoutes, start, announcement };
 }

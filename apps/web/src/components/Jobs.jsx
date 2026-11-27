@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { api, navigate } from "../api.js";
 import { BRAND, agentMeta } from "../brand.js";
 import { AgentPicker, MODES } from "./Controls.jsx";
-import { locale, num, t } from "../i18n.js";
+import { locale, t } from "../i18n.js";
 import { askConfirm } from "../dialog.jsx";
 
 // A job's mode: the chat's mode list (Controls.jsx) plus «محدود» (owner 2026-10-19). What each means in
@@ -43,15 +43,6 @@ function JobModePicker({ mode, onChange }) {
   );
 }
 
-// The server describes a schedule in Persian ("هر 30 دقیقه"); show it in the UI language.
-const EVERY = /^هر (\d+) (دقیقه|ساعت|روز)$/; // i18n-ignore
-function scheduleText(text) {
-  const m = EVERY.exec(String(text || ""));
-  if (!m) return t(text || "");
-  const n = num(m[1]);
-  return m[2] === "روز" ? t("هر {n} روز", { n }) : m[2] === "ساعت" ? t("هر {n} ساعت", { n }) : t("هر {n} دقیقه", { n }); // i18n-ignore
-}
-
 const EVERY_PRESETS = ["5m", "15m", "30m", "1h", "3h", "6h", "12h", "1d"];
 
 const STATUS = {
@@ -81,7 +72,7 @@ export function JobsPage({ onBack }) {
       <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-4 sm:px-6">
         <div className="mb-6 flex items-center gap-2">
           <button type="button" onClick={onBack} className="press flex size-8 items-center justify-center rounded-full hover:bg-muted" aria-label={t("بازگشت")}>
-            <ArrowRight className="size-4 rtl-mirror" />
+            <ArrowRight className="rtl-mirror size-4" />
           </button>
           <h1 className="text-lg font-semibold">{t("جاب‌ها")}</h1>
           <button type="button" onClick={() => setEditing({})} className="press ms-auto flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground shadow-sm hover:shadow">
@@ -97,7 +88,7 @@ export function JobsPage({ onBack }) {
         ) : data.jobs.length === 0 ? (
           <button type="button" onClick={() => setEditing({})} className="press flex w-full flex-col items-center gap-2 rounded-2xl border border-dashed py-12 text-muted-foreground hover:border-primary/60 hover:text-foreground">
             <AlarmClock className="size-6" />
-            {t("هنوز جابی نداری — مثلاً «هر دوشنبه صبح خلاصهٔ هفته را برایم بفرست»")}
+            {t("هنوز جابی نداری — مثلاً «هر نیم ساعت نمودار مصرف منابع گیت‌لب»")}
           </button>
         ) : (
           <motion.ul layout className="space-y-3">
@@ -175,7 +166,7 @@ function JobCard({ job, targets, onChange, onEdit }) {
             <span>·</span>
             <span style={{ color: who.color }}>{who.short || who.label}</span>
             <span>·</span>
-            {scheduleText(job.description)}
+            {job.description}
           </p>
         </div>
         <button type="button" onClick={() => call(`/api/jobs/${job.id}/run`, "POST")} disabled={busy || job.running} className="press flex items-center gap-1 rounded-full border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50">
@@ -196,7 +187,7 @@ function JobCard({ job, targets, onChange, onEdit }) {
       <p className="mt-3 line-clamp-2 rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground" dir="auto">{job.prompt}</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        {job.enabled && job.nextAt ? <span className="flex items-center gap-1"><Clock className="size-3.5" /> {t("اجرای بعدی {when}", { when: time(job.nextAt) })}</span> : null}
+        {job.enabled && job.nextAt ? <span className="flex items-center gap-1"><Clock className="size-3.5" /> {t("اجرای بعدی {time}", { time: time(job.nextAt) })}</span> : null}
         {names.length ? <span className="flex items-center gap-1"><Send className="size-3.5" /> {names.join(t("، "))}</span> : <span className="text-warn">{t("مقصدی انتخاب نشده")}</span>}
       </div>
 
@@ -280,7 +271,7 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
     event.preventDefault();
     setBusy(true);
     try {
-      const trigger = form.triggerType !== "schedule" ? {} : mode === "cron" ? { cron: form.trigger.cron || "" } : { every: form.trigger.every || "30m" };
+      const trigger = form.triggerType === "webhook" ? form.trigger || {} : form.triggerType !== "schedule" ? {} : mode === "cron" ? { cron: form.trigger.cron || "" } : { every: form.trigger.every || "30m" };
       const body = { ...form, trigger };
       await api(editing ? `/api/jobs/${job.id}` : "/api/jobs", { method: editing ? "PATCH" : "POST", body });
       toast.success(editing ? t("جاب ذخیره شد") : t("جاب ساخته شد"));
@@ -306,12 +297,12 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
           <form onSubmit={submit} className="space-y-4">
             <label className="block">
               <span className="mb-1 block text-xs text-muted-foreground">{t("نام")}</span>
-              <input value={form.name} onChange={(e) => set({ name: e.target.value })} required placeholder={t("خلاصهٔ هفتگی")} className={input} />
+              <input value={form.name} onChange={(e) => set({ name: e.target.value })} required placeholder={t("وضعیت منابع گیت‌لب")} className={input} />
             </label>
 
             <label className="block">
               <span className="mb-1 block text-xs text-muted-foreground">{t("دستور به ایجنت")}</span>
-              <textarea value={form.prompt} onChange={(e) => set({ prompt: e.target.value })} required rows={4} dir="auto" placeholder={t("کارهای هفتهٔ گذشته را در پنج خط خلاصه کن و آنچه هنوز باز مانده را جدا بگو.")} className={`${input} resize-y leading-6`} />
+              <textarea value={form.prompt} onChange={(e) => set({ prompt: e.target.value })} required rows={4} dir="auto" placeholder={t("مصرف CPU و مموری پادهای گیت‌لب کلاستر را در ۶ ساعت گذشته نمودار بکش و خلاصهٔ کوتاه بده.")} className={`${input} resize-y leading-6`} />
             </label>
 
             <div>
@@ -329,7 +320,7 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
               <div className="flex gap-2">
                 {kinds.map((kind) => (
                   <button key={kind.type} type="button" onClick={() => set({ triggerType: kind.type })} className={`press flex-1 rounded-xl border px-3 py-2 text-xs ${form.triggerType === kind.type ? "border-primary bg-primary/8 ring-1 ring-primary" : "hover:bg-muted"}`}>
-                    {t(kind.label)}
+                    {kind.label}
                   </button>
                 ))}
               </div>
@@ -352,7 +343,7 @@ function JobDialog({ job, kinds, targets, onClose, onSaved }) {
                 ) : (
                   <input value={form.trigger.cron || ""} onChange={(e) => set({ trigger: { cron: e.target.value } })} placeholder="0,30 * * * *" className={`ltr font-mono ${input}`} />
                 )}
-                <p className="text-[11px] text-muted-foreground">{t("به وقت سرور (GRIFFIN_TZ). «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.")}</p>
+                <p className="text-[11px] text-muted-foreground">{t("ساعت محلی. «هر ۳۰ دقیقه» روی :۰۰ و :۳۰ می‌افتد.")}</p>
               </div>
             ) : null}
 

@@ -1,3 +1,4 @@
+import { useAuthMe } from "./auth-me.js";
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ChevronDown, ListChecks, Menu, Network, PanelRightOpen, Square, Wifi, WifiOff, Zap } from "lucide-react";
 import { Popover } from "radix-ui";
@@ -9,8 +10,6 @@ import { linkedSection } from "./settings-map.js";
 import { todoList } from "./todos.js";
 import { BRAND, STORAGE, agentMeta, applyAgentTheme, readSetting, writeSetting } from "./brand.js";
 import { textDir } from "./dir.js";
-import { num, t, isRtl, locale } from "./i18n.js";
-
 import { ModulePage, SectionOff } from "./components/ModulePage.jsx";
 import { pageOff, parseModuleRoute } from "./modules.js";
 import { useModuleList } from "./module-hooks.js";
@@ -53,8 +52,9 @@ import { useInbox } from "./inbox.js";
 import { hasBoard } from "./board.js";
 import { NeedsYou, TaskLists } from "./components/Board.jsx";
 import { UpdateNotice } from "./components/UpdateNotice.jsx";
+import { AnnouncementBar } from "./components/AnnouncementBar.jsx";
 import { NavRail, SectionsPalette } from "./components/SectionNav.jsx";
-
+import { locale, num, t, isRtl } from "./i18n.js";
 import { isHeavyEffort, isHeavyModel } from "./model-policy.js";
 import { DialogHost, askConfirm } from "./dialog.jsx";
 
@@ -114,15 +114,17 @@ const SETUP_KNOWN = "griffin.setup-known";
 function ConnectionNotice({ notice, onRetry, className = "flex", wrap = false, hideTextOnPhone = false }) {
   const tone = notice.tone === "warn" ? "text-warn" : notice.tone === "ok" ? "text-ok" : "text-muted-foreground";
   return (
-    <span className={`min-w-0 items-center gap-1 text-xs ${tone} ${className}`} title={t(notice.text)}>
+    <span className={`min-w-0 items-center gap-1 text-xs ${tone} ${className}`} title={notice.text}>
       {notice.tone === "warn" ? <WifiOff className="size-3.5 shrink-0" aria-hidden /> : notice.tone === "ok" ? <Wifi className="size-3.5 shrink-0" aria-hidden /> : null}
-      <span className={wrap ? "min-w-0" : hideTextOnPhone ? "hidden truncate sm:inline" : "truncate"}>{t(notice.text)}</span>
-      {notice.action ? <button type="button" onClick={onRetry} className="press shrink-0 rounded-md px-1.5 py-0.5 underline hover:bg-muted">{t(notice.action)}</button> : null}
+      <span className={wrap ? "min-w-0" : hideTextOnPhone ? "hidden truncate sm:inline" : "truncate"}>{notice.text}</span>
+      {notice.action ? <button type="button" onClick={onRetry} className="press shrink-0 rounded-md px-1.5 py-0.5 underline hover:bg-muted">{notice.action}</button> : null}
     </span>
   );
 }
 
 export default function App() {
+  const me = useAuthMe();
+  const member = me?.role === "member";
   const chatId = useRoute();
   const page = usePageRoute();
   const browserRoute = useBrowserRoute();
@@ -212,6 +214,12 @@ export default function App() {
   // The owner's look and flags from the server; the first load after the update saves this browser's.
   useEffect(() => {
     loadUiPrefs();
+    const onSettingsChanged = (ev) => {
+      const kind = ev?.detail?.kind || "all";
+      if (kind === "ui" || kind === "settings" || kind === "all") loadUiPrefs();
+    };
+    window.addEventListener("griffin:settings-changed", onSettingsChanged);
+    return () => window.removeEventListener("griffin:settings-changed", onSettingsChanged);
   }, []);
   const openSuggestionCount = useSuggestions().open.length;
   // «کارهای دستیار»: what waits for the owner and what runs, on the home page (Board.jsx).
@@ -221,8 +229,8 @@ export default function App() {
   const menuBadge = openSuggestionCount + inbox.count;
   const board = useMemo(
     // «هر چیز فقط یک جا» (flag onePlace): only what waits for him makes a board; runs and suggestions stay in the sidebar.
-    () => (!chatId && (onePlace ? inbox.count > 0 : hasBoard(inbox, chats, openSuggestionCount)) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} />, count: inbox.count + (onePlace ? 0 : openSuggestionCount) } : null),
-    [chatId, inbox, chats, openSuggestionCount, onePlace],
+    () => (!member && !chatId && (onePlace ? inbox.count > 0 : hasBoard(inbox, chats, openSuggestionCount)) ? { top: <NeedsYou inbox={inbox} />, bottom: <TaskLists chats={chats} inbox={inbox} />, count: inbox.count + (onePlace ? 0 : openSuggestionCount) } : null),
+    [member, chatId, inbox, chats, openSuggestionCount, onePlace],
   );
 
   // A sub-agent's chat is not in the sidebar (its parent shows it above the composer): the parent's
@@ -285,8 +293,9 @@ export default function App() {
 
   // First run (no engine key, wizard never finished): open the setup wizard once. Until this browser
   // knows the answer the page waits, so a first visit does not draw the chat and then jump to the wizard.
-  const [setupKnown, setSetupKnown] = useState(() => readSetting(SETUP_KNOWN, "") === "1");
+  const [setupKnown, setSetupKnown] = useState(() => member || readSetting(SETUP_KNOWN, "") === "1");
   useEffect(() => {
+    if (member) { setSetupKnown(true); return; }
     api("/api/setup")
       .then((r) => {
         if (!r.done && r.needsEngine && !window.location.hash.startsWith("#/setup")) window.location.hash = "/setup/first";
@@ -352,7 +361,7 @@ export default function App() {
     document.title = BRAND.title;
   }, []);
 
-  // The sidebar's "new" (no group) and a group heading's "+" (that group). The group is for the new
+  // The sidebar's «جدید» (no group) and a group heading's «+» (that group). The group is for the new
   // chat on screen: opening a chat or another page (jobs, settings…) lets it go.
   // A repository's «+» (sidebar grouped by repo) also picks the new chat's repository.
   const newChatIn = useCallback((groupId, { repo } = {}) => {
@@ -414,7 +423,7 @@ export default function App() {
 
   // Open chat: PATCH persona in place. Fresh composer: remember default for next chat.
   // The sidebar's agent menu always opens a new chat with the agent picked, the one already shown
-  // too (a colleague 2026-10-24: picking it inside a chat changed that chat, or nothing, and left him there).
+  // too (picking it inside a chat changed that chat, or nothing, and left him there).
   const selectAgent = useCallback((agent) => {
     setDraft((d) => ({ ...d, agent, groupId: "" }));
     writeSetting(STORAGE.agent, agent);
@@ -475,7 +484,7 @@ export default function App() {
   }, [sideParent]);
   const clearSideSeed = useCallback(() => setSideSeed(null), []);
   useSideChats(sideParent, sideDispatch, pane.tab);
-  const paneAvailable = paneViews(Boolean(sideParent));
+  const paneAvailable = paneViews(Boolean(sideParent)).filter((v) => !member || (v.id !== "terminal" && v.id !== "changes"));
   const sendToChat = useCallback((text) => api(`/api/chats/${chatId}/messages`, { method: "POST", body: { text, intent: chat?.runStatus === "running" ? "queue" : "send" } }).catch((e) => toast.error(e.message)), [chatId, chat?.runStatus]);
   // «ادامهٔ برنامه‌ریزی»: what he wants changed goes in the chat box; a phone's pane sits over that box.
   const refinePlan = useCallback(() => {
@@ -486,11 +495,10 @@ export default function App() {
   useEffect(() => {
     if (!error) return;
     // A message that did not reach the server is back in the box (runtime.jsx sets keptText); say so.
-    const kept = error.keptText ? t("پیام فرستاده نشد و در کادر پیام ماند.") : "";
-    const line = (text) => (kept ? `${text} ${kept}` : text);
-    if (error.status === 409) toast.error(line(t("ایجنت هنوز روی پیام قبلی کار می‌کند.")));
-    else if (!error.status && (error instanceof TypeError || error.keptText)) toast.error(`${t("ارتباط با سرور {name} قطع است.", { name: BRAND.name })} ${kept || t("دوباره امتحان کنید.")}`);
-    else toast.error(line(t("خطا: {message}", { message: error.message })));
+    const kept = error.keptText ? t(" پیام فرستاده نشد و در کادر پیام ماند.") : "";
+    if (error.status === 409) toast.error(t("ایجنت هنوز روی پیام قبلی کار می‌کند.{kept}", { kept }));
+    else if (!error.status && (error instanceof TypeError || error.keptText)) toast.error(t("ارتباط با سرور {name} قطع است.{v}", { name: BRAND.name, v: kept || t(" دوباره امتحان کنید.") }));
+    else toast.error(t("خطا: {message}.{kept}", { message: error.message, kept }));
   }, [error]);
 
   // «به چت جدید» in the selection toolbar (SelectionActions): a plain new chat starts at once with the
@@ -554,7 +562,9 @@ export default function App() {
   if (!setupKnown) return <div className="flex h-dvh overflow-hidden"><PageLoading /></div>;
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div className="flex h-dvh flex-col overflow-hidden">
+      <AnnouncementBar />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       {browserRoute ? (
         <BrowserPanel key={browserRoute} chatId={browserRoute} exists standalone onClose={() => navigate(browserRoute)} />
       ) : page === "setup" ? (
@@ -658,7 +668,7 @@ export default function App() {
                     {chat?.mother && chat.personId ? <WatchPill personId={chat.personId} /> : null}
                     {telegramChat ? (
                       <button type="button" onClick={() => setPanelSheet(true)} className="press shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted md:hidden">
-                        {chat.mother ? t("ترد‌ها ({n})", { n: num((chat.children || []).filter((c) => c.runStatus === "running").length) }) : t("پنل")}
+                        {chat.mother ? t("ترد‌ها ({toLocaleString})", { toLocaleString: (chat.children || []).filter((c) => c.runStatus === "running").length.toLocaleString(locale) }) : t("پنل")}
                       </button>
                     ) : null}
                     {chatId && notice ? (
@@ -675,10 +685,10 @@ export default function App() {
                         <span className="hidden sm:inline">{t("توکن")}</span>
                       </span>
                     ) : null}
-                    {/* A Telegram chat says whose it is in its title; "requested by team" meant nothing. */}
-                    {chat?.caller && chat.caller !== "owner" && chat.caller !== "team" ? (
+                    {/* A Telegram chat says whose it is in its title; «به درخواست team» meant nothing. */}
+                    {chat?.caller && chat.caller !== "owner" && chat.caller !== "team" && !chat.caller.startsWith("user:") ? (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground" dir="auto">
-                        {t("به درخواست {caller}", { caller: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
+                        {t("به درخواست {v}", { v: ({ scheduler: t("زمان‌بند"), griffin: BRAND.name, "arvan-ban": t("آروان‌بان"), "nsin-ban": t("انسین‌بان"), "platform": t("پلتفرم‌بان"), task: t("زیرایجنت") })[chat.caller] || chat.caller })}
                       </span>
                     ) : null}
                     {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="hidden sm:flex" /> : null}
@@ -697,7 +707,7 @@ export default function App() {
                     {headerCounts && chat?.limitResumeAt ? <LimitResumeChip chat={chat} className="mt-2 flex w-fit sm:hidden" /> : null}
                     {headerCounts && chatId && notice?.action ? <ConnectionNotice notice={notice} onRetry={reconnect} className="mt-2 flex sm:hidden" wrap /> : null}
                     {/* One live region that stays in the page, so a screen reader hears each change once. */}
-                    <span className="sr-only" role="status" aria-live="polite">{chatId && notice && notice.tone !== "muted" && notice.text ? t(notice.text) : ""}</span>
+                    <span className="sr-only" role="status" aria-live="polite">{chatId && notice && notice.tone !== "muted" ? notice.text || "" : ""}</span>
                   </header>
                 }
                 runInfo={paneChat ? <PlanInChat part="waiting" plan={chatPlan} act={planAct} onRefine={refinePlan} onOpen={() => paneDispatch({ type: "tab", id: "plan" })} /> : null}
@@ -714,7 +724,7 @@ export default function App() {
                 placeholder={
                   // A phone's box is a few words wide: the short form there (the panel says the rest).
                   chat?.mother
-                    ? touch ? t("فقط به {name} می‌رسد", { name: BRAND.name }) : t("به {name} بگویید — برای {person} فرستاده نمی‌شود", { name: BRAND.name, person: motherName(chat) })
+                    ? touch ? t("فقط به {name} می‌رسد", { name: BRAND.name }) : t("به {name} بگویید — برای {motherName} فرستاده نمی‌شود", { name: BRAND.name, motherName: motherName(chat) })
                     : chat?.global
                       ? touch ? t("به {name} بگویید…", { name: BRAND.name }) : t("به {name} بگویید… (مثلاً: جواب خانم رضایی را بده)", { name: BRAND.name })
                       : ""
@@ -728,7 +738,7 @@ export default function App() {
                 onModelChange={(model) => updateSettings({ model })}
                 onEffortChange={(effort) => updateSettings({ effort })}
                 composerTop={
-                  chat && ((chat.caller || "owner") !== "owner" || chat.global) ? null : (
+                  (member && !draftGroup) || (chat && ((chat.caller || "owner") !== "owner" || chat.global)) ? null : (
                     <RepoChips
                       chatId={chat?.id || null}
                       repo={settings.repo}
@@ -766,6 +776,7 @@ export default function App() {
           <NavRail />
         </>
       )}
+      </div>
 
       <SectionsPalette chats={chats} onNewChat={() => newChatIn(null)} />
       <DialogHost />
@@ -874,7 +885,7 @@ function SubagentsBar({ chat }) {
               ) : null}
             </div>
           ))}
-          {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">{t("و {n} مورد قدیمی‌تر", { n: num(count - children.length) })}</p> : null}
+          {count > children.length ? <p className="px-2.5 py-1.5 text-xs text-muted-foreground">{t("و {v} مورد قدیمی‌تر", { v: count - children.length })}</p> : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -900,7 +911,7 @@ function LimitResumeChip({ chat, className = "" }) {
   );
 }
 
-// The desktop sidebar with a draggable edge. The width is written straight to the
+// The desktop sidebar with a draggable edge (from Karsara). The width is written straight to the
 // element while dragging (the app does not re-render per pixel) and kept in the browser on release.
 // The sidebar sits at the start of the RTL row, so its free edge is the inline end.
 function browserStorage() {

@@ -5,6 +5,7 @@ import { Check, Folder, FolderGit2, FolderInput, GitBranch, Loader2, Plus, Serve
 import { toast } from "sonner";
 import { api, usePolling } from "../api.js";
 import { FOLDER_BUSY, folderSwitchError, folderSwitchLines } from "../folder-switch.js";
+import { isMember } from "../auth-me.js";
 import { t } from "../i18n.js";
 import { copyText } from "../copy.js";
 import { useFlag, useLook } from "../ui-prefs.js";
@@ -53,11 +54,23 @@ function CopyChip({ icon, value, label, title }) {
 // `group`: { name, onClear } — the owner's group a new chat from a group's "+" goes into (× drops it).
 export function RepoChips({ chatId = null, repo: chosen = null, locked = false, branch = null, worktreePath = null, onRepoChange, group = null }) {
   // A new chat with no choice yet starts on the server's default repo (GRIFFIN_DEFAULT_REPO, if set).
-  const repos = usePolling("/api/repos", 5 * 60_000);
+  const member = isMember();
+  const repos = usePolling(member ? null : "/api/repos", 5 * 60_000);
   const repo = chosen ?? (locked ? "" : repos?.default || "");
   const karsara = useFlag("repoCapsule"); // the "capsule" chip (ui-prefs.js)
   // The very first visit, before the list ever arrived: the chip's place, not «بدون ریپو» that then changes.
-  const waiting = !repos && chosen == null && !locked;
+  const waiting = !member && !repos && chosen == null && !locked;
+  if (member) {
+    if (!group) return null;
+    return (
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 px-1">
+        <span className={chip} title={t("این گفتگو در این گروه ساخته می‌شود")}>
+          <FolderInput /> <span className="truncate" dir="auto">{group.name}</span>
+          <button type="button" onClick={group.onClear} className="-me-1 rounded-full px-1 hover:text-foreground" aria-label={t("بیرون از گروه بساز")}>×</button>
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="mb-1.5 flex flex-wrap items-center gap-1.5 px-1">
       {karsara ? (

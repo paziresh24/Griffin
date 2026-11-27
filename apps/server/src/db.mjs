@@ -502,7 +502,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
   // read is a scan of the whole event log (can be gigabytes). Partial: only usage rows. Building
   // it reads the table once, on the first start after this change.
   db.exec("CREATE INDEX IF NOT EXISTS events_usage_at ON events(at) WHERE type = 'usage'");
-  // Per-run model, tokens, turns and whether it showed anything (from Karsara), kept as events
+  // Per-run model, tokens, turns and whether it showed anything , kept as events
   // arrive so nothing scans the event log for them. Adding nullable columns is O(1); runs from
   // before have NULL (unknown) and are never backfilled — that would read the whole event log.
   const runCols = new Set(db.prepare("PRAGMA table_info(runs)").all().map((c) => c.name));
@@ -526,10 +526,6 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "sim")) {
     db.exec("ALTER TABLE chats ADD COLUMN sim INTEGER NOT NULL DEFAULT 0");
   }
-  // Simulation chats (sim.mjs): real runs, side effects recorded instead of executed; not listed.
-  if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "sim")) {
-    db.exec("ALTER TABLE chats ADD COLUMN sim INTEGER NOT NULL DEFAULT 0");
-  }
   // Peer-call child chats (ask_agent): hidden from the sidebar; ask_owner routes to the root.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "parent_chat_id")) {
     db.exec("ALTER TABLE chats ADD COLUMN parent_chat_id TEXT");
@@ -546,12 +542,12 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "provider")) {
     db.exec("ALTER TABLE chats ADD COLUMN provider TEXT NOT NULL DEFAULT 'cursor'");
   }
-  // Side chats: an owner's aside next to a chat, seeded with that chat's
+  // Side chats : an owner's aside next to a chat, seeded with that chat's
   // conversation. Not a child (no ask routing, no cancel cascade) and never in the main list.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "side_of")) {
     db.exec("ALTER TABLE chats ADD COLUMN side_of TEXT");
   }
-  // Per-chat repo: the git clone under the repos root a chat works in, and its own
+  // Per-chat repo : the git clone under the repos root a chat works in, and its own
   // worktree (worktrees.mjs) once the first run made it.
   if (!db.prepare("PRAGMA table_info(chats)").all().some((c) => c.name === "repo")) {
     db.exec("ALTER TABLE chats ADD COLUMN repo TEXT");
@@ -638,7 +634,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     started_chat_id TEXT,
     created_at TEXT NOT NULL
   )`);
-  // Send ledger (from Karsara; telegram-ledger.mjs): which chat sent which Telegram message to which
+  // Send ledger (telegram-ledger.mjs): which chat sent which Telegram message to which
   // peer through telegram_send, so an answer can be traced back to the chat that asked. Written only
   // when the install sets TELEGRAM_LEDGER=on. Same shape as Karsara's table, so from-karsara copies it.
   db.exec(`CREATE TABLE IF NOT EXISTS telegram_sends (
@@ -649,7 +645,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     at TEXT NOT NULL
   )`);
   db.exec("CREATE INDEX IF NOT EXISTS telegram_sends_peer ON telegram_sends (peer_id, id)");
-  // Telegram inbox items (telegram-inbox.mjs, from Karsara; config TELEGRAM_DM_MODE=inbox):
+  // Telegram inbox items (telegram-inbox.mjs, config TELEGRAM_DM_MODE=inbox):
   // pending -> delivered (its run is in flight) -> done | failed. Same shape as Karsara's table.
   db.exec(`CREATE TABLE IF NOT EXISTS inbox_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -683,9 +679,31 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     if (/^(tgwaiting$|ownertasks$|kept:|todo:)/.test(key)) bus.emit("inbox", { key });
   };
 
+  for (const tbl of ["chats", "chat_groups", "notes"]) {
+    if (!db.prepare(`PRAGMA table_info(${tbl})`).all().some((c) => c.name === "user_id")) {
+      db.exec(`ALTER TABLE ${tbl} ADD COLUMN user_id TEXT`);
+    }
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS chats_user ON chats(user_id, updated_at);
+    CREATE TABLE IF NOT EXISTS app_users (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      display_name TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'member',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      session_version INTEGER NOT NULL DEFAULT 1,
+      last_login_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS app_users_token ON app_users(token_hash);
+  `);
+
   const q = {
     insertChat: db.prepare(
-      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, side_of, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @sideOf, @at, @at)",
+      "INSERT INTO chats (id, title, model, mode, job_id, caller, agent, parent_chat_id, call_chain, person_id, provider, sim, side_of, user_id, created_at, updated_at) VALUES (@id, @title, @model, @mode, @jobId, @caller, @agent, @parentChatId, @callChain, @personId, @provider, @sim, @sideOf, @userId, @at, @at)",
     ),
     getChat: db.prepare("SELECT * FROM chats WHERE id = ?"),
     // A cap per caller (and per job), never one cap over everything (owner 2026-11-14: his archived
@@ -695,13 +713,20 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       SELECT c.*, r.status AS run_status, r.started_at AS run_started_at
       FROM chats c
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
+      WHERE c.archived = @archived AND c.user_id IS NULL AND c.job_id IS NULL AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0 AND (c.caller IS NULL OR c.caller <> 'team')
         AND c.id IN (SELECT id FROM (SELECT id, caller, ROW_NUMBER() OVER (PARTITION BY COALESCE(caller, 'owner') ORDER BY pinned DESC, updated_at DESC) AS rn
-          FROM chats WHERE archived = @archived AND job_id IS NULL AND parent_chat_id IS NULL AND side_of IS NULL AND sim = 0)
+          FROM chats WHERE archived = @archived AND user_id IS NULL AND job_id IS NULL AND parent_chat_id IS NULL AND side_of IS NULL AND sim = 0)
           WHERE rn <= CASE WHEN COALESCE(caller, 'owner') = 'owner' THEN ${OWNER_LIST_CAP} ELSE ${OTHER_LIST_CAP} END)
       ORDER BY c.pinned DESC, c.updated_at DESC`),
     // Every top-level chat for the sidebar, tagged with where it came from so each tab lists its
     // own threads (manual chats under «گفتگو», Telegram-born ones under the Telegram tab, …).
+    listUserChats: db.prepare(`
+      SELECT c.*, r.status AS run_status, r.started_at AS run_started_at, 'manual' AS source
+      FROM chats c
+      LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
+      WHERE c.user_id = @userId AND c.archived = @archived AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0
+      ORDER BY c.pinned DESC, c.updated_at DESC
+      LIMIT ${OWNER_LIST_CAP}`),
     listChatsBySource: db.prepare(`
       SELECT c.*, r.status AS run_status, r.started_at AS run_started_at,
         CASE
@@ -728,17 +753,17 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       LEFT JOIN persons p ON p.id = c.person_id
       LEFT JOIN peer_users pu ON c.caller = 'peer:' || pu.id
       LEFT JOIN runs r ON r.id = (SELECT id FROM runs WHERE chat_id = c.id ORDER BY started_at DESC LIMIT 1)
-      WHERE c.archived = @archived AND c.side_of IS NULL AND c.sim = 0
+      WHERE c.archived = @archived AND c.user_id IS NULL AND c.side_of IS NULL AND c.sim = 0
         -- A Telegram general issue's thread (integrations/mother.mjs SHARED) is a main-list chat too.
         AND (c.parent_chat_id IS NULL OR EXISTS (SELECT 1 FROM kv WHERE kv.key = 'sharedthread:' || c.id))
-        -- One entry per job (an hourly job would fill the list): its last-created run, plus
+        -- One entry per job (from Karsara: an hourly job filled the list): its last-created run, plus
         -- a run the owner pinned or kept and one still running (parked on a question too). Archiving
         -- the newest run clears the job until it runs again; the archive view lists every run.
         AND (@archived = 1 OR c.job_id IS NULL OR c.pinned = 1 OR c.job_kept = 1 OR r.status = 'running'
           OR c.id = (SELECT h.id FROM chats h WHERE h.job_id = c.job_id AND h.parent_chat_id IS NULL
             ORDER BY h.created_at DESC, h.rowid DESC LIMIT 1))
         AND c.id IN (SELECT id FROM (SELECT id, caller, ROW_NUMBER() OVER (PARTITION BY COALESCE(job_id, caller, 'owner') ORDER BY pinned DESC, updated_at DESC) AS rn
-          FROM chats WHERE archived = @archived AND side_of IS NULL AND sim = 0)
+          FROM chats WHERE archived = @archived AND user_id IS NULL AND side_of IS NULL AND sim = 0)
           WHERE rn <= CASE WHEN COALESCE(caller, 'owner') = 'owner' THEN ${OWNER_LIST_CAP} ELSE ${OTHER_LIST_CAP} END)
       ORDER BY c.pinned DESC, c.updated_at DESC`),
     listChildChats: db.prepare("SELECT id FROM chats WHERE parent_chat_id = ?"),
@@ -835,6 +860,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       provider = "cursor",
       sim = false,
       sideOf = null,
+      userId = null,
     }) {
       const chat = {
         id: randomUUID(),
@@ -850,11 +876,12 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
         provider: normalizeProvider(provider),
         sim: sim ? 1 : 0,
         sideOf: sideOf || null,
+        userId: userId || null,
         at: now(),
       };
       q.insertChat.run(chat);
       // Peer children stay out of the sidebar (same idea as job chats).
-      if (!chat.parentChatId && !chat.sim && !chat.sideOf) bus.emit("chats", { type: "created", chatId: chat.id });
+      if (!chat.parentChatId && !chat.sim && !chat.sideOf) bus.emit("chats", { type: "created", chatId: chat.id, userId: chat.userId });
       return store.getChat(chat.id);
     },
 
@@ -1050,17 +1077,20 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       return row ? { ...row } : null;
     },
 
-    listChats({ archived = false } = {}) {
+    listChats({ archived = false, userId = null } = {}) {
+      if (userId) return q.listUserChats.all({ userId: String(userId), archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
       return q.listChats.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
     },
 
-    // Changes whenever the archive list would: the web reads that heavier list only then.
-    archiveStamp() {
-      const row = db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM chats WHERE archived = 1 AND side_of IS NULL AND sim = 0").get();
+    archiveStamp({ userId = null } = {}) {
+      const row = userId
+        ? db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM chats WHERE user_id = ? AND archived = 1 AND side_of IS NULL AND sim = 0").get(String(userId))
+        : db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM chats WHERE user_id IS NULL AND archived = 1 AND side_of IS NULL AND sim = 0").get();
       return `${row.n}|${row.at || ""}`;
     },
 
-    listChatsBySource({ archived = false } = {}) {
+    listChatsBySource({ archived = false, userId = null } = {}) {
+      if (userId) return q.listUserChats.all({ userId: String(userId), archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
       return q.listChatsBySource.all({ archived: archived ? 1 : 0 }).map((row) => ({ ...row }));
     },
 
@@ -1108,57 +1138,65 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       return db.prepare("SELECT id, title, group_id, archived FROM chats WHERE module = ?").all(String(moduleId)).map((row) => ({ ...row }));
     },
 
-    listGroups() {
-      return db.prepare("SELECT id, name, position FROM chat_groups ORDER BY position, created_at").all().map((row) => ({ ...row }));
+    listGroups({ userId = null } = {}) {
+      if (userId) return db.prepare("SELECT id, name, position, user_id FROM chat_groups WHERE user_id = ? ORDER BY position, created_at").all(String(userId)).map((row) => ({ ...row }));
+      return db.prepare("SELECT id, name, position FROM chat_groups WHERE user_id IS NULL ORDER BY position, created_at").all().map((row) => ({ ...row }));
     },
-    getGroup(id) {
-      const row = db.prepare("SELECT id, name, position FROM chat_groups WHERE id = ?").get(String(id));
+    getGroup(id, { userId = null } = {}) {
+      const row = userId
+        ? db.prepare("SELECT id, name, position, user_id FROM chat_groups WHERE id = ? AND user_id = ?").get(String(id), String(userId))
+        : db.prepare("SELECT id, name, position FROM chat_groups WHERE id = ? AND user_id IS NULL").get(String(id));
       return row ? { ...row } : null;
     },
-    createGroup(name) {
+    createGroup(name, { userId = null } = {}) {
       const id = randomUUID();
-      const { next } = db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM chat_groups").get();
-      db.prepare("INSERT INTO chat_groups (id, name, position, created_at) VALUES (?, ?, ?, ?)").run(id, name, next, now());
-      bus.emit("chats", { type: "groups" });
-      return store.getGroup(id);
+      const { next } = userId
+        ? db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM chat_groups WHERE user_id = ?").get(String(userId))
+        : db.prepare("SELECT COALESCE(MAX(position), -1) + 1 AS next FROM chat_groups WHERE user_id IS NULL").get();
+      db.prepare("INSERT INTO chat_groups (id, name, position, user_id, created_at) VALUES (?, ?, ?, ?, ?)").run(id, name, next, userId ? String(userId) : null, now());
+      bus.emit("chats", { type: "groups", userId: userId || null });
+      return store.getGroup(id, { userId });
     },
-    renameGroup(id, name) {
-      if (!db.prepare("UPDATE chat_groups SET name = ? WHERE id = ?").run(name, String(id)).changes) return null;
-      bus.emit("chats", { type: "groups" });
-      return store.getGroup(id);
+    renameGroup(id, name, { userId = null } = {}) {
+      const res = userId
+        ? db.prepare("UPDATE chat_groups SET name = ? WHERE id = ? AND user_id = ?").run(name, String(id), String(userId))
+        : db.prepare("UPDATE chat_groups SET name = ? WHERE id = ? AND user_id IS NULL").run(name, String(id));
+      if (!res.changes) return null;
+      bus.emit("chats", { type: "groups", userId: userId || null });
+      return store.getGroup(id, { userId });
     },
-    // The owner's order by drag and drop: `order` is every group id once, plus "none" where the
-    // ungrouped chats («بدون گروه») sit. Returns false when the list is not exactly that.
-    orderGroups(order) {
-      const ids = store.listGroups().map((g) => g.id);
+    orderGroups(order, { userId = null } = {}) {
+      const ids = store.listGroups({ userId }).map((g) => g.id);
       const list = Array.isArray(order) ? order.map(String) : [];
       const named = list.filter((id) => id !== "none");
       if (new Set(list).size !== list.length || named.length !== ids.length || !named.every((id) => ids.includes(id)) || list.length - named.length > 1) return false;
-      const set = db.prepare("UPDATE chat_groups SET position = ? WHERE id = ?");
+      const set = userId
+        ? db.prepare("UPDATE chat_groups SET position = ? WHERE id = ? AND user_id = ?")
+        : db.prepare("UPDATE chat_groups SET position = ? WHERE id = ? AND user_id IS NULL");
       db.exec("BEGIN IMMEDIATE");
       try {
-        named.forEach((id, index) => set.run(index, id));
+        named.forEach((id, index) => (userId ? set.run(index, id, String(userId)) : set.run(index, id)));
         db.exec("COMMIT");
       } catch (error) {
         db.exec("ROLLBACK");
         throw error;
       }
       const loose = list.indexOf("none");
-      store.setKv("groups-loose-at", loose < 0 ? null : loose);
-      bus.emit("chats", { type: "groups" });
+      const kvKey = userId ? `groups-loose-at:user:${userId}` : "groups-loose-at";
+      store.setKv(kvKey, loose < 0 ? null : loose);
+      bus.emit("chats", { type: "groups", userId: userId || null });
       return true;
     },
-    /** Where «بدون گروه» sits among the groups (0 = first); null = after them all. */
-    looseGroupAt() {
-      const at = store.getKv("groups-loose-at");
+    looseGroupAt({ userId = null } = {}) {
+      const kvKey = userId ? `groups-loose-at:user:${userId}` : "groups-loose-at";
+      const at = store.getKv(kvKey);
       return Number.isInteger(at) && at >= 0 ? at : null;
     },
-    // Its chats stay where they are (archive included), only ungrouped.
-    deleteGroup(id) {
-      if (!store.getGroup(id)) return false;
+    deleteGroup(id, { userId = null } = {}) {
+      if (!store.getGroup(id, { userId })) return false;
       db.prepare("UPDATE chats SET group_id = NULL WHERE group_id = ?").run(String(id));
       db.prepare("DELETE FROM chat_groups WHERE id = ?").run(String(id));
-      bus.emit("chats", { type: "groups" });
+      bus.emit("chats", { type: "groups", userId: userId || null });
       return true;
     },
 
@@ -1336,8 +1374,13 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
 
     // One-time cleanup: rewrite events whose stored JSON is large with a sanitizer (e.g. image bytes
     // that older versions kept inside tool results). Returns how many rows changed.
-    compactLargeEvents(sanitize, minBytes = 64 * 1024) {
-      const rows = db.prepare("SELECT id, data FROM events WHERE length(data) > ?").all(minBytes);
+    // Pass { afterId, uptoId } to scan only a bounded id slice instead of the whole multi-GB events table.
+    compactLargeEvents(sanitize, minBytes = 64 * 1024, { afterId = 0, uptoId = null } = {}) {
+      const rows = uptoId != null
+        ? db.prepare("SELECT id, data FROM events WHERE id > ? AND id <= ? AND length(data) > ?").all(afterId, uptoId, minBytes)
+        : afterId > 0
+          ? db.prepare("SELECT id, data FROM events WHERE id > ? AND length(data) > ?").all(afterId, minBytes)
+          : db.prepare("SELECT id, data FROM events WHERE length(data) > ?").all(minBytes);
       const update = db.prepare("UPDATE events SET data = ? WHERE id = ?");
       let changed = 0;
       for (const row of rows) {
@@ -1349,6 +1392,9 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       }
       if (changed) bus.emit("events.rewritten");
       return changed;
+    },
+    maxEventId() {
+      return db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get().id;
     },
 
     startRun(chatId) {
@@ -1474,7 +1520,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     // The id of the owner's message the page sent under this client id, or null: a resend after a
     // lost answer (a 502 while the server restarts) must not be stored twice. Only this chat's
     // events among the latest RECENT_EVENTS ids (events_chat index range); a resend comes within
-    // seconds, and a later one finds its message already in the timeline.
+    // seconds, and a later one finds its message already in the timeline .
     userEventIdByClientId(chatId, clientId) {
       const floor = Math.max(0, (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get().id || 0) - RECENT_EVENTS);
       return db
@@ -1486,6 +1532,25 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     lastRunProvider(chatId) {
       const row = db.prepare("SELECT json_extract(data, '$.provider') AS provider FROM events WHERE chat_id = ? AND type = 'run.started' ORDER BY id DESC LIMIT 1").get(chatId);
       return row?.provider || null;
+    },
+
+    // The same for several chats at once, in one query: routing asks this on every pick (how many runs
+    // each subscription account is carrying), and one statement per chat per pick would be a query
+    // storm on the hot path (2026-11-25).
+    lastRunProviders(chatIds = []) {
+      const ids = [...new Set(chatIds.filter(Boolean))];
+      if (!ids.length) return new Map();
+      const rows = db
+        .prepare(
+          `SELECT chat_id, provider FROM (
+             SELECT chat_id, json_extract(data, '$.provider') AS provider,
+                    ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY id DESC) AS rn
+             FROM events
+             WHERE type = 'run.started' AND chat_id IN (${ids.map(() => "?").join(",")})
+           ) WHERE rn = 1`,
+        )
+        .all(...ids);
+      return new Map(rows.filter((r) => r.provider).map((r) => [r.chat_id, r.provider]));
     },
 
     lastEventId(chatId) {
@@ -1519,7 +1584,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     // Every recorded turn since `sinceIso` with its chat and the model its run used — the rows behind
     // the token-usage page. The model sits on the run's run.started event: found by walking back from
     // the run's first usage row along events_chat, at most 5 000 rows, once per run (memo).
-    // INDEXED BY: with ORDER BY id the planner otherwise scans all of events (~10 s on a large log).
+    // INDEXED BY: with ORDER BY id the planner otherwise scans all of events (~10 s on .46).
     usageRows(sinceIso) {
       const rows = db
         .prepare(
@@ -1633,7 +1698,7 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     // hold every word of it in one message (any order). The first `snippets` chats carry the text
     // around their newest hit (FTS5 snippet, the match between \u0002 and \u0003) so the sidebar
     // can show WHY a chat matched; `loose: true` marks the words-only hits.
-    searchChatHits(query, { limit = 500, scan = 2000, snippets = 40 } = {}) {
+    searchChatHits(query, { limit = 500, scan = 2000, snippets = 40, userId = null } = {}) {
       const term = foldSearch(query).trim();
       if (!store.searchReady() || [...term].length < 2) return [];
       const words = term.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
@@ -1643,10 +1708,15 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
       const phrase = `${quote(term)}${star}`;
       const loose = words.length > 1 ? words.map((w, i) => `${quote(w)}${i === words.length - 1 ? star : ""}`).join(" AND ") : null;
       const hits = new Map();
+      const chatAllowed = userId
+        ? db.prepare("SELECT 1 FROM chats WHERE id = ? AND user_id = ?")
+        : db.prepare("SELECT 1 FROM chats WHERE id = ? AND user_id IS NULL");
       const collect = (match, isLoose) => {
         for (const r of db.prepare("SELECT rowid AS id, chat_id FROM events_fts WHERE events_fts MATCH ? ORDER BY rowid DESC LIMIT ?").iterate(match, scan)) {
           if (hits.size >= limit) break;
-          if (!hits.has(r.chat_id)) hits.set(r.chat_id, { id: r.chat_id, row: r.id, match, loose: isLoose });
+          if (hits.has(r.chat_id)) continue;
+          const ok = userId ? chatAllowed.get(r.chat_id, String(userId)) : chatAllowed.get(r.chat_id);
+          if (ok) hits.set(r.chat_id, { id: r.chat_id, row: r.id, match, loose: isLoose });
         }
       };
       try {
@@ -1696,19 +1766,21 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
 
     // --- notes («بعداً»): the owner's own message, kept until it is run ---
 
-    createNote({ text, chatId = null, options = null, runAt = null }) {
+    createNote({ text, chatId = null, options = null, runAt = null, userId = null }) {
       const id = randomUUID();
       const at = now();
-      db.prepare("INSERT INTO notes (id, text, chat_id, options, run_at, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)")
-        .run(id, text, chatId || null, options ? JSON.stringify(options) : null, runAt || null, at, at);
+      db.prepare("INSERT INTO notes (id, text, chat_id, options, run_at, status, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)")
+        .run(id, text, chatId || null, options ? JSON.stringify(options) : null, runAt || null, userId ? String(userId) : null, at, at);
       return store.getNote(id);
     },
 
-    getNote(id) {
+    getNote(id, { userId = undefined } = {}) {
       const row = db
         .prepare("SELECT n.*, c.title AS chat_title FROM notes n LEFT JOIN chats c ON c.id = n.chat_id WHERE n.id = ? AND n.status != 'deleted'")
         .get(String(id || ""));
-      return row ? { ...row } : null;
+      if (!row) return null;
+      if (userId !== undefined && (row.user_id || null) !== (userId ? String(userId) : null)) return null;
+      return { ...row };
     },
 
     /** When this chat's next timed note or reminder runs (the sidebar's clock), or null. */
@@ -1723,11 +1795,76 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
     },
 
     /** Open and failed notes: timed ones by run_at, then untimed ones newest first. */
-    listNotes({ limit = 200 } = {}) {
+    listNotes({ limit = 200, userId = null } = {}) {
+      if (userId) {
+        return db
+          .prepare("SELECT n.*, c.title AS chat_title FROM notes n LEFT JOIN chats c ON c.id = n.chat_id WHERE n.user_id = ? AND n.status IN ('open', 'failed') ORDER BY n.run_at IS NULL, n.run_at ASC, n.created_at DESC, n.rowid DESC LIMIT ?")
+          .all(String(userId), limit)
+          .map((row) => ({ ...row }));
+      }
       return db
-        .prepare("SELECT n.*, c.title AS chat_title FROM notes n LEFT JOIN chats c ON c.id = n.chat_id WHERE n.status IN ('open', 'failed') ORDER BY n.run_at IS NULL, n.run_at ASC, n.created_at DESC, n.rowid DESC LIMIT ?")
+        .prepare("SELECT n.*, c.title AS chat_title FROM notes n LEFT JOIN chats c ON c.id = n.chat_id WHERE n.user_id IS NULL AND n.status IN ('open', 'failed') ORDER BY n.run_at IS NULL, n.run_at ASC, n.created_at DESC, n.rowid DESC LIMIT ?")
         .all(limit)
         .map((row) => ({ ...row }));
+    },
+
+    listAppUsers() {
+      return db.prepare(`
+        SELECT u.*, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0) AS chat_count
+        FROM app_users u ORDER BY u.created_at ASC
+      `).all().map((row) => ({ ...row }));
+    },
+    getAppUser(id) {
+      const row = db.prepare(`
+        SELECT u.*, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id AND c.parent_chat_id IS NULL AND c.side_of IS NULL AND c.sim = 0) AS chat_count
+        FROM app_users u WHERE u.id = ?
+      `).get(String(id || ""));
+      return row ? { ...row } : null;
+    },
+    getAppUserByUsername(username) {
+      const row = db.prepare("SELECT * FROM app_users WHERE username = ? COLLATE NOCASE").get(String(username || "").trim());
+      return row ? { ...row } : null;
+    },
+    findAppUserByTokenHash(tokenHash) {
+      if (!tokenHash) return null;
+      const row = db.prepare("SELECT * FROM app_users WHERE token_hash = ?").get(String(tokenHash));
+      return row ? { ...row } : null;
+    },
+    createAppUser({ id = randomUUID(), username, displayName, tokenHash, role = "member" }) {
+      const at = now();
+      db.prepare(
+        "INSERT INTO app_users (id, username, display_name, token_hash, role, enabled, session_version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)",
+      ).run(id, String(username).trim().toLowerCase(), String(displayName).trim(), String(tokenHash), String(role || "member"), at, at);
+      return store.getAppUser(id);
+    },
+    updateAppUser(id, patch = {}) {
+      const current = store.getAppUser(id);
+      if (!current) return null;
+      const sets = [];
+      const vals = [];
+      if ("username" in patch && patch.username) { sets.push("username = ?"); vals.push(String(patch.username).trim().toLowerCase()); }
+      if ("displayName" in patch && patch.displayName) { sets.push("display_name = ?"); vals.push(String(patch.displayName).trim()); }
+      if ("tokenHash" in patch && patch.tokenHash) { sets.push("token_hash = ?"); vals.push(String(patch.tokenHash)); }
+      if ("enabled" in patch) { sets.push("enabled = ?"); vals.push(patch.enabled ? 1 : 0); }
+      if ("lastLoginAt" in patch) { sets.push("last_login_at = ?"); vals.push(patch.lastLoginAt || null); }
+      if (patch.bumpSessionVersion) sets.push("session_version = session_version + 1");
+      if (!sets.length) return current;
+      sets.push("updated_at = ?");
+      vals.push(now(), String(id));
+      db.prepare(`UPDATE app_users SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+      return store.getAppUser(id);
+    },
+    deleteAppUser(id, { deleteChats = false } = {}) {
+      const current = store.getAppUser(id);
+      if (!current) return false;
+      if (deleteChats) {
+        const chatIds = db.prepare("SELECT id FROM chats WHERE user_id = ?").all(String(id)).map((r) => r.id);
+        for (const cid of chatIds) store.deleteChat(cid);
+        db.prepare("DELETE FROM chat_groups WHERE user_id = ?").run(String(id));
+        db.prepare("DELETE FROM notes WHERE user_id = ?").run(String(id));
+      }
+      db.prepare("DELETE FROM app_users WHERE id = ?").run(String(id));
+      return true;
     },
 
     /** Text and/or run_at of a note not yet started. Returns the row, or null when it was started. */
@@ -2276,6 +2413,14 @@ export function openStore(file, { seedProvider, coalesceMs = Number(process.env.
           store.updateAgentProfile(profile.id, { tools: [...new Set([...profile.tools, ...chatTools])] });
         }
         store.setKv("migr:chat-tools", "1");
+      }
+      // One-time: settings_suggest goes to the agents that have the chat tools.
+      if (!store.getKv("migr:settings-suggest")) {
+        for (const profile of store.listAgentProfiles()) {
+          if (profile.meta?.allTools || !Array.isArray(profile.tools) || !profile.tools.includes("chat_suggest") || profile.tools.includes("settings_suggest")) continue;
+          store.updateAgentProfile(profile.id, { tools: [...profile.tools, "settings_suggest"] });
+        }
+        store.setKv("migr:settings-suggest", "1");
       }
       // One-time: consult (from Karsara) goes to the same agents as the chat tools above.
       if (!store.getKv("migr:consult")) {

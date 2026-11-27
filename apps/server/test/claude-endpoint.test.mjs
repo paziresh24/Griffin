@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createClaudeProvider, REPLY_LANGUAGE } from "../src/providers/claude.mjs";
+import { createClaudeProvider } from "../src/providers/claude.mjs";
 import { createProviders, setAccounts } from "../src/providers/index.mjs";
 import { CLAUDE_ENDPOINTS, endpointOf, endpointModel, endpointSettings } from "../src/providers/claude-endpoint.mjs";
 import { splitModel, kindOf } from "../src/providers/ids.mjs";
 
-// GLM (Z.ai) inside Claude Code: a claude-* account whose settings name an
+// GLM (Z.ai) inside Claude Code (Karsara 5651ac9): a claude-* account whose settings name an
 // endpoint runs the same Claude Code — Bash, skills, hooks, MCP — with only the env of its query()
 // changed. A fake Claude Code records the options it was started with and answers with `answer`.
 const ZAI = CLAUDE_ENDPOINTS.find((e) => e.id === "zai");
@@ -53,8 +53,8 @@ test("an endpoint account runs Claude Code on Z.ai: base URL, its key, every mod
     assert.equal(o.effort, undefined);
     assert.equal(o.promptSuggestions, undefined);
     assert.equal(o.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, undefined);
-    // Only the reply language: an endpoint model answers in Persian too.
-    assert.deepEqual(o.settings, { language: REPLY_LANGUAGE });
+    // settings.language is opt-in (off by default); Persian is still enforced by hooks/prompt.
+    assert.deepEqual(o.settings, {});
     assert.equal(o.disallowedTools, undefined);
     assert.deepEqual(o.settingSources, ["user", "project", "local"]);
   } finally {

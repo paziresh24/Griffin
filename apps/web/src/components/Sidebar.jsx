@@ -20,6 +20,7 @@ import { setUiPrefs, useFlag, useUiPrefs } from "../ui-prefs.js";
 import { AgentGlyph, AgentPicker } from "./Controls.jsx";
 import { TelegramList } from "./Telegram.jsx";
 import { SidebarSuggestions } from "./ChatTools.jsx";
+import { isMember } from "../auth-me.js";
 import { useInbox } from "../inbox.js";
 import { peoplePath } from "../inbox-people.js";
 import { exactTime } from "../elapsed.js";
@@ -29,13 +30,14 @@ import { focusText } from "../focus.js";
 import { UpdateNotice, useUpdateDot } from "./UpdateNotice.jsx";
 import { HostNotice } from "./HostNotice.jsx";
 import { TwoStepNotice } from "./TwoStepNotice.jsx";
+import { SettingsNudge } from "./SettingsSuggest.jsx";
 import { ListStatus } from "./ListStatus.jsx";
 import { FeedbackBarButton, PROFILE_ITEMS, profileAction } from "./Feedback.jsx";
 import { useListChoice, useSectionOrder } from "../list-prefs.js";
 import { groupOrder, sectionDrag } from "../drag.js";
 import { chatDragProps, groupDragProps, useSectionDrop } from "./SidebarDrag.jsx";
 import { NavLauncher, NavSlot, PaletteKey, PinnedRow, SectionMenuFoot, SectionMenuItems, navStyleOf, useSections } from "./SectionNav.jsx";
-import { num, t, isRtl } from "../i18n.js";
+import { locale, t, isRtl } from "../i18n.js";
 import { askConfirm, askPrompt } from "../dialog.jsx";
 
 const isUnread = (chat) => isUnreadChat(chat, seenOf(chat.id));
@@ -63,6 +65,7 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
   const listSource = flags.oneList && (activeSource === "job" || activeSource === "peer") ? "manual" : activeSource;
   const section = sectionOfPage(page) || (!page && listSource && SECTIONS[listSource] ? listSource : "manual");
   const oneList = flags.oneList && (section === "manual" || section === "job" || section === "peer");
+  const member = isMember();
   const inbox = useInbox(); // «جدید» counts what waits for the owner (the home-page board)
 
   // A new chat, in a group when it comes from that group's «+».
@@ -124,7 +127,7 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
             <img src={iconUrl()} alt={BRAND.name} className="size-10 rounded-xl" />
           </a>
         )}
-        <AgentPicker agent={agent} onChange={(id) => (onAgentChange?.(id), onClose?.())} onAdd={() => go("/agents/new")} className={k ? "min-w-[10rem]" : "min-w-[11rem]"} />
+        <AgentPicker agent={agent} onChange={(id) => (onAgentChange?.(id), onClose?.())} onAdd={member ? null : () => go("/agents/new")} className={k ? "min-w-[10rem]" : "min-w-[11rem]"} />
         {navStyleOf(flags) === "launcher" ? <NavLauncher go={go} activeSection={oneList ? sectionOfPage(page) : section} /> : null}
         {onHide ? (
           <button type="button" onClick={onHide} className={k ? "kc-icon-btn ms-auto hidden shrink-0 md:inline-flex" : "ms-auto hidden shrink-0 rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground md:inline-flex"} aria-label={t("پنهان کردن فهرست گفتگوها")} title={t("پنهان کردن فهرست گفتگوها (Ctrl+B یا ⌘B)")}>
@@ -162,10 +165,7 @@ export function Sidebar({ chats, archived, groups = [], looseAt = null, loading 
         />
       )}
 
-      <HostNotice />
-      <PushNudge />
-      <TwoStepNotice />
-      <UpdateNotice />
+      {member ? null : (<><HostNotice /><PushNudge /><TwoStepNotice /><SettingsNudge /><UpdateNotice /></>)}
       {flags.userMenu ? <UserMenu onNavigate={onClose} /> : <UserBar onNavigate={onClose} k={k} />}
     </aside>
   );
@@ -327,7 +327,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
         </label>
       </div>
 
-      {/* Only "new" and the search stay fixed; everything else scrolls with the chat list.
+      {/* Only «جدید» and the search stay fixed; everything else scrolls with the chat list (from Karsara).
           It stays under Telegram too: it is the way back to the owner's own chats. */}
       {nav.top}
 
@@ -374,7 +374,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
               title={t("برداشتن فیلتر")}
             >
               <Filter className="size-3 shrink-0" />
-              <span className="truncate">{t("فیلتر: {name} ✕", { name: FILTERS.find((f) => f.id === filter)?.label || filter })}</span>
+              <span className="truncate">{t("فیلتر: {v} ✕", { v: FILTERS.find((f) => f.id === filter)?.label || filter })}</span>
             </button>
           ) : null}
           {sections.map((item) => (
@@ -434,7 +434,7 @@ function TabList({ section, chats, archived, groups, looseAt, loading, failed, o
               className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted-foreground hover:bg-muted"
             >
               <Archive className="size-3.5" />
-              {showArchived ? t("بازگشت") : t("بایگانی ({n})", { n: num(archivedHere.length) })}
+              {showArchived ? t("بازگشت") : t("بایگانی ({length})", { length: archivedHere.length })}
             </button>
           ) : null}
           </>
@@ -526,10 +526,12 @@ function MenuPick({ icon: Icon, label, selected, onClick }) {
 // تنظیمات بمونه فقط و خروج», then «چرا پروفایل رفت؟»): his name and photo (opens Settings → حساب), the
 // Settings icon and log out; agents, token usage and the rest live in Settings.
 function UserBar({ onNavigate, k: karsara = false }) {
+  const member = isMember();
   const updateDot = useUpdateDot(); // «آپدیت فقط در تنظیمات»: a new release waits there
   // Something to connect (no engine with a working key): marked here, so it is seen without opening Settings.
   const [setupMissing, setSetupMissing] = useState(false);
   useEffect(() => {
+    if (member) return undefined;
     let live = true;
     api("/api/setup").then((r) => live && setSetupMissing(Boolean(r?.needsEngine)), () => {});
     return () => {
@@ -611,7 +613,9 @@ function UserBar({ onNavigate, k: karsara = false }) {
           <Popover.Content side="top" align="start" sideOffset={8} collisionPadding={8} className="g-menu pop z-50 w-56 overflow-hidden rounded-xl border bg-card p-1 text-sm shadow-lg" dir={isRtl ? "rtl" : "ltr"}>
             {/* «جای بخش‌ها: منوی کاربر»: the sections first (SectionNav.jsx); nothing otherwise. */}
             <SectionMenuItems onPick={() => { setMenu(false); onNavigate?.(); }} rowClass="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" />
-            {PROFILE_ITEMS.map(({ id, icon: Icon, label, rule }) => (
+            {PROFILE_ITEMS.map(({ id, icon: Icon, label, rule }) => {
+              if (member && id !== "profile" && id !== "logout") return null;
+              return (
               <div key={id}>
                 {rule ? <div className="my-1 border-t" /> : null}
                 <button type="button" className="press flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted" onClick={() => { setMenu(false); profileAction(id, { editProfile: () => openSettings("account") }); }}>
@@ -619,7 +623,8 @@ function UserBar({ onNavigate, k: karsara = false }) {
                   <span>{label}</span>
                 </button>
               </div>
-            ))}
+              );
+            })}
             <SectionMenuFoot />
           </Popover.Content>
         </Popover.Portal>
@@ -629,7 +634,7 @@ function UserBar({ onNavigate, k: karsara = false }) {
         {updateDot && !setupMissing ? <span className="absolute end-2 top-2 size-2 rounded-full bg-primary" role="img" aria-label={t("نسخهٔ تازه آماده است")} /> : null}
         {setupMissing ? <span className="absolute end-2 top-2 size-2 rounded-full bg-warn" role="img" aria-label={t("اتصالی ناقص است")} title={t("اتصالی ناقص است")} /> : null}
       </button>
-      <FeedbackBarButton className={button} />
+      {member ? null : <FeedbackBarButton className={button} />}
     </div>
   );
 }
@@ -681,7 +686,7 @@ function SidebarNav({ section, go, k: karsara = false, flags }) {
     setMore(false);
     go("/settings/market");
   };
-  // Always in sight, so a module that is off (the MR list …) can be found without knowing «بیشتر» exists.
+  // Always in sight, so a module that is off (tickets, MR list …) can be found without knowing «بیشتر» exists.
   const storeLink = icons ? (
     <button type="button" data-tip={t("بازارچه · بخش‌های بیشتر")} aria-label={t("بازارچه: بخش‌های بیشتر")} onClick={openSettings} className="g-icon-btn g-sn-tip g-sn-tip-below flex size-9 items-center justify-center rounded-lg text-muted-foreground opacity-60 hover:bg-muted hover:text-foreground hover:opacity-100">
       <Store className="size-4" />
@@ -792,7 +797,7 @@ function NavButton({ active, icon: Icon, href, label, onClick, k = false, badge 
       <Icon className={k ? "size-4 shrink-0 kc-muted" : "size-4 shrink-0"} />
       <span>{label}</span>
       {badge > 0 ? (
-        <span className="g-badge ms-auto rounded-full bg-warn px-1.5 text-[10px] leading-4 text-background" aria-label={t("{n} مورد منتظر شما", { n: num(badge) })}>{num(badge)}</span>
+        <span className="g-badge ms-auto rounded-full bg-warn px-1.5 text-[10px] leading-4 text-background" aria-label={t("{badge} مورد منتظر شما", { badge })}>{badge.toLocaleString(locale)}</span>
       ) : null}
     </a>
   );
@@ -851,7 +856,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
             <ChevronDown className={`size-3 shrink-0 transition-transform ${collapsed ? "-rotate-90 rtl:rotate-90" : ""}`} />
             <span className="min-w-0 truncate text-start" dir="auto">{title}</span>
             {/* The count right after the title, in Persian digits: «griffin-private (۳۹)» (owner 2026-10-19). */}
-            <span className="shrink-0 tabular-nums">({chats.length.toLocaleString("fa-IR")})</span>
+            <span className="shrink-0 tabular-nums">({chats.length.toLocaleString(locale)})</span>
             <span className="flex-1" />
           </button>
           {group && onNewChat ? (
@@ -910,7 +915,7 @@ function Section({ title, group = null, repo = null, chats, groups, activeId, on
           <li>
             <button type="button" onClick={onMore} className="flex w-full items-center gap-1.5 rounded-md px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground">
               <ChevronDown className={`size-3 transition-transform ${more ? "rotate-180" : ""}`} />
-              {more ? t("کمتر") : t("بیشتر ({toLocaleString})", { toLocaleString: (chats.length - shown.length).toLocaleString("fa-IR") })}
+              {more ? t("کمتر") : t("بیشتر ({toLocaleString})", { toLocaleString: (chats.length - shown.length).toLocaleString(locale) })}
             </button>
           </li>
         ) : null}
@@ -986,7 +991,7 @@ const ChatItem = memo(function ChatItem({ chat, active, onOpen, groups = [], onG
           {state.id === "ask" ? (
             <span className="shrink-0" title={state.label}><CircleHelp className="size-3.5 text-warn" aria-label={state.label} /></span>
           ) : state.id === "running" ? null : state.failed ? (
-            <span className="size-1.5 shrink-0 rounded-full bg-bad" title={t("خطادار")} />
+            <span className="shrink-0 rounded-full bg-bad/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-bad" title={t("آخرین اجرای این گفتگو با خطا تمام شد (خطای سرور یا پر شدن اکانت)")}>{t("خطا")}</span>
           ) : null}
           {chat.reminderAt ? <span className="shrink-0" title={reminderLabel(chat.reminderAt)}><BellRing className="size-3.5 text-muted-foreground" aria-label={reminderLabel(chat.reminderAt)} /></span> : null}
           {unread ? <span className="size-2 shrink-0 rounded-full bg-signal ring-2 ring-signal/25" title={t("محتوای دیده‌نشده")} /> : null}
@@ -1033,7 +1038,7 @@ const ChatItem = memo(function ChatItem({ chat, active, onOpen, groups = [], onG
             </div>
           ) : (
           <div className="g-menu absolute end-2 top-9 z-20 w-48 overflow-hidden rounded-lg border bg-card text-sm shadow-lg">
-            {/* A chat that ended in an error: send it again, call it done, or close it (archive, below). */}
+            {/* A chat that ended in an error: send it again, call it done, or close it («بایگانی» below). */}
             {state.failed || chat.kept?.length ? (
               <>
                 <ChatMenuItem icon={RotateCcw} onClick={() => { closeMenu(); api(`/api/chats/${chat.id}/retry`, { method: "POST" }).catch(failed); }}>

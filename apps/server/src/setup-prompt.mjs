@@ -26,6 +26,8 @@ function engineSteps(engine, secrets) {
     ollama: `Ollama on this server: PATCH /api/providers/openai {"preset":"ollama","model":"<a model you see in ollama list>"}; if the app runs in Docker it must reach the host (host.docker.internal). ${doctor}`,
     custom: `OpenAI-compatible service: PATCH /api/providers/openai {"baseUrl":"https://…/v1","apiKey":"…","model":"…"}. Ask me for the address and model. ${key} ${doctor}`,
     cursor: `Cursor: PATCH /api/providers/cursor {"apiKey":"key_…"}. ${key} ${doctor}`,
+    "codex-sub": `ChatGPT subscription (Codex), no key: POST /api/providers {"kind":"openai","plan":"codex"} returns the account id; POST /api/providers/<id>/plan-signin returns a userCode and a verificationUrl. Send me both; I open the page, sign in and type the code. Poll GET /api/providers/<id>/plan-signin every few seconds until status is ready. ${doctor}`,
+    "antigravity-sub": `Google Antigravity subscription, no key: POST /api/providers {"kind":"openai","plan":"antigravity"} returns the account id; POST /api/providers/<id>/plan-signin returns a url. Send me the url; I sign in with Google and send back the address of the error page it ends on (http://localhost:51121/oauth-callback?…); then POST /api/providers/<id>/plan-signin/code {"code":"<that address>"}. ${doctor}`,
   };
   if (steps[engine]) return steps[engine];
   return `Ask me which account I want to use (Claude subscription, Anthropic key, Z.ai, OpenAI, OpenRouter, Ollama, Cursor), then set it up through GET /api/providers and PATCH /api/providers/<id> (or POST /api/providers/claude/signin for a Claude subscription). ${doctor}`;

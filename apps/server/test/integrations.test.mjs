@@ -1,3 +1,4 @@
+import { DEFAULT_TZ } from "../src/jobs/cron.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -287,10 +288,11 @@ test("coverage ask buttons stay bound to their own chat", async () => {
   }
 });
 
-test("answer stamp: Tehran clock and duration, nothing without an end time", () => {
-  assert.equal(answerStamp({ startedAt: "2026-09-24T06:04:16Z", endedAt: "2026-09-24T06:04:39Z" }), "⏱ ۰۹:۳۴ · ۲۳ث");
-  assert.equal(answerStamp({ startedAt: "2026-09-24T06:00:00Z", endedAt: "2026-09-24T06:02:05Z" }), "⏱ ۰۹:۳۲ · ۲د ۵ث");
-  assert.equal(answerStamp({ endedAt: "2026-09-24T06:04:39Z" }), "⏱ ۰۹:۳۴");
+test("answer stamp: install clock and duration, nothing without an end time", () => {
+  const hm = (iso) => new Intl.DateTimeFormat("fa-IR", { timeZone: DEFAULT_TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
+  assert.equal(answerStamp({ startedAt: "2026-09-24T06:04:16Z", endedAt: "2026-09-24T06:04:39Z" }), `⏱ ${hm("2026-09-24T06:04:39Z")} · ۲۳ث`);
+  assert.equal(answerStamp({ startedAt: "2026-09-24T06:00:00Z", endedAt: "2026-09-24T06:02:05Z" }), `⏱ ${hm("2026-09-24T06:02:05Z")} · ۲د ۵ث`);
+  assert.equal(answerStamp({ endedAt: "2026-09-24T06:04:39Z" }), `⏱ ${hm("2026-09-24T06:04:39Z")}`);
   assert.equal(answerStamp({ startedAt: "2026-09-24T06:04:16Z" }), "");
 });
 

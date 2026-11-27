@@ -47,6 +47,34 @@ test("an agent on a rejected engine moves to one that answers, and back once it 
   assert.equal(store.getAgentProfile(agent.id).provider, "claude");
 });
 
+test("a subscription engine is probed through its own sign-in, never sent to api.openai.com as a key (2026-11-22)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-"));
+  const store = openStore(path.join(dir, "t.sqlite"));
+  const urls = [];
+  let health = { ok: true, status: 200 };
+  const doctor = createDoctor({
+    store,
+    runner: { cancel: async () => {} },
+    providers: { "openai-ag": { kind: "openai", plan: "antigravity", defaultModel: "gemini-3-flash", health: async () => health } },
+    providerKey: () => '{"plan":"antigravity","refresh":"x"}',
+    providerConfig: () => ({ plan: "antigravity" }),
+    engineIds: ["openai-ag"],
+    dataDir: dir,
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return new Response("Incorrect API key provided", { status: 401 });
+    },
+  });
+  const ok = await doctor.probeEngine("openai-ag");
+  assert.equal(ok.ok, true);
+  assert.deepEqual(urls, []);
+  health = { ok: false, status: null, error: "http_401" };
+  assert.equal((await doctor.probeEngine("openai-ag")).cause, "bad_key");
+  health = { ok: false, error: "ECONNRESET" };
+  assert.equal((await doctor.probeEngine("openai-ag")).cause, "network");
+  assert.deepEqual(urls, []);
+});
+
 test("cancel_stuck leaves a run alone by age: only the sweep decides, and heal never does it", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "doctor-"));
   const store = openStore(path.join(dir, "t.sqlite"));

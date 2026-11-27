@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Bot, Check, HardDrive, Loader2, RotateCw, ShieldCheck, Store, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api.js";
-import { BRAND } from "../brand.js";
 import { readSetting, writeSetting } from "../brand.js";
 import { FEATURES, FEATURE_GROUPS, blockedBy, featureDepth, featureOf, featureOn, featureValue, isFresh, isSwitch } from "../settings-features.js";
+import { CONFIG_EVENT, configChanged } from "../settings-catalog.js";
 import { Badge, Choice, Group, Help, SettingRow, Toggle } from "./SettingsParts.jsx";
 import { num, t } from "../i18n.js";
 import { askConfirm } from "../dialog.jsx";
@@ -23,6 +23,11 @@ export function useConfigData() {
   useEffect(() => {
     load();
     api("/api/providers").then((d) => setAccounts(d.providers || [])).catch(() => {});
+  }, [load]);
+  // A suggestion card (SettingsSuggest.jsx) changed a setting: show it here too.
+  useEffect(() => {
+    window.addEventListener(CONFIG_EVENT, load);
+    return () => window.removeEventListener(CONFIG_EVENT, load);
   }, [load]);
   return { data, accounts, reload: load };
 }
@@ -45,11 +50,14 @@ export function useFeatureRows() {
   const load = useCallback(() => api("/api/config").then((d) => setRows(d.settings || []), (e) => toast.error(e.message)), []);
   useEffect(() => {
     load();
+    window.addEventListener(CONFIG_EVENT, load);
+    return () => window.removeEventListener(CONFIG_EVENT, load);
   }, [load]);
   const set = async (key, value) => {
     setBusy(key);
     try {
       const r = await api("/api/config", { method: "PATCH", body: { [key]: value } });
+      configChanged("page");
       await load();
       if (r?.restart) toast.message(t("بعد از ری‌استارت اعمال می‌شود"));
     } catch (e) {
@@ -233,7 +241,7 @@ export function ConfigFields({ settings, accounts = [], onSaved, save: saveWith,
         ) : s.kind === "account" ? (
           <select id={inputId} className={field} value={value} onChange={(e) => set(e.target.value)}>
             <option value="">{s.effective && !s.value ? t("پیش‌فرض ({effective})", { effective: s.effective }) : t("— مثل ایجنت —")}</option>
-            {accounts.map((a) => <option key={a.id} value={a.id}>{a.label || a.id}</option>)}
+            {accounts.map((a) => <option key={a.id} value={a.id}>{a.name || a.label || a.id}</option>)}
           </select>
         ) : s.multiline ? (
           <textarea id={inputId} className={`${field} min-h-20`} dir="auto" value={value} onChange={(e) => set(e.target.value)} placeholder={fallback} />

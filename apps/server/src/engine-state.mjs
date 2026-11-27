@@ -18,11 +18,18 @@ export const CREDIT_RETRY_MS = 6 * 60 * 60_000;
 // 2026-10-29: claude-5's login had expired and six runs of one chat went to it while 4/6/7 were fine).
 export const AUTH_RETRY_MS = 30 * 60_000;
 
+// A login Anthropic says can never be renewed («this login reached its time limit and cannot be renewed»)
+// does not come back with time: it stays out of routing until a sign-in, a new key or a passing test
+// clears it. Retrying it every 30 minutes only failed the first turn of every hourly job (a colleague's
+// install, 2026-11-19: «کلاد خانم دهقان» refused the :00 run of each job, every hour).
+const AUTH_FINAL = /cannot be renewed|reached its time limit/i;
+export const isFinalAuthError = (text) => AUTH_FINAL.test(String(text || ""));
+
 /** { state: "ok"|"limited"|"auth"|"credit"|"no_key"|"off", until? } */
-export function engineState({ enabled, keyed, limitedUntil = 0, creditAt = 0, authAt = 0, now = Date.now() }) {
+export function engineState({ enabled, keyed, limitedUntil = 0, creditAt = 0, authAt = 0, authFinal = false, now = Date.now() }) {
   if (!enabled) return { state: "off" };
   if (!keyed) return { state: "no_key" };
-  if (authAt && now - authAt < AUTH_RETRY_MS) return { state: "auth", since: authAt };
+  if (authAt && (authFinal || now - authAt < AUTH_RETRY_MS)) return { state: "auth", since: authAt };
   if (creditAt && now - creditAt < CREDIT_RETRY_MS) return { state: "credit", since: creditAt };
   if (limitedUntil > now) return { state: "limited", until: limitedUntil };
   return { state: "ok" };

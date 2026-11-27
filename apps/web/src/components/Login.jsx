@@ -3,8 +3,9 @@ import { Fingerprint, KeyRound, ShieldCheck } from "lucide-react";
 import { browserSupportsWebAuthn, startAuthentication } from "@simplewebauthn/browser";
 import { BRAND, iconUrl } from "../brand.js";
 import { loginError } from "../login-error.js";
-import { t } from "../i18n.js";
 import { TwoStepSection } from "./TwoStep.jsx";
+import { setAuthMe } from "../auth-me.js";
+import { t } from "../i18n.js";
 
 export function AuthGate({ children }) {
   // "checking" | "in" | "out" | "setup" (signed in, but this install requires two-step sign-in first)
@@ -21,21 +22,21 @@ export function AuthGate({ children }) {
     const check = () =>
       fetch("/api/auth/me", { credentials: "same-origin" })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-        .then((body) => alive && setState(!body.authenticated ? "out" : body.setupRequired ? "setup" : "in"))
+        .then((body) => { if (!alive) return; setAuthMe(body.authenticated ? body : null); setState(!body.authenticated ? "out" : body.setupRequired ? "setup" : "in"); })
         .catch(() => {
           if (!alive) return;
           setOffline(true);
           timer = setTimeout(check, 3000);
         });
     check();
-    const onUnauthorized = () => setState("out");
+    const onUnauthorized = () => { setAuthMe(null); setState("out"); };
     const onSetup = () => setState("setup");
-    window.addEventListener("griffin:unauthorized", onUnauthorized);
+    window.addEventListener("sokan:unauthorized", onUnauthorized);
     window.addEventListener(SETUP_EVENT, onSetup);
     return () => {
       alive = false;
       clearTimeout(timer);
-      window.removeEventListener("griffin:unauthorized", onUnauthorized);
+      window.removeEventListener("sokan:unauthorized", onUnauthorized);
       window.removeEventListener(SETUP_EVENT, onSetup);
     };
   }, [round]);
@@ -147,7 +148,7 @@ function Login({ onDone }) {
           <img src={iconUrl()} alt="" className="size-10" />
           <div>
             <h1 className="font-semibold">{BRAND.title}</h1>
-            <p className="text-xs text-muted-foreground">{t("ورود با توکن Owner")}</p>
+            <p className="text-xs text-muted-foreground">{t("ورود با توکن")}</p>
           </div>
         </div>
         <input type="text" name="username" value="owner" autoComplete="username" readOnly hidden />

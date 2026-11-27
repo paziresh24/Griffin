@@ -1,0 +1,21 @@
+{
+  "۳ روز": "3 days",
+  "ارسال به همه": "Send to everyone",
+  "اطلاع": "Info",
+  "اعلان برای همهٔ گریفین‌ها": "Announcement for every Griffin",
+  "اعلان برداشته شد": "Announcement removed",
+  "اعلان فرستاده شد": "Announcement sent",
+  "اهمیت": "Importance",
+  "بستن اعلان": "Close announcement",
+  "بی‌پایان": "No end",
+  "تا {when}": "Until {when}",
+  "تا وقتی بردارم": "Until I remove it",
+  "جایگزین و ارسال": "Replace and send",
+  "متنی که این‌جا بفرستید روی همهٔ نصب‌ها، بالای همهٔ صفحه‌ها، به‌صورت یک کادر دیده می‌شود. هر کس می‌تواند آن را برای خودش ببندد؛ اعلان تازه دوباره دیده می‌شود.": "What you send here shows on every install, as a bar on top of every page. Anyone can close it for themselves; a new announcement shows again.",
+  "مثلاً: اکانت team-a فعلاً از کار افتاده؛ لطفاً سراغ ورود دوباره‌اش نروید.": "e.g. The team-a account is down for now; please don't try to sign it in again.",
+  "مدت": "Duration",
+  "مهم": "Important",
+  "هشدار": "Warning",
+  "همین الان به {sent} از {members} نصب وصل رسید؛ بقیه تا ۱۵ دقیقه می‌گیرند.": "Reached {sent} of {members} connected installs now; the rest get it within 15 minutes.",
+  "یک هفته": "1 week"
+}

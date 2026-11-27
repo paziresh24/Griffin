@@ -14,6 +14,7 @@ import { createClaudeProvider } from "../src/providers/claude.mjs";
 import { griffinStatePaths } from "../src/providers/state-guard.mjs";
 import { noteOwnerAnswer } from "../src/guard.mjs";
 import { thirdPartyKey } from "../src/related.mjs";
+import { heavyKey } from "../src/model-policy.mjs";
 import { createChatTrust } from "../src/knowledge-trust.mjs";
 
 // Gap 3 (Karsara → Griffin): a job the owner wrote runs with his attended tools unless its mode is
@@ -689,5 +690,76 @@ test("a job approval's yes does not bless the chain even if the job is made «م
     assert.deepEqual(ran, ["*1"], "the second, different call did not run on the first yes");
   } finally {
     env.cleanup();
+  }
+});
+
+// Owner 2026-11-24: a Sentry-triage job written in his Opus chat ran on Sonnet/medium. A job he wrote
+// runs with the model, effort and heavy-model confirmation of the chat that wrote it (as a side chat
+// inherits its parent's, app.mjs) — only when that chat is his and holds his second confirmation.
+test("owner job: the run chat inherits model, effort and heavyok from the owner's chat that wrote it; nothing else does", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "griffin-owner-jobs-model-"));
+  const store = openStore(path.join(dir, "db.sqlite"));
+  const trust = createChatTrust({ store });
+  const ownerJobs = createOwnerJobs({ store, ownerRooted: (id) => trust.ownerRooted(id) });
+  const jobs = createJobs({
+    store,
+    runner: { send: async () => {}, cancel: async () => {} },
+    log: { error() {}, warn() {}, info() {} },
+    tickMs: 60_000,
+    timeoutFor: () => 150,
+    pollMs: 10,
+    runChoice: (job, by) => ownerJobs.runChoice(job, by),
+    runsWith: (job) => {
+      const choice = ownerJobs.runChoice(job);
+      return choice ? { model: choice.model, effort: choice.effort } : { model: "sonnet", effort: "medium" };
+    },
+  });
+  const toolsIn = (chatId) => createJobTools({ jobs, targets: () => [], chatId });
+  const env = { store, jobs, toolsIn };
+  const mk = async (chatId, name, extra = {}) => jobs.get(payload(await toolsIn(chatId).jobs_create.execute({ name, prompt: name, triggerType: "manual", ...extra })).id);
+  const runOf = async (job, fire = () => jobs.run(job.id, "manual")) => {
+    const id = await runChatOf(env, job, fire);
+    await sleep(200);
+    return { chat: store.getChat(id), ok: store.getKv(heavyKey(id)) };
+  };
+  try {
+    const opus = store.createChat({ title: "opus chat", model: "opus" });
+    store.updateChat(opus.id, { effort: "high" });
+    store.setKv(heavyKey(opus.id), { model: true, effort: true });
+    const plain = store.createChat({ title: "plain chat", model: "opus" }); // heavy pick never confirmed
+    const colleague = store.createChat({ title: "theirs", caller: "team", model: "opus" });
+    store.setKv(heavyKey(colleague.id), { model: true, effort: true });
+
+    const fromOpus = await mk(opus.id, "sentry");
+    const run = await runOf(fromOpus);
+    assert.equal(run.chat.model, "opus");
+    assert.equal(run.chat.effort, "high");
+    assert.deepEqual(run.ok, { model: true, effort: true }, "the run holds the owner's confirmation, so the clamp keeps Opus/high");
+    assert.deepEqual(payload(await toolsIn(opus.id).jobs_list.execute({})).jobs.find((j) => j.id === fromOpus.id).runsWith, { model: "opus", effort: "high" }, "jobs_list shows what the job runs with");
+
+    const pinned = await mk(opus.id, "pinned");
+    store.updateJob(pinned.id, { model: "sonnet" });
+    assert.equal((await runOf(jobs.get(pinned.id))).chat.model, "sonnet", "a model set on the job itself wins");
+
+    for (const job of [await mk(plain.id, "unconfirmed"), await mk(colleague.id, "colleague"), jobs.create({ name: "page", prompt: "page", triggerType: "manual" })]) {
+      const other = await runOf(job);
+      assert.equal(other.chat.model, null, `${job.name}: today's default`);
+      assert.equal(other.chat.effort, null, job.name);
+      assert.equal(other.ok, null, job.name);
+    }
+
+    store.updateJob(fromOpus.id, { mode: "limited" });
+    assert.equal((await runOf(jobs.get(fromOpus.id))).ok, null, "«محدود» stays on the scheduler's defaults");
+    store.updateJob(fromOpus.id, { mode: "agent" });
+    const firedByColleague = await runOf(fromOpus, () => toolsIn(colleague.id).jobs_run.execute({ id: fromOpus.id }));
+    assert.equal(firedByColleague.ok, null, "a run a colleague's chain started inherits nothing");
+    assert.equal(firedByColleague.chat.model, null);
+
+    store.deleteKv(heavyKey(opus.id));
+    assert.equal((await runOf(fromOpus)).ok, null, "read at run time: the owner taking the confirmation back applies to the job");
+  } finally {
+    jobs.stop();
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

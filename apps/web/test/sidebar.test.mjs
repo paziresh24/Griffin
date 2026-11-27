@@ -1,5 +1,5 @@
-// The sidebar: the owner's own chat groups, the fixed head («جدید» and the search only), labels,
-// and its place on the start side of the page (the right of the RTL page).
+// The sidebar (from Karsara): the owner's own chat groups, the fixed head («جدید» and the search
+// only), labels, and its place on the right of the RTL page.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -25,7 +25,7 @@ test("groups: a search, a filter or the archive hides the empty ones; nothing to
 test("only «فضای کار» and the search stay fixed; the pages scroll with the list", () => {
   const side = src("components/Sidebar.jsx");
   assert.match(side, /<NavButton k=\{k\} active=\{!page && !activeId\}[^>]*label=(\{t\()?"فضای کار"/, "«فضای کار» is lit only on the home / new-chat screen");
-  // Mr. Rezaei 2026-10-24: «فضای کار» with a «+» beside it; both go home, as does the logo.
+  // a colleague 2026-10-24: «فضای کار» with a «+» beside it; both go home, as does the logo.
   assert.match(side, /aria-label=(\{t\()?"گفتگوی جدید"/);
   assert.match(side, /aria-label=(\{t\()?"فضای کار"/);
   // Both lists: the search and «جدید» (nav.top) above the scrolling <nav>; the section rows (Settings →
@@ -39,7 +39,7 @@ test("only «فضای کار» and the search stay fixed; the pages scroll with 
     assert.match(list, /\{query\.trim\(\) \? null : nav\??\.sections\}/, file);
   }
   assert.match(side, /sections: <SidebarNav /);
-  const nav = src("ui-prefs.js");
+  const nav = src("ui-flags.js"); // the sections and flags live in the React-free half of ui-prefs.js
   for (const label of ["تلگرام", "جاب", "حادثه‌ها", "ایجنت‌های همکاران", "میز کار"]) assert.match(nav, new RegExp(`label: t\\("${label}"\\)`));
 });
 
@@ -47,12 +47,12 @@ test("the foot holds the profile menu, Settings and feedback; log out is in the 
   const side = src("components/Sidebar.jsx");
   const foot = side.slice(side.indexOf("function UserBar"));
   const aria = (label) => new RegExp(`aria-label=(\\{t\\()?"${label}"`);
-  // Mr. Rezaei 2026-10-24: nobody used «خروج» there; its place is «ارسال بازخورد» (a bug icon).
   assert.match(foot, aria("تنظیمات"));
+  // a colleague 2026-10-24: nobody used «خروج» there; its place is «ارسال بازخورد» (a bug icon).
   assert.match(foot, /<FeedbackBarButton /);
   assert.doesNotMatch(foot, aria("خروج"));
   assert.match(src("components/Feedback.jsx"), /\{ id: "logout", icon: LogOut, label: (t\()?"خروج"/);
-  // The profile opens its own menu (edit profile, about, support, feedback), not Settings.
+  // Owner 2026-10-18: the profile opens its own menu (edit profile, about, support, feedback), not Settings.
   assert.match(foot, aria("منوی پروفایل"));
   assert.match(foot, /PROFILE_ITEMS\.map/);
   assert.doesNotMatch(side, /UsageBadge|MenuRow/);

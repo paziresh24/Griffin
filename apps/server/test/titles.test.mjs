@@ -111,8 +111,8 @@ test("a colleague's agent's chat is named from its request, old «name: …» ti
 });
 
 test("a colleague chat the owner renamed is not the automatic title", () => {
-  const wrapped = peerRequestMessage({ label: "یارا (علیرضا کاظمی)", userId: "net-x", text: "سلام، یارا هستم. آقای کاظمی موافقت کردند." });
-  assert.equal(isPeerAutoTitle("یارا (علیرضا کاظمی): سلام، یارا هستم. آقای کاظمی…", wrapped), true);
+  const wrapped = peerRequestMessage({ label: "یارا (کاربر یک کاظمی)", userId: "net-x", text: "سلام، یارا هستم. آقای کاظمی موافقت کردند." });
+  assert.equal(isPeerAutoTitle("یارا (کاربر یک کاظمی): سلام، یارا هستم. آقای کاظمی…", wrapped), true);
   assert.equal(isPeerAutoTitle("سلام، یارا هستم. آقای کاظمی موافقت کردند.", wrapped), true);
   assert.equal(isPeerAutoTitle("موافقت آقای کاظمی", wrapped), false);
   assert.equal(peerAutoTitle("\n  خط اول\nخط دوم"), "خط اول");

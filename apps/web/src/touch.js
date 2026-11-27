@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-// A touch-first device: its primary pointer is a finger. Not the composer library's
+// A touch-first device: its primary pointer is a finger (from Karsara). Not the composer library's
 // stricter "(pointer: coarse) and (not (any-pointer: fine))" — a phone that also reports a fine
 // pointer (stylus, paired mouse) fails that test and Enter kept sending the message.
 export const TOUCH_QUERY = "(pointer: coarse)";
@@ -26,4 +26,17 @@ const subscribe = (onChange) => {
 
 export function useTouchPrimary() {
   return useSyncExternalStore(subscribe, () => Boolean(media()?.matches), () => false);
+}
+
+/**
+ * What an Enter keydown does in a one-box answer field: "send" or "newline" (null = not Enter).
+ * Follows the composer: keyboard → Enter sends and Shift+Enter breaks the line (or the reverse with
+ * ENTER_KEY=shiftEnter); touch → Enter breaks the line and Ctrl/Cmd+Enter sends. An IME's Enter only confirms the word.
+ */
+export function answerKey(touch, e) {
+  if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return null;
+  const mode = submitMode(touch);
+  if (mode === "ctrlEnter") return e.ctrlKey || e.metaKey ? "send" : "newline";
+  if (mode === "none") return e.shiftKey && !e.ctrlKey && !e.metaKey ? "send" : "newline";
+  return e.shiftKey ? "newline" : "send";
 }

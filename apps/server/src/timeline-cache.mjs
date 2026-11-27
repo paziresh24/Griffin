@@ -36,7 +36,7 @@ export function tailStart(messages, limit) {
 export const LAZY_RESULT_BYTES = 1024;
 const SHOWN_WITHOUT_CLICK = new Set([
   "show_media", "browser_screenshot", "s3_get", "visualize", "preview_start", "ask_owner", "ask_requester", "ask_agent",
-  "consult", "send_to_person", "owner_task", "task", "todo_write", "TodoWrite", "AskUserQuestion", "ExitPlanMode",
+  "consult", "send_to_person", "owner_task", "task", "todo_write", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "settings_suggest",
 ]);
 const leavable = (part) => part.type === "tool" && part.status === "success" && Boolean(part.result) && Boolean(part.callId) && !SHOWN_WITHOUT_CLICK.has(part.name);
 

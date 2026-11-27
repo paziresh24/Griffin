@@ -164,11 +164,11 @@ test("a signed-in page on an old public name carries its session to the new name
   const store = openStore(path.join(dir, "db.sqlite"));
   try {
     const runner = createRunner({ store, sdk: {}, agentOptions: () => ({}), log: {} });
-    const app = createApp({ store, runner, auth: createAuth({ dataDir: dir, store }), movedHosts: ["karsara-x.example.org"], publicUrl: "https://griffin-x.example.org" });
+    const app = createApp({ store, runner, auth: createAuth({ dataDir: dir, store }), movedHosts: ["node-x.example.org"], publicUrl: "https://griffin-x.example.org" });
     const token = fs.readFileSync(path.join(dir, "owner.token"), "utf8").trim();
     const cookie = (await login(app, token)).headers.get("set-cookie").split(";")[0];
-    const old = "http://karsara-x.example.org";
-    const host = { host: "karsara-x.example.org" };
+    const old = "http://node-x.example.org";
+    const host = { host: "node-x.example.org" };
 
     // No cookie: the plain permanent redirect, as before.
     assert.equal((await app.request(`${old}/?a=1`, { headers: host })).status, 301);

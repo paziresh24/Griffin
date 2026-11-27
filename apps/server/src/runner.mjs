@@ -7,11 +7,11 @@ import { fileMeta, forEngine, isInline, keepOnDisk, mergeMessages, toSdkMessage 
 import { ASK_TOOL } from "./asks.mjs";
 import { rootCallerOf } from "./agents/profiles.mjs";
 import { explainEgress } from "./egress-down.mjs";
-import { colleagueCaller } from "./colleague-access.mjs";
+import { colleagueCaller, fullAccessLive } from "./colleague-access.mjs";
 import { UPGRADE_TOOL, upgradeNote } from "./model-upgrade.mjs";
 import { accountMoveNote, doneTools, droppedNote, ENGINE_UNAVAILABLE, resetFromText, FALLBACK_KEY, FALLBACK_OFFERS_KEY, fallbackNote, fallbackQuestion, saidWait, saidYes, storableMessage, withLeadNote } from "./plan-fallback.mjs";
 
-// Kept messages: the owner's message whose run ended in an error before anything
+// Kept messages (from Karsara): the owner's message whose run ended in an error before anything
 // reached them (no text, no tool) is kept in the store's kv, oldest first, until a retry gets
 // through or the owner deletes it. A newer message joins the end of that FIFO, never jumps it.
 // After MAX_KEPT_RETRIES failed retries a kept message is no longer retried on its own and stops
@@ -25,7 +25,7 @@ export function keptList(store, chatId) {
 // What the thread shows: ids only, oldest first (a delete names one by id, never by position).
 export const keptIds = (store, chatId) => keptList(store, chatId).map((k) => k.id);
 
-// Restart resume: what a chat was doing survives the process. runq:<chat> holds the
+// Restart resume (from Karsara): what a chat was doing survives the process. runq:<chat> holds the
 // turn in flight (its own message text and the «در صف» events it carries) and the messages queued
 // behind it; resume:pending lists, oldest first, the chats to pick up after the next boot — the
 // ones our own graceful stop cut (a deploy) and the ones a crash left `running`.
@@ -65,7 +65,8 @@ export function lostWakeupsPrompt(crons = []) {
 const MAX_RESUMES = 3;
 const RESUME_GAP_MS = 15_000;
 
-// Continue after the plan limit resets: a run the limit stopped, with no other engine to move to, continues by itself a minute
+// Continue after the plan limit resets (from Karsara, the desktop app's «Auto-continue when limits
+// reset»): a run the limit stopped, with no other engine to move to, continues by itself a minute
 // after the reset time — at most MAX_LIMIT_RESUMES tries in a row. Kept in the store's kv so a
 // restart does not forget the wait; any message of the owner or a Stop ends it.
 export const MAX_LIMIT_RESUMES = 3;
@@ -174,7 +175,7 @@ export function createRunner({
   // Pause between two chats resumed after a boot (one at a time, not a burst on the engines).
   resumeGapMs = RESUME_GAP_MS,
   // annotate(chatId) -> a line the model reads before this message (not shown as the message):
-  // in a Telegram mother chat, what the assistant already sent that person and is unanswered (desk.mjs).
+  // in a Telegram mother chat, what Iris already sent that person and is unanswered (desk.mjs).
   annotate = () => null,
   // notResumable(chat) -> true for a chat nobody waits on after a restart (a consult: the call
   // that waited for its answer is gone), so a cut or crashed run there is not continued.
@@ -331,7 +332,7 @@ export function createRunner({
 
   // A turn of its own that the engine refused (a spent plan, an empty answer) got no answer to the
   // task that woke it, and its later tasks die the same way: nothing else would wake the chat
-  // («Platform HA», 2026-11-01: seven tasks stopped at the weekly limit, silent until the owner asked).
+  // («HA drill», 2026-11-01: seven tasks stopped at the weekly limit, silent until the owner asked).
   // It goes on as a normal run, whose own path moves accounts. An empty one only once per owner message.
   function wakeRefused(chatId, entry, result, status, emit) {
     if (status !== "error" || entry.cancelRequested) return false;
@@ -732,7 +733,10 @@ export function createRunner({
     const root = chat?.parent_chat_id ? rootCallerOf(store, chat) : chat?.caller;
     return colleagueCaller(root) ? "agent" : chat?.mode || "agent";
   };
-  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}|${Boolean(shellHeld(chat))}`;
+  // A colleague chain's full access (colleague-access.mjs) is part of it: his yes, or its end, makes
+  // every chat of that chain (also a sub-chat made before it) start its next turn with new tools.
+  const grantLive = (chat) => fullAccessLive(store, chat.parent_chat_id ? store.rootChatId?.(chat.id) || chat.id : chat.id);
+  const placement = (chat) => `${chat.runs_on || ""}|${genv("CLAUDE_HOST", "off")}|${["agent", "auto"].includes(chat.mode || "agent")}|${chat.repo || ""}|${Boolean(shellHeld(chat))}|${grantLive(chat)}`;
   const liveAgent = (chatId) => {
     const chat = store.getChat(chatId);
     return bgAgents.get(chatId) || (chat?.agent_id ? agents.get(agentKey(chat, chat.agent_id)) : null) || null;
@@ -819,7 +823,7 @@ export function createRunner({
   }
 
   // The annotate line goes on when the turn starts (not when a message is queued, kept or resumed):
-  // what it says — the assistant's unanswered sends — may change while a message waits behind a turn.
+  // what it says — Iris's unanswered sends — may change while a message waits behind a turn.
   function withNote(chatId, message) {
     let note = null;
     try {
@@ -991,7 +995,7 @@ export function createRunner({
         entry.retryOnFallback = true;
       }
       // Empty again on the retry: the account itself answers nothing (zero tokens in a few seconds —
-      // 15 on one install and 10 on another in two days, always on the same accounts). It rests
+      // 15 on hub and 10 on a colleague's install in two days, always on the same accounts). It rests
       // 15 minutes like a plan limit and the turn goes to another account, the session kept when it
       // is the same model.
       if (status === "error" && result.error?.code === "no_answer" && entry.afterEmpty && !entry.produced) {
@@ -1078,10 +1082,11 @@ export function createRunner({
       offerFallback(chatId, runId, entry.offerFallback.provider, entry.raw ?? message, resetsAt, entry.offerFallback.keptId);
     }
     if (entry.retryOnFallback) {
-      // A same-model move between Claude accounts (ask mode) keeps the session: both accounts share
-      // one Claude Code config folder, only the token differs. Without a session to keep, the
-      // rerun is told what it does not see and what the stopped run already did.
-      const keepSession = Boolean((entry.hop || entry.emptyRetry) && store.getChat(chatId)?.agent_id);
+      // Only a same-account empty-turn retry keeps the Claude session. Moving across Claude accounts
+      // (`entry.hop`) starts a fresh session seeded with the chat history so Account B never sends
+      // `--resume` with Account A's session UUID (both a cross-account fingerprint and missing across
+      // isolated CLAUDE_CONFIG_DIR folders); accountMoveNote + seedMessages carry the context over.
+      const keepSession = Boolean(entry.emptyRetry && !entry.hop && store.getChat(chatId)?.agent_id);
       if (entry.hop && !keepSession) {
         const raw = entry.raw ?? message;
         entry.rerunMessage = withLeadNote(raw, accountMoveNote(entry.hop, doneTools(store, runId)));
@@ -1568,7 +1573,7 @@ export function createRunner({
     // first checkpointed turn at or after it. null when there is none or the engine cannot (then the
     // rewind only cuts the conversation); { restored } or { error } otherwise. Never throws.
     // ponytail: a turn already running when the event was queued is not rewound (only later turns).
-    // dryRun: a preview { canRewind, changed, insertions, deletions } for the rewind dialog.
+    // dryRun: a preview { canRewind, changed, insertions, deletions } for the rewind dialog (from Karsara).
     async rewindFiles(chat, fromEventId, { dryRun = false } = {}) {
       let mark = null;
       for (const event of store.allEvents(chat.id, Number(fromEventId) - 1)) {

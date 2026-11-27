@@ -43,6 +43,8 @@ export async function forkChat({ store, runner, parent, runId = null, title = nu
     mode: parent.mode || "auto",
     agent: parent.agent || DEFAULT_AGENT,
     provider: normalizeProvider(parent.provider),
+    caller: parent.caller || "owner",
+    userId: parent.user_id || null,
   });
   // Same folder (index.mjs agentOptions): Claude Code keeps the forked session by working folder.
   store.setKv(`fork-of:${chat.id}`, parent.id);

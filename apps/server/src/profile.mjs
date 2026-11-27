@@ -1,9 +1,9 @@
-// The owner's name and photo at the foot of the sidebar. The connected Telegram
+// The owner's name and photo at the foot of the sidebar (from Karsara). The connected Telegram
 // account gives both; a name typed in Settings («نام شما») wins over Telegram's; with neither, name
 // and photo are null and the page keeps its default. This is the owner, not the assistant (persona.mjs).
 // The photo is served from memory (the Telegram channel downloads it), never stored. While Telegram
-// gives none (not connected, or switched off), the last saved ones stand in: kv "profile".telegramName and
-// <data>/profile-photo.jpg (an install moved from another tool can carry them over).
+// gives none (not connected, or switched off), the last ones another install showed stand in: a moved
+// Karsara's (scripts/from-karsara.mjs carryProfile) kv "profile".telegramName and <data>/profile-photo.jpg.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -55,10 +55,24 @@ export function profileRoutes(app, { store, telegramProfile = () => null, config
     return { name: typedName || telegramName || nameOf(configuredName), photo: photo ? `/api/profile/photo?v=${versionOf(photo)}` : null, typedName, telegramName };
   };
 
-  app.get("/api/profile", async (c) => c.json(await view()));
+  const memberView = (authUser) => {
+    const row = store.getAppUser?.(authUser.id);
+    const displayName = row?.display_name || authUser.displayName;
+    return { name: displayName, photo: null, typedName: displayName, telegramName: null, role: "member", username: row?.username || authUser.username };
+  };
+  app.get("/api/profile", async (c) => {
+    const authUser = c.get?.("authUser");
+    return c.json(authUser ? memberView(authUser) : await view());
+  });
   app.put("/api/profile", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     if (typeof body?.name !== "string") return c.json({ error: "name must be a string" }, 400);
+    const authUser = c.get?.("authUser");
+    if (authUser) {
+      const cleanName = nameOf(body.name);
+      if (cleanName) store.updateAppUser?.(authUser.id, { displayName: cleanName });
+      return c.json(memberView(authUser));
+    }
     store.setKv("profile", { ...(store.getKv("profile") || {}), name: nameOf(body.name) });
     return c.json(await view());
   });

@@ -9,10 +9,11 @@ import { api, usePolling } from "../api.js";
 import { useFlag, useLook } from "../ui-prefs.js";
 import { agentMeta, PROVIDER_META } from "../brand.js";
 import { DEFAULT_EFFORT, modelHeld } from "../model-policy.js";
-import { isRtl, locale, num, t } from "../i18n.js";
+import { isMember } from "../auth-me.js";
+import { locale, t, isRtl } from "../i18n.js";
 
-// The chat's mode, as Claude Desktop's mode menu. The three asking modes apply to Claude with full
-// Claude Code in the owner's chats; elsewhere they run like «بدون پرسیدن» (no asking).
+// The chat's mode, as Claude Desktop's mode menu (owner 2026-10-17). The three asking modes apply to
+// Claude with full Claude Code in the owner's chats; elsewhere they run like «بدون پرسیدن».
 export const MODES = [
   { value: "auto", label: t("خودکار"), icon: Sparkles, hint: t("مثل قبل: همه‌چیز را انجام می‌دهد؛ فقط کارهای حساس (گارد و بازبین) از شما پرسیده می‌شود (پیش‌فرض)") },
   { value: "ask", label: t("دستی"), icon: Hand, hint: t("قبل از هر تغییری از شما اجازه می‌گیرد") },
@@ -30,6 +31,7 @@ const PROVIDERS = [
 // engine, so it is asked at most once per 15 minutes per page.
 let doctorCache = { at: 0, promise: null };
 export function loadDoctor() {
+  if (isMember()) return Promise.resolve(null);
   if (!doctorCache.promise || Date.now() - doctorCache.at > 15 * 60_000) doctorCache = { at: Date.now(), promise: api("/api/doctor").catch(() => null) };
   return doctorCache.promise;
 }
@@ -66,15 +68,17 @@ export function AgentGlyph({ id, className = "size-8" }) {
   );
 }
 
-// The mode under the box: a small framed button with an arrow, so it reads as changeable.
-// In a chat it is the mode's icon; on the new-chat page (`named`) its name too. The
+// The mode under the box: a small framed button with an arrow, so it reads as changeable (owner,
+// 2026-10-12). In a chat it is the mode's icon; on the new-chat page (`named`) its name too. The
 // menu lists both modes with what each does.
 export function ModeToggle({ mode, onChange, named = false }) {
   const [open, setOpen] = useState(false);
   // «حالت اجرا: فقط Bypass و Plan» (ui-prefs.js): Karsara's two modes, in its words.
+  const member = isMember();
   const simple = useFlag("modeSimple");
   if (simple) return <ModeMenu mode={mode} onChange={onChange} />;
-  const current = MODES.find((m) => m.value === mode) || MODES.find((m) => m.value === "auto");
+  const list = member ? MODES.filter((m) => m.value !== "agent") : MODES;
+  const current = list.find((m) => m.value === mode) || list.find((m) => m.value === "auto");
   const tone = (value) => (value === "plan" ? "text-amber-600 dark:text-amber-400" : "text-primary");
   const Icon = current.icon;
   return (
@@ -93,7 +97,7 @@ export function ModeToggle({ mode, onChange, named = false }) {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content align="start" side="top" sideOffset={8} collisionPadding={16} className={`${MENU} p-1`}>
-          {MODES.map((m) => (
+          {list.map((m) => (
             <button
               key={m.value}
               type="button"
@@ -117,8 +121,8 @@ export function ModeToggle({ mode, onChange, named = false }) {
   );
 }
 
-// Karsara skin: the mode in English — «Bypass permissions ▾» («Bypass» on a phone) and «Plan»,
-// each with a one-line description.
+// Karsara skin: the mode as Karsara writes it — «Bypass permissions ▾» («Bypass» on a phone) and
+// «Plan», each with Karsara's Persian description (karsara Thread.jsx PermissionMode).
 const KARSARA_MODES = [
   { value: "agent", label: "Bypass permissions", short: "Bypass", hint: t("اجرای مستقیم؛ ابزارها بدون پرسشِ اجازه کار می‌کنند") },
   { value: "plan", label: "Plan", short: "Plan", hint: t("اول نقشه را می‌نویسد و منتظر تأیید شما می‌ماند") },
@@ -169,7 +173,7 @@ export function AgentPicker({ agent, onChange, onAdd = null, locked = false, cla
   const current = agents.find((a) => a.id === agent) || agents.find((a) => a.id === "griffin");
   const id = current?.id || agent || "griffin";
   const meta = agentMeta(id);
-  const label = t(current?.label || meta.label);
+  const label = current?.label || meta.label;
   const main = agents.filter((a) => a.id === "griffin");
   const specialists = agents.filter((a) => a.id !== "griffin");
 
@@ -190,7 +194,7 @@ export function AgentPicker({ agent, onChange, onAdd = null, locked = false, cla
         className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-sm data-[selected=true]:bg-muted"
       >
         <AgentGlyph id={a.id} className="size-8" />
-        <span className="min-w-0 flex-1 truncate text-start font-medium" dir="auto">{t(a.label)}</span>
+        <span className="min-w-0 flex-1 truncate text-start font-medium" dir="auto">{a.label}</span>
         {selected ? <Check className="size-4 shrink-0" style={{ color: m.color }} /> : null}
       </Command.Item>
     );
@@ -332,9 +336,14 @@ function loadAccounts() {
 }
 const KIND_NAME = { cursor: "Cursor", claude: "Claude", openai: "OpenAI-compatible" };
 const kindOfAccount = (id) => String(id || "").split("-")[0];
-function accountName(id, accounts) {
+// The server's name for the account (its label or login email, before «@»); before the accounts load,
+// the one its model rows carry — never the raw id while the menu opens (owner 2026-11-23).
+function accountName(id, accounts, models = []) {
   const account = accounts.find((a) => a.id === id);
-  if (account?.label) return account.label;
+  if (account?.name) return account.name;
+  if (account?.label) return String(account.label).replace(/@.*$/, "");
+  const tagged = models.find((m) => m.provider === id && m.accountName)?.accountName;
+  if (tagged) return tagged;
   if (PROVIDER_META[id]) return PROVIDER_META[id].label;
   const kind = kindOfAccount(id);
   return `${KIND_NAME[kind] || kind} · ${String(id).slice(kind.length + 1)}`;
@@ -351,7 +360,7 @@ const SHOWN_PER_ACCOUNT = 5;
 // be turned off and the run moves on), else the profile (an older server without `route`).
 const runsOn = (profile) => (profile?.route?.provider ? profile.route : { provider: profile?.provider, model: profile?.model });
 
-// The model menu: this account's models first — «خودکار» (the agent's priority list),
+// The model menu (from Karsara): this account's models first — «خودکار» (the agent's priority list),
 // the account's default tagged, keys 1–9 pick — and every other account behind «مدل‌های بیشتر».
 // A pick is "<account>:<model>" and moves only this chat; "" = the agent's default.
 // A menu's views slide sideways: forward (deeper) comes in from the reading end, back from the start.
@@ -393,7 +402,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
   const browsing = view.account || current;
   const browsingInfo = accounts.find((a) => a.id === browsing);
   // The main view has this account's main and newest models; the older ones the engine marks `more`
-  // (Claude Code's dated models) are behind «مدل‌های بیشتر», first there.
+  // (Claude Code's dated models) are behind «مدل‌های بیشتر», first there (owner 2026-10-19).
   const listed = models.filter((m) => m.provider === browsing && (view.account || !m.more));
   const needle = filter.trim().toLowerCase();
   const rows = needle ? listed.filter((m) => modelMatches(m, needle, labels)) : listed;
@@ -461,8 +470,8 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={t("مدل: {label}", { label: name })}
-          title={`${name} · ${accountName(current, accounts)}${bad.has(current) ? ` — ${t("کلید این موتور رد شده است")}` : ""}`}
+          aria-label={t("مدل: {name}", { name })}
+          title={`${name} · ${accountName(current, accounts, models)}${bad.has(current) ? t(" — کلید این موتور رد شده") : ""}`}
           className={karsara ? "g-pill press inline-flex min-w-0 shrink-0 items-center gap-1" : "g-text-btn press inline-flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-foreground data-[state=open]:text-foreground h-8 max-w-48 px-1.5 text-xs"}
         >
           {bad.has(current) ? <BadKeyDot /> : null}
@@ -486,7 +495,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
               {groups.map(({ id, label, own }) => (
                 <div key={id} className="pt-1">
                   <p className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1 text-[11px] font-medium text-muted-foreground">
-                    <span className="min-w-0 truncate">{accountName(id, accounts)}</span>
+                    <span className="min-w-0 truncate">{accountName(id, accounts, models)}</span>
                     {bad.has(id) ? <BadKeyDot /> : null}
                     {label ? <span className={tag}>{label}</span> : null}
                   </p>
@@ -498,7 +507,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
                   ))}
                   {!own.length || (!needle && own.length > SHOWN_PER_ACCOUNT) ? (
                     <button type="button" className={`${row} ${muted}`} onClick={() => { setFilter(""); setView({ kind: "models", account: id }); }}>
-                      <span className="flex-1">{own.length ? t("همهٔ {n} مدل", { n: num(own.length) }) : t("انتخاب مدل…")}</span>
+                      <span className="flex-1">{own.length ? t("همهٔ {toLocaleString} مدل", { toLocaleString: own.length.toLocaleString(locale) }) : t("انتخاب مدل…")}</span>
                       <ChevronLeft className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
                     </button>
                   ) : null}
@@ -510,7 +519,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
                 <>
                   {divider}
                   <button type="button" className={`${row} ${muted}`} onClick={openEngines} title={t("تنظیمات ← موتورها")}>
-                    <span className="min-w-0 flex-1 truncate">{t("{names} خاموش یا بی‌کلید", { names: resting.map((id) => accountName(id, accounts)).join(t("، ")) })}</span>
+                    <span className="min-w-0 flex-1 truncate">{t("{join} خاموش یا بی‌کلید", { join: resting.map((id) => accountName(id, accounts, models)).join(t("، ")) })}</span>
                     <span className="shrink-0 text-primary">{t("تنظیم")}</span>
                   </button>
                 </>
@@ -522,13 +531,13 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
                 <>
                   <button type="button" className={`${row} ${muted}`} onClick={() => setView({ kind: "accounts", account: null })}>
                     <ChevronRight className="size-3.5 rtl:rotate-0 ltr:rotate-180" />
-                    <span className="flex-1 truncate">{accountName(browsing, accounts)}</span>
+                    <span className="flex-1 truncate">{accountName(browsing, accounts, models)}</span>
                     {accountTag(browsingInfo) ? <span className={tag}>{accountTag(browsingInfo)}</span> : null}
                   </button>
                   {divider}
                 </>
               ) : (
-                <button type="button" className={row} onClick={() => pick("")} title={runs.provider ? t("به ترتیب اولویت ایجنت ({engine})", { engine: `${accountName(runs.provider, accounts)}${runs.model ? ` · ${runs.model}` : ""}` }) : t("به ترتیب اولویت ایجنت")}>
+                <button type="button" className={row} onClick={() => pick("")} title={t("به ترتیب اولویت ایجنت{v}", { v: runs.provider ? ` (${accountName(runs.provider, accounts, models)}${runs.model ? ` · ${runs.model}` : ""})` : "" })}>
                   <span className="min-w-0 flex-1">{t("خودکار")}</span>
                   {!model ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
                 </button>
@@ -543,12 +552,12 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
                     <span className="ltr min-w-0 flex-1 truncate text-start rtl:text-right">{modelName(m, labels)}</span>
                     {m.id === defaultId ? <span className={tag}>{t("پیش‌فرض")}</span> : null}
                     {selected ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
-                    {i < 9 && !needle ? <kbd className="w-4 shrink-0 text-center font-sans text-[11px] text-muted-foreground">{num(i + 1)}</kbd> : null}
+                    {i < 9 && !needle ? <kbd className="w-4 shrink-0 text-center font-sans text-[11px] text-muted-foreground">{(i + 1).toLocaleString(locale)}</kbd> : null}
                   </button>
                 );
               })}
               {listed.length && !rows.length ? <p className="px-2.5 py-2 text-xs text-muted-foreground">{t("مدلی با این نام نیست.")}</p> : null}
-              {!listed.length ? <p className="px-2.5 py-2 text-xs text-muted-foreground">{accountTag(browsingInfo) ? t("این موتور {state} است.", { state: accountTag(browsingInfo) }) : t("فهرست مدل این موتور در دسترس نیست.")}</p> : null}
+              {!listed.length ? <p className="px-2.5 py-2 text-xs text-muted-foreground">{accountTag(browsingInfo) ? t("این موتور {accountTag} است.", { accountTag: accountTag(browsingInfo) }) : t("فهرست مدل این موتور در دسترس نیست.")}</p> : null}
               {kindOfAccount(browsing) === "openai" ? (
                 <form
                   className="px-1 py-1"
@@ -557,7 +566,7 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
                     if (typed.trim()) pick(`${browsing}:${typed.trim()}`);
                   }}
                 >
-                  <input dir="ltr" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={t("شناسهٔ مدل، مثلاً {example}", { example: "z-ai/glm-4.6" })} aria-label={t("شناسهٔ مدل")} className="g-input w-full rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none" />
+                  <input dir="ltr" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={t("شناسهٔ مدل، مثلاً z-ai/glm-4.6")} aria-label={t("شناسهٔ مدل")} className="g-input w-full rounded-lg border bg-background px-2.5 py-1.5 text-sm outline-none" />
                 </form>
               ) : null}
               {divider}
@@ -577,8 +586,8 @@ export function ModelPicker({ model, onChange, agent = "griffin", compact = fals
 }
 
 // How hard the model thinks, per chat: Claude's effort panel — «تلاش زیاد», then a slider from
-// «سریع‌تر» to «باهوش‌تر». Only the word under the box is English, as Claude writes it.
-// Claude takes all five levels; OpenAI-style endpoints (GLM) get low/medium/high; Cursor
+// «سریع‌تر» to «باهوش‌تر». Only the word under the box is English, as Claude writes it (owner,
+// 2026-10-12). Claude takes all five levels; OpenAI-style endpoints (GLM) get low/medium/high; Cursor
 // ignores it. The tick «پیشنهادی» is the model's default; picking what would run anyway stores no override.
 const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
 const EFFORT_FA = { low: t("کم"), medium: t("متوسط"), high: t("زیاد"), xhigh: t("بسیار زیاد"), max: t("بیشینه") };
@@ -628,10 +637,12 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
     loadAccounts().then(setAccounts);
   }, []);
   if (!account || kind === "cursor") return null;
-  const levels = kind === "claude" ? ["low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high"];
   const pinnedId = String(model || "").includes(":") ? model.split(/:(.*)/s)[1] : "";
   const modelId = pinnedId || (runs.provider === account ? runs.model : "") || accounts.find((a) => a.id === account)?.defaultModel || "";
-  const modelDefault = models.find((m) => m.provider === account && m.id === modelId)?.defaultEffort;
+  const row = models.find((m) => m.provider === account && m.id === modelId);
+  // A model that names its own levels (Antigravity's families: Gemini 4 Neon low … xhigh) offers those.
+  const levels = row?.efforts?.length ? row.efforts : kind === "claude" ? ["low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high"];
+  const modelDefault = row?.defaultEffort;
   const recommended = levels.includes(modelDefault) ? modelDefault : kind === "claude" ? "high" : "medium";
   // What runs with no choice here: a plain Claude login is held to the default (model-policy.mjs).
   const plainClaude = kind === "claude" && !accounts.find((a) => a.id === account)?.endpoint;
@@ -644,7 +655,7 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label={t("تلاش: {label}", { label: EFFORT_FA[current] })}
+          aria-label={t("تلاش: {v}", { v: EFFORT_FA[current] })}
           title={t("میزان فکر کردن مدل")}
           className={`g-text-btn inline-flex shrink-0 items-center text-muted-foreground hover:text-foreground data-[state=open]:text-foreground ${karsara ? "px-1 text-[13px]" : "h-8 px-1.5 text-xs"}`}
         >
@@ -660,7 +671,7 @@ export function EffortPicker({ effort = "", model = "", agent = "griffin", onCha
   );
 }
 
-// Karsara skin: the effort as a plain
+// Karsara skin: the effort as Karsara shows it (karsara Controls.jsx EffortPicker, plain): a Persian
 // pill «تلاش پیش‌فرض ⇅» and a list — the default (no override stored), then each level.
 function KarsaraEffort({ levels, effort, onChange }) {
   const [open, setOpen] = useState(false);

@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Check, CircleHelp, ExternalLink, Loader2, Send } from "lucide-react";
 import { askLink } from "../ask.js";
 import { api, useRoute } from "../api.js";
-import { num, t } from "../i18n.js";
 import { holdReload } from "../new-version.js";
+import { answerKey, useTouchPrimary } from "../touch.js";
 import { isFallbackCard } from "../fallback.js";
+import { locale, t, isRtl } from "../i18n.js";
 
 // Card for the agent's ask_owner tool. While the tool call waits, the owner answers here and the
 // run continues. If the run is already over, the same answer is sent as a follow-up message.
@@ -19,6 +20,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
   const answered = result?.answered ? result : null;
   const [selected, setSelected] = useState([]);
   const [text, setText] = useState("");
+  const touch = useTouchPrimary();
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(null);
   const [error, setError] = useState(null);
@@ -33,7 +35,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
       const response = await api(`/api/chats/${chatId}/answer`, {
         method: "POST",
         // stale: its question is over (stopped, timed out). The answer goes as a new message, never held
-        // for the chain's next question, which may be a different one.
+        // for the chain's next question, which may be a different one (review, 2026-10-15).
         body: { question: args.question, selected: picks, text: text.trim(), ...(askId ? { askId } : {}), ...(!waiting && !askIdProp ? { stale: true } : {}) },
       });
       setSent(response.delivered === "tool" ? "tool" : response.delivered === "held" ? "held" : "message");
@@ -80,7 +82,7 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
           {done.map((line, i) => (
             <li key={i} className="truncate" dir="ltr">{line}</li>
           ))}
-          {args.doneMore > 0 ? <li className="list-none" dir="auto">{t("و {n} کار دیگر", { n: num(Number(args.doneMore)) })}</li> : null}
+          {args.doneMore > 0 ? <li className="list-none" dir={isRtl ? "rtl" : "ltr"}>{t("و {toLocaleString} کار دیگر", { toLocaleString: Number(args.doneMore).toLocaleString(locale) })}</li> : null}
         </ul>
       ) : null}
 
@@ -139,23 +141,31 @@ export function AskCard({ args = {}, result, isError, status, chatId: chatIdProp
           {options.length > 0 && args.multiSelect ? (
             <p className="text-xs text-muted-foreground" aria-live="polite">
               {selected.length
-                ? t("{n} گزینه انتخاب شد؛ برای فرستادن، دکمهٔ ارسال را بزن.", { n: num(selected.length) })
+                ? t("{toLocaleString} گزینه انتخاب شد؛ برای فرستادن، دکمهٔ ارسال را بزن.", { toLocaleString: selected.length.toLocaleString(locale) })
                 : t("می‌توانی چند گزینه انتخاب کنی؛ بعد دکمهٔ ارسال را بزن.")}
             </p>
           ) : null}
           {planCard ? null : <form
-            className="flex items-center gap-2"
+            className="flex items-end gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               submit();
             }}
           >
-            <input
+            <textarea
+              rows={1}
               value={text}
               onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                const action = answerKey(touch, event);
+                if (action === "send") {
+                  event.preventDefault();
+                  if (!sending) submit();
+                }
+              }}
               placeholder={options.length ? t("توضیح یا گزینهٔ دیگر…") : t("پاسخ…")}
               dir="auto"
-              className="g-input min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary pointer-coarse:h-11"
+              className="g-input max-h-40 min-h-9 min-w-0 flex-1 resize-none rounded-md border bg-background px-3 py-2 text-sm outline-none [field-sizing:content] focus:border-primary pointer-coarse:min-h-11"
             />
             <button
               type="submit"
