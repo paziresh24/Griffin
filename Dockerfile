@@ -76,7 +76,6 @@ COPY modules modules
 COPY apps/web/src/i18n.js apps/web/src/i18n.js
 COPY apps/web/src/mcp.js apps/web/src/mcp.js
 COPY apps/web/src/ui-flags.js apps/web/src/ui-flags.js
-COPY apps/web/src/settings-search.js apps/web/src/settings-search.js
 COPY apps/web/src/settings-catalog.js apps/web/src/settings-catalog.js
 COPY apps/web/src/settings-features.js apps/web/src/settings-features.js
 COPY apps/web/src/settings-map.js apps/web/src/settings-map.js
